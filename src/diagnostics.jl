@@ -134,6 +134,17 @@ function vorticity_grid(cfg::SHTConfig, Tlm::AbstractMatrix)
     return ζ
 end
 
+"""vorticity_radial_grid(cfg, Tlm::AbstractMatrix, r::Real) -> Matrix{Float64}
+Radial vorticity (3D) on the grid from toroidal spectrum T_lm at radius r.
+
+This scales the unit-sphere vorticity by 1/r to obtain the 3D radial component.
+"""
+function vorticity_radial_grid(cfg::SHTConfig, Tlm::AbstractMatrix, r::Real)
+    r == 0 && throw(ArgumentError("radius r must be > 0"))
+    ζ = vorticity_grid(cfg, Tlm)
+    return ζ ./ r
+end
+
 """grid_energy_scalar(cfg, f::AbstractMatrix) -> Float64"""
 function grid_energy_scalar(cfg::SHTConfig, f::AbstractMatrix)
     size(f,1) == cfg.nlat && size(f,2) == cfg.nlon || throw(DimensionMismatch("f dims"))

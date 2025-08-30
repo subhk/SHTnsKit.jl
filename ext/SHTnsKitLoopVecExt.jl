@@ -1,4 +1,3 @@
-__precompile__(false)  # Disable precompilation due to method overwriting
 module SHTnsKitLoopVecExt
 
 using LoopVectorization

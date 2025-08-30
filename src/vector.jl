@@ -319,6 +319,44 @@ Alias to `SHsph_to_spat`, for compatibility with SHTns macro.
 SH_to_grad_spat(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true) = SHsph_to_spat(cfg, Slm; real_output)
 
 """
+    SHsphtor_curl_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; r::Real, dSlm_dr=nothing, real_output::Bool=true)
+        -> ωr::Matrix{Float64}, ωθ::Matrix{Float64}, ωφ::Matrix{Float64}
+
+Synthesize the curl (vorticity) components (ωr, ωθ, ωφ) on the grid for a vector field
+represented by spheroidal (Slm) and toroidal (Tlm) scalars at radius r.
+
+Notes:
+- ωr is computed spectrally via vorticity_grid(Tlm) on the unit sphere and scaled by 1/r
+  to obtain the 3D radial component.
+- (ωθ, ωφ) are computed from the surface gradient of F_lm = (l(l+1)/r) * Slm, using the identity
+  ω_tangential = (1/r) (r̂ × ∇_s F). This yields ωθ = (1/r) Gφ and ωφ = -(1/r) Gθ, where (Gθ, Gφ)
+  are the tangential gradient components synthesized by SH_to_grad_spat.
+- The optional dSlm_dr is accepted for future extensions where radial derivatives are used explicitly.
+"""
+function SHsphtor_curl_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; r::Real, dSlm_dr=nothing, real_output::Bool=true)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
+    size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
+    r == 0 && throw(ArgumentError("radius r must be > 0"))
+
+    # Radial vorticity from toroidal scalar
+    ωr = vorticity_grid(cfg, Tlm) ./ r
+
+    # Tangential components from surface gradient of F = (l(l+1)/r) * S
+    F = similar(Slm)
+    @inbounds for m in 0:mmax
+        col = m+1
+        for l in m:lmax
+            F[l+1, col] = (l*(l+1))/r * Slm[l+1, col]
+        end
+    end
+    Gθ, Gφ = SH_to_grad_spat(cfg, F; real_output=true)
+    ωθ = (1/r) .* Gφ
+    ωφ = -(1/r) .* Gθ
+    return ωr, ωθ, ωφ
+end
+
+"""
     SHsphtor_to_spat_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
         -> Vt, Vp
 

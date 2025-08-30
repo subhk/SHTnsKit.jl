@@ -86,7 +86,7 @@ jobs:
 ```yaml
 - name: Test performance optimizations
   # Test SIMD operations
-  result = simd_apply_laplacian!(cfg, qlm_copy)
+  result = turbo_apply_laplacian!(cfg, qlm_copy)
   
   # Test threading
   threaded_apply_costheta_operator!(cfg, qlm, qlm_out)
@@ -100,7 +100,7 @@ jobs:
 - name: Run performance benchmarks
   # Different problem sizes: [10, 20, 30]
   t_synth = @belapsed synthesize($cfg, real.($qlm))
-  t_simd = @belapsed simd_apply_laplacian!($cfg, $qlm_copy)
+  t_simd = @belapsed turbo_apply_laplacian!($cfg, $qlm_copy)
   speedup = t_lapl / t_simd
   println("SIMD Laplacian: $(speedup)x speedup")
 ```

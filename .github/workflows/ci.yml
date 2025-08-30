@@ -145,7 +145,7 @@ jobs:
             try
               # Test SIMD operations
               qlm_copy = copy(qlm)
-              result = simd_apply_laplacian!(cfg, qlm_copy)
+              result = turbo_apply_laplacian!(cfg, qlm_copy)
               println(" SIMD Laplacian working")
               
               # Test threading if available

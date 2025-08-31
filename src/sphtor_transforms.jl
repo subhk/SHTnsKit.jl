@@ -19,72 +19,22 @@ Transform spheroidal/toroidal coefficients to horizontal vector field components
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
 function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+    # Validate inputs
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat, nlon = cfg.nlat, cfg.nlon
-    
-    # Validate input dimensions
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
-    
-    # Create working copies to avoid modifying input
+
+    # Use the planned, fully normalized vector synthesis for correctness
+    plan = SHTPlan(cfg; use_rfft=false)
     if real_output
-        S2 = similar(Slm); T2 = similar(Tlm)
+        Vt = Matrix{Float64}(undef, nlat, nlon)
+        Vp = Matrix{Float64}(undef, nlat, nlon)
     else
-        S2 = copy(Slm); T2 = copy(Tlm)
+        Vt = Matrix{ComplexF64}(undef, nlat, nlon)
+        Vp = Matrix{ComplexF64}(undef, nlat, nlon)
     end
-    
-    # Apply differential operators to get vector components
-    # This involves computing derivatives of spherical harmonics
-    @threads for m in 0:mmax
-        col = m + 1
-        
-        if cfg.use_plm_tables && length(cfg.plm_tables) == mmax+1
-            # Fast path with precomputed derivatives
-            tbl = cfg.plm_tables[m+1]
-            @inbounds for l in m:lmax
-                row = l + 1
-                ll1 = l * (l + 1)
-                if ll1 > 0  # Avoid division by zero
-                    # Compute derivatives for vector components
-                    S2[row, col] = Slm[row, col] * sqrt(ll1)
-                    T2[row, col] = Tlm[row, col] * sqrt(ll1)
-                else
-                    S2[row, col] = 0.0
-                    T2[row, col] = 0.0
-                end
-            end
-        else
-            # Standard computation
-            @inbounds for l in max(1,m):lmax  # Vector fields start at l=1
-                row = l + 1
-                ll1 = l * (l + 1)
-                # Apply vector spherical harmonic relationships
-                S2[row, col] = Slm[row, col] * sqrt(ll1)
-                T2[row, col] = Tlm[row, col] * sqrt(ll1)
-            end
-        end
-    end
-    
-    # Transform to spatial grid
-    # For simplicity, we'll use the synthesis function and then apply vector relationships
-    # In a full implementation, this would involve proper vector spherical harmonic synthesis
-    
-    # For now, synthesize the scaled coefficients
-    Vt_temp = synthesis(cfg, S2; real_output=real_output)
-    Vp_temp = synthesis(cfg, T2; real_output=real_output)
-    
-    # Apply geometric factors (this is a simplified version)
-    # Full implementation would properly compute θ and φ derivatives
-    Vt = similar(Vt_temp)
-    Vp = similar(Vp_temp)
-    
-    @inbounds for j in 1:nlon, i in 1:nlat
-        # Simplified vector component computation
-        # Real implementation would involve proper spherical derivatives
-        Vt[i, j] = real_output ? real(Vt_temp[i, j]) : Vt_temp[i, j]
-        Vp[i, j] = real_output ? real(Vp_temp[i, j]) : Vp_temp[i, j]
-    end
-    
+    SHsphtor_to_spat!(plan, Vt, Vp, Slm, Tlm; real_output=real_output)
     return Vt, Vp
 end
 

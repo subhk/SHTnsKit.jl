@@ -315,13 +315,13 @@ end
 
 # ===== PARALLEL EXTENSION MODULES =====
 # Include specialized modules for different aspects of parallel spherical harmonic transforms
-include("parallel_diagnostics.jl")      # Diagnostic and profiling tools for parallel operations
-include("parallel_dispatch.jl")         # Function dispatch and interface definitions  
-include("parallel_plans.jl")            # Distributed transform planning and setup
-include("parallel_transforms.jl")       # Core parallel transform implementations
-include("parallel_ops_pencil.jl")       # Parallel differential operators using PencilArrays
-include("parallel_rotations_pencil.jl") # Parallel spherical rotation operations
-include("parallel_local.jl")            # Local (per-process) operations and utilities
+include("ParallelDiagnostics.jl")      # Diagnostic and profiling tools for parallel operations
+include("ParallelDispatch.jl")         # Function dispatch and interface definitions  
+include("ParallelPlans.jl")            # Distributed transform planning and setup
+include("ParallelTransforms.jl")       # Core parallel transform implementations
+include("ParallelOpsPencil.jl")       # Parallel differential operators using PencilArrays
+include("ParallelRotationsPencil.jl") # Parallel spherical rotation operations
+include("ParallelLocal.jl")            # Local (per-process) operations and utilities
 
 # Optimized communication patterns for large spectral arrays
 function efficient_spectral_reduce!(local_data::AbstractMatrix, comm)

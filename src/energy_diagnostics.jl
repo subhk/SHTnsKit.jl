@@ -82,12 +82,11 @@ Compute kinetic energy of a vector field from its θ and φ components.
 """
 function grid_energy_vector(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat, sintheta = cfg.wlat, cfg.sintheta
+    wlat = cfg.wlat
     
     E = 0.0
     for j in 1:nlon, i in 1:nlat
-        sin2_inv = 1.0 / (sintheta[i]^2)
-        E += wlat[i] * (abs2(Vt[i, j]) + sin2_inv * abs2(Vp[i, j]))
+        E += wlat[i] * (abs2(Vt[i, j]) + abs2(Vp[i, j]))
     end
     return 0.5 * E * (2π / nlon)
 end
@@ -115,14 +114,12 @@ end
 Compute energy from packed spectral coefficients (1D vector format).
 """
 function energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
+    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     E = 0.0
-    idx = 1
-    for l in 0:lmax, m in 0:min(l, mmax)
-        E += wm[m+1] * abs2(Qlm[idx])
-        idx += 1
+    @inbounds for k in eachindex(Qlm)
+        m = cfg.mi[k]
+        E += wm[m+1] * abs2(Qlm[k])
     end
     return 0.5 * E
 end
@@ -133,14 +130,12 @@ end
 Compute energy gradient for packed coefficients format.
 """
 function grad_energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
+    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     grad = similar(Qlm)
-    idx = 1
-    for l in 0:lmax, m in 0:min(l, mmax)
-        grad[idx] = wm[m+1] * Qlm[idx]
-        idx += 1
+    @inbounds for k in eachindex(Qlm)
+        m = cfg.mi[k]
+        grad[k] = wm[m+1] * Qlm[k]
     end
     return grad
 end
@@ -191,16 +186,15 @@ Compute gradients of grid-based vector energy with respect to vector components.
 """
 function grad_grid_energy_vector_fields(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat, sintheta = cfg.wlat, cfg.sintheta
+    wlat = cfg.wlat
     scale = (2π / nlon)
     
     grad_Vt, grad_Vp = allocate_spatial_pair(Vt, Vp)
     
     for j in 1:nlon, i in 1:nlat
         w = scale * wlat[i]
-        sin2_inv = 1.0 / (sintheta[i]^2)
         grad_Vt[i, j] = w * Vt[i, j]
-        grad_Vp[i, j] = w * sin2_inv * Vp[i, j]
+        grad_Vp[i, j] = w * Vp[i, j]
     end
     return grad_Vt, grad_Vp
 end
@@ -211,15 +205,16 @@ end
 Compute vector field kinetic energy from packed S and T coefficients.
 """
 function energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}, Tpacked::AbstractVector{<:Complex}; real_field::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+    length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
+    length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
+    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     E = 0.0
-    idx = 1
-    for l in 1:lmax, m in 0:min(l, mmax)  # Vector starts at l=1
-        ll1 = l * (l + 1)
-        E += wm[m+1] * ll1 * (abs2(Spacked[idx]) + abs2(Tpacked[idx]))
-        idx += 1
+    @inbounds for k in eachindex(Spacked)
+        l = cfg.li[k]; m = cfg.mi[k]
+        if l >= 1
+            ll1 = l * (l + 1)
+            E += wm[m+1] * ll1 * (abs2(Spacked[k]) + abs2(Tpacked[k]))
+        end
     end
     return 0.5 * E
 end
@@ -230,19 +225,20 @@ end
 Compute energy gradients for packed vector coefficients.
 """
 function grad_energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}, Tpacked::AbstractVector{<:Complex}; real_field::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+    length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
+    length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
+    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     grad_S = similar(Spacked)
     grad_T = similar(Tpacked)
-    
-    idx = 1
-    for l in 1:lmax, m in 0:min(l, mmax)
-        ll1 = l * (l + 1)
-        w = wm[m+1] * ll1
-        grad_S[idx] = w * Spacked[idx]
-        grad_T[idx] = w * Tpacked[idx]
-        idx += 1
+    fill!(grad_S, 0)
+    fill!(grad_T, 0)
+    @inbounds for k in eachindex(Spacked)
+        l = cfg.li[k]; m = cfg.mi[k]
+        if l >= 1
+            w = wm[m+1] * (l * (l + 1))
+            grad_S[k] = w * Spacked[k]
+            grad_T[k] = w * Tpacked[k]
+        end
     end
     return grad_S, grad_T
 end

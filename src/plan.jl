@@ -108,7 +108,7 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             end
         end
     end
-    FFTW.fft!(plan.fft_plan)
+    plan.fft_plan * plan.Fθk
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
@@ -138,7 +138,7 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             end
         end
     end
-    FFTW.fft!(plan.fft_plan)
+    plan.fft_plan * plan.Fθk
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
@@ -220,7 +220,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             plan.Fθk[i,j] = Vt_tmp[i,j]
         end
     else
-        FFTW.ifft!(plan.ifft_plan)
+        plan.ifft_plan * plan.Fθk
     end
     if cfg.robert_form
         @inbounds for i in 1:nlat
@@ -271,7 +271,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             plan.Fθk[i,j] = Vt_tmp[i,j]
         end
     else
-        FFTW.ifft!(plan.ifft_plan)
+        plan.ifft_plan * plan.Fθk
     end
     if cfg.robert_form
         @inbounds for i in 1:nlat
@@ -309,7 +309,7 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     @inbounds for i in 1:nlat, j in 1:nlon
         plan.Fθk[i,j] = f[i,j]
     end
-    FFTW.fft!(plan.fft_plan)  # in-place along dim 2
+    plan.fft_plan * plan.Fθk  # execute planned FFT in-place
     # Compute alm
     fill!(alm_out, 0)
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -386,7 +386,7 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         end
     end
     # Inverse FFT along φ in-place
-    FFTW.ifft!(plan.ifft_plan)
+    plan.ifft_plan * plan.Fθk
     # Write result
     if real_output
         @inbounds for i in 1:nlat, j in 1:nlon

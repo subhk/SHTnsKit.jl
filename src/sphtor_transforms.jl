@@ -19,22 +19,88 @@ Transform spheroidal/toroidal coefficients to horizontal vector field components
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
 function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
-    # Validate inputs
+    # Validate input dimensions
     lmax, mmax = cfg.lmax, cfg.mmax
-    nlat, nlon = cfg.nlat, cfg.nlon
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
 
-    # Use the planned, fully normalized vector synthesis for correctness
-    plan = SHTPlan(cfg; use_rfft=false)
-    if real_output
-        Vt = Matrix{Float64}(undef, nlat, nlon)
-        Vp = Matrix{Float64}(undef, nlat, nlon)
-    else
-        Vt = Matrix{ComplexF64}(undef, nlat, nlon)
-        Vp = Matrix{ComplexF64}(undef, nlat, nlon)
+    # Convert to internal normalization if needed
+    Slm_int, Tlm_int = Slm, Tlm
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        S2 = similar(Slm); T2 = similar(Tlm)
+        convert_alm_norm!(S2, Slm, cfg; to_internal=true)
+        convert_alm_norm!(T2, Tlm, cfg; to_internal=true)
+        Slm_int = S2; Tlm_int = T2
     end
-    SHsphtor_to_spat!(plan, Vt, Vp, Slm, Tlm; real_output=real_output)
+
+    # Set up arrays for synthesis
+    nlat, nlon = cfg.nlat, cfg.nlon
+    CT = eltype(Slm_int)
+    Fθ = Matrix{CT}(undef, nlat, nlon)  # Fourier coefficients for θ-component
+    Fφ = Matrix{CT}(undef, nlat, nlon)  # Fourier coefficients for φ-component
+    fill!(Fθ, 0); fill!(Fφ, 0)
+
+    # Thread-local working arrays for Legendre polynomial computation
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    # Scale continuous Fourier coefficients to DFT bins for ifft (factor nlon or nlon/(2π))
+    inv_scaleφ = phi_inv_scale(nlon)
+
+    # Process each azimuthal mode m in parallel
+    @threads for m in 0:mmax
+        col = m + 1
+        for i in 1:nlat
+            x = cfg.x[i]
+            sθ = sqrt(max(0.0, 1 - x*x))
+            inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+            gθ = 0.0 + 0.0im
+            gφ = 0.0 + 0.0im
+            if cfg.use_plm_tables && length(cfg.plm_tables) == mmax+1 && length(cfg.dplm_tables) == mmax+1
+                tblP = cfg.plm_tables[m+1]
+                tbld = cfg.dplm_tables[m+1]
+                @inbounds for l in m:lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = -sθ * N * tbld[l+1, i]
+                    Y = N * tblP[l+1, i]
+                    Sl = Slm_int[l+1, col]
+                    Tl = Tlm_int[l+1, col]
+                    gθ += dθY * Sl + (0 + 1im) * m * inv_sθ * Y * Tl
+                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + (sθ * N * tbld[l+1, i]) * Tl
+                end
+            else
+                P = thread_local_P[Threads.threadid()]
+                dPdx = thread_local_dPdx[Threads.threadid()]
+                Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
+                @inbounds for l in m:lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = -sθ * N * dPdx[l+1]
+                    Y = N * P[l+1]
+                    Sl = Slm_int[l+1, col]
+                    Tl = Tlm_int[l+1, col]
+                    gθ += dθY * Sl + (0 + 1im) * m * inv_sθ * Y * Tl
+                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + (sθ * N * dPdx[l+1]) * Tl
+                end
+            end
+            Fθ[i, col] = inv_scaleφ * gθ
+            Fφ[i, col] = inv_scaleφ * gφ
+        end
+        if real_output && m > 0
+            conj_index = nlon - m + 1
+            @inbounds for i in 1:nlat
+                Fθ[i, conj_index] = conj(Fθ[i, col])
+                Fφ[i, conj_index] = conj(Fφ[i, col])
+            end
+        end
+    end
+    Vt = real_output ? real.(ifft_phi(Fθ)) : ifft_phi(Fθ)
+    Vp = real_output ? real.(ifft_phi(Fφ)) : ifft_phi(Fφ)
+    if cfg.robert_form
+        @inbounds for i in 1:nlat
+            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
+            Vt[i, :] .*= sθ
+            Vp[i, :] .*= sθ
+        end
+    end
     return Vt, Vp
 end
 

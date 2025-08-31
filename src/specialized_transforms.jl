@@ -11,13 +11,13 @@ is needed, avoiding the computational overhead of full 2D transforms.
 """
 
 """
-    spat_to_SH(cfg, Vr) -> Vector{ComplexF64}
+    spat_to_SH_axisym(cfg, Vr) -> Vector{ComplexF64}
 
-Transform spatial radial field values at Gauss points to spherical harmonic coefficients.
+Axisymmetric (m=0) transform from Gauss latitudes to degree-only coefficients.
 Input `Vr` should contain values at Gauss latitudes for a specific longitude mode.
-Returns packed coefficients Q_l for l = 0..lmax.
+Returns coefficients Q_l for l = 0..lmax.
 """
-function spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real})
+function spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     
@@ -40,13 +40,52 @@ function spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real})
 end
 
 """
-    SH_to_spat(cfg, Qlm) -> Vector{Float64}
+    spat_to_SH(cfg, Vr_flat::AbstractVector{<:Real}) -> Vector{ComplexF64}
 
-Transform spherical harmonic coefficients to spatial values at Gauss points.
+Packed scalar analysis from flattened grid values (length nlat*nlon) to Qlm (LM order).
+"""
+function spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real})
+    length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
+    f = reshape(Vr, cfg.nlat, cfg.nlon)
+    alm_mat = analysis(cfg, f)
+    Qlm = Vector{eltype(alm_mat)}(undef, cfg.nlm)
+    @inbounds for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
+        for l in m:cfg.lmax
+            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
+            Qlm[lm] = alm_mat[l+1, m+1]
+        end
+    end
+    return Qlm
+end
+
+"""
+    SH_to_spat(cfg, Qlm::AbstractVector{<:Complex}) -> Vector{Float64}
+
+Packed scalar synthesis from Qlm (LM order) to flattened real grid (length nlat*nlon).
+"""
+function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
+    alm_mat = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    @inbounds for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
+        for l in m:cfg.lmax
+            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
+            alm_mat[l+1, m+1] = Qlm[lm]
+        end
+    end
+    f = synthesis(cfg, alm_mat; real_output=true)
+    return vec(f)
+end
+
+"""
+    SH_to_spat_axisym(cfg, Qlm) -> Vector{Float64}
+
+Axisymmetric synthesis from degree-only coefficients to Gauss latitudes.
 Input `Qlm` should contain coefficients Q_l for l = 0..lmax.
 Returns spatial values at Gauss latitudes.
 """
-function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+function SH_to_spat_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Qlm) == lmax + 1 || throw(DimensionMismatch("Qlm length must be lmax+1=$(lmax+1)"))
     
@@ -68,12 +107,11 @@ function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
 end
 
 """
-    spat_to_SH_l(cfg, Vr, ltr) -> Vector{ComplexF64}
+    spat_to_SH_l_axisym(cfg, Vr, ltr) -> Vector{ComplexF64}
 
-Transform spatial field to spherical harmonic coefficients up to degree ltr.
-This is a degree-limited version of spat_to_SH for efficiency.
+Axisymmetric degree-limited transform up to degree ltr.
 """
-function spat_to_SH_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
+function spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
     nlat = cfg.nlat
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
@@ -97,12 +135,11 @@ function spat_to_SH_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
 end
 
 """
-    SH_to_spat_l(cfg, Qlm, ltr) -> Vector{Float64}
+    SH_to_spat_l_axisym(cfg, Qlm, ltr) -> Vector{Float64}
 
-Transform spherical harmonic coefficients to spatial field using degrees up to ltr.
-This is a degree-limited version of SH_to_spat.
+Axisymmetric degree-limited synthesis using degrees up to ltr.
 """
-function SH_to_spat_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Int)
+function SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     ltr_qlm = length(Qlm) - 1  # Convert length to max degree
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))

@@ -170,8 +170,9 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
     
-    # Allocate intermediate array for Fourier modes F(θ,m)
-    Fφ = Matrix{CT}(undef, nlat, mmax + 1)
+    # Allocate intermediate array for Fourier modes with full longitude width
+    # Fill only the resolved azimuthal modes 0..mmax; rest remain zero for IFFT
+    Fφ = Matrix{CT}(undef, nlat, nlon)
     fill!(Fφ, zero(CT))
     
     # Thread-local Legendre polynomial buffers
@@ -186,10 +187,11 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
             # Fast path with precomputed tables
             tbl = cfg.plm_tables[m+1]
             for i in 1:nlat
-                Fφ[i, col] = zero(CT)
+                local acc = zero(CT)
                 for l in m:lmax
-                    Fφ[i, col] += alm[l+1, col] * tbl[i, l+1]
+                    acc += alm[l+1, col] * tbl[i, l+1]
                 end
+                Fφ[i, col] = acc
             end
         else
             # Standard path with on-the-fly computation
@@ -197,10 +199,11 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
                 x = cfg.x[i]
                 Plm_row!(P, x, lmax, m)
                 
-                Fφ[i, col] = zero(CT)
+                local acc = zero(CT)
                 for l in m:lmax
-                    Fφ[i, col] += alm[l+1, col] * P[l+1]
+                    acc += alm[l+1, col] * P[l+1]
                 end
+                Fφ[i, col] = acc
             end
         end
     end
@@ -224,7 +227,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
-    Fφ = Matrix{CT}(undef, nlat, mmax + 1)
+    Fφ = Matrix{CT}(undef, nlat, nlon)
     fill!(Fφ, zero(CT))
     
     # Fused implementation for better performance

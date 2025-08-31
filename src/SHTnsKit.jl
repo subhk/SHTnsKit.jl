@@ -71,7 +71,7 @@ export shtns_rotation_set_angles_ZYZ, shtns_rotation_set_angles_ZXZ
 export shtns_rotation_wigner_d_matrix, shtns_rotation_apply_cplx, shtns_rotation_apply_real, shtns_rotation_set_angle_axis
 
 # ===== ENERGY AND DIAGNOSTICS =====
-export energy_scalar, energy_vector, enstrophy, vorticity_spectral, vorticity_grid, vorticity_radial_grid
+export energy_scalar, energy_vector, enstrophy, vorticity_spectral, vorticity_grid
 export grid_energy_scalar, grid_energy_vector, grid_enstrophy
 export energy_scalar_l_spectrum, energy_scalar_m_spectrum    # Spectral energy analysis
 export energy_vector_l_spectrum, energy_vector_m_spectrum

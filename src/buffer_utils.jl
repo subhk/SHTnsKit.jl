@@ -59,7 +59,7 @@ Allocate three spatial field buffers for (Vr, Vt, Vp) components.
 """
 function allocate_spatial_triple(template1::AbstractMatrix, template2::AbstractMatrix, template3::AbstractMatrix)
     return similar(template1), similar(template2), similar(template3)
-</}
+end
 
 """
     zero_high_degree_modes!(arrays::Tuple, cfg::SHTConfig, ltr::Int)

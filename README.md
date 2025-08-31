@@ -16,7 +16,7 @@
   <img alt="MPI Examples" src="https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml/badge.svg">
 </a>
 
-**High-Performance Spherical Harmonic Transforms for Julia**
+**High-Performance Spherical Harmonic Transforms in Julia**
 
 SHTnsKit.jl provides a comprehensive, pure-Julia implementation of spherical harmonic transforms with **parallel computing support** for scalable scientific computing. 
 ## Key Features

@@ -18,11 +18,11 @@ phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" 
 include("fftutils.jl")      # FFT utility functions and helpers
 include("layout.jl")        # Data layout and memory organization
 include("mathutils.jl")     # Mathematical utility functions
-include("buffer_utils.jl")  # Common buffer allocation patterns
 include("gausslegendre.jl") # Gauss-Legendre quadrature implementation
 include("legendre.jl")      # Legendre polynomial computations
 include("normalization.jl") # Spherical harmonic normalization
 include("config.jl")              # Configuration and setup functions
+include("buffer_utils.jl")  # Common buffer allocation patterns
 include("plan.jl")                # Transform planning and optimization
 include("core_transforms.jl")     # Core 2D grid ↔ spectral transforms
 include("specialized_transforms.jl") # Vector and point transforms

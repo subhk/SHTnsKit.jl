@@ -27,6 +27,7 @@ Base.@kwdef mutable struct SHTConfig
     φ::Vector{Float64}          # Azimuthal angles [0, 2π)
     x::Vector{Float64}          # Gauss-Legendre nodes: x = cos(θ) ∈ [-1,1]
     w::Vector{Float64}          # Gauss-Legendre integration weights
+    wlat::Vector{Float64}       # Alias: latitude weights (Gauss-Legendre) = w
     Nlm::Matrix{Float64}        # Normalization factors for Y_l^m
     cphi::Float64               # Longitude spacing: 2π / nlon
     
@@ -37,6 +38,7 @@ Base.@kwdef mutable struct SHTConfig
     nspat::Int                  # Total spatial grid points: nlat × nlon
     ct::Vector{Float64}         # Precomputed cos(θ) values
     st::Vector{Float64}         # Precomputed sin(θ) values
+    sintheta::Vector{Float64}   # Alias: sin(θ) values = st
     
     # Transform normalization and phase conventions
     norm::Symbol                # Normalization type (:orthonormal, :schmidt, etc.)
@@ -81,9 +83,9 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
     st = sin.(θ)  # sine of colatitude
     
     # Construct and return the complete configuration
-    return SHTConfig(; lmax, mmax, mres, nlat, nlon, θ, φ, x, w, Nlm,
+    return SHTConfig(; lmax, mmax, mres, nlat, nlon, θ, φ, x, w, wlat = w, Nlm,
                      cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                     ct, st, norm, cs_phase, real_norm, robert_form)
+                     ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form)
 end
 
 """

@@ -18,19 +18,24 @@ phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" 
 include("fftutils.jl")      # FFT utility functions and helpers
 include("layout.jl")        # Data layout and memory organization
 include("mathutils.jl")     # Mathematical utility functions
+include("buffer_utils.jl")  # Common buffer allocation patterns
 include("gausslegendre.jl") # Gauss-Legendre quadrature implementation
 include("legendre.jl")      # Legendre polynomial computations
 include("normalization.jl") # Spherical harmonic normalization
-include("config.jl")        # Configuration and setup functions
-include("plan.jl")          # Transform planning and optimization
-include("transform.jl")     # Core transform implementations
-include("complex_packed.jl")# Complex number packing utilities
-include("vector.jl")        # Vector field operations
+include("config.jl")              # Configuration and setup functions
+include("plan.jl")                # Transform planning and optimization
+include("core_transforms.jl")     # Core 2D grid ↔ spectral transforms
+include("specialized_transforms.jl") # Vector and point transforms
+include("complex_packed.jl")      # Complex number packing utilities
+include("qst_transforms.jl")       # QST (3D) vector field operations
+include("sphtor_transforms.jl")    # Spheroidal/toroidal (2D) vector operations
 include("operators.jl")     # Differential operators on sphere
-include("rotations.jl")     # Spherical rotation operations
-include("local.jl")         # Local (thread-local) operations
-include("diagnostics.jl")   # Diagnostic and analysis tools
-include("api_compat.jl")    # API compatibility layer
+include("rotations.jl")           # Spherical rotation operations
+include("local.jl")              # Local (thread-local) operations
+include("energy_diagnostics.jl") # Energy calculations and gradients
+include("spectral_diagnostics.jl") # Spectral analysis and spectrum functions
+include("vorticity_diagnostics.jl") # Vorticity and enstrophy calculations
+include("api_compat.jl")         # API compatibility layer
 include("parallel_dense.jl")# Parallel dense matrix operations
 
 # ===== CORE CONFIGURATION AND SETUP =====

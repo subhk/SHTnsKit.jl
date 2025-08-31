@@ -56,11 +56,9 @@ let
     # Create a real spatial field on the Gauss×equiangular grid
     f = randn(Float64, cfg.nlat, cfg.nlon)
 
-    # Roundtrip: spatial -> spectral (packed) -> spatial
-    Vr = vec(f)
-    Qlm = spat_to_SH(cfg, Vr)
-    Vr2 = SH_to_spat(cfg, Qlm)
-    f2 = reshape(Vr2, cfg.nlat, cfg.nlon)
+    # Roundtrip: spatial -> spectral (full) -> spatial
+    alm = analysis(cfg, f)
+    f2 = synthesis(cfg, alm; real_output=true)
 
     # Compute local max abs error and reduce to global
     local_err = maximum(abs.(f2 .- f))
@@ -109,4 +107,3 @@ if RANK == 0
     println("Done.")
 end
 MPI.Finalize()
-

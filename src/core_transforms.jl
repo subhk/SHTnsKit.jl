@@ -69,7 +69,7 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
             end
         else
             # Standard path: compute Legendre polynomials on-the-fly
-            for i in 1:nlat
+            @inbounds for i in 1:nlat
                 x = cfg.x[i]  # cos(θ_i)
                 Plm_row!(P, x, lmax, m)  # Compute P_l^m(x) for all l
                 
@@ -81,7 +81,7 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
         end
         
         # Apply longitude scaling factor
-        for l in m:lmax
+        @inbounds for l in m:lmax
             alm[l+1, col] *= scaleφ
         end
     end

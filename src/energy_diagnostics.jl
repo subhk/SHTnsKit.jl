@@ -32,7 +32,7 @@ function energy_scalar(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=tru
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
     E = 0.0
-    for m in 0:mmax, l in m:lmax
+    @inbounds for m in 0:mmax, l in m:lmax
         E += wm[m+1] * abs2(alm[l+1, m+1])
     end
     return 0.5 * E
@@ -51,7 +51,7 @@ function energy_vector(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix;
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
     E = 0.0
-    for m in 0:mmax, l in max(1,m):lmax  # Vector fields start at l=1
+    @inbounds for m in 0:mmax, l in max(1,m):lmax  # Vector fields start at l=1
         ll1 = l * (l + 1)
         E += wm[m+1] * ll1 * (abs2(Slm[l+1, m+1]) + abs2(Tlm[l+1, m+1]))
     end

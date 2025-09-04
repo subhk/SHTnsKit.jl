@@ -16,9 +16,12 @@ Key capabilities:
 - Caching of FFT plans for repeated operations (optional via environment variable)
 """
 
+using Base.Threads                       # Threads.@threads and locks/macros
+import MPI                               # Bring MPI module into scope for MPI.* calls
 using MPI: Allreduce, Allreduce!, Allgather, Allgatherv, Comm_size, COMM_WORLD
+import PencilArrays                      # Bring PencilArrays module for qualified calls
 using PencilArrays: Pencil, PencilArray  # Distributed array framework
-using PencilFFTs                          # Distributed FFTs
+using PencilFFTs                         # Distributed FFTs
 using SHTnsKit                           # Core spherical harmonic functionality
 
 # ===== FFT PLAN CACHING =====
@@ -422,25 +425,41 @@ function tree_reduce!(data::AbstractMatrix, comm)
     end
 end
 
-function sparse_spectral_reduce!(local_data::AbstractVector, indices::Vector{Int}, comm)
-    # For sparse spectral data, only communicate non-zero coefficients
-    # This can significantly reduce communication volume
-    nz_indices = findall(!iszero, local_data)
-    
-    if length(nz_indices) < length(local_data) * 0.1  # Less than 10% non-zero
-        # Gather only non-zero entries
-        local_nz_data = local_data[nz_indices]
-        global_nz_data = MPI.Allreduce(local_nz_data, +, comm)
-        
-        # Reconstruct full array
-        fill!(local_data, 0)
-        local_data[nz_indices] = global_nz_data
-        return local_data
-    else
-        # Use standard Allreduce for dense data
-        MPI.Allreduce!(local_data, +, comm)
-        return local_data
+function sparse_spectral_reduce!(local_data::AbstractVector{T}, comm) where {T}
+    # True sparse reduction using Allgatherv of (indices, values)
+    nz_idx = findall(!iszero, local_data)
+    send_count = length(nz_idx)
+
+    # Gather counts to all ranks and build displacements
+    counts = Allgather(send_count, comm)
+    displs = cumsum([0; counts[1:end-1]])
+    total = sum(counts)
+
+    # Prepare send buffers
+    idx_send = collect(Int, nz_idx)
+    val_send = local_data[nz_idx]
+
+    # Receive buffers
+    idx_recv = Vector{Int}(undef, total)
+    val_recv = Vector{T}(undef, total)
+
+    # Exchange indices and values
+    Allgatherv(idx_send, idx_recv, counts, displs, comm)
+    Allgatherv(val_send, val_recv, counts, displs, comm)
+
+    # Accumulate into the full dense vector
+    fill!(local_data, zero(T))
+    @inbounds for i in 1:total
+        local_data[idx_recv[i]] += val_recv[i]
     end
+    return local_data
+end
+
+function sparse_spectral_reduce!(local_data::AbstractMatrix{T}, comm) where {T}
+    # Flattened sparse reduction on matrix storage
+    A = vec(local_data)
+    sparse_spectral_reduce!(A, comm)
+    return local_data
 end
 
 # ===== ADVANCED COMMUNICATION PATTERNS =====
@@ -466,7 +485,7 @@ function adaptive_spectral_communication!(data::AbstractArray, comm; operation=+
     sparsity = nonzero_count / data_size
     
     if sparsity < sparse_threshold && data_size > 1000
-        # Use sparse communication for very sparse data
+        # Use sparse communication for very sparse data (robust fallback)
         return sparse_spectral_reduce!(data, comm)
     elseif nprocs > 64 && data_size > 50000
         # Use segmented reduction for large-scale problems

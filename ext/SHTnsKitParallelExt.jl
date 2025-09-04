@@ -32,6 +32,7 @@ const _CACHE_PENCILFFTS = Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "0") =
 # Thread-safe cache storage for FFT plans indexed by array characteristics
 const _pfft_cache = IdDict{Any,Any}()
 const _cache_lock = Threads.ReentrantLock()
+const _sparse_gather_cache = Dict{Tuple{DataType,Int}, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}()
 
 # Generate cache key based on array characteristics for FFT plan reuse
 function _cache_key(kind::Symbol, A)
@@ -429,9 +430,27 @@ function sparse_spectral_reduce!(local_data::AbstractVector{T}, comm) where {T}
     idx_send = collect(Int, nz_idx)
     val_send = local_data[nz_idx]
 
-    # Receive buffers
-    idx_recv = Vector{Int}(undef, total)
-    val_recv = Vector{T}(undef, total)
+    # Receive buffers (reused across calls when possible)
+    key = (T, hash(comm))
+    idx_recv, val_recv = lock(_cache_lock) do
+        if haskey(_sparse_gather_cache, key)
+            buf = _sparse_gather_cache[key]
+            idx_buf = buf.idx
+            val_buf = buf.val
+            if length(idx_buf) < total
+                resize!(idx_buf, total)
+            end
+            if length(val_buf) < total
+                resize!(val_buf, total)
+            end
+            (idx_buf, val_buf)
+        else
+            idx_buf = Vector{Int}(undef, total)
+            val_buf = Vector{T}(undef, total)
+            _sparse_gather_cache[key] = (idx=idx_buf, val=val_buf)
+            (idx_buf, val_buf)
+        end
+    end
 
     # Exchange indices and values
     Allgatherv(idx_send, idx_recv, counts, displs, comm)
@@ -466,15 +485,17 @@ Strategies:
 - Sparse data: Sparse coefficient exchange
 - Very large data: Segmented reduction with overlap
 """
-function adaptive_spectral_communication!(data::AbstractArray, comm; operation=+, sparse_threshold=0.1)
+function adaptive_spectral_communication!(data::AbstractArray, comm; operation=+, sparse_threshold=nothing)
     nprocs = MPI.Comm_size(comm)
     data_size = length(data)
+    # Resolve sparsity threshold from ENV if not provided
+    st = sparse_threshold === nothing ? try parse(Float64, get(ENV, "SHTNSKIT_SPARSE_THRESHOLD", "0.1")) catch; 0.1 end : sparse_threshold
     
     # Compute sparsity ratio
     nonzero_count = count(!iszero, data)
     sparsity = nonzero_count / data_size
     
-    if sparsity < sparse_threshold && data_size > 1000
+    if sparsity < st && data_size > 1000
         # Use sparse communication for very sparse data (robust fallback)
         return sparse_spectral_reduce!(data, comm)
     elseif nprocs > 64 && data_size > 50000

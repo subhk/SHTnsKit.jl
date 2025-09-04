@@ -174,16 +174,16 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
         Fθk = fft(fθφ, pfft)
     end
     Fθm = transpose(Fθk, (; dims=(1,2), names=(:θ,:m)))
+    # Packed mapping info if needed
+    storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
     
     # Enhanced packed storage for optimal memory efficiency
     storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
     
     if use_packed_storage
-        # Packed storage reduces memory by 30-50% for large lmax
-        Alm_local = zeros(ComplexF64, storage_info.nlm_packed)  
-        temp_dense = zeros(ComplexF64, lmax+1, mmax+1)  # Temporary for computation
-        
-        # Log memory savings for user awareness
+        # Directly accumulate into packed storage to reduce memory and avoid packing
+        Alm_local = zeros(ComplexF64, storage_info.nlm_packed)
+        temp_dense = nothing
         if get(ENV, "SHTNSKIT_VERBOSE_STORAGE", "0") == "1"
             dense_bytes, packed_bytes, savings = estimate_memory_savings(lmax, mmax)
             @info "Using packed storage: $(round(savings, digits=1))% memory reduction ($(packed_bytes ÷ 1024) KB vs $(dense_bytes ÷ 1024) KB)"
@@ -258,18 +258,29 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
                     tblcol = view(cfg.plm_tables[col], :, iglob)
                     cached_table_views[cache_key] = tblcol
                 end
-                
-                # CANNOT use @simd ivdep - accumulating into same temp_dense[l+1, col] across iterations
-                @inbounds @simd for l in mval:lmax
-                    temp_dense[l+1, col] += wi * tblcol[l+1] * Fi
+                if use_packed_storage
+                    @inbounds @simd for l in mval:lmax
+                        lm = storage_info.lm_to_packed[l+1, col]
+                        Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * tblcol[l+1]) * Fi
+                    end
+                else
+                    @inbounds @simd for l in mval:lmax
+                        temp_dense[l+1, col] += wi * tblcol[l+1] * Fi
+                    end
                 end
             else
                 # Fallback: compute Legendre polynomials on-demand with better error handling
                 try
                     SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
-                    # CANNOT use @simd ivdep - accumulating into same temp_dense[l+1, col] across iterations
-                    @inbounds @simd for l in mval:lmax
-                        temp_dense[l+1, col] += wi * P[l+1] * Fi
+                    if use_packed_storage
+                        @inbounds @simd for l in mval:lmax
+                            lm = storage_info.lm_to_packed[l+1, col]
+                            Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * P[l+1]) * Fi
+                        end
+                    else
+                        @inbounds @simd for l in mval:lmax
+                            temp_dense[l+1, col] += wi * P[l+1] * Fi
+                        end
                     end
                 catch e
                     error("Failed to compute Legendre polynomials at latitude index $iglob: $e")
@@ -280,21 +291,8 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     
     # Handle MPI reduction based on storage type with optimized communication
     if use_packed_storage
-        # Use efficient reduction for large spectral arrays
-        SHTnsKitParallelExt.efficient_spectral_reduce!(temp_dense, comm)
-        # Apply normalization to dense matrix with SIMD optimization
-        # Each (l,m) element is independent, so ivdep is safe
-        @inbounds for m in 0:mmax
-            @simd ivdep for l in m:lmax
-                temp_dense[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
-            end
-        end
-        # Convert to optimized packed storage
-        if storage_info !== nothing
-            _dense_to_packed!(Alm_local, temp_dense, storage_info)
-        else
-            _dense_to_packed!(Alm_local, temp_dense, cfg)  # Fallback
-        end
+        # Reduce packed coefficients directly (already normalized during accumulation)
+        SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
     else
         # Use efficient reduction for large spectral arrays
         SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
@@ -340,9 +338,7 @@ function dist_analysis_fused_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::Penci
     
     if use_packed_storage
         Alm_local = zeros(ComplexF64, storage_info.nlm_packed)
-        temp_dense = zeros(ComplexF64, lmax+1, mmax+1)
-        
-        # Log storage efficiency in fused mode
+        temp_dense = nothing
         if get(ENV, "SHTNSKIT_VERBOSE_STORAGE", "0") == "1"
             dense_bytes, packed_bytes, savings = estimate_memory_savings(lmax, mmax)
             @info "Fused analysis using packed storage: $(round(savings, digits=1))% memory saved"
@@ -418,21 +414,34 @@ function dist_analysis_fused_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::Penci
                             view_col
                         end
                         
-                        # FUSED: Integration + normalization in single loop
-                        @inbounds @simd for l in mval:lmax
-                            # Combine weight, normalization, and phi scaling
-                            fused_weight = wi * cfg.Nlm[l+1, col] * cfg.cphi
-                            temp_dense[l+1, col] += (fused_weight * tblcol[l+1]) * Fi
+                        # FUSED: Integration + normalization (+ packing when enabled)
+                        if use_packed_storage
+                            @inbounds @simd for l in mval:lmax
+                                fused_weight = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                lm = storage_info.lm_to_packed[l+1, col]
+                                Alm_local[lm] += (fused_weight * tblcol[l+1]) * Fi
+                            end
+                        else
+                            @inbounds @simd for l in mval:lmax
+                                fused_weight = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                temp_dense[l+1, col] += (fused_weight * tblcol[l+1]) * Fi
+                            end
                         end
                     else
                         # Fallback with fused operations
                         try
                             SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
-                            # FUSED: Integration + normalization in single loop
-                            @inbounds @simd for l in mval:lmax
-                                # Combine weight, normalization, and phi scaling
-                                fused_weight = wi * cfg.Nlm[l+1, col] * cfg.cphi
-                                temp_dense[l+1, col] += (fused_weight * P[l+1]) * Fi
+                            if use_packed_storage
+                                @inbounds @simd for l in mval:lmax
+                                    fused_weight = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                    lm = storage_info.lm_to_packed[l+1, col]
+                                    Alm_local[lm] += (fused_weight * P[l+1]) * Fi
+                                end
+                            else
+                                @inbounds @simd for l in mval:lmax
+                                    fused_weight = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                    temp_dense[l+1, col] += (fused_weight * P[l+1]) * Fi
+                                end
                             end
                         catch e
                             error("Failed to compute Legendre polynomials in fused analysis at latitude $iglob: $e")
@@ -445,12 +454,7 @@ function dist_analysis_fused_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::Penci
     
     # Handle MPI reduction and storage conversion
     if use_packed_storage
-        SHTnsKitParallelExt.efficient_spectral_reduce!(temp_dense, comm)
-        if storage_info !== nothing
-            _dense_to_packed!(Alm_local, temp_dense, storage_info)
-        else
-            _dense_to_packed!(Alm_local, temp_dense, cfg)  # Fallback
-        end
+        SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
     else
         SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
     end
@@ -488,7 +492,7 @@ function dist_analysis_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray
     # Use packed storage for better memory efficiency
     if use_packed_storage
         Alm_local = zeros(ComplexF64, cfg.nlm)
-        temp_dense = zeros(ComplexF64, lmax+1, mmax+1)
+        temp_dense = nothing
     else
         Alm_local = zeros(ComplexF64, lmax+1, mmax+1)
         temp_dense = Alm_local
@@ -567,21 +571,33 @@ function dist_analysis_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray
                             end
                         end
                         
-                        # CANNOT use @simd ivdep - accumulating into same temp_dense[l+1, col] across iterations
-                        @inbounds @simd for l in mval:lmax
-                            # FUSION: Combine integration with normalization
-                            weight_norm = wi * cfg.Nlm[l+1, col] * cfg.cphi
-                            temp_dense[l+1, col] += (weight_norm * tblcol[l+1]) * Fi
+                        if use_packed_storage
+                            @inbounds @simd for l in mval:lmax
+                                weight_norm = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                lm = storage_info.lm_to_packed[l+1, col]
+                                Alm_local[lm] += (weight_norm * tblcol[l+1]) * Fi
+                            end
+                        else
+                            @inbounds @simd for l in mval:lmax
+                                weight_norm = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                temp_dense[l+1, col] += (weight_norm * tblcol[l+1]) * Fi
+                            end
                         end
                     else
                         # Fallback with better error handling
                         try
                             SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
-                            # CANNOT use @simd ivdep - accumulating into same temp_dense[l+1, col] across iterations
-                            @inbounds @simd for l in mval:lmax
-                                # FUSION: Combine integration with normalization
-                                weight_norm = wi * cfg.Nlm[l+1, col] * cfg.cphi
-                                temp_dense[l+1, col] += (weight_norm * P[l+1]) * Fi
+                            if use_packed_storage
+                                @inbounds @simd for l in mval:lmax
+                                    weight_norm = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                    lm = storage_info.lm_to_packed[l+1, col]
+                                    Alm_local[lm] += (weight_norm * P[l+1]) * Fi
+                                end
+                            else
+                                @inbounds @simd for l in mval:lmax
+                                    weight_norm = wi * cfg.Nlm[l+1, col] * cfg.cphi
+                                    temp_dense[l+1, col] += (weight_norm * P[l+1]) * Fi
+                                end
                             end
                         catch e
                             error("Failed to compute Legendre polynomials in cache-blocked analysis at latitude $iglob: $e")
@@ -592,13 +608,8 @@ function dist_analysis_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray
         end
     end
     
-    # Handle MPI reduction and final processing
-    if use_packed_storage
-        SHTnsKitParallelExt.efficient_spectral_reduce!(temp_dense, comm)
-        _dense_to_packed!(Alm_local, temp_dense, cfg)
-    else
-        SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
-    end
+    # Handle MPI reduction and final processing (packed already normalized)
+    SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
     
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         Alm_out = similar(Alm_local)

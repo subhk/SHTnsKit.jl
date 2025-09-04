@@ -56,17 +56,26 @@ let
     # Create a real spatial field on the Gauss×equiangular grid
     f = randn(Float64, cfg.nlat, cfg.nlon)
 
-    # Roundtrip: spatial -> spectral (full) -> spatial
-    alm = analysis(cfg, f)
-    f2 = synthesis(cfg, alm; real_output=true)
-
-    # Compute local max abs error and reduce to global
-    local_err = maximum(abs.(f2 .- f))
-    global_err = Ref(0.0)
-    MPI.Allreduce!(Ref(local_err), global_err, MPI.MAX, COMM)
+    # Roundtrip diagnostics: fused vs non-fused
+    alm_fused = analysis(cfg, f; use_fused_loops=true)
+    f2_fused = synthesis(cfg, alm_fused; real_output=true, use_fused_loops=true)
+    alm_nf = analysis(cfg, f; use_fused_loops=false)
+    f2_nf = synthesis(cfg, alm_nf; real_output=true, use_fused_loops=false)
+    # Local errors
+    lmax_f = maximum(abs.(f2_fused .- f))
+    lrel_f = sqrt(sum(abs2, f2_fused .- f) / (sum(abs2, f) + eps()))
+    lmax_nf = maximum(abs.(f2_nf .- f))
+    lrel_nf = sqrt(sum(abs2, f2_nf .- f) / (sum(abs2, f) + eps()))
+    # Reduce max across ranks
+    gmax_f = Ref(0.0); grel_f = Ref(0.0); gmax_nf = Ref(0.0); grel_nf = Ref(0.0)
+    MPI.Allreduce!(Ref(lmax_f), gmax_f, MPI.MAX, COMM)
+    MPI.Allreduce!(Ref(lrel_f), grel_f, MPI.MAX, COMM)
+    MPI.Allreduce!(Ref(lmax_nf), gmax_nf, MPI.MAX, COMM)
+    MPI.Allreduce!(Ref(lrel_nf), grel_nf, MPI.MAX, COMM)
 
     if RANK == 0
-        println("Roundtrip complete. max|f̂−f| = $(global_err[])")
+        println("Roundtrip (fused):    max|f̂−f|=$(gmax_f[]), rel=$(grel_f[])")
+        println("Roundtrip (nonfused): max|f̂−f|=$(gmax_nf[]), rel=$(grel_nf[])\n")
     end
 
     # Optional: demonstrate safe PencilArrays allocation patterns
@@ -77,9 +86,12 @@ let
         MPI.Barrier(COMM)
         try
             # Construct a 2D pencil decomposition matching the spatial grid
-            # Note: API varies slightly across versions; the following pattern
-            # works with recent PencilArrays:
-            pencil = PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
+            # Prefer named-axes API, fall back to older positional signature
+            pencil = try
+                PencilArrays.Pencil((:θ,:φ), (cfg.nlat, cfg.nlon); comm=COMM)
+            catch
+                PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
+            end
 
             # Try multiple variants for cross-version compatibility
             A = try
@@ -88,7 +100,15 @@ let
                 try
                     PencilArrays.zeros(pencil; eltype=Float64)
                 catch
-                    tmp = similar(pencil, Float64); fill!(tmp, 0.0); tmp
+                    try
+                        PencilArrays.PencilArray(undef, Float64, pencil) |> x -> (fill!(x, 0.0); x)
+                    catch
+                        try
+                            PencilArrays.PencilArray{Float64}(undef, pencil) |> x -> (fill!(x, 0.0); x)
+                        catch
+                            error("No compatible PencilArrays zeros/similar/PencilArray constructor found")
+                        end
+                    end
                 end
             end
 
@@ -103,6 +123,45 @@ let
         catch e
             if RANK == 0
                 @warn "PencilArrays allocation demo failed (version/API mismatch)" exception=(e, catch_backtrace())
+            end
+        end
+
+        # Optional: distributed packed roundtrip (uses extension helpers)
+        try
+            MPI.Barrier(COMM)
+            if RANK == 0
+                println("Distributed packed roundtrip demo…")
+            end
+            pencil = try
+                PencilArrays.Pencil((:θ,:φ), (cfg.nlat, cfg.nlon); comm=COMM)
+            catch
+                PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
+            end
+            fθφ = try
+                PencilArrays.zeros(Float64, pencil)
+            catch
+                try
+                    PencilArrays.zeros(pencil; eltype=Float64)
+                catch
+                    PencilArrays.PencilArray(undef, Float64, pencil) |> x -> (fill!(x, 0.0); x)
+                end
+            end
+            # Local fill (deterministic pattern)
+            for (iθ, iφ) in Iterators.product(axes(fθφ,1), axes(fθφ,2))
+                fθφ[iθ, iφ] = sin(0.11*Int(iθ)) + cos(0.07*Int(iφ))
+            end
+            Qlm = SHTnsKit.dist_spat_to_SH_packed(cfg, fθφ)
+            fθφ_rt = SHTnsKit.dist_SH_packed_to_spat(cfg, Qlm; prototype_θφ=fθφ, real_output=true)
+            # Relative error across ranks
+            lrel = sqrt(sum(abs2, Array(fθφ_rt) .- Array(fθφ)) / (sum(abs2, Array(fθφ)) + eps()))
+            grel = Ref(0.0)
+            MPI.Allreduce!(Ref(lrel), grel, MPI.MAX, COMM)
+            if RANK == 0
+                println("Distributed packed roundtrip rel error: $(grel[])\n")
+            end
+        catch e
+            if RANK == 0
+                @warn "Distributed packed roundtrip demo skipped" exception=(e, catch_backtrace())
             end
         end
     elseif RANK == 0

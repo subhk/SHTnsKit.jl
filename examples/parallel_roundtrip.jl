@@ -81,8 +81,16 @@ let
             # works with recent PencilArrays:
             pencil = PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
 
-            # Correct: use positional eltype argument
-            A = PencilArrays.zeros(Float64, pencil)
+            # Try multiple variants for cross-version compatibility
+            A = try
+                PencilArrays.zeros(Float64, pencil)
+            catch
+                try
+                    PencilArrays.zeros(pencil; eltype=Float64)
+                catch
+                    tmp = similar(pencil, Float64); fill!(tmp, 0.0); tmp
+                end
+            end
 
             # Safe fallback that works across versions
             B = similar(pencil, ComplexF64)

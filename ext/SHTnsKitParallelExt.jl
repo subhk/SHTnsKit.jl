@@ -328,24 +328,14 @@ include("ParallelLocal.jl")            # Local (per-process) operations and util
 
 # Optimized communication patterns for large spectral arrays
 function efficient_spectral_reduce!(local_data::AbstractMatrix, comm)
-    # Advanced hierarchical reduction with node-aware communication topology
-    # Optimizes for NUMA domains, compute nodes, and network topology
-    rank = MPI.Comm_rank(comm)
-    nprocs = MPI.Comm_size(comm)
-    
-    if nprocs <= 8 || length(local_data) < 5000
-        # For small problems, use standard Allreduce
-        MPI.Allreduce!(local_data, +, comm)
-        return local_data
-    end
-    
-    # Try to detect node-local communication capabilities
-    node_size = get(ENV, "SHTNSKIT_NODE_SIZE", "0")
-    ppn = node_size == "0" ? min(nprocs, 32) : parse(Int, node_size)  # processes per node
-    
-    # Multi-level hierarchical reduction for better scaling
-    hierarchical_spectral_reduce!(local_data, comm, ppn)
-    return local_data
+    # Delegate to adaptive strategy which selects among sparse, segmented,
+    # hierarchical, or dense reductions based on data/process characteristics.
+    return adaptive_spectral_communication!(local_data, comm; operation=+)
+end
+
+function efficient_spectral_reduce!(local_data::AbstractVector, comm)
+    # Vector specialization using the adaptive strategy as well.
+    return adaptive_spectral_communication!(local_data, comm; operation=+)
 end
 
 function hierarchical_spectral_reduce!(local_data::AbstractMatrix, comm, ppn::Int)

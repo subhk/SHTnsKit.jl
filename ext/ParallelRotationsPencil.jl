@@ -242,29 +242,11 @@ function SHTnsKit.dist_SH_Zrotate_packed(cfg::SHTnsKit.SHTConfig,
                                          Qlm::AbstractVector{<:Complex}, α::Real;
                                          prototype_lm::PencilArray)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be $(cfg.nlm)"))
-    lmax, mmax = cfg.lmax, cfg.mmax
-    # Unpack to dense Alm
-    Alm = zeros(ComplexF64, lmax+1, mmax+1)
-    @inbounds for m in 0:mmax, l in m:lmax
-        Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1]
-    end
-    # Distribute and rotate
-    Alm_p = PencilArray(Alm)
-    R_p = allocate(Alm_p; dims=(:l,:m), eltype=ComplexF64)
-    SHTnsKit.dist_SH_Zrotate(cfg, Alm_p, α, R_p)
-    # Gather to dense
-    Rlm_mat = zeros(ComplexF64, lmax+1, mmax+1)
-    lloc = axes(R_p, 1); mloc = axes(R_p, 2)
-    gl_l = globalindices(R_p, 1)
-    gl_m = globalindices(R_p, 2)
-    for (ii, il) in enumerate(lloc), (jj, jm) in enumerate(mloc)
-        Rlm_mat[gl_l[ii], gl_m[jj]] = R_p[il, jm]
-    end
-    MPI.Allreduce!(Rlm_mat, +, communicator(R_p))
-    # Pack back
+    # Z-rotation is diagonal in m; no communication needed
     Rlm = similar(Qlm)
-    @inbounds for m in 0:mmax, l in m:lmax
-        Rlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1] = Rlm_mat[l+1, m+1]
+    @inbounds for k in eachindex(Qlm)
+        m = cfg.mi[k]
+        Rlm[k] = cis(m * α) * Qlm[k]
     end
     return Rlm
 end

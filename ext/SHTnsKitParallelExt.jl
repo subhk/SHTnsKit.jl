@@ -533,23 +533,54 @@ function segmented_spectral_reduce!(data::AbstractArray, comm, operation)
     segment_size = min(length(data), max_elements_per_segment)
     num_segments = (length(data) + segment_size - 1) ÷ segment_size
     
-    # Process segments with overlapped communication
-    temp_buffer = similar(data, segment_size)
+    # Process segments with overlapped communication (double-buffered)
+    temp_a = similar(data, segment_size)
+    temp_b = similar(data, segment_size)
+    prev_req = nothing
+    prev_buf = nothing  # :a or :b
+    prev_len = 0
+    prev_start = 0
     
     for seg in 1:num_segments
         start_idx = (seg - 1) * segment_size + 1
         end_idx = min(seg * segment_size, length(data))
         segment_data = view(data, start_idx:end_idx)
+        cur_len = length(segment_data)
         
-        # Copy to buffer for safe communication
-        temp_view = view(temp_buffer, 1:length(segment_data))
+        # Choose buffer not in use by previous outstanding request
+        buf_sym = (prev_buf == :a) ? :b : :a
+        temp_view = buf_sym === :a ? view(temp_a, 1:cur_len) : view(temp_b, 1:cur_len)
         copyto!(temp_view, segment_data)
         
-        # Non-blocking reduction of this segment
-        MPI.Allreduce!(temp_view, operation, comm)
+        # Launch nonblocking reduction for current segment
+        req = MPI.Iallreduce!(temp_view, operation, comm)
         
-        # Copy results back
-        copyto!(segment_data, temp_view)
+        # Complete previous request and write back
+        if prev_req !== nothing
+            MPI.Wait(prev_req)
+            # previous segment range
+            pstart = prev_start
+            pend = min(pstart + prev_len - 1, length(data))
+            prev_data = view(data, pstart:pend)
+            prev_view = (prev_buf === :a ? view(temp_a, 1:prev_len) : view(temp_b, 1:prev_len))
+            copyto!(prev_data, prev_view)
+        end
+        
+        # Promote current to previous
+        prev_req = req
+        prev_buf = buf_sym
+        prev_len = cur_len
+        prev_start = start_idx
+    end
+    
+    # Final pending segment
+    if prev_req !== nothing
+        MPI.Wait(prev_req)
+        pstart = prev_start
+        pend = min(pstart + prev_len - 1, length(data))
+        prev_data = view(data, pstart:pend)
+        prev_view = (prev_buf === :a ? view(temp_a, 1:prev_len) : view(temp_b, 1:prev_len))
+        copyto!(prev_data, prev_view)
     end
     
     return data

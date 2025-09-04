@@ -654,8 +654,13 @@ function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::Penci
     end
     Fθm = transpose(Fθk, (; dims=(1,2), names=(:θ,:m)))
     
-    # Use pre-allocated storage from scratch buffers
-    fill!(scratch.temp_dense, 0.0 + 0.0im)  # Reset dense storage
+    # If using packed storage, accumulate directly into packed coefficients
+    use_packed = plan.use_packed_storage
+    storage_info = use_packed ? create_packed_storage_info(cfg) : nothing
+    Alm_local = use_packed ? zeros(ComplexF64, storage_info.nlm_packed) : scratch.temp_dense
+    if !use_packed
+        fill!(scratch.temp_dense, 0.0 + 0.0im)
+    end
     
     # Use plan's pre-computed index maps (no allocations)
     θ_globals = plan.θ_local_to_global
@@ -692,17 +697,29 @@ function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::Penci
                         scratch.table_view_cache[cache_key] = tblcol
                     end
                 end
-                
-                # Optimized integration using scratch.temp_dense
-                @inbounds @simd for l in mval:lmax
-                    scratch.temp_dense[l+1, col] += wi * tblcol[l+1] * Fi
+                if use_packed
+                    @inbounds @simd for l in mval:lmax
+                        lm = storage_info.lm_to_packed[l+1, col]
+                        Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * tblcol[l+1]) * Fi
+                    end
+                else
+                    @inbounds @simd for l in mval:lmax
+                        scratch.temp_dense[l+1, col] += wi * tblcol[l+1] * Fi
+                    end
                 end
             else
                 # Use pre-allocated Legendre buffer from scratch
                 try
                     SHTnsKit.Plm_row!(scratch.legendre_buffer, cfg.x[iglob], lmax, mval)
-                    @inbounds @simd for l in mval:lmax
-                        scratch.temp_dense[l+1, col] += wi * scratch.legendre_buffer[l+1] * Fi
+                    if use_packed
+                        @inbounds @simd for l in mval:lmax
+                            lm = storage_info.lm_to_packed[l+1, col]
+                            Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * scratch.legendre_buffer[l+1]) * Fi
+                        end
+                    else
+                        @inbounds @simd for l in mval:lmax
+                            scratch.temp_dense[l+1, col] += wi * scratch.legendre_buffer[l+1] * Fi
+                        end
                     end
                 catch e
                     error("Failed to compute Legendre polynomials with scratch buffers at latitude $iglob: $e")
@@ -712,23 +729,21 @@ function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::Penci
     end
     
     # Handle MPI reduction with optimized communication
-    SHTnsKitParallelExt.efficient_spectral_reduce!(scratch.temp_dense, comm)
+    SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
     
-    # Apply normalization using scratch.temp_dense
-    @inbounds for m in 0:mmax
-        @simd ivdep for l in m:lmax
-            scratch.temp_dense[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
-        end
-    end
-    
-    # Return appropriate storage format
-    if plan.use_packed_storage
-        # Convert to packed storage
-        Alm_local = zeros(ComplexF64, cfg.nlm)
-        _dense_to_packed!(Alm_local, scratch.temp_dense, cfg)
+    # Always return dense matrix for compatibility with dist_analysis!(..., Alm_out::AbstractMatrix, ...)
+    if use_packed
+        dense = zeros(ComplexF64, lmax+1, mmax+1)
+        _packed_to_dense!(dense, Alm_local, cfg)
+        Alm_local = dense
     else
-        # Return dense storage (make copy to preserve scratch buffer)
         Alm_local = copy(scratch.temp_dense)
+        # Apply normalization in dense path
+        @inbounds for m in 0:mmax
+            @simd ivdep for l in m:lmax
+                Alm_local[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
+            end
+        end
     end
     
     # Convert to user's requested normalization if needed

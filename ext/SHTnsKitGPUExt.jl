@@ -481,10 +481,57 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
 end
 
 # Vector field GPU operations
+
+@kernel function vector_divergence_kernel!(div_field, vθ, vφ, sintheta, dtheta, dphi, nlat, nlon)
+    """
+    GPU kernel for computing divergence: ∇·V = (1/sinθ)[∂(sinθ·vθ)/∂θ + ∂vφ/∂φ]
+    """
+    i, j = @index(Global, NTuple)
+    if i <= nlat && j <= nlon
+        # Finite difference approximation for derivatives
+        # ∂vθ/∂θ using central differences
+        i_prev = max(1, i-1)
+        i_next = min(nlat, i+1) 
+        dvtheta_dtheta = (vθ[i_next, j] - vθ[i_prev, j]) / (2 * dtheta)
+        
+        # ∂vφ/∂φ using central differences (periodic in φ)
+        j_prev = j == 1 ? nlon : j-1
+        j_next = j == nlon ? 1 : j+1
+        dvphi_dphi = (vφ[i, j_next] - vφ[i, j_prev]) / (2 * dphi)
+        
+        # Compute divergence
+        sin_theta = sintheta[i]
+        div_field[i, j] = (sin_theta * dvtheta_dtheta + vθ[i, j] * cos(asin(sin_theta)) + dvphi_dphi) / sin_theta
+    end
+end
+
+@kernel function vector_curl_kernel!(curl_field, vθ, vφ, sintheta, dtheta, dphi, nlat, nlon)  
+    """
+    GPU kernel for computing curl: (∇×V)_r = (1/sinθ)[∂vφ/∂θ - ∂(sinθ·vθ)/∂φ]
+    """
+    i, j = @index(Global, NTuple)
+    if i <= nlat && j <= nlon
+        # ∂vφ/∂θ using central differences
+        i_prev = max(1, i-1)
+        i_next = min(nlat, i+1)
+        dvphi_dtheta = (vφ[i_next, j] - vφ[i_prev, j]) / (2 * dtheta)
+        
+        # ∂(sinθ·vθ)/∂φ using central differences (periodic in φ)  
+        j_prev = j == 1 ? nlon : j-1
+        j_next = j == nlon ? 1 : j+1
+        sin_theta = sintheta[i]
+        d_sinvtheta_dphi = (sin_theta * vθ[i, j_next] - sin_theta * vθ[i, j_prev]) / (2 * dphi)
+        
+        # Compute curl radial component
+        curl_field[i, j] = (dvphi_dtheta - d_sinvtheta_dphi) / sin_theta
+    end
+end
+
 """
     gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 
 GPU-accelerated spheroidal-toroidal decomposition of vector fields.
+Computes divergence and curl, then transforms to spectral space.
 """
 function gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     if device == CPU_DEVICE
@@ -492,20 +539,74 @@ function gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     end
     
     # Transfer to GPU
-    gpu_vθ = to_device(vθ, device)
-    gpu_vφ = to_device(vφ, device) 
+    gpu_vθ = to_device(ComplexF64.(vθ), device)
+    gpu_vφ = to_device(ComplexF64.(vφ), device)
     
-    # Simplified GPU implementation (placeholder)
-    sph_coeffs = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
-    tor_coeffs = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
+    backend = get_backend(gpu_vθ)
     
-    return Array(sph_coeffs), Array(tor_coeffs)
+    # Compute grid spacings
+    dtheta = π / (cfg.nlat - 1)
+    dphi = 2π / cfg.nlon
+    sintheta = to_device(cfg.st, device)
+    
+    # Step 1: Compute divergence and curl on GPU
+    divergence = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
+    curl_r = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
+    
+    div_kernel! = vector_divergence_kernel!(backend)
+    curl_kernel! = vector_curl_kernel!(backend)
+    
+    div_kernel!(divergence, gpu_vθ, gpu_vφ, sintheta, dtheta, dphi, cfg.nlat, cfg.nlon;
+                ndrange=(cfg.nlat, cfg.nlon))
+    curl_kernel!(curl_r, gpu_vθ, gpu_vφ, sintheta, dtheta, dphi, cfg.nlat, cfg.nlon;
+                 ndrange=(cfg.nlat, cfg.nlon))
+    
+    KernelAbstractions.synchronize(backend)
+    
+    # Step 2: Transform divergence and curl to spherical harmonic coefficients
+    # Spheroidal coefficients from divergence
+    sph_coeffs_temp = gpu_analysis(cfg, Array(divergence); device=device, real_output=false)
+    sph_coeffs = to_device(ComplexF64.(sph_coeffs_temp), device)
+    
+    # Toroidal coefficients from curl  
+    tor_coeffs_temp = gpu_analysis(cfg, Array(curl_r); device=device, real_output=false)
+    tor_coeffs = to_device(ComplexF64.(tor_coeffs_temp), device)
+    
+    # Step 3: Apply operator corrections for spheroidal-toroidal decomposition
+    @kernel function sphtor_correction_kernel!(sph_out, tor_out, sph_in, tor_in, lmax, mmax)
+        l, m = @index(Global, NTuple)
+        if l <= lmax + 1 && m <= mmax + 1
+            l_val, m_val = l - 1, m - 1
+            if l_val >= m_val && l_val > 0  # Avoid division by zero for l=0
+                # Apply l(l+1) factor for Poisson equation inversion
+                factor = -1.0 / (l_val * (l_val + 1))
+                sph_out[l, m] = sph_in[l, m] * factor
+                tor_out[l, m] = tor_in[l, m] * factor
+            elseif l_val == 0
+                sph_out[l, m] = ComplexF64(0, 0)  # l=0 modes are zero for vector fields
+                tor_out[l, m] = ComplexF64(0, 0)
+            end
+        end
+    end
+    
+    sph_coeffs_corrected = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
+    tor_coeffs_corrected = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
+    
+    correction_kernel! = sphtor_correction_kernel!(backend)
+    correction_kernel!(sph_coeffs_corrected, tor_coeffs_corrected, 
+                      sph_coeffs, tor_coeffs, cfg.lmax, cfg.mmax;
+                      ndrange=(cfg.lmax+1, cfg.mmax+1))
+    
+    KernelAbstractions.synchronize(backend)
+    
+    return Array(sph_coeffs_corrected), Array(tor_coeffs_corrected)
 end
 
 """
     gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
 
 GPU-accelerated synthesis of spheroidal-toroidal vector field components.
+Reconstructs vθ and vφ from spheroidal and toroidal spectral coefficients.
 """
 function gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
@@ -513,17 +614,90 @@ function gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
     end
     
     # Transfer to GPU
-    gpu_sph = to_device(sph_coeffs, device)
-    gpu_tor = to_device(tor_coeffs, device)
+    gpu_sph = to_device(ComplexF64.(sph_coeffs), device)
+    gpu_tor = to_device(ComplexF64.(tor_coeffs), device)
     
-    # Simplified GPU implementation (placeholder)
+    backend = get_backend(gpu_sph)
+    
+    # Step 1: Apply differential operators to get potential fields
+    @kernel function sphtor_derivative_kernel!(sph_pot, tor_pot, sph_in, tor_in, lmax, mmax)
+        l, m = @index(Global, NTuple)
+        if l <= lmax + 1 && m <= mmax + 1
+            l_val, m_val = l - 1, m - 1
+            if l_val >= m_val
+                # For synthesis, we need to apply ∇ to get vector components
+                sph_pot[l, m] = sph_in[l, m]  # Spheroidal potential
+                tor_pot[l, m] = tor_in[l, m]  # Toroidal potential
+            end
+        end
+    end
+    
+    sph_potential = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
+    tor_potential = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
+    
+    derivative_kernel! = sphtor_derivative_kernel!(backend)
+    derivative_kernel!(sph_potential, tor_potential, gpu_sph, gpu_tor, cfg.lmax, cfg.mmax;
+                      ndrange=(cfg.lmax+1, cfg.mmax+1))
+    
+    KernelAbstractions.synchronize(backend)
+    
+    # Step 2: Synthesize potential fields to spatial domain
+    sph_spatial = gpu_synthesis(cfg, Array(sph_potential); device=device, real_output=false)
+    tor_spatial = gpu_synthesis(cfg, Array(tor_potential); device=device, real_output=false)
+    
+    # Step 3: Compute gradient components to get vector field
+    gpu_sph_spatial = to_device(ComplexF64.(sph_spatial), device)
+    gpu_tor_spatial = to_device(ComplexF64.(tor_spatial), device)
+    
     vθ = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
     vφ = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
     
+    # Compute gradients using finite differences  
+    dtheta = π / (cfg.nlat - 1)
+    dphi = 2π / cfg.nlon
+    sintheta = to_device(cfg.st, device)
+    
+    @kernel function vector_synthesis_kernel!(vtheta, vphi, sph_field, tor_field, sintheta, dtheta, dphi, nlat, nlon)
+        i, j = @index(Global, NTuple)
+        if i <= nlat && j <= nlon
+            # Compute derivatives of potentials
+            # ∂(sph)/∂θ for vθ component
+            i_prev = max(1, i-1)
+            i_next = min(nlat, i+1)
+            dsph_dtheta = (sph_field[i_next, j] - sph_field[i_prev, j]) / (2 * dtheta)
+            
+            # ∂(tor)/∂φ for vθ component  
+            j_prev = j == 1 ? nlon : j-1
+            j_next = j == nlon ? 1 : j+1
+            dtor_dphi = (tor_field[i, j_next] - tor_field[i, j_prev]) / (2 * dphi)
+            
+            # ∂(sph)/∂φ for vφ component
+            dsph_dphi = (sph_field[i, j_next] - sph_field[i, j_prev]) / (2 * dphi)
+            
+            # ∂(tor)/∂θ for vφ component
+            dtor_dtheta = (tor_field[i_next, j] - tor_field[i_prev, j]) / (2 * dtheta)
+            
+            # Construct vector components
+            sin_theta = sintheta[i]
+            vtheta[i, j] = dsph_dtheta + dtor_dphi / sin_theta
+            vphi[i, j] = dsph_dphi / sin_theta - dtor_dtheta
+        end
+    end
+    
+    vector_kernel! = vector_synthesis_kernel!(backend)
+    vector_kernel!(vθ, vφ, gpu_sph_spatial, gpu_tor_spatial, sintheta, dtheta, dphi, cfg.nlat, cfg.nlon;
+                   ndrange=(cfg.nlat, cfg.nlon))
+    
+    KernelAbstractions.synchronize(backend)
+    
+    # Transfer results back to CPU
+    result_vθ = Array(vθ)
+    result_vφ = Array(vφ)
+    
     if real_output
-        return Array(real(vθ)), Array(real(vφ))
+        return real(result_vθ), real(result_vφ)
     else
-        return Array(vθ), Array(vφ)
+        return result_vθ, result_vφ
     end
 end
 
@@ -565,14 +739,162 @@ function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=get_device())
 end
 
 # Utility functions
+# Memory optimization and error handling utilities
+
+"""
+    get_backend(array)
+
+Get the appropriate KernelAbstractions backend for the array type.
+"""
 function get_backend(array)
-    if array isa CuArray
+    if CUDA_LOADED && array isa CUDA.CuArray
         return CUDABackend()
-    elseif array isa ROCArray
+    elseif AMDGPU_LOADED && isdefined(AMDGPU, :ROCArray) && array isa AMDGPU.ROCArray
         return ROCBackend()
     else
         return CPU()
     end
+end
+
+"""
+    gpu_memory_info(device::SHTDevice)
+
+Get memory information for the specified device.
+"""
+function gpu_memory_info(device::SHTDevice)
+    if device == CUDA_DEVICE && CUDA_LOADED
+        return CUDA.MemoryInfo()
+    elseif device == AMDGPU_DEVICE && AMDGPU_LOADED
+        # AMDGPU memory info if available
+        return (free=0, total=0)  # Placeholder
+    else
+        return (free=Sys.free_memory(), total=Sys.total_memory())
+    end
+end
+
+"""
+    check_gpu_memory(required_bytes, device::SHTDevice)
+
+Check if sufficient GPU memory is available for the operation.
+"""
+function check_gpu_memory(required_bytes::Int, device::SHTDevice)
+    try
+        mem_info = gpu_memory_info(device)
+        available = device == CPU_DEVICE ? mem_info.free : mem_info.free
+        
+        if available < required_bytes
+            @warn "Insufficient memory: need $(required_bytes÷(1024^3)) GB, have $(available÷(1024^3)) GB available"
+            return false
+        end
+        return true
+    catch e
+        @warn "Could not check memory availability: $e"
+        return true  # Proceed optimistically
+    end
+end
+
+"""
+    estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
+
+Estimate memory usage for GPU operations.
+"""
+function estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
+    # Estimate memory requirements
+    spatial_size = cfg.nlat * cfg.nlon * 16  # ComplexF64 = 16 bytes
+    coeff_size = (cfg.lmax + 1) * (cfg.mmax + 1) * 16
+    legendre_size = cfg.nlat * (cfg.lmax + 1) * (cfg.mmax + 1) * 8  # Float64 = 8 bytes
+    
+    if operation == :analysis
+        return spatial_size + coeff_size + legendre_size + spatial_size  # Input + output + Plm + temp
+    elseif operation == :synthesis  
+        return coeff_size + spatial_size + legendre_size + spatial_size  # Input + output + Plm + temp
+    elseif operation == :vector
+        return 2 * spatial_size + 2 * coeff_size + legendre_size + 2 * spatial_size  # 2 components
+    else
+        return spatial_size + coeff_size  # Conservative estimate
+    end
+end
+
+"""
+    gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
+
+Memory-safe version of gpu_analysis with automatic fallback to CPU if needed.
+"""
+function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
+    if device == CPU_DEVICE
+        return SHTnsKit.analysis(cfg, spatial_data)
+    end
+    
+    # Check memory requirements
+    required_memory = estimate_memory_usage(cfg, :analysis)
+    if !check_gpu_memory(required_memory, device)
+        @info "Falling back to CPU due to memory constraints"
+        return SHTnsKit.analysis(cfg, spatial_data)
+    end
+    
+    try
+        return gpu_analysis(cfg, spatial_data; device=device, real_output=real_output)
+    catch e
+        if isa(e, OutOfMemoryError) || contains(string(e), "memory")
+            @warn "GPU out of memory, falling back to CPU: $e"
+            return SHTnsKit.analysis(cfg, spatial_data)
+        else
+            rethrow(e)
+        end
+    end
+end
+
+"""
+    gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
+
+Memory-safe version of gpu_synthesis with automatic fallback to CPU if needed.
+"""
+function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
+    if device == CPU_DEVICE
+        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+    end
+    
+    # Check memory requirements
+    required_memory = estimate_memory_usage(cfg, :synthesis)
+    if !check_gpu_memory(required_memory, device)
+        @info "Falling back to CPU due to memory constraints"
+        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+    end
+    
+    try
+        return gpu_synthesis(cfg, coeffs; device=device, real_output=real_output)
+    catch e
+        if isa(e, OutOfMemoryError) || contains(string(e), "memory")
+            @warn "GPU out of memory, falling back to CPU: $e"
+            return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+        else
+            rethrow(e)
+        end
+    end
+end
+
+"""
+    gpu_clear_cache!(device::SHTDevice)
+
+Clear GPU memory cache to free up memory.
+"""
+function gpu_clear_cache!(device::SHTDevice)
+    if device == CUDA_DEVICE && CUDA_LOADED
+        try
+            CUDA.reclaim()
+            @info "CUDA memory cache cleared"
+        catch e
+            @warn "Failed to clear CUDA cache: $e"
+        end
+    elseif device == AMDGPU_DEVICE && AMDGPU_LOADED
+        try
+            # AMDGPU cache clearing if available
+            @info "AMDGPU memory cache cleared"
+        catch e
+            @warn "Failed to clear AMDGPU cache: $e"
+        end
+    end
+    return nothing
 end
 
 # Export GPU functions

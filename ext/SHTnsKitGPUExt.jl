@@ -900,8 +900,10 @@ end
 # Export GPU functions
 export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE
 export get_device, set_device!, to_device
-export gpu_analysis, gpu_synthesis
-export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat
+export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe
+export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat  
 export gpu_apply_laplacian!, gpu_legendre!
+export gpu_memory_info, check_gpu_memory, gpu_clear_cache!
+export estimate_memory_usage
 
 end # module SHTnsKitGPUExt

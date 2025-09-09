@@ -103,9 +103,10 @@ export prepare_plm_tables!, enable_plm_tables!, disable_plm_tables!  # Precomput
 # GPU Computing functions (SHTnsKitGPUExt extension)
 export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE  # Device management
 export get_device, set_device!, to_device                 # Device utilities
-export gpu_analysis, gpu_synthesis                        # GPU transforms
+export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU transforms
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
 export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
+export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
 
 # Optional LoopVectorization-powered helpers (SHTnsKitLoopVecExt extension)
 export analysis_turbo, synthesis_turbo                    # Vectorized transforms

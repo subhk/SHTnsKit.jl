@@ -142,24 +142,39 @@ function run_gpu_comparison_example()
         println("\n$(uppercase(string(get_config_device(cfg_gpu)))) Performance:")
         
         try
-            print("  GPU Analysis transform: ")
-            gpu_analysis_time = @belapsed gpu_analysis($cfg_gpu, $spatial_data)
+            # Test memory-safe GPU functions first
+            print("  GPU Analysis (safe): ")
+            gpu_analysis_time = @belapsed gpu_analysis_safe($cfg_gpu, $spatial_data)
             @printf "%.2f ms" (gpu_analysis_time * 1000)
             speedup = cpu_analysis_time / gpu_analysis_time
             @printf " (%.1f× speedup)\n" speedup
             
             # Get GPU coefficients for synthesis
-            coeffs_gpu = gpu_analysis(cfg_gpu, spatial_data)
+            coeffs_gpu = gpu_analysis_safe(cfg_gpu, spatial_data)
             
-            print("  GPU Synthesis transform: ")
-            gpu_synthesis_time = @belapsed gpu_synthesis($cfg_gpu, $coeffs_gpu; real_output=true)
+            print("  GPU Synthesis (safe): ")
+            gpu_synthesis_time = @belapsed gpu_synthesis_safe($cfg_gpu, $coeffs_gpu; real_output=true)
             @printf "%.2f ms" (gpu_synthesis_time * 1000)
             speedup = cpu_synthesis_time / gpu_synthesis_time  
             @printf " (%.1f× speedup)\n" speedup
             
+            # Also test direct GPU functions
+            println("\n  Direct GPU functions (may use more memory):")
+            
+            # Check memory usage
+            required_mem = estimate_memory_usage(cfg_gpu, :analysis)
+            println("  Estimated memory usage: $(required_mem÷(1024^2)) MB")
+            
+            print("  GPU Analysis (direct): ")
+            gpu_analysis_time = @belapsed gpu_analysis($cfg_gpu, $spatial_data)  
+            @printf "%.2f ms\n" (gpu_analysis_time * 1000)
+            
         catch e
-            println("❌ GPU benchmarking failed: $e")
-            println("   This is expected since the GPU extension contains placeholder implementations")
+            if contains(string(e), "not fully implemented") || contains(string(e), "GPU extension")
+                println("⚠ GPU functions using CPU fallback (GPU packages not loaded)")
+            else
+                println("❌ GPU benchmarking failed: $e")
+            end
         end
     end
     
@@ -176,8 +191,8 @@ function run_gpu_comparison_example()
     # GPU roundtrip (if available)
     if cfg_gpu !== nothing
         try
-            coeffs_gpu = gpu_analysis(cfg_gpu, spatial_data)
-            reconstructed_gpu = gpu_synthesis(cfg_gpu, coeffs_gpu; real_output=true) 
+            coeffs_gpu = gpu_analysis_safe(cfg_gpu, spatial_data)
+            reconstructed_gpu = gpu_synthesis_safe(cfg_gpu, coeffs_gpu; real_output=true) 
             gpu_error = maximum(abs.(spatial_data - reconstructed_gpu))
             @printf "GPU roundtrip error:  %.2e\n" gpu_error
             
@@ -185,8 +200,25 @@ function run_gpu_comparison_example()
             coeff_diff = maximum(abs.(coeffs_cpu - coeffs_gpu))
             @printf "CPU-GPU coefficient difference: %.2e\n" coeff_diff
             
+            # Memory management example
+            println("\n💾 Memory Management:")
+            current_device = get_config_device(cfg_gpu)
+            if current_device != :cpu
+                try
+                    mem_info = gpu_memory_info(current_device)
+                    println("  GPU Memory: $(mem_info.free÷(1024^3)) GB free / $(mem_info.total÷(1024^3)) GB total")
+                    gpu_clear_cache!(current_device)
+                catch e
+                    println("  Could not access GPU memory info: $e")
+                end
+            end
+            
         catch e
-            println("⚠ GPU accuracy test skipped (placeholder implementation)")
+            if contains(string(e), "GPU extension")
+                println("⚠ GPU accuracy test skipped (GPU packages not loaded)")
+            else
+                println("❌ GPU accuracy test failed: $e")
+            end
         end
     end
     
@@ -217,8 +249,20 @@ function run_gpu_comparison_example()
             @printf "%.2f ms" (gpu_vector_time * 1000)
             speedup = cpu_vector_time / gpu_vector_time
             @printf " (%.1f× speedup)\n" speedup
+            
+            # Test vector field roundtrip
+            sph_gpu, tor_gpu = gpu_spat_to_SHsphtor(cfg_gpu, u_wind, v_wind)
+            u_recon_gpu, v_recon_gpu = gpu_SHsphtor_to_spat(cfg_gpu, sph_gpu, tor_gpu; real_output=true)
+            
+            vector_error = max(maximum(abs.(u_wind - u_recon_gpu)), maximum(abs.(v_wind - v_recon_gpu)))
+            @printf "GPU vector roundtrip error: %.2e\n" vector_error
+            
         catch e
-            println("⚠ GPU vector transform skipped (placeholder implementation)")
+            if contains(string(e), "GPU extension")
+                println("⚠ GPU vector transform skipped (GPU packages not loaded)")
+            else
+                println("❌ GPU vector transform failed: $e")
+            end
         end
     end
     

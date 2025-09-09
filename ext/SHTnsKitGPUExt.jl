@@ -63,6 +63,106 @@ function get_device()
 end
 
 """
+    get_available_gpus()
+
+Returns a list of available GPU devices with their IDs and types.
+"""
+function get_available_gpus()
+    gpus = []
+    
+    if CUDA_LOADED && CUDA.functional()
+        for i = 0:(CUDA.ndevices()-1)
+            push!(gpus, (device=:cuda, id=i, name=CUDA.name(CUDA.CuDevice(i))))
+        end
+    end
+    
+    if AMDGPU_LOADED && AMDGPU.functional()
+        # AMDGPU device enumeration if available
+        try
+            for i = 0:(AMDGPU.ndevices()-1)
+                push!(gpus, (device=:amdgpu, id=i, name="AMDGPU Device $i"))
+            end
+        catch
+            # Fallback if AMDGPU doesn't support device enumeration
+        end
+    end
+    
+    return gpus
+end
+
+"""
+    set_gpu_device(device_type::Symbol, device_id::Int)
+
+Set the active GPU device by type and ID.
+"""
+function set_gpu_device(device_type::Symbol, device_id::Int)
+    if device_type == :cuda && CUDA_LOADED
+        CUDA.device!(device_id)
+        return true
+    elseif device_type == :amdgpu && AMDGPU_LOADED
+        # AMDGPU device selection if available
+        try
+            AMDGPU.device!(device_id)
+            return true
+        catch
+            return false
+        end
+    else
+        return false
+    end
+end
+
+"""
+    MultiGPUConfig
+
+Configuration for multi-GPU spherical harmonic transforms.
+"""
+struct MultiGPUConfig
+    base_config::Any  # SHTConfig
+    gpu_devices::Vector{NamedTuple}
+    distribution_strategy::Symbol  # :latitude, :longitude, :spectral
+    primary_gpu::Int
+end
+
+"""
+    create_multi_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude, gpu_ids=nothing)
+
+Create a multi-GPU configuration for spherical harmonic transforms.
+"""
+function create_multi_gpu_config(lmax::Int, nlat::Int; 
+                                 nlon::Union{Int,Nothing}=nothing,
+                                 strategy::Symbol=:latitude,
+                                 gpu_ids::Union{Vector{Int},Nothing}=nothing)
+    
+    # Get available GPUs
+    available_gpus = get_available_gpus()
+    if isempty(available_gpus)
+        error("No GPUs available for multi-GPU configuration")
+    end
+    
+    # Select GPUs to use
+    if gpu_ids === nothing
+        selected_gpus = available_gpus  # Use all available
+    else
+        selected_gpus = [gpu for gpu in available_gpus if gpu.id in gpu_ids]
+    end
+    
+    if isempty(selected_gpus)
+        error("No valid GPUs found with specified IDs: $gpu_ids")
+    end
+    
+    # Create base configuration
+    base_cfg = SHTnsKit.create_gauss_config(lmax, nlat; nlon=nlon)
+    
+    # Validate distribution strategy
+    if strategy ∉ [:latitude, :longitude, :spectral]
+        error("Invalid distribution strategy: $strategy. Must be :latitude, :longitude, or :spectral")
+    end
+    
+    return MultiGPUConfig(base_cfg, selected_gpus, strategy, selected_gpus[1].id)
+end
+
+"""
     set_device!(device::SHTDevice)
 
 Set the active compute device for SHTnsKit operations.

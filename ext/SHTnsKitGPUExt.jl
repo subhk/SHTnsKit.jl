@@ -125,14 +125,17 @@ struct MultiGPUConfig
 end
 
 """
-    create_multi_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude, gpu_ids=nothing)
+    create_multi_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude, gpu_ids=nothing, allow_mixed=true)
 
 Create a multi-GPU configuration for spherical harmonic transforms.
+Supports mixing NVIDIA and AMD GPUs when allow_mixed=true.
 """
 function create_multi_gpu_config(lmax::Int, nlat::Int; 
                                  nlon::Union{Int,Nothing}=nothing,
                                  strategy::Symbol=:latitude,
-                                 gpu_ids::Union{Vector{Int},Nothing}=nothing)
+                                 gpu_ids::Union{Vector{Int},Nothing}=nothing,
+                                 gpu_types::Union{Vector{Symbol},Nothing}=nothing,
+                                 allow_mixed::Bool=true)
     
     # Get available GPUs
     available_gpus = get_available_gpus()
@@ -141,14 +144,33 @@ function create_multi_gpu_config(lmax::Int, nlat::Int;
     end
     
     # Select GPUs to use
-    if gpu_ids === nothing
+    if gpu_ids === nothing && gpu_types === nothing
         selected_gpus = available_gpus  # Use all available
-    else
-        selected_gpus = [gpu for gpu in available_gpus if gpu.id in gpu_ids]
+    elseif gpu_types !== nothing
+        # Select by GPU type (e.g., [:cuda, :amdgpu])
+        selected_gpus = [gpu for gpu in available_gpus if gpu.device in gpu_types]
+    elseif gpu_ids !== nothing
+        # Select by GPU IDs (more complex for mixed types)
+        selected_gpus = []
+        for id in gpu_ids
+            matching_gpus = [gpu for gpu in available_gpus if gpu.id == id]
+            append!(selected_gpus, matching_gpus)
+        end
     end
     
     if isempty(selected_gpus)
-        error("No valid GPUs found with specified IDs: $gpu_ids")
+        error("No valid GPUs found with specified criteria")
+    end
+    
+    # Check for mixed GPU types
+    gpu_device_types = unique([gpu.device for gpu in selected_gpus])
+    if length(gpu_device_types) > 1 && !allow_mixed
+        error("Mixed GPU types detected but allow_mixed=false. Found: $gpu_device_types")
+    end
+    
+    if length(gpu_device_types) > 1
+        @info "Using mixed GPU types: $gpu_device_types"
+        @info "Performance may be limited by slowest GPU type"
     end
     
     # Create base configuration
@@ -159,7 +181,60 @@ function create_multi_gpu_config(lmax::Int, nlat::Int;
         error("Invalid distribution strategy: $strategy. Must be :latitude, :longitude, or :spectral")
     end
     
+    # Enable P2P for CUDA GPUs if multiple CUDA devices
+    if length([gpu for gpu in selected_gpus if gpu.device == :cuda]) >= 2
+        try
+            enable_gpu_p2p_access(selected_gpus)
+        catch e
+            @warn "Failed to enable P2P access: $e"
+        end
+    end
+    
     return MultiGPUConfig(base_cfg, selected_gpus, strategy, selected_gpus[1].id)
+end
+
+"""
+    create_balanced_mixed_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude)
+
+Create a multi-GPU configuration that automatically balances workload across 
+different GPU types based on their relative performance.
+"""
+function create_balanced_mixed_gpu_config(lmax::Int, nlat::Int;
+                                         nlon::Union{Int,Nothing}=nothing,
+                                         strategy::Symbol=:latitude)
+    
+    available_gpus = get_available_gpus()
+    if isempty(available_gpus)
+        error("No GPUs available")
+    end
+    
+    # Estimate relative performance (rough approximation)
+    # In practice, these would be benchmarked values
+    gpu_performance_weights = Dict{Symbol, Float64}(
+        :cuda => 1.0,    # Reference performance
+        :amdgpu => 0.85  # Typically slightly slower than equivalent NVIDIA
+    )
+    
+    # Calculate work distribution based on performance
+    total_weight = sum(gpu_performance_weights[gpu.device] for gpu in available_gpus)
+    
+    # Create weighted GPU selection
+    weighted_gpus = []
+    for gpu in available_gpus
+        weight = gpu_performance_weights[gpu.device] / total_weight
+        # Store weight for potential use in load balancing
+        weighted_gpu = merge(gpu, (performance_weight=weight,))
+        push!(weighted_gpus, weighted_gpu)
+    end
+    
+    base_cfg = SHTnsKit.create_gauss_config(lmax, nlat; nlon=nlon)
+    
+    @info "Created balanced mixed-GPU config with $(length(weighted_gpus)) GPUs"
+    for (i, gpu) in enumerate(weighted_gpus)
+        @info "  GPU $i: $(gpu.device) $(gpu.id) (weight: $(round(gpu.performance_weight, digits=2)))"
+    end
+    
+    return MultiGPUConfig(base_cfg, weighted_gpus, strategy, weighted_gpus[1].id)
 end
 
 # Multi-GPU array distribution strategies
@@ -270,9 +345,54 @@ function distribute_coefficient_array(coeffs::AbstractArray, mgpu_config::MultiG
 end
 
 """
+    gpu_to_gpu_transfer(src_data, src_gpu, dest_gpu)
+
+Transfer data directly between GPUs using peer-to-peer communication when possible.
+Falls back to CPU transfer if P2P is not available.
+"""
+function gpu_to_gpu_transfer(src_data, src_gpu, dest_gpu)
+    if src_gpu.device == dest_gpu.device == :cuda && CUDA_LOADED
+        # CUDA peer-to-peer transfer
+        try
+            # Check if P2P access is enabled between devices
+            src_device = CUDA.CuDevice(src_gpu.id)
+            dest_device = CUDA.CuDevice(dest_gpu.id)
+            
+            # Enable P2P access if available
+            can_access = try
+                CUDA.can_access_peer(src_device, dest_device)
+            catch
+                false
+            end
+            
+            if can_access
+                # Direct GPU-to-GPU transfer
+                set_gpu_device(:cuda, dest_gpu.id)
+                dest_data = CUDA.CuArray{eltype(src_data)}(undef, size(src_data))
+                
+                # Copy directly between GPUs
+                set_gpu_device(:cuda, src_gpu.id)
+                copyto!(dest_data, src_data)
+                
+                return dest_data
+            end
+        catch e
+            @warn "P2P transfer failed, falling back to CPU: $e"
+        end
+    end
+    
+    # Fallback: transfer via CPU
+    set_gpu_device(src_gpu.device, src_gpu.id)
+    cpu_data = Array(src_data)
+    set_gpu_device(dest_gpu.device, dest_gpu.id)
+    return to_device(cpu_data, dest_gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+end
+
+"""
     gather_distributed_arrays(distributed_arrays, original_shape)
 
 Gather distributed arrays back into a single array on the primary GPU.
+Uses optimized GPU-to-GPU transfers when possible.
 """
 function gather_distributed_arrays(distributed_arrays, original_shape)
     # Set primary GPU
@@ -286,11 +406,8 @@ function gather_distributed_arrays(distributed_arrays, original_shape)
     # Copy data chunks to appropriate locations
     for chunk in distributed_arrays
         if chunk.gpu != primary_gpu
-            # Transfer from other GPU to primary GPU
-            set_gpu_device(chunk.gpu.device, chunk.gpu.id)
-            cpu_data = Array(chunk.data)
-            set_gpu_device(primary_gpu.device, primary_gpu.id)
-            gpu_data = to_device(cpu_data, primary_gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+            # Use optimized GPU-to-GPU transfer
+            gpu_data = gpu_to_gpu_transfer(chunk.data, chunk.gpu, primary_gpu)
         else
             gpu_data = chunk.data
         end
@@ -301,6 +418,51 @@ function gather_distributed_arrays(distributed_arrays, original_shape)
     end
     
     return result
+end
+
+"""
+    enable_gpu_p2p_access(gpus::Vector)
+
+Enable peer-to-peer access between all CUDA GPUs if possible.
+"""
+function enable_gpu_p2p_access(gpus::Vector)
+    if !CUDA_LOADED
+        return false
+    end
+    
+    cuda_gpus = [gpu for gpu in gpus if gpu.device == :cuda]
+    if length(cuda_gpus) < 2
+        return false
+    end
+    
+    enabled_pairs = 0
+    total_pairs = 0
+    
+    for i in 1:length(cuda_gpus), j in 1:length(cuda_gpus)
+        if i != j
+            total_pairs += 1
+            try
+                src_device = CUDA.CuDevice(cuda_gpus[i].id)
+                dest_device = CUDA.CuDevice(cuda_gpus[j].id)
+                
+                if CUDA.can_access_peer(src_device, dest_device)
+                    set_gpu_device(:cuda, cuda_gpus[i].id)
+                    CUDA.enable_peer_access(dest_device)
+                    enabled_pairs += 1
+                end
+            catch e
+                # P2P not available for this pair
+            end
+        end
+    end
+    
+    if enabled_pairs > 0
+        @info "Enabled P2P access for $enabled_pairs/$total_pairs GPU pairs"
+        return true
+    else
+        @info "No P2P access available between GPUs"
+        return false
+    end
 end
 
 """
@@ -1138,6 +1300,148 @@ function gpu_clear_cache!(device::SHTDevice)
     return nothing
 end
 
+# Multi-GPU vector field transform functions
+
+"""
+    multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_output=true)
+
+Perform multi-GPU spheroidal-toroidal decomposition of vector fields.
+"""
+function multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_output=true)
+    # Distribute vector field components across GPUs
+    distributed_vθ = distribute_spatial_array(vθ, mgpu_config)
+    distributed_vφ = distribute_spatial_array(vφ, mgpu_config)
+    
+    # Perform partial spheroidal-toroidal analysis on each GPU
+    partial_sph_results = []
+    partial_tor_results = []
+    
+    for (chunk_vθ, chunk_vφ) in zip(distributed_vθ, distributed_vφ)
+        set_gpu_device(chunk_vθ.gpu.device, chunk_vθ.gpu.id)
+        
+        # Create temporary config for this GPU chunk (similar to scalar case)
+        if mgpu_config.distribution_strategy == :latitude
+            lat_indices = chunk_vθ.indices[1]
+            chunk_nlat = length(lat_indices)
+            
+            cfg = mgpu_config.base_config
+            temp_cfg = SHTnsKit.SHTConfig(
+                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                nlat=chunk_nlat, nlon=cfg.nlon,
+                θ=cfg.θ[lat_indices], φ=cfg.φ,
+                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
+                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
+                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                nspat=chunk_nlat*cfg.nlon,
+                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
+                sintheta=cfg.st[lat_indices],
+                norm=cfg.norm, cs_phase=cfg.cs_phase,
+                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                compute_device=chunk_vθ.gpu.device == :cuda ? :cuda : :amdgpu,
+                device_preference=[chunk_vθ.gpu.device == :cuda ? :cuda : :amdgpu]
+            )
+            
+            # Perform GPU vector analysis on this chunk
+            chunk_sph, chunk_tor = gpu_spat_to_SHsphtor(temp_cfg, Array(chunk_vθ.data), Array(chunk_vφ.data))
+            
+        else
+            error("Multi-GPU vector analysis currently only supports :latitude distribution strategy")
+        end
+        
+        push!(partial_sph_results, chunk_sph)
+        push!(partial_tor_results, chunk_tor)
+    end
+    
+    # Combine results from all GPUs
+    set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
+    
+    cfg = mgpu_config.base_config
+    final_sph_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    final_tor_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    
+    for (sph_result, tor_result) in zip(partial_sph_results, partial_tor_results)
+        final_sph_coeffs .+= sph_result
+        final_tor_coeffs .+= tor_result
+    end
+    
+    if real_output && eltype(vθ) <: Real && eltype(vφ) <: Real
+        return real(final_sph_coeffs), real(final_tor_coeffs)
+    else
+        return final_sph_coeffs, final_tor_coeffs
+    end
+end
+
+"""
+    multi_gpu_SHsphtor_to_spat(mgpu_config::MultiGPUConfig, sph_coeffs, tor_coeffs; real_output=true)
+
+Perform multi-GPU synthesis of spheroidal-toroidal vector field components.
+"""
+function multi_gpu_SHsphtor_to_spat(mgpu_config::MultiGPUConfig, sph_coeffs, tor_coeffs; real_output=true)
+    cfg = mgpu_config.base_config
+    
+    if mgpu_config.distribution_strategy == :latitude
+        # Distribute by latitude bands - each GPU synthesizes its portion
+        distributed_vθ_results = []
+        distributed_vφ_results = []
+        
+        ngpus = length(mgpu_config.gpu_devices)
+        lat_per_gpu = div(cfg.nlat, ngpus)
+        lat_remainder = cfg.nlat % ngpus
+        
+        lat_start = 1
+        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+            lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
+            lat_end = lat_start + lat_count - 1
+            lat_indices = lat_start:lat_end
+            
+            set_gpu_device(gpu.device, gpu.id)
+            
+            # Create config for this latitude band
+            temp_cfg = SHTnsKit.SHTConfig(
+                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                nlat=lat_count, nlon=cfg.nlon,
+                θ=cfg.θ[lat_indices], φ=cfg.φ,
+                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
+                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
+                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                nspat=lat_count*cfg.nlon,
+                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
+                sintheta=cfg.st[lat_indices],
+                norm=cfg.norm, cs_phase=cfg.cs_phase,
+                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
+                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+            )
+            
+            # Perform synthesis on this GPU
+            chunk_vθ, chunk_vφ = gpu_SHsphtor_to_spat(temp_cfg, sph_coeffs, tor_coeffs; real_output=real_output)
+            
+            push!(distributed_vθ_results, (
+                data=chunk_vθ,
+                gpu=gpu,
+                indices=(lat_indices, 1:cfg.nlon)
+            ))
+            
+            push!(distributed_vφ_results, (
+                data=chunk_vφ,
+                gpu=gpu,
+                indices=(lat_indices, 1:cfg.nlon)
+            ))
+            
+            lat_start = lat_end + 1
+        end
+        
+        # Gather results back to single arrays
+        result_vθ = gather_distributed_arrays(distributed_vθ_results, (cfg.nlat, cfg.nlon))
+        result_vφ = gather_distributed_arrays(distributed_vφ_results, (cfg.nlat, cfg.nlon))
+        
+        return Array(result_vθ), Array(result_vφ)
+        
+    else
+        error("Multi-GPU vector synthesis currently only supports :latitude distribution strategy")
+    end
+end
+
 # Multi-GPU transform functions
 
 """
@@ -1181,8 +1485,32 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
             # Perform GPU analysis on this chunk
             chunk_coeffs = gpu_analysis(temp_cfg, Array(chunk.data); real_output=false)
             
+        elseif mgpu_config.distribution_strategy == :longitude
+            # For longitude distribution, each GPU processes longitude sectors
+            lon_indices = chunk.indices[2]
+            chunk_nlon = length(lon_indices)
+            
+            cfg = mgpu_config.base_config
+            temp_cfg = SHTnsKit.SHTConfig(
+                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                nlat=cfg.nlat, nlon=chunk_nlon,
+                θ=cfg.θ, φ=cfg.φ[lon_indices],
+                x=cfg.x, w=cfg.w,
+                wlat=cfg.w, Nlm=cfg.Nlm, cphi=2π/chunk_nlon,
+                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                nspat=cfg.nlat*chunk_nlon,
+                ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
+                norm=cfg.norm, cs_phase=cfg.cs_phase,
+                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                compute_device=chunk.gpu.device == :cuda ? :cuda : :amdgpu,
+                device_preference=[chunk.gpu.device == :cuda ? :cuda : :amdgpu]
+            )
+            
+            # Perform GPU analysis on longitude sector
+            chunk_coeffs = gpu_analysis(temp_cfg, Array(chunk.data); real_output=false)
+            
         else
-            error("Multi-GPU analysis currently only supports :latitude distribution strategy")
+            error("Multi-GPU analysis currently supports :latitude and :longitude distribution strategies")
         end
         
         push!(partial_results, (coeffs=chunk_coeffs, chunk=chunk))

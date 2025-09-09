@@ -21,10 +21,10 @@ using BenchmarkTools
 # Try to load GPU packages - they're optional
 try
     using CUDA, AMDGPU, GPUArrays, KernelAbstractions
-    println("✓ GPU packages loaded successfully")
+    println("GPU packages loaded successfully")
     GPU_AVAILABLE = true
 catch e
-    println("⚠ GPU packages not available: $e")
+    println("WARNING: GPU packages not available: $e")
     println("  Install with: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"AMDGPU\", \"GPUArrays\", \"KernelAbstractions\"])'"
     GPU_AVAILABLE = false
 end
@@ -73,38 +73,38 @@ function run_gpu_comparison_example()
     device_pref = parse_device_arg()
     
     # Create configurations for different devices
-    println("\n📋 Device Detection and Configuration:")
+    println("\nDevice Detection and Configuration:")
     println("-" ^ 40)
     
     # Auto-detect best available device
     if device_pref == :auto
         selected_device, gpu_available = select_compute_device()
-        println("🔍 Auto-selected device: $selected_device")
+        println("Auto-selected device: $selected_device")
     else
         selected_device = device_pref
         gpu_available = (device_pref != :cpu)
-        println("👤 User-specified device: $selected_device") 
+        println("User-specified device: $selected_device") 
     end
     
     # CPU configuration (always available)
     cfg_cpu = create_gauss_config(lmax, nlat; nlon=nlon)
     set_config_device!(cfg_cpu, :cpu)
-    println("✓ CPU configuration created")
+    println("CPU configuration created")
     
     # GPU configuration (if available)
     cfg_gpu = nothing
     if GPU_AVAILABLE && selected_device != :cpu
         try
             cfg_gpu = create_gauss_config_gpu(lmax, nlat; nlon=nlon, device=selected_device)
-            println("✓ GPU configuration created ($(get_config_device(cfg_gpu)))")
+            println("GPU configuration created ($(get_config_device(cfg_gpu)))")
         catch e
-            println("❌ Failed to create GPU configuration: $e")
+            println("FAILED: Failed to create GPU configuration: $e")
             cfg_gpu = nothing
         end
     end
     
     # Create test data - bandlimited function for exact roundtrip
-    println("\n🔧 Creating Test Data:")
+    println("\nCreating Test Data:")
     println("-" ^ 40)
     
     θ, φ = cfg_cpu.θ, cfg_cpu.φ
@@ -122,7 +122,7 @@ function run_gpu_comparison_example()
     println("Created bandlimited test function with max energy at low l")
     
     # CPU Benchmarking
-    println("\n⚡ Performance Benchmarking:")
+    println("\nPerformance Benchmarking:")
     println("-" ^ 40)
     
     println("CPU Performance:")
@@ -171,15 +171,15 @@ function run_gpu_comparison_example()
             
         catch e
             if contains(string(e), "not fully implemented") || contains(string(e), "GPU extension")
-                println("⚠ GPU functions using CPU fallback (GPU packages not loaded)")
+                println("WARNING: GPU functions using CPU fallback (GPU packages not loaded)")
             else
-                println("❌ GPU benchmarking failed: $e")
+                println("ERROR: GPU benchmarking failed: $e")
             end
         end
     end
     
     # Accuracy Testing
-    println("\n🎯 Roundtrip Accuracy Test:")
+    println("\nRoundtrip Accuracy Test:")
     println("-" ^ 40)
     
     # CPU roundtrip
@@ -201,7 +201,7 @@ function run_gpu_comparison_example()
             @printf "CPU-GPU coefficient difference: %.2e\n" coeff_diff
             
             # Memory management example
-            println("\n💾 Memory Management:")
+            println("\nMemory Management:")
             current_device = get_config_device(cfg_gpu)
             if current_device != :cpu
                 try
@@ -215,15 +215,15 @@ function run_gpu_comparison_example()
             
         catch e
             if contains(string(e), "GPU extension")
-                println("⚠ GPU accuracy test skipped (GPU packages not loaded)")
+                println("WARNING: GPU accuracy test skipped (GPU packages not loaded)")
             else
-                println("❌ GPU accuracy test failed: $e")
+                println("ERROR: GPU accuracy test failed: $e")
             end
         end
     end
     
     # Vector field example
-    println("\n🌀 Vector Field GPU Acceleration:")
+    println("\nVector Field GPU Acceleration:")
     println("-" ^ 40)
     
     # Create test vector field
@@ -259,15 +259,15 @@ function run_gpu_comparison_example()
             
         catch e
             if contains(string(e), "GPU extension")
-                println("⚠ GPU vector transform skipped (GPU packages not loaded)")
+                println("WARNING: GPU vector transform skipped (GPU packages not loaded)")
             else
-                println("❌ GPU vector transform failed: $e")
+                println("ERROR: GPU vector transform failed: $e")
             end
         end
     end
     
     # Device management examples
-    println("\n⚙️  Device Management Examples:")
+    println("\nDevice Management Examples:")
     println("-" ^ 40)
     
     # Show device switching
@@ -291,10 +291,10 @@ function run_gpu_comparison_example()
         destroy_config(cfg_gpu)
     end
     
-    println("\n✨ GPU acceleration example completed!")
+    println("\nGPU acceleration example completed!")
     
     if !GPU_AVAILABLE
-        println("\n💡 To enable GPU acceleration:")
+        println("\nTo enable GPU acceleration:")
         println("   1. Install GPU packages: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"AMDGPU\", \"GPUArrays\", \"KernelAbstractions\"])'"
         println("   2. Restart Julia and run this example again")
     end
@@ -309,9 +309,9 @@ function main()
     try
         run_gpu_comparison_example()
     catch e
-        println("❌ Example failed: $e")
+        println("ERROR: Example failed: $e")
         if isa(e, MethodError)
-            println("\n💡 This may be due to incomplete GPU extension implementation.")
+            println("\nNOTE: This may be due to incomplete GPU extension implementation.")
             println("   The current implementation provides the framework for GPU acceleration.")
         end
         rethrow(e)

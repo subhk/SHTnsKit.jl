@@ -110,6 +110,7 @@ export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usag
 export MultiGPUConfig, create_multi_gpu_config           # Multi-GPU configuration
 export get_available_gpus, set_gpu_device                # Multi-GPU device management
 export multi_gpu_analysis, multi_gpu_synthesis           # Multi-GPU transforms
+export multi_gpu_analysis_streaming, multi_gpu_synthesis_streaming, estimate_streaming_chunks  # Memory streaming
 
 # Optional LoopVectorization-powered helpers (SHTnsKitLoopVecExt extension)
 export analysis_turbo, synthesis_turbo                    # Vectorized transforms

@@ -1591,8 +1591,116 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
         result = gather_distributed_arrays(distributed_results, (cfg.nlat, cfg.nlon))
         return Array(result)
         
+    elseif mgpu_config.distribution_strategy == :longitude
+        # Distribute by longitude sectors - each GPU synthesizes its portion
+        distributed_results = []
+        
+        ngpus = length(mgpu_config.gpu_devices)
+        lon_per_gpu = div(cfg.nlon, ngpus)
+        lon_remainder = cfg.nlon % ngpus
+        
+        lon_start = 1
+        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+            lon_count = lon_per_gpu + (i <= lon_remainder ? 1 : 0)
+            lon_end = lon_start + lon_count - 1
+            lon_indices = lon_start:lon_end
+            
+            set_gpu_device(gpu.device, gpu.id)
+            
+            # Create config for this longitude sector
+            temp_cfg = SHTnsKit.SHTConfig(
+                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                nlat=cfg.nlat, nlon=lon_count,
+                θ=cfg.θ, φ=cfg.φ[lon_indices],
+                x=cfg.x, w=cfg.w,
+                wlat=cfg.w, Nlm=cfg.Nlm, cphi=2π/lon_count,
+                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                nspat=cfg.nlat*lon_count,
+                ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
+                norm=cfg.norm, cs_phase=cfg.cs_phase,
+                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
+                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+            )
+            
+            # Perform synthesis on longitude sector
+            chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
+            
+            push!(distributed_results, (
+                data=chunk_result,
+                gpu=gpu,
+                indices=(1:cfg.nlat, lon_indices)
+            ))
+            
+            lon_start = lon_end + 1
+        end
+        
+        # Gather results back to single array
+        result = gather_distributed_arrays(distributed_results, (cfg.nlat, cfg.nlon))
+        return Array(result)
+        
+    elseif mgpu_config.distribution_strategy == :spectral
+        # Spectral distribution - divide coefficients by m or l modes
+        # This is more complex but can be beneficial for high-resolution problems
+        distributed_results = []
+        
+        ngpus = length(mgpu_config.gpu_devices)
+        
+        # Distribute by m modes (azimuthal modes)
+        m_per_gpu = div(cfg.mmax + 1, ngpus)
+        m_remainder = (cfg.mmax + 1) % ngpus
+        
+        m_start = 0
+        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+            m_count = m_per_gpu + (i <= m_remainder ? 1 : 0)
+            m_end = m_start + m_count - 1
+            m_indices = m_start:m_end
+            
+            set_gpu_device(gpu.device, gpu.id)
+            
+            # Extract coefficients for this m range
+            coeffs_chunk = coeffs[:, m_indices .+ 1]  # +1 for 1-based indexing
+            
+            # Create temporary config for spectral chunk
+            temp_cfg = SHTnsKit.SHTConfig(
+                lmax=cfg.lmax, mmax=m_end, mres=cfg.mres,
+                nlat=cfg.nlat, nlon=cfg.nlon,
+                θ=cfg.θ, φ=cfg.φ,
+                x=cfg.x, w=cfg.w,
+                wlat=cfg.w, Nlm=cfg.Nlm, cphi=cfg.cphi,
+                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                nspat=cfg.nspat,
+                ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
+                norm=cfg.norm, cs_phase=cfg.cs_phase,
+                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
+                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+            )
+            
+            # Perform synthesis with coefficient subset
+            chunk_result = gpu_synthesis(temp_cfg, coeffs_chunk; real_output=real_output)
+            
+            push!(distributed_results, (
+                data=chunk_result,
+                gpu=gpu,
+                m_range=m_indices
+            ))
+            
+            m_start = m_end + 1
+        end
+        
+        # Combine results from different m modes
+        set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
+        final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
+        
+        for result in distributed_results
+            final_result .+= result.data
+        end
+        
+        return Array(final_result)
+        
     else
-        error("Multi-GPU synthesis currently only supports :latitude distribution strategy")
+        error("Multi-GPU synthesis supports :latitude, :longitude, and :spectral distribution strategies")
     end
 end
 
@@ -1605,10 +1713,199 @@ export gpu_apply_laplacian!, gpu_legendre!
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!
 export estimate_memory_usage
 
+# Multi-GPU memory streaming for large problems
+
+"""
+    estimate_streaming_chunks(mgpu_config::MultiGPUConfig, data_size, max_memory_per_gpu=4*1024^3)
+
+Estimate optimal chunk sizes for memory streaming with multiple GPUs.
+Returns number of chunks needed to keep memory usage below max_memory_per_gpu bytes.
+"""
+function estimate_streaming_chunks(mgpu_config::MultiGPUConfig, data_size, max_memory_per_gpu=4*1024^3)
+    # Estimate memory requirements
+    element_size = 16  # ComplexF64 = 16 bytes
+    total_memory_needed = prod(data_size) * element_size
+    
+    # Account for temporary arrays and FFT workspace
+    memory_overhead = 3.0  # Roughly 3x for intermediates and FFT
+    total_memory_with_overhead = total_memory_needed * memory_overhead
+    
+    ngpus = length(mgpu_config.gpu_devices)
+    memory_per_gpu = total_memory_with_overhead / ngpus
+    
+    if memory_per_gpu <= max_memory_per_gpu
+        return 1  # No streaming needed
+    else
+        chunks_needed = ceil(Int, memory_per_gpu / max_memory_per_gpu)
+        return chunks_needed
+    end
+end
+
+"""
+    multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data; 
+                                max_memory_per_gpu=4*1024^3, real_output=true)
+
+Perform multi-GPU analysis with memory streaming for very large problems.
+"""
+function multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data; 
+                                     max_memory_per_gpu=4*1024^3, real_output=true)
+    data_size = size(spatial_data)
+    chunks_needed = estimate_streaming_chunks(mgpu_config, data_size, max_memory_per_gpu)
+    
+    if chunks_needed == 1
+        # Use regular multi-GPU analysis
+        return multi_gpu_analysis(mgpu_config, spatial_data; real_output=real_output)
+    end
+    
+    println("Using memory streaming with $(chunks_needed) chunks per GPU")
+    
+    # Split data into chunks
+    cfg = mgpu_config.base_config
+    if mgpu_config.distribution_strategy == :latitude
+        # Split latitude dimension into chunks
+        lat_chunk_size = div(cfg.nlat, chunks_needed)
+        lat_remainder = cfg.nlat % chunks_needed
+        
+        # Accumulate results across chunks
+        final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+        
+        lat_start = 1
+        for chunk_idx in 1:chunks_needed
+            chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
+            lat_end = lat_start + chunk_lat_size - 1
+            lat_indices = lat_start:lat_end
+            
+            # Extract chunk data
+            chunk_data = spatial_data[lat_indices, :]
+            
+            # Create temporary config for this chunk
+            chunk_mgpu_config = MultiGPUConfig(
+                base_config=SHTnsKit.SHTConfig(
+                    lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                    nlat=chunk_lat_size, nlon=cfg.nlon,
+                    θ=cfg.θ[lat_indices], φ=cfg.φ,
+                    x=cfg.x[lat_indices], w=cfg.w[lat_indices],
+                    wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
+                    nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                    nspat=chunk_lat_size*cfg.nlon,
+                    ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
+                    sintheta=cfg.st[lat_indices],
+                    norm=cfg.norm, cs_phase=cfg.cs_phase,
+                    real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                    compute_device=cfg.compute_device, device_preference=cfg.device_preference
+                ),
+                gpu_devices=mgpu_config.gpu_devices,
+                distribution_strategy=mgpu_config.distribution_strategy
+            )
+            
+            # Process this chunk
+            chunk_coeffs = multi_gpu_analysis(chunk_mgpu_config, chunk_data; real_output=false)
+            final_coeffs .+= chunk_coeffs
+            
+            lat_start = lat_end + 1
+            
+            # Clear GPU caches between chunks
+            for gpu in mgpu_config.gpu_devices
+                try
+                    gpu_clear_cache!(gpu.device)
+                catch e
+                    # Ignore cache clear errors
+                end
+            end
+        end
+        
+        if real_output && eltype(spatial_data) <: Real
+            return real(final_coeffs)
+        else
+            return final_coeffs
+        end
+        
+    else
+        error("Memory streaming currently only supports :latitude distribution strategy")
+    end
+end
+
+"""
+    multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs; 
+                                 max_memory_per_gpu=4*1024^3, real_output=true)
+
+Perform multi-GPU synthesis with memory streaming for very large problems.
+"""
+function multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs; 
+                                      max_memory_per_gpu=4*1024^3, real_output=true)
+    cfg = mgpu_config.base_config
+    data_size = (cfg.nlat, cfg.nlon)
+    chunks_needed = estimate_streaming_chunks(mgpu_config, data_size, max_memory_per_gpu)
+    
+    if chunks_needed == 1
+        # Use regular multi-GPU synthesis
+        return multi_gpu_synthesis(mgpu_config, coeffs; real_output=real_output)
+    end
+    
+    println("Using memory streaming with $(chunks_needed) chunks per GPU")
+    
+    # Process in chunks and combine results
+    if mgpu_config.distribution_strategy == :latitude
+        # Split latitude dimension
+        lat_chunk_size = div(cfg.nlat, chunks_needed)
+        lat_remainder = cfg.nlat % chunks_needed
+        
+        final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
+        
+        lat_start = 1
+        for chunk_idx in 1:chunks_needed
+            chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
+            lat_end = lat_start + chunk_lat_size - 1
+            lat_indices = lat_start:lat_end
+            
+            # Create chunk configuration
+            chunk_mgpu_config = MultiGPUConfig(
+                base_config=SHTnsKit.SHTConfig(
+                    lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                    nlat=chunk_lat_size, nlon=cfg.nlon,
+                    θ=cfg.θ[lat_indices], φ=cfg.φ,
+                    x=cfg.x[lat_indices], w=cfg.w[lat_indices],
+                    wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
+                    nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                    nspat=chunk_lat_size*cfg.nlon,
+                    ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
+                    sintheta=cfg.st[lat_indices],
+                    norm=cfg.norm, cs_phase=cfg.cs_phase,
+                    real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                    compute_device=cfg.compute_device, device_preference=cfg.device_preference
+                ),
+                gpu_devices=mgpu_config.gpu_devices,
+                distribution_strategy=mgpu_config.distribution_strategy
+            )
+            
+            # Process this chunk
+            chunk_result = multi_gpu_synthesis(chunk_mgpu_config, coeffs; real_output=real_output)
+            final_result[lat_indices, :] = chunk_result
+            
+            lat_start = lat_end + 1
+            
+            # Clear GPU caches between chunks
+            for gpu in mgpu_config.gpu_devices
+                try
+                    gpu_clear_cache!(gpu.device)
+                catch e
+                    # Ignore cache clear errors
+                end
+            end
+        end
+        
+        return final_result
+        
+    else
+        error("Memory streaming currently only supports :latitude distribution strategy")
+    end
+end
+
 # Multi-GPU functions
 export MultiGPUConfig, create_multi_gpu_config
 export get_available_gpus, set_gpu_device
 export distribute_spatial_array, distribute_coefficient_array, gather_distributed_arrays
 export multi_gpu_analysis, multi_gpu_synthesis
+export multi_gpu_analysis_streaming, multi_gpu_synthesis_streaming, estimate_streaming_chunks
 
 end # module SHTnsKitGPUExt

@@ -37,9 +37,12 @@ include("spectral_diagnostics.jl") # Spectral analysis and spectrum functions
 include("vorticity_diagnostics.jl") # Vorticity and enstrophy calculations
 include("api_compat.jl")         # API compatibility layer
 include("parallel_dense.jl")# Parallel dense matrix operations
+include("device_utils.jl")  # GPU device utilities and management
 
 # ===== CORE CONFIGURATION AND SETUP =====
 export SHTConfig, create_gauss_config, create_config, destroy_config  # Configuration management
+export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_config  # GPU device management
+export select_compute_device, device_transfer_arrays                  # Device utilities
 
 # ===== BASIC TRANSFORMS =====
 export analysis, synthesis                              # Basic forward/backward transforms
@@ -97,6 +100,13 @@ export prepare_plm_tables!, enable_plm_tables!, disable_plm_tables!  # Precomput
 # These functions are implemented in Julia package extensions and only available when
 # the corresponding packages are loaded
 
+# GPU Computing functions (SHTnsKitGPUExt extension)
+export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE  # Device management
+export get_device, set_device!, to_device                 # Device utilities
+export gpu_analysis, gpu_synthesis                        # GPU transforms
+export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
+export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
+
 # Optional LoopVectorization-powered helpers (SHTnsKitLoopVecExt extension)
 export analysis_turbo, synthesis_turbo                    # Vectorized transforms
 export turbo_apply_laplacian!, benchmark_turbo_vs_simd    # Performance utilities
@@ -122,6 +132,18 @@ export dist_SH_Zrotate_packed, dist_SH_Yrotate_packed, dist_SH_Yrotate90_packed,
 
 # ===== EXTENSION FALLBACK FUNCTIONS =====
 # These provide informative error messages when extension packages are not loaded
+
+# GPU extension fallbacks
+get_device() = error("GPU extension not loaded. Install and load CUDA.jl or AMDGPU.jl with GPUArrays and KernelAbstractions")
+set_device!(::Any) = error("GPU extension not loaded")
+to_device(::Any, ::Any) = error("GPU extension not loaded")
+gpu_analysis(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_synthesis(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_legendre!(::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+
 # Default fallbacks if extensions are not loaded (use broad signatures to avoid overwriting)
 zgrad_scalar_energy(::SHTConfig, ::Any) = error("Zygote extension not loaded")
 zgrad_vector_energy(::SHTConfig, ::Any, ::Any) = error("Zygote extension not loaded")

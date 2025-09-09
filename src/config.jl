@@ -48,6 +48,10 @@ Base.@kwdef mutable struct SHTConfig
     
     # Performance optimization: precomputed Legendre polynomials
     use_plm_tables::Bool = false                              # Enable/disable table lookup
+    
+    # GPU Computing support
+    compute_device::Symbol = :cpu                             # Computing device: :cpu, :cuda, :amdgpu
+    device_preference::Vector{Symbol} = [:cpu]               # Preferred device order
     plm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]   # P_l^m values: [m+1][l+1, lat_idx]
     dplm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]  # dP_l^m/dx values: [m+1][l+1, lat_idx]
 end
@@ -85,7 +89,8 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
     # Construct and return the complete configuration
     return SHTConfig(; lmax, mmax, mres, nlat, nlon, θ, φ, x, w, wlat = w, Nlm,
                      cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                     ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form)
+                     ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form,
+                     compute_device = :cpu, device_preference = [:cpu])
 end
 
 """
@@ -190,3 +195,70 @@ end
 No-op placeholder for API symmetry with libraries that require explicit teardown.
 """
 destroy_config(::SHTConfig) = nothing
+
+# ==== GPU DEVICE MANAGEMENT FUNCTIONS ====
+
+"""
+    create_gauss_config_gpu(lmax, nlat; nlon=nothing, mres=1, device=:auto, kwargs...)
+
+Create a spherical harmonic configuration with GPU device selection.
+Enhanced version of `create_gauss_config` with automatic device detection.
+
+# Arguments
+- `device::Symbol`: Target device (:auto, :cpu, :cuda, :amdgpu)
+- `device_preference::Vector{Symbol}`: Preference order when device=:auto
+"""
+function create_gauss_config_gpu(lmax::Int, nlat::Int; 
+                                nlon::Union{Int,Nothing}=nothing, 
+                                mres::Int=1,
+                                device::Symbol=:auto,
+                                device_preference::Vector{Symbol}=[:cuda, :amdgpu, :cpu],
+                                kwargs...)
+    
+    # Create the base configuration
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon, mres=mres, kwargs...)
+    
+    # Determine the compute device
+    if device == :auto
+        selected_device, gpu_available = select_compute_device(device_preference)
+    else
+        selected_device = device
+        gpu_available = (device != :cpu)
+    end
+    
+    # Set device configuration
+    cfg.compute_device = selected_device
+    cfg.device_preference = copy(device_preference)
+    
+    return cfg
+end
+
+"""
+    set_config_device!(cfg::SHTConfig, device::Symbol)
+
+Change the compute device for an existing configuration.
+"""
+function set_config_device!(cfg::SHTConfig, device::Symbol)
+    if device ∉ [:cpu, :cuda, :amdgpu]
+        throw(ArgumentError("Unsupported device: $device. Must be :cpu, :cuda, or :amdgpu"))
+    end
+    
+    cfg.compute_device = device
+    
+    # Update device preference to put the selected device first
+    new_preference = [device]
+    for dev in cfg.device_preference
+        if dev != device
+            push!(new_preference, dev)
+        end
+    end
+    cfg.device_preference = new_preference
+    
+    return cfg
+end
+
+"""Get the current compute device for a configuration."""
+get_config_device(cfg::SHTConfig) = cfg.compute_device
+
+"""Check if a configuration is set up for GPU computing."""
+is_gpu_config(cfg::SHTConfig) = cfg.compute_device != :cpu

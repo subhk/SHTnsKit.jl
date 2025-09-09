@@ -107,6 +107,9 @@ export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
 export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
+export MultiGPUConfig, create_multi_gpu_config           # Multi-GPU configuration
+export get_available_gpus, set_gpu_device                # Multi-GPU device management
+export multi_gpu_analysis, multi_gpu_synthesis           # Multi-GPU transforms
 
 # Optional LoopVectorization-powered helpers (SHTnsKitLoopVecExt extension)
 export analysis_turbo, synthesis_turbo                    # Vectorized transforms

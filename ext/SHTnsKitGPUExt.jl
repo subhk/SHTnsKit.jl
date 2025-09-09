@@ -162,6 +162,147 @@ function create_multi_gpu_config(lmax::Int, nlat::Int;
     return MultiGPUConfig(base_cfg, selected_gpus, strategy, selected_gpus[1].id)
 end
 
+# Multi-GPU array distribution strategies
+
+"""
+    distribute_spatial_array(array, mgpu_config::MultiGPUConfig)
+
+Distribute a spatial array across multiple GPUs according to the distribution strategy.
+"""
+function distribute_spatial_array(array::AbstractArray, mgpu_config::MultiGPUConfig)
+    ngpus = length(mgpu_config.gpu_devices)
+    nlat, nlon = size(array)
+    distributed_arrays = []
+    
+    if mgpu_config.distribution_strategy == :latitude
+        # Split by latitude bands
+        lat_per_gpu = div(nlat, ngpus)
+        lat_remainder = nlat % ngpus
+        
+        lat_start = 1
+        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+            # Handle remainder by giving extra rows to first few GPUs
+            lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
+            lat_end = lat_start + lat_count - 1
+            
+            # Set device and transfer data chunk
+            set_gpu_device(gpu.device, gpu.id)
+            chunk = array[lat_start:lat_end, :]
+            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+            
+            push!(distributed_arrays, (
+                data=gpu_chunk, 
+                gpu=gpu, 
+                indices=(lat_start:lat_end, 1:nlon)
+            ))
+            
+            lat_start = lat_end + 1
+        end
+        
+    elseif mgpu_config.distribution_strategy == :longitude
+        # Split by longitude sectors  
+        lon_per_gpu = div(nlon, ngpus)
+        lon_remainder = nlon % ngpus
+        
+        lon_start = 1
+        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+            lon_count = lon_per_gpu + (i <= lon_remainder ? 1 : 0)
+            lon_end = lon_start + lon_count - 1
+            
+            set_gpu_device(gpu.device, gpu.id)
+            chunk = array[:, lon_start:lon_end]
+            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+            
+            push!(distributed_arrays, (
+                data=gpu_chunk,
+                gpu=gpu,
+                indices=(1:nlat, lon_start:lon_end)
+            ))
+            
+            lon_start = lon_end + 1
+        end
+        
+    else  # :spectral - for coefficient arrays
+        error("Spectral distribution not implemented for spatial arrays")
+    end
+    
+    return distributed_arrays
+end
+
+"""
+    distribute_coefficient_array(coeffs, mgpu_config::MultiGPUConfig)
+
+Distribute spherical harmonic coefficients across multiple GPUs.
+"""
+function distribute_coefficient_array(coeffs::AbstractArray, mgpu_config::MultiGPUConfig)
+    ngpus = length(mgpu_config.gpu_devices)
+    lmax_plus1, mmax_plus1 = size(coeffs)
+    distributed_coeffs = []
+    
+    if mgpu_config.distribution_strategy == :spectral
+        # Split by l-modes (degree)
+        l_per_gpu = div(lmax_plus1, ngpus)
+        l_remainder = lmax_plus1 % ngpus
+        
+        l_start = 1
+        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+            l_count = l_per_gpu + (i <= l_remainder ? 1 : 0)
+            l_end = l_start + l_count - 1
+            
+            set_gpu_device(gpu.device, gpu.id)
+            chunk = coeffs[l_start:l_end, :]
+            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+            
+            push!(distributed_coeffs, (
+                data=gpu_chunk,
+                gpu=gpu,
+                indices=(l_start:l_end, 1:mmax_plus1),
+                l_range=(l_start-1:l_end-1)  # 0-based l values
+            ))
+            
+            l_start = l_end + 1
+        end
+    else
+        error("Can only distribute coefficient arrays with :spectral strategy")
+    end
+    
+    return distributed_coeffs
+end
+
+"""
+    gather_distributed_arrays(distributed_arrays, original_shape)
+
+Gather distributed arrays back into a single array on the primary GPU.
+"""
+function gather_distributed_arrays(distributed_arrays, original_shape)
+    # Set primary GPU
+    primary_gpu = distributed_arrays[1].gpu
+    set_gpu_device(primary_gpu.device, primary_gpu.id)
+    
+    # Create output array on primary GPU
+    result = to_device(zeros(eltype(distributed_arrays[1].data), original_shape), 
+                      primary_gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+    
+    # Copy data chunks to appropriate locations
+    for chunk in distributed_arrays
+        if chunk.gpu != primary_gpu
+            # Transfer from other GPU to primary GPU
+            set_gpu_device(chunk.gpu.device, chunk.gpu.id)
+            cpu_data = Array(chunk.data)
+            set_gpu_device(primary_gpu.device, primary_gpu.id)
+            gpu_data = to_device(cpu_data, primary_gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+        else
+            gpu_data = chunk.data
+        end
+        
+        # Place in correct location
+        lat_range, lon_range = chunk.indices
+        result[lat_range, lon_range] .= gpu_data
+    end
+    
+    return result
+end
+
 """
     set_device!(device::SHTDevice)
 
@@ -997,6 +1138,136 @@ function gpu_clear_cache!(device::SHTDevice)
     return nothing
 end
 
+# Multi-GPU transform functions
+
+"""
+    multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_output=true)
+
+Perform spherical harmonic analysis using multiple GPUs.
+"""
+function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_output=true)
+    # Distribute spatial data across GPUs
+    distributed_data = distribute_spatial_array(spatial_data, mgpu_config)
+    
+    # Perform partial analysis on each GPU
+    partial_results = []
+    for chunk in distributed_data
+        set_gpu_device(chunk.gpu.device, chunk.gpu.id)
+        
+        # Create temporary config for this GPU chunk
+        if mgpu_config.distribution_strategy == :latitude
+            # For latitude distribution, each GPU processes a subset of latitude bands
+            lat_indices = chunk.indices[1]
+            chunk_nlat = length(lat_indices)
+            
+            # Extract relevant parts of the base config
+            cfg = mgpu_config.base_config
+            temp_cfg = SHTnsKit.SHTConfig(
+                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                nlat=chunk_nlat, nlon=cfg.nlon,
+                θ=cfg.θ[lat_indices], φ=cfg.φ, 
+                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
+                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
+                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi, 
+                nspat=chunk_nlat*cfg.nlon,
+                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices], 
+                sintheta=cfg.st[lat_indices],
+                norm=cfg.norm, cs_phase=cfg.cs_phase, 
+                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                compute_device=chunk.gpu.device == :cuda ? :cuda : :amdgpu,
+                device_preference=[chunk.gpu.device == :cuda ? :cuda : :amdgpu]
+            )
+            
+            # Perform GPU analysis on this chunk
+            chunk_coeffs = gpu_analysis(temp_cfg, Array(chunk.data); real_output=false)
+            
+        else
+            error("Multi-GPU analysis currently only supports :latitude distribution strategy")
+        end
+        
+        push!(partial_results, (coeffs=chunk_coeffs, chunk=chunk))
+    end
+    
+    # Combine results from all GPUs
+    # For latitude distribution, we need to sum contributions from all latitude bands
+    set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
+    
+    cfg = mgpu_config.base_config
+    final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    
+    for result in partial_results
+        final_coeffs .+= result.coeffs
+    end
+    
+    if real_output && eltype(spatial_data) <: Real
+        return real(final_coeffs)
+    else
+        return final_coeffs
+    end
+end
+
+"""
+    multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=true)
+
+Perform spherical harmonic synthesis using multiple GPUs.
+"""
+function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=true)
+    cfg = mgpu_config.base_config
+    
+    if mgpu_config.distribution_strategy == :latitude
+        # Distribute by latitude bands - each GPU synthesizes its portion
+        distributed_results = []
+        
+        ngpus = length(mgpu_config.gpu_devices)
+        lat_per_gpu = div(cfg.nlat, ngpus)
+        lat_remainder = cfg.nlat % ngpus
+        
+        lat_start = 1
+        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+            lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
+            lat_end = lat_start + lat_count - 1
+            lat_indices = lat_start:lat_end
+            
+            set_gpu_device(gpu.device, gpu.id)
+            
+            # Create config for this latitude band
+            temp_cfg = SHTnsKit.SHTConfig(
+                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
+                nlat=lat_count, nlon=cfg.nlon,
+                θ=cfg.θ[lat_indices], φ=cfg.φ,
+                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
+                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
+                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
+                nspat=lat_count*cfg.nlon,
+                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
+                sintheta=cfg.st[lat_indices],
+                norm=cfg.norm, cs_phase=cfg.cs_phase,
+                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
+                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
+                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+            )
+            
+            # Perform synthesis on this GPU
+            chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
+            
+            push!(distributed_results, (
+                data=chunk_result,
+                gpu=gpu,
+                indices=(lat_indices, 1:cfg.nlon)
+            ))
+            
+            lat_start = lat_end + 1
+        end
+        
+        # Gather results back to single array
+        result = gather_distributed_arrays(distributed_results, (cfg.nlat, cfg.nlon))
+        return Array(result)
+        
+    else
+        error("Multi-GPU synthesis currently only supports :latitude distribution strategy")
+    end
+end
+
 # Export GPU functions
 export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE
 export get_device, set_device!, to_device
@@ -1005,5 +1276,11 @@ export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat
 export gpu_apply_laplacian!, gpu_legendre!
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!
 export estimate_memory_usage
+
+# Multi-GPU functions
+export MultiGPUConfig, create_multi_gpu_config
+export get_available_gpus, set_gpu_device
+export distribute_spatial_array, distribute_coefficient_array, gather_distributed_arrays
+export multi_gpu_analysis, multi_gpu_synthesis
 
 end # module SHTnsKitGPUExt

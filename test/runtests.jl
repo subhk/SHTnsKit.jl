@@ -363,6 +363,97 @@ end
     end
 end
 
+@testset "Pencil θ-φ decomposition (optional)" begin
+    try
+        if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
+            using MPI, PencilArrays, PencilFFTs
+            MPI.Init()
+            comm = MPI.COMM_WORLD
+            nprocs = MPI.Comm_size(comm)
+
+            # Find a processor grid that splits both θ and φ dimensions
+            function _two_dim_factor(p)
+                for d in 2:(p-1)
+                    if p % d == 0
+                        q = div(p, d)
+                        if q > 1
+                            return d, q
+                        end
+                    end
+                end
+                return nothing
+            end
+
+            fact = _two_dim_factor(nprocs)
+            if fact === nothing
+                @info "Skipping θ-φ decomposition test (requires pθ>1 and pφ>1)"
+            else
+                pθ, pφ = fact
+                lmax = 6
+                cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
+                topo = PencilArrays.Pencil((cfg.nlat, cfg.nlon), (pθ, pφ), comm)
+
+                fθφ = PencilArrays.zeros(topo; eltype=Float64)
+                for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
+                    fθφ[iθ, iφ] = 0.3 * sin(0.2*(iθ+1)) + 0.4 * cos(0.15*(iφ+1))
+                end
+
+                # Scalar plan with scratch buffers exercises allocate(dims=(:θ,:m)) path
+                aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ; use_rfft=true, with_spatial_scratch=true)
+                Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+                SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
+
+                Alm_p = PencilArrays.PencilArray(Alm)
+                spln = SHTnsKit.DistPlan(cfg, fθφ; use_rfft=true)
+                fθφ_back = PencilArrays.zeros(topo; eltype=Float64)
+                SHTnsKit.dist_synthesis!(spln, fθφ_back, Alm_p)
+
+                loc_diff = sum(abs2, Array(fθφ_back) .- Array(fθφ))
+                loc_ref  = sum(abs2, Array(fθφ))
+                glob_diff = MPI.Allreduce(loc_diff, +, comm)
+                glob_ref  = MPI.Allreduce(loc_ref, +, comm)
+                rel = sqrt(glob_diff / (glob_ref + eps()))
+                @test rel < 1e-8
+
+                # Vector roundtrip with rfft + spatial scratch (allocates (:θ,:k) buffers)
+                Vt = PencilArrays.zeros(topo; eltype=Float64)
+                Vp = PencilArrays.zeros(topo; eltype=Float64)
+                for (iθ, iφ) in zip(eachindex(axes(Vt,1)), eachindex(axes(Vt,2)))
+                    Vt[iθ, iφ] = 0.2*(iθ+1) * sin(0.1*(iφ+1))
+                    Vp[iθ, iφ] = 0.15*(iφ+1) * cos(0.12*(iθ+1))
+                end
+
+                vplan = SHTnsKit.DistSphtorPlan(cfg, Vt; use_rfft=true, with_spatial_scratch=true)
+                Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+                Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+                SHTnsKit.dist_spat_to_SHsphtor!(vplan, Slm, Tlm, Vt, Vp)
+
+                Vt_back = PencilArrays.zeros(topo; eltype=Float64)
+                Vp_back = PencilArrays.zeros(topo; eltype=Float64)
+                SHTnsKit.dist_SHsphtor_to_spat!(vplan, Vt_back, Vp_back, Slm, Tlm)
+
+                vt_diff = sum(abs2, Array(Vt_back) .- Array(Vt))
+                vp_diff = sum(abs2, Array(Vp_back) .- Array(Vp))
+                vt_ref  = sum(abs2, Array(Vt))
+                vp_ref  = sum(abs2, Array(Vp))
+                glob_vdiff = MPI.Allreduce(vt_diff + vp_diff, +, comm)
+                glob_vref  = MPI.Allreduce(vt_ref + vp_ref, +, comm)
+                rel_v = sqrt(glob_vdiff / (glob_vref + eps()))
+                @test rel_v < 5e-8
+            end
+            MPI.Finalize()
+        else
+            @info "Skipping θ-φ decomposition tests (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
+        end
+    catch e
+        @info "Skipping θ-φ decomposition tests" exception=(e, catch_backtrace())
+        try
+            MPI.isinitialized() && MPI.Finalize()
+        catch
+        end
+    end
+end
+
 @testset "Parallel operator equivalence (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"

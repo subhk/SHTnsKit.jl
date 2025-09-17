@@ -247,6 +247,26 @@ function SHtor_to_spat_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int; real_out
 end
 
 """
+    SHsph_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+
+Mode-limited spheroidal-only synthesis wrapper.
+"""
+function SHsph_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+    Tl_zero = zeros(eltype(Sl), length(Sl))
+    return SHsphtor_to_spat_ml(cfg, im, Sl, Tl_zero, ltr)
+end
+
+"""
+    SHtor_to_spat_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
+
+Mode-limited toroidal-only synthesis wrapper.
+"""
+function SHtor_to_spat_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
+    Sl_zero = zeros(eltype(Tl), length(Tl))
+    return SHsphtor_to_spat_ml(cfg, im, Sl_zero, Tl, ltr)
+end
+
+"""
     spat_to_SHsphtor_ml(cfg, im, Vt_m, Vp_m, ltr) -> (Sl, Tl)
 
 Mode-limited transform for specific azimuthal mode im.
@@ -327,4 +347,31 @@ function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     end
     
     return Vt_m, Vp_m
+end
+
+"""
+    SH_to_grad_spat(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
+
+Gradient synthesis alias for compatibility with SHTns.
+"""
+function SH_to_grad_spat(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
+    return SHsph_to_spat(cfg, Slm; real_output=real_output)
+end
+
+"""
+    SH_to_grad_spat_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+
+Degree-limited gradient synthesis alias.
+"""
+function SH_to_grad_spat_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+    return SHsph_to_spat_l(cfg, Slm, ltr; real_output=real_output)
+end
+
+"""
+    SH_to_grad_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+
+Mode-limited gradient synthesis alias.
+"""
+function SH_to_grad_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+    return SHsph_to_spat_ml(cfg, im, Sl, ltr)
 end

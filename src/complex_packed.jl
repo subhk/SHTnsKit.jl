@@ -21,6 +21,17 @@ function LM_cplx_index(lmax::Int, mmax::Int, l::Int, m::Int)
 end
 
 """
+    LM_cplx(cfg::SHTConfig, l::Integer, m::Integer) -> Int
+
+Compatibility helper that mirrors the C macro `LM_cplx` for `mres == 1`,
+returning the zero-based packed complex index for coefficient `(l,m)`.
+"""
+function LM_cplx(cfg::SHTConfig, l::Integer, m::Integer)
+    cfg.mres == 1 || throw(ArgumentError("LM_cplx is only defined for mres == 1"))
+    return LM_cplx_index(cfg.lmax, cfg.mmax, Int(l), Int(m))
+end
+
+"""
     SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}) -> Matrix{ComplexF64}
 
 Synthesize complex spatial field from packed complex coefficients (LM_cplx order).

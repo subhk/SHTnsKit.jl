@@ -53,19 +53,20 @@ export spat_to_SHsphtor!, SHsphtor_to_spat!            # In-place spheroidal/tor
 export spat_to_SH, SH_to_spat, spat_to_SH_l, SH_to_spat_l, spat_to_SH_ml, SH_to_spat_ml, SH_to_point
 
 # ===== INDEXING AND COMPLEX NUMBER UTILITIES =====
-export nlm_calc, nlm_cplx_calc, LM_index, LiM_index, im_from_lm, LM_cplx_index
+export nlm_calc, nlm_cplx_calc, LM_index, LiM_index, im_from_lm, LM_cplx_index, LM_cplx
 export spat_cplx_to_SH, SH_to_spat_cplx, SH_to_point_cplx  # Complex number transforms
 export fft_phi_backend
 
 # ===== VECTOR FIELD TRANSFORMS =====
 export spat_to_SHsphtor, SHsphtor_to_spat, SHsph_to_spat, SHtor_to_spat, SH_to_grad_spat
+export SH_to_grad_spat_l
 export spat_to_SHqst, SHqst_to_spat, spat_cplx_to_SHqst, SHqst_to_spat_cplx  # Q,S,T decomposition
 
 # ===== LATITUDE-BAND AND M-MODE SPECIFIC TRANSFORMS =====
 export SHsphtor_to_spat_l, spat_to_SHsphtor_l, SHsph_to_spat_l, SHtor_to_spat_l
-export spat_to_SHsphtor_ml, SHsphtor_to_spat_ml
+export spat_to_SHsphtor_ml, SHsphtor_to_spat_ml, SHsph_to_spat_ml, SHtor_to_spat_ml
 export spat_to_SHqst_l, SHqst_to_spat_l, spat_to_SHqst_ml, SHqst_to_spat_ml
-export SHsphtor_to_spat_cplx, spat_cplx_to_SHsphtor
+export SHsphtor_to_spat_cplx, spat_cplx_to_SHsphtor, SH_to_grad_spat_ml
 
 # ===== MATRIX OPERATIONS AND DIFFERENTIAL OPERATORS =====
 export mul_ct_matrix, st_dt_matrix, SH_mul_mx          # Matrix multiplication utilities

@@ -72,6 +72,97 @@ end
     @test isapprox(E_spec, E_grid; rtol=1e-9, atol=1e-11)
 end
 
+@testset "Truncated scalar transforms" begin
+    lmax = 5
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(11)
+    alm = randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1)
+    alm[:, 1] .= real.(alm[:, 1])
+    Vr = vec(synthesis(cfg, alm; real_output=true))
+
+    full_Q = spat_to_SH(cfg, Vr)
+    ltr = lmax - 1
+    trunc_Q = spat_to_SH_l(cfg, Vr, ltr)
+    for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
+        for l in m:cfg.lmax
+            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
+            if l <= ltr
+                @test isapprox(trunc_Q[lm], full_Q[lm]; rtol=1e-10, atol=1e-12)
+            else
+                @test trunc_Q[lm] == 0
+            end
+        end
+    end
+
+    full_spatial = SH_to_spat(cfg, full_Q)
+    zeroed_Q = copy(full_Q)
+    for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
+        for l in (ltr+1):cfg.lmax
+            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
+            zeroed_Q[lm] = 0
+        end
+    end
+    expected_trunc = SH_to_spat(cfg, zeroed_Q)
+    @test isapprox(SH_to_spat_l(cfg, full_Q, ltr), expected_trunc; rtol=1e-10, atol=1e-12)
+    @test isapprox(SH_to_spat_l(cfg, full_Q, lmax), full_spatial; rtol=1e-10, atol=1e-12)
+end
+
+@testset "Mode-limited vector wrappers" begin
+    lmax = 5
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    im = 1
+    ltr = lmax - 1
+    len = ltr - im + 1
+    rng = MersenneTwister(17)
+    Sl = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
+    Tl = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
+
+    Vt_ref, Vp_ref = SHsphtor_to_spat_ml(cfg, im, Sl, zeros(ComplexF64, len), ltr)
+    Vt_s, Vp_s = SHsph_to_spat_ml(cfg, im, Sl, ltr)
+    @test isapprox(Vt_s, Vt_ref; rtol=1e-10, atol=1e-12)
+    @test isapprox(Vp_s, Vp_ref; rtol=1e-10, atol=1e-12)
+
+    Vt_ref_t, Vp_ref_t = SHsphtor_to_spat_ml(cfg, im, zeros(ComplexF64, len), Tl, ltr)
+    Vt_t, Vp_t = SHtor_to_spat_ml(cfg, im, Tl, ltr)
+    @test isapprox(Vt_t, Vt_ref_t; rtol=1e-10, atol=1e-12)
+    @test isapprox(Vp_t, Vp_ref_t; rtol=1e-10, atol=1e-12)
+
+    Slm = ComplexF64.(randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1))
+    Slm[:, 1] .= real.(Slm[:, 1])
+    Gt_ref, Gp_ref = SHsph_to_spat(cfg, Slm)
+    Gt, Gp = SH_to_grad_spat(cfg, Slm)
+    @test isapprox(Gt, Gt_ref; rtol=1e-10, atol=1e-12)
+    @test isapprox(Gp, Gp_ref; rtol=1e-10, atol=1e-12)
+
+    Gt_l_ref, Gp_l_ref = SHsph_to_spat_l(cfg, Slm, ltr)
+    Gt_l, Gp_l = SH_to_grad_spat_l(cfg, Slm, ltr)
+    @test isapprox(Gt_l, Gt_l_ref; rtol=1e-10, atol=1e-12)
+    @test isapprox(Gp_l, Gp_l_ref; rtol=1e-10, atol=1e-12)
+
+    Sl_ml = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
+    Vt_ml_ref, Vp_ml_ref = SHsph_to_spat_ml(cfg, im, Sl_ml, ltr)
+    Vt_ml, Vp_ml = SH_to_grad_spat_ml(cfg, im, Sl_ml, ltr)
+    @test isapprox(Vt_ml, Vt_ml_ref; rtol=1e-10, atol=1e-12)
+    @test isapprox(Vp_ml, Vp_ml_ref; rtol=1e-10, atol=1e-12)
+end
+
+@testset "LM_cplx compatibility" begin
+    lmax = 6
+    cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
+    for l in 0:lmax
+        for m in -l:l
+            idx = LM_cplx(cfg, l, m)
+            @test idx == LM_cplx_index(cfg.lmax, cfg.mmax, l, m)
+        end
+    end
+end
+
 """
     parseval_scalar_test(lmax::Int)
 

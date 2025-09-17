@@ -178,32 +178,27 @@ end
 
 # Allocate PencilArray with robust version detection
 function allocate(args...; kwargs...)
-    # Modern PencilArrays API (v0.17+)
-    if hasmethod(PencilArrays.allocate, Tuple{typeof(args[1]), typeof(args[2])})
+    # Attempt direct call and fall back only on MethodError originating from allocate
+    try
         return PencilArrays.allocate(args...; kwargs...)
-    end
-    
-    # Legacy constructor patterns (v0.15-v0.16)
-    if length(args) >= 2
-        T, pencil = args[1], args[2]
-        if isa(pencil, PencilArrays.Pencil)
-            # Try multiple constructor signatures
-            try
-                return PencilArrays.PencilArray(undef, T, pencil; kwargs...)
-            catch MethodError
-                try
-                    return PencilArrays.PencilArray{eltype(T)}(undef, pencil; kwargs...)
-                catch MethodError
-                    # Very old pattern
-                    return PencilArrays.PencilArray{eltype(T), ndims(T), typeof(pencil)}(
-                        undef, size(T), pencil; kwargs...)
-                end
-            end
+    catch err
+        if !(err isa MethodError && err.f === PencilArrays.allocate)
+            rethrow(err)
         end
     end
-    
-    error("Unable to allocate PencilArray with provided arguments. "
-          * "This may indicate an incompatible PencilArrays version.")
+
+    nargs = length(args)
+    if nargs >= 2
+        T, pencil = args[1], args[2]
+        if isa(pencil, PencilArrays.Pencil)
+            kw = Dict{Symbol,Any}(kwargs)
+            kw[:eltype] = get(kw, :eltype, T)
+            return PencilArrays.zeros(pencil; (;kw...)...)
+        end
+    end
+
+    error("Unable to allocate PencilArray with provided arguments. " *
+          "This may indicate an incompatible PencilArrays version or API change.")
 end
 
 # Get global indices with robust fallback patterns

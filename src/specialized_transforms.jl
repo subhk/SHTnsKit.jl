@@ -79,6 +79,53 @@ function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
 end
 
 """
+    spat_to_SH_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer) -> Vector{ComplexF64}
+
+Scalar analysis truncated to degrees `l ≤ ltr`. The returned packed coefficient
+vector has length `cfg.nlm`; coefficients with `l > ltr` are set to zero.
+"""
+function spat_to_SH_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer)
+    length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
+    f = reshape(Vr, cfg.nlat, cfg.nlon)
+    alm_mat = analysis(cfg, f)
+    Qlm = zeros(eltype(alm_mat), cfg.nlm)
+    @inbounds for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
+        m > lcap && continue
+        for l in m:lcap
+            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
+            Qlm[lm] = alm_mat[l+1, m+1]
+        end
+    end
+    return Qlm
+end
+
+"""
+    SH_to_spat_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integer) -> Vector{Float64}
+
+Scalar synthesis truncated to degrees `l ≤ ltr`. Contributions from higher
+degrees are ignored.
+"""
+function SH_to_spat_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integer)
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
+    alm_mat = zeros(eltype(Qlm), cfg.lmax+1, cfg.mmax+1)
+    @inbounds for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
+        m > lcap && continue
+        for l in m:lcap
+            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
+            alm_mat[l+1, m+1] = Qlm[lm]
+        end
+    end
+    f = synthesis(cfg, alm_mat; real_output=true)
+    return vec(f)
+end
+
+"""
     SH_to_spat_axisym(cfg, Qlm) -> Vector{Float64}
 
 Axisymmetric synthesis from degree-only coefficients to Gauss latitudes.

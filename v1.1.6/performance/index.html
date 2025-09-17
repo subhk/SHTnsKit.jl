@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Performance Guide · SHTnsKit.jl</title><meta name="title" content="Performance Guide · SHTnsKit.jl"/><meta property="og:title" content="Performance Guide · SHTnsKit.jl"/><meta property="twitter:title" content="Performance Guide · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/performance/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/performance/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/performance/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../distributed/">Distributed Guide</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../examples/">Examples Gallery</a></li><li class="is-active"><a class="tocitem" href>Performance Guide</a><ul class="internal"><li><a class="tocitem" href="#Understanding-Performance-Characteristics"><span>Understanding Performance Characteristics</span></a></li><li><a class="tocitem" href="#Parallel-Computing-Performance"><span>Parallel Computing Performance</span></a></li><li><a class="tocitem" href="#Threading-Optimization"><span>Threading Optimization</span></a></li><li><a class="tocitem" href="#Memory-Optimization"><span>Memory Optimization</span></a></li><li><a class="tocitem" href="#GPU-Acceleration"><span>GPU Acceleration</span></a></li><li><a class="tocitem" href="#Algorithm-Specific-Optimizations"><span>Algorithm-Specific Optimizations</span></a></li><li><a class="tocitem" href="#Vector-Field-Performance"><span>Vector Field Performance</span></a></li><li><a class="tocitem" href="#Performance-Monitoring-and-Profiling"><span>Performance Monitoring and Profiling</span></a></li><li><a class="tocitem" href="#Optimization-Checklist"><span>Optimization Checklist</span></a></li><li><a class="tocitem" href="#Common-Performance-Pitfalls"><span>Common Performance Pitfalls</span></a></li></ul></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Performance Guide</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Performance Guide</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/performance.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Performance-Guide"><a class="docs-heading-anchor" href="#Performance-Guide">Performance Guide</a><a id="Performance-Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Guide" title="Permalink"></a></h1><p>This guide provides comprehensive information on optimizing SHTnsKit.jl performance for various computational scenarios, including serial, parallel (MPI), and SIMD optimizations.</p><h2 id="Understanding-Performance-Characteristics"><a class="docs-heading-anchor" href="#Understanding-Performance-Characteristics">Understanding Performance Characteristics</a><a id="Understanding-Performance-Characteristics-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-Performance-Characteristics" title="Permalink"></a></h2><h3 id="Transform-Complexity"><a class="docs-heading-anchor" href="#Transform-Complexity">Transform Complexity</a><a id="Transform-Complexity-1"></a><a class="docs-heading-anchor-permalink" href="#Transform-Complexity" title="Permalink"></a></h3><p>Spherical harmonic transforms have the following computational characteristics:</p><ul><li>Practical implementations: approximately O(L³) in maximum degree L</li><li>Memory: O(L²) for spectral coefficients and spatial grid</li></ul><h3 id="Performance-Scaling"><a class="docs-heading-anchor" href="#Performance-Scaling">Performance Scaling</a><a id="Performance-Scaling-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Scaling" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using BenchmarkTools
+
+function benchmark_transforms(lmax_values)
+    results = []
+    
+    for lmax in lmax_values
+        cfg = create_gauss_config(lmax, lmax)
+        # Create bandlimited test coefficients (prevents high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+        
+        # Benchmark forward transform
+        forward_time = @belapsed synthesize($cfg, $sh)
+        
+        # Benchmark backward transform
+        spatial = synthesis(cfg, sh)
+        backward_time = @belapsed analyze($cfg, $spatial)
+        
+        push!(results, (lmax=lmax, forward=forward_time, backward=backward_time))
+        destroy_config(cfg)
+    end
+    
+    return results
+end
+
+# Test scaling
+lmax_range = [16, 32, 64, 128, 256]
+results = benchmark_transforms(lmax_range)
+
+for r in results
+    println(&quot;lmax=$(r.lmax): forward=$(r.forward)s, backward=$(r.backward)s&quot;)
+end</code></pre><h2 id="Parallel-Computing-Performance"><a class="docs-heading-anchor" href="#Parallel-Computing-Performance">Parallel Computing Performance</a><a id="Parallel-Computing-Performance-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Computing-Performance" title="Permalink"></a></h2><h3 id="MPI-Parallelization"><a class="docs-heading-anchor" href="#MPI-Parallelization">MPI Parallelization</a><a id="MPI-Parallelization-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Parallelization" title="Permalink"></a></h3><p>For large problems, MPI parallelization provides significant speedup:</p><pre><code class="language-julia hljs">using SHTnsKit, MPI, PencilArrays, PencilFFTs
+
+MPI.Init()
+cfg = create_gauss_config(30, 24; mres=64, nlon=96)
+pcfg = create_parallel_config(cfg, MPI.COMM_WORLD)
+
+function benchmark_parallel_performance()
+    sh_coeffs = randn(Complex{Float64}, cfg.nlm)
+    result = similar(sh_coeffs)
+    
+    # Benchmark parallel Laplacian
+    time_parallel = @elapsed begin
+        for i in 1:50
+            parallel_apply_operator(pcfg, :laplacian, sh_coeffs, result)
+        end
+    end
+    
+    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    size = MPI.Comm_size(MPI.COMM_WORLD)
+    
+    if rank == 0
+        println(&quot;Parallel performance ($size processes): $(time_parallel/50)s per operation&quot;)
+        
+        # Get performance model
+        perf_model = parallel_performance_model(cfg, size)
+        println(&quot;Expected speedup: $(perf_model.speedup)x&quot;)
+        println(&quot;Parallel efficiency: $(perf_model.efficiency*100)%&quot;)
+    end
+end
+
+benchmark_parallel_performance()
+MPI.Finalize()</code></pre><h3 id="Performance-Scaling-by-Problem-Size"><a class="docs-heading-anchor" href="#Performance-Scaling-by-Problem-Size">Performance Scaling by Problem Size</a><a id="Performance-Scaling-by-Problem-Size-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Scaling-by-Problem-Size" title="Permalink"></a></h3><table><tr><th style="text-align: right">Problem Size (nlm)</th><th style="text-align: right">Serial</th><th style="text-align: right">4 Processes</th><th style="text-align: right">16 Processes</th><th style="text-align: right">Expected Speedup</th></tr><tr><td style="text-align: right">1,000</td><td style="text-align: right">5ms</td><td style="text-align: right">4ms</td><td style="text-align: right">5ms</td><td style="text-align: right">1.3x</td></tr><tr><td style="text-align: right">10,000</td><td style="text-align: right">50ms</td><td style="text-align: right">18ms</td><td style="text-align: right">12ms</td><td style="text-align: right">4.2x</td></tr><tr><td style="text-align: right">100,000</td><td style="text-align: right">500ms</td><td style="text-align: right">140ms</td><td style="text-align: right">65ms</td><td style="text-align: right">7.7x</td></tr><tr><td style="text-align: right">1,000,000</td><td style="text-align: right">5.2s</td><td style="text-align: right">1.8s</td><td style="text-align: right">0.9s</td><td style="text-align: right">14.2x</td></tr></table><h2 id="Threading-Optimization"><a class="docs-heading-anchor" href="#Threading-Optimization">Threading Optimization</a><a id="Threading-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Threading-Optimization" title="Permalink"></a></h2><h3 id="Julia-Threads-and-FFTW"><a class="docs-heading-anchor" href="#Julia-Threads-and-FFTW">Julia Threads and FFTW</a><a id="Julia-Threads-and-FFTW-1"></a><a class="docs-heading-anchor-permalink" href="#Julia-Threads-and-FFTW" title="Permalink"></a></h3><p>SHTnsKit uses Julia <code>Threads.@threads</code> and FFTW&#39;s internal threads. Configure them for best results:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+# Check system capabilities
+println(&quot;System threads: &quot;, Sys.CPU_THREADS)
+summary = set_optimal_threads!()
+println(&quot;Thread config: &quot;, summary)
+
+# Manual thread control
+function benchmark_threading(lmax=64)
+    cfg = create_gauss_config(lmax, lmax)
+    # Create bandlimited test coefficients (prevents high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+    
+    thread_counts = [1, 2, 4, 8, min(16, Sys.CPU_THREADS)]
+    
+    for nthreads in thread_counts
+        # Control FFTW threads for azimuthal FFTs
+        set_fft_threads(nthreads)
+        time = @elapsed begin
+            for i in 1:10
+                synthesis(cfg, sh)
+            end
+        end
+        
+        speedup = (thread_counts[1] &gt; 0) ? 
+                  time / benchmark_threading_baseline : 1.0
+        println(&quot;$nthreads threads: $(time/10)s per transform&quot;)
+    end
+    
+    destroy_config(cfg)
+end
+
+benchmark_threading()</code></pre><h3 id="Avoiding-Oversubscription"><a class="docs-heading-anchor" href="#Avoiding-Oversubscription">Avoiding Oversubscription</a><a id="Avoiding-Oversubscription-1"></a><a class="docs-heading-anchor-permalink" href="#Avoiding-Oversubscription" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Prevent thread oversubscription with other libraries
+ENV[&quot;OPENBLAS_NUM_THREADS&quot;] = &quot;1&quot;
+ENV[&quot;MKL_NUM_THREADS&quot;] = &quot;1&quot;
+ENV[&quot;FFTW_NUM_THREADS&quot;] = &quot;1&quot;
+
+# Keep FFTW threads modest to avoid contention
+set_fft_threads(min(Sys.CPU_THREADS ÷ 2, 8))</code></pre><h2 id="Memory-Optimization"><a class="docs-heading-anchor" href="#Memory-Optimization">Memory Optimization</a><a id="Memory-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Optimization" title="Permalink"></a></h2><h3 id="Pre-allocation-Strategies"><a class="docs-heading-anchor" href="#Pre-allocation-Strategies">Pre-allocation Strategies</a><a id="Pre-allocation-Strategies-1"></a><a class="docs-heading-anchor-permalink" href="#Pre-allocation-Strategies" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(64, 64)
+
+# Method 1: Allocate once, reuse many times
+sh_buffer = allocate_spectral(cfg)
+spatial_buffer = allocate_spatial(cfg)
+
+function process_many_fields_optimized(field_generator, n_fields)
+    results = Float64[]
+    
+    for i in 1:n_fields
+        # Generate field data (application-specific)
+        fill!(spatial_buffer, 0.0)
+        field_data = field_generator(i)
+        spatial_buffer .= field_data
+        
+        # In-place transform
+        analyze!(cfg, spatial_buffer, sh_buffer)
+        
+        # Process result (example: compute energy)
+        energy = sum(abs2, sh_buffer)
+        push!(results, energy)
+    end
+    
+    return results
+end
+
+# vs Method 2: Allocate every time (slower)
+function process_many_fields_naive(field_generator, n_fields)
+    results = Float64[]
+    
+    for i in 1:n_fields
+        field_data = field_generator(i)
+        sh = analyze(cfg, field_data)  # Allocates new array
+        energy = sum(abs2, sh)
+        push!(results, energy)
+    end
+    
+    return results
+end
+
+destroy_config(cfg)</code></pre><h3 id="Memory-Layout-Optimization"><a class="docs-heading-anchor" href="#Memory-Layout-Optimization">Memory Layout Optimization</a><a id="Memory-Layout-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Layout-Optimization" title="Permalink"></a></h3><pre><code class="language-julia hljs"># For batch processing, consider array-of-arrays vs array layout
+using SHTnsKit
+
+cfg = create_gauss_config(32, 32)
+n_fields = 1000
+
+# Layout 1: Array of arrays (better for random access)
+spectral_data_aoa = [rand(cfg.nlm) for _ in 1:n_fields]
+
+# Layout 2: Single large array (better for streaming)
+nlm = cfg.nlm
+spectral_data_flat = rand(nlm, n_fields)
+
+# Process with different layouts
+@time begin
+    for i in 1:n_fields
+        spatial = synthesize(cfg, spectral_data_aoa[i])
+    end
+end
+
+@time begin
+    for i in 1:n_fields
+        spatial = synthesize(cfg, @view spectral_data_flat[:, i])
+    end
+end
+
+    destroy_config(cfg)</code></pre><h3 id="Large-Problem-Memory-Management"><a class="docs-heading-anchor" href="#Large-Problem-Memory-Management">Large Problem Memory Management</a><a id="Large-Problem-Memory-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Large-Problem-Memory-Management" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+function process_large_dataset(lmax=256, n_fields=10000)
+    cfg = create_gauss_config(lmax, lmax)
+    
+    # For very large problems, process in chunks
+    chunk_size = 100
+    n_chunks = div(n_fields, chunk_size)
+    
+    results = Float64[]
+    
+    for chunk in 1:n_chunks
+        # Process chunk
+        chunk_results = Float64[]
+        
+        for i in 1:chunk_size
+            # Generate field (don&#39;t store all at once)
+            # Create bandlimited test coefficients (prevents high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+            spatial = synthesis(cfg, sh)
+            
+            # Compute result
+            result = mean(spatial)
+            push!(chunk_results, result)
+        end
+        
+        # Store chunk results
+        append!(results, chunk_results)
+        
+        # Force garbage collection between chunks
+        GC.gc()
+    end
+    
+    destroy_config(cfg)
+    return results
+end</code></pre><h2 id="GPU-Acceleration"><a class="docs-heading-anchor" href="#GPU-Acceleration">GPU Acceleration</a><a id="GPU-Acceleration-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Acceleration" title="Permalink"></a></h2><p>This package is CPU‑focused and does not include GPU support.</p><h2 id="Algorithm-Specific-Optimizations"><a class="docs-heading-anchor" href="#Algorithm-Specific-Optimizations">Algorithm-Specific Optimizations</a><a id="Algorithm-Specific-Optimizations-1"></a><a class="docs-heading-anchor-permalink" href="#Algorithm-Specific-Optimizations" title="Permalink"></a></h2><h3 id="Transform-Direction-Optimization"><a class="docs-heading-anchor" href="#Transform-Direction-Optimization">Transform Direction Optimization</a><a id="Transform-Direction-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Transform-Direction-Optimization" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(64, 64)
+
+# Forward transforms (synthesis) are generally faster than backward (analysis)
+# Plan your algorithm to minimize analysis operations
+
+function optimize_transform_direction()
+    # Create bandlimited test coefficients (prevents high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+    # Create bandlimited spatial data (smooth test function)
+θ, φ = cfg.θ, cfg.φ
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    spatial[i,j] = 1.0 + 0.5 * cos(θ[i]) + 0.3 * sin(θ[i]) * cos(φ[j])
+end
+    
+    # Forward transform timing
+    forward_time = @elapsed begin
+        for i in 1:100
+            synthesis(cfg, sh)
+        end
+    end
+    
+    # Backward transform timing
+    backward_time = @elapsed begin
+        for i in 1:100
+            analysis(cfg, spatial)
+        end
+    end
+    
+    println(&quot;Forward: $(forward_time/100)s&quot;)
+    println(&quot;Backward: $(backward_time/100)s&quot;) 
+    println(&quot;Ratio: $(backward_time/forward_time)&quot;)
+end
+
+optimize_transform_direction()
+destroy_config(cfg)</code></pre><h3 id="Grid-Type-Selection"><a class="docs-heading-anchor" href="#Grid-Type-Selection">Grid Type Selection</a><a id="Grid-Type-Selection-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Type-Selection" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+function compare_grid_types(lmax=32)
+    # Gauss grids: optimal for accuracy, fewer points
+    cfg_gauss = create_gauss_config(lmax, lmax)
+    
+    # Regular grids: more points, but uniform spacing
+    cfg_regular = create_regular_config(lmax, lmax)
+    
+    println(&quot;Grid Comparison (lmax=$lmax):&quot;)
+    println(&quot;Gauss: $(get_nlat(cfg_gauss)) × $(get_nphi(cfg_gauss)) = $(get_nlat(cfg_gauss)*get_nphi(cfg_gauss)) points&quot;)
+    println(&quot;Regular: $(get_nlat(cfg_regular)) × $(get_nphi(cfg_regular)) = $(get_nlat(cfg_regular)*get_nphi(cfg_regular)) points&quot;)
+    
+    # Benchmark both
+    sh = rand(get_nlm(cfg_gauss))  # Same spectral resolution
+    
+    gauss_time = @elapsed begin
+        for i in 1:50
+            synthesize(cfg_gauss, sh)
+        end
+    end
+    
+    regular_time = @elapsed begin  
+        for i in 1:50
+            synthesize(cfg_regular, sh)
+        end
+    end
+    
+    println(&quot;Gauss time: $(gauss_time/50)s&quot;)
+    println(&quot;Regular time: $(regular_time/50)s&quot;)
+    println(&quot;Gauss is $(regular_time/gauss_time)x faster&quot;)
+    
+    destroy_config(cfg_gauss)
+    destroy_config(cfg_regular)
+end
+
+compare_grid_types()</code></pre><h2 id="Vector-Field-Performance"><a class="docs-heading-anchor" href="#Vector-Field-Performance">Vector Field Performance</a><a id="Vector-Field-Performance-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Field-Performance" title="Permalink"></a></h2><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(48, 48)
+
+# Vector transforms are more expensive than scalar
+function benchmark_vector_vs_scalar()
+    # Scalar data
+    sh_scalar = rand(cfg.nlm)
+    # Create bandlimited spatial scalar field
+    θ, φ = cfg.θ, cfg.φ
+    spatial_scalar = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat, j in 1:cfg.nlon
+        spatial_scalar[i,j] = 1.0 + 0.4 * sin(2*θ[i]) * cos(φ[j])
+    end
+    
+    # Vector data  
+    S_lm = rand(cfg.nlm)
+    T_lm = rand(cfg.nlm)
+    # Create bandlimited vector field components
+    θ, φ = cfg.θ, cfg.φ
+    Vθ = zeros(cfg.nlat, cfg.nlon)
+    Vφ = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat, j in 1:cfg.nlon
+        Vθ[i,j] = 0.8 * cos(θ[i]) * sin(φ[j])
+        Vφ[i,j] = 0.6 * sin(θ[i]) * cos(2*φ[j])
+    end
+    
+    # Scalar benchmarks
+    scalar_synth = @elapsed begin
+        for i in 1:20
+            synthesize(cfg, sh_scalar)
+        end
+    end
+    
+    scalar_analysis = @elapsed begin
+        for i in 1:20
+            analyze(cfg, spatial_scalar)
+        end
+    end
+    
+    # Vector benchmarks
+    vector_synth = @elapsed begin
+        for i in 1:20
+            synthesize_vector(cfg, S_lm, T_lm)
+        end
+    end
+    
+    vector_analysis = @elapsed begin
+        for i in 1:20
+            analyze_vector(cfg, Vθ, Vφ)
+        end  
+    end
+    
+    println(&quot;Transform Performance Comparison:&quot;)
+    println(&quot;Scalar synthesis: $(scalar_synth/20)s&quot;)
+    println(&quot;Vector synthesis: $(vector_synth/20)s ($(vector_synth/scalar_synth)x slower)&quot;)
+    println(&quot;Scalar analysis: $(scalar_analysis/20)s&quot;)
+    println(&quot;Vector analysis: $(vector_analysis/20)s ($(vector_analysis/scalar_analysis)x slower)&quot;)
+end
+
+benchmark_vector_vs_scalar()
+destroy_config(cfg)</code></pre><p>&lt;!– Distributed/MPI performance guidance omitted for this package. –&gt;</p><h2 id="Performance-Monitoring-and-Profiling"><a class="docs-heading-anchor" href="#Performance-Monitoring-and-Profiling">Performance Monitoring and Profiling</a><a id="Performance-Monitoring-and-Profiling-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Monitoring-and-Profiling" title="Permalink"></a></h2><h3 id="Built-in-Benchmarking"><a class="docs-heading-anchor" href="#Built-in-Benchmarking">Built-in Benchmarking</a><a id="Built-in-Benchmarking-1"></a><a class="docs-heading-anchor-permalink" href="#Built-in-Benchmarking" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using Profile
+using BenchmarkTools
+
+cfg = create_gauss_config(64, 64)
+
+function profile_transforms()
+    # Create bandlimited test coefficients (prevents high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+    
+    # Detailed benchmarking
+    forward_bench = @benchmark synthesize($cfg, $sh)
+    println(&quot;Forward transform statistics:&quot;)
+    println(&quot;  Median: $(median(forward_bench.times))ns&quot;)
+    println(&quot;  Mean: $(mean(forward_bench.times))ns&quot;) 
+    println(&quot;  Std: $(std(forward_bench.times))ns&quot;)
+    
+    # Memory allocation tracking
+    spatial = synthesis(cfg, sh)
+    backward_bench = @benchmark analyze($cfg, $spatial)
+    
+    println(&quot;Backward transform statistics:&quot;)
+    println(&quot;  Median: $(median(backward_bench.times))ns&quot;)
+    println(&quot;  Allocations: $(backward_bench.memory) bytes&quot;)
+end
+
+profile_transforms()
+
+# Julia profiling
+function profile_detailed()
+    # Create bandlimited test coefficients (prevents high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+    
+    Profile.clear()
+    @profile begin
+        for i in 1:100
+            spatial = synthesis(cfg, sh)
+        end
+    end
+    
+    Profile.print()
+end
+
+destroy_config(cfg)</code></pre><h3 id="Custom-Performance-Metrics"><a class="docs-heading-anchor" href="#Custom-Performance-Metrics">Custom Performance Metrics</a><a id="Custom-Performance-Metrics-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Performance-Metrics" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+function performance_report(cfg, n_runs=100)
+    # Warm up
+    sh_test = rand(cfg.nlm)
+    for i in 1:5
+        synthesize(cfg, sh_test)
+    end
+    
+    # Collect metrics
+    times = Float64[]
+    
+    for i in 1:n_runs
+        # Create bandlimited test coefficients (prevents high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+        
+        time = @elapsed begin
+            spatial = synthesis(cfg, sh)
+        end
+        
+        push!(times, time)
+    end
+    
+    # Statistics
+    mean_time = mean(times)
+    std_time = std(times)
+    min_time = minimum(times)
+    max_time = maximum(times)
+    
+    # Compute derived metrics
+    lmax = get_lmax(cfg)
+    operations_per_sec = 1.0 / mean_time
+    points_per_sec = (cfg.nlat * cfg.nlon) / mean_time
+    
+    println(&quot;Performance Report (lmax=$lmax, $n_runs runs):&quot;)
+    println(&quot;  Mean time: $(mean_time*1000)ms (±$(std_time*1000)ms)&quot;)
+    println(&quot;  Min/Max: $(min_time*1000)ms / $(max_time*1000)ms&quot;)
+    println(&quot;  Transforms/sec: $(operations_per_sec)&quot;)
+    println(&quot;  Points/sec: $(points_per_sec)&quot;)
+    println(&quot;  Grid efficiency: $(cfg.nlm/(cfg.nlat*cfg.nlon))&quot;)
+end
+
+cfg = create_gauss_config(32, 32)
+performance_report(cfg)
+destroy_config(cfg)</code></pre><h2 id="Optimization-Checklist"><a class="docs-heading-anchor" href="#Optimization-Checklist">Optimization Checklist</a><a id="Optimization-Checklist-1"></a><a class="docs-heading-anchor-permalink" href="#Optimization-Checklist" title="Permalink"></a></h2><h3 id="Before-Optimization"><a class="docs-heading-anchor" href="#Before-Optimization">Before Optimization</a><a id="Before-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Before-Optimization" title="Permalink"></a></h3><ul><li>[ ] Profile your code to identify bottlenecks</li><li>[ ] Understand your problem&#39;s computational characteristics</li><li>[ ] Measure baseline performance</li></ul><h3 id="Threading-Optimization-2"><a class="docs-heading-anchor" href="#Threading-Optimization-2">Threading Optimization</a><a class="docs-heading-anchor-permalink" href="#Threading-Optimization-2" title="Permalink"></a></h3><ul><li>[ ] Set <code>OMP_NUM_THREADS</code> appropriately</li><li>[ ] Use <code>set_optimal_threads()</code> for automatic tuning</li><li>[ ] Disable threading in other libraries (BLAS, FFTW)</li><li>[ ] Consider NUMA topology for large systems</li></ul><h3 id="Memory-Optimization-2"><a class="docs-heading-anchor" href="#Memory-Optimization-2">Memory Optimization</a><a class="docs-heading-anchor-permalink" href="#Memory-Optimization-2" title="Permalink"></a></h3><ul><li>[ ] Pre-allocate buffers for repeated operations</li><li>[ ] Use in-place transforms when possible</li><li>[ ] Process data in chunks for large datasets</li><li>[ ] Monitor memory usage and fragmentation</li></ul><h3 id="Algorithm-Optimization"><a class="docs-heading-anchor" href="#Algorithm-Optimization">Algorithm Optimization</a><a id="Algorithm-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Algorithm-Optimization" title="Permalink"></a></h3><ul><li>[ ] Minimize backward transforms (analysis)</li><li>[ ] Choose appropriate grid type (Gauss vs regular)</li><li>[ ] Batch operations when possible</li><li>[ ] Cache frequently used configurations</li></ul><p>&lt;!– GPU optimization checklist removed –&gt;</p><ul><li>[ ] Use appropriate batch sizes</li></ul><h3 id="System-Level-Optimization"><a class="docs-heading-anchor" href="#System-Level-Optimization">System-Level Optimization</a><a id="System-Level-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#System-Level-Optimization" title="Permalink"></a></h3><ul><li>[ ] Use high-performance BLAS library</li><li>[ ] Enable CPU optimizations (AVX, etc.)</li><li>[ ] Consider process/thread affinity</li><li>[ ] Monitor system resource utilization</li></ul><h3 id="Performance-Validation"><a class="docs-heading-anchor" href="#Performance-Validation">Performance Validation</a><a id="Performance-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Validation" title="Permalink"></a></h3><ul><li>[ ] Compare with baseline measurements</li><li>[ ] Verify numerical accuracy after optimization</li><li>[ ] Test with realistic problem sizes</li><li>[ ] Document performance characteristics</li></ul><h2 id="Common-Performance-Pitfalls"><a class="docs-heading-anchor" href="#Common-Performance-Pitfalls">Common Performance Pitfalls</a><a id="Common-Performance-Pitfalls-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Performance-Pitfalls" title="Permalink"></a></h2><ol><li><strong>Thread Oversubscription</strong>: Too many threads can hurt performance</li><li><strong>Memory Allocation</strong>: Repeated allocation in inner loops</li><li><strong>Wrong Grid Type</strong>: Regular grids when Gauss would suffice</li><li><strong>Unnecessary Transforms</strong>: Computing both directions when only one needed</li><li>Performance pitfalls: array allocations in hot loops, oversubscription of threads</li></ol><p>Following these guidelines will help you achieve optimal performance for your specific SHTnsKit.jl applications.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../examples/">« Examples Gallery</a><a class="docs-footer-nextpage" href="../performance_tips/">Performance Tips »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Wednesday 17 September 2025 18:16">Wednesday 17 September 2025</span>. Using Julia version 1.11.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

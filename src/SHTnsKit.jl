@@ -67,6 +67,7 @@ export SHsphtor_to_spat_l, spat_to_SHsphtor_l, SHsph_to_spat_l, SHtor_to_spat_l
 export spat_to_SHsphtor_ml, SHsphtor_to_spat_ml, SHsph_to_spat_ml, SHtor_to_spat_ml
 export spat_to_SHqst_l, SHqst_to_spat_l, spat_to_SHqst_ml, SHqst_to_spat_ml
 export SHsphtor_to_spat_cplx, spat_cplx_to_SHsphtor, SH_to_grad_spat_ml
+export suggest_pencil_grid, set_fft_plan_cache!, enable_fft_plan_cache!, disable_fft_plan_cache!, fft_plan_cache_enabled
 
 # ===== MATRIX OPERATIONS AND DIFFERENTIAL OPERATORS =====
 export mul_ct_matrix, st_dt_matrix, SH_mul_mx          # Matrix multiplication utilities

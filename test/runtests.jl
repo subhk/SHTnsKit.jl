@@ -393,6 +393,10 @@ end
                 cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
                 topo = PencilArrays.Pencil((cfg.nlat, cfg.nlon), (pθ, pφ), comm)
 
+                # Helper should reproduce the chosen decomposition when both dims split
+                grid = SHTnsKit.suggest_pencil_grid(comm, cfg.nlat, cfg.nlon; allow_one_dim=false)
+                @test grid == (pθ, pφ)
+
                 fθφ = PencilArrays.zeros(topo; eltype=Float64)
                 for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                     fθφ[iθ, iφ] = 0.3 * sin(0.2*(iθ+1)) + 0.4 * cos(0.15*(iφ+1))
@@ -440,6 +444,14 @@ end
                 glob_vref  = MPI.Allreduce(vt_ref + vp_ref, +, comm)
                 rel_v = sqrt(glob_vdiff / (glob_vref + eps()))
                 @test rel_v < 5e-8
+
+                # Cache control toggles
+                initial_cache = SHTnsKit.fft_plan_cache_enabled()
+                SHTnsKit.enable_fft_plan_cache!()
+                @test SHTnsKit.fft_plan_cache_enabled()
+                SHTnsKit.disable_fft_plan_cache!()
+                @test !SHTnsKit.fft_plan_cache_enabled()
+                SHTnsKit.set_fft_plan_cache!(initial_cache)
             end
             MPI.Finalize()
         else

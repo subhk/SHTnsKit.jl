@@ -431,13 +431,20 @@ Enable rfft in distributed plans (when supported):
 using SHTnsKit, MPI, PencilArrays, PencilFFTs
 MPI.Init()
 cfg = create_gauss_config(16, 18; nlon=33)
+
+# Let SHTnsKit suggest a balanced θ/φ pencil layout
+pθ, pφ = suggest_pencil_grid(MPI.COMM_WORLD, cfg.nlat, cfg.nlon; allow_one_dim=false)
 Pθφ = PencilArrays.Pencil((:θ,:φ), (cfg.nlat, cfg.nlon); comm=MPI.COMM_WORLD)
+# (Pass `procgrid=(pθ,pφ)` or similar keyword if your PencilArrays version supports it.)
 
 # Scalar analysis with rfft
 aplan = DistAnalysisPlan(cfg, PencilArrays.zeros(Pθφ; eltype=Float64); use_rfft=true)
 
 # Vector transforms with rfft + optional spatial scratch to avoid iFFT allocs for real outputs
 vplan = DistSphtorPlan(cfg, PencilArrays.zeros(Pθφ; eltype=Float64); use_rfft=true, with_spatial_scratch=true)
+
+# Cache PencilFFT plans across calls once warm-up completes
+enable_fft_plan_cache!()
 MPI.Finalize()
 ```
 
@@ -518,4 +525,3 @@ SHTnsKit.jl is released under the GNU General Public License v3.0 (GPL-3.0), ens
 
 - **[SHTns Documentation](https://nschaeff.bitbucket.io/shtns/)**: Original C library
 - **[Spherical Harmonics Theory](https://en.wikipedia.org/wiki/Spherical_harmonics)**: Mathematical background  
-

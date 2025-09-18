@@ -17,6 +17,7 @@ Key capabilities:
 """
 
 using Base.Threads                       # Threads.@threads and locks/macros
+using Base: ceildiv
 import MPI                               # Bring MPI module into scope for MPI.* calls
 using MPI: Allreduce, Allreduce!, Allgather, Allgatherv, Comm_size, COMM_WORLD
 import PencilArrays                      # Bring PencilArrays module for qualified calls
@@ -33,6 +34,44 @@ const _CACHE_PENCILFFTS = Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "0") =
 const _pfft_cache = IdDict{Any,Any}()
 const _cache_lock = Threads.ReentrantLock()
 const _sparse_gather_cache = Dict{Tuple{DataType,Int}, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}()
+
+"""
+    SHTnsKit.fft_plan_cache_enabled() -> Bool
+
+Return whether distributed FFT plan caching is currently enabled.
+"""
+SHTnsKit.fft_plan_cache_enabled() = _CACHE_PENCILFFTS[]
+
+"""
+    SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
+
+Enable or disable caching of PencilFFT plans. When disabling and `clear=true`, any
+cached plans are freed immediately to release memory.
+"""
+function SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
+    _CACHE_PENCILFFTS[] = flag
+    if !flag && clear
+        lock(_cache_lock) do
+            empty!(_pfft_cache)
+        end
+    end
+    return flag
+end
+
+"""
+    SHTnsKit.enable_fft_plan_cache!()
+
+Convenience wrapper to enable distributed FFT plan caching.
+"""
+SHTnsKit.enable_fft_plan_cache!() = SHTnsKit.set_fft_plan_cache!(true)
+
+"""
+    SHTnsKit.disable_fft_plan_cache!(; clear::Bool=true)
+
+Disable distributed FFT plan caching. Pass `clear=false` to keep previously cached
+plans in memory for later reuse.
+"""
+SHTnsKit.disable_fft_plan_cache!(; clear::Bool=true) = SHTnsKit.set_fft_plan_cache!(false; clear)
 
 # Generate cache key based on array characteristics for FFT plan reuse
 function _cache_key(kind::Symbol, A)
@@ -199,6 +238,46 @@ function allocate(args...; kwargs...)
 
     error("Unable to allocate PencilArray with provided arguments. " *
           "This may indicate an incompatible PencilArrays version or API change.")
+end
+
+"""
+    SHTnsKit.suggest_pencil_grid(comm::MPI.Comm, nlat::Integer, nlon::Integer;
+                                 prefer_square::Bool=true, allow_one_dim::Bool=true)
+
+Suggest a `(pθ, pφ)` processor grid for a Pencil decomposition that splits the
+θ and φ dimensions across the MPI communicator `comm`. When `prefer_square` is
+true (default), the heuristic favours balanced local tiles; otherwise it
+minimises the total local grid area. Set `allow_one_dim=false` to require both
+factors to be greater than one (falls back to one-dimensional decomposition when
+no such factorisation exists).
+"""
+function SHTnsKit.suggest_pencil_grid(comm::MPI.Comm, nlat::Integer, nlon::Integer;
+                                      prefer_square::Bool=true, allow_one_dim::Bool=true)
+    total = MPI.Comm_size(comm)
+    best = (1, total)
+    best_cost = typemax(Float64)
+    for pθ in 1:total
+        total % pθ == 0 || continue
+        pφ = div(total, pθ)
+        if !allow_one_dim && (pθ == 1 || pφ == 1)
+            continue
+        end
+        lθ = ceildiv(Int(nlat), pθ)
+        lφ = ceildiv(Int(nlon), pφ)
+        cost = if prefer_square
+            abs(lθ - lφ)
+        else
+            lθ * lφ
+        end
+        if cost < best_cost || (cost == best_cost && max(pθ, pφ) < max(best...))
+            best_cost = cost
+            best = (pθ, pφ)
+        end
+    end
+    if !allow_one_dim && best == (1, total) && total > 1
+        @warn "Unable to find a 2D pencil decomposition for $total processes; falling back to 1D split"
+    end
+    return best
 end
 
 # Get global indices with robust fallback patterns

@@ -156,6 +156,30 @@ set_fft_plan_cache!(flag::Bool; clear::Bool=true) = (_fft_plan_cache_set_cb[])(f
 enable_fft_plan_cache!() = (_fft_plan_cache_enable_cb[])()
 disable_fft_plan_cache!(; clear::Bool=true) = (_fft_plan_cache_disable_cb[])(; clear=clear)
 
+Base.@doc """
+    fft_plan_cache_enabled() -> Bool
+
+Return whether distributed FFT plan caching is currently enabled.
+""" fft_plan_cache_enabled
+
+Base.@doc """
+    set_fft_plan_cache!(flag::Bool; clear::Bool=true)
+
+Enable or disable caching of distributed FFT plans. When disabling and `clear=true`, cached plans are freed.
+""" set_fft_plan_cache!
+
+Base.@doc """
+    enable_fft_plan_cache!()
+
+Convenience wrapper to enable distributed FFT plan caching.
+""" enable_fft_plan_cache!
+
+Base.@doc """
+    disable_fft_plan_cache!(; clear::Bool=true)
+
+Disable distributed FFT plan caching. Pass `clear=false` to retain existing cache entries.
+""" disable_fft_plan_cache!
+
 # GPU extension fallbacks
 get_device() = error("GPU extension not loaded. Install and load CUDA.jl or AMDGPU.jl with GPUArrays and KernelAbstractions")
 set_device!(::Any) = error("GPU extension not loaded")
@@ -207,6 +231,7 @@ dist_SH_Xrotate90_packed(::SHTConfig, ::Any; kwargs...) = error("Parallel extens
 # ===== PARALLEL ROTATION FUNCTIONS =====
 # Parallel rotations fallbacks (PencilArray-based)
 Dist = SHTnsKit  # Alias for distributed operations
+
 # Non-bang (out-of-place) and in-place rotation variants
 function dist_SH_Zrotate(::SHTConfig, ::Any, ::Any); error("Parallel extension not loaded"); end          # Out-of-place Z rotation
 function dist_SH_Zrotate(::SHTConfig, ::Any, ::Any, ::Any); error("Parallel extension not loaded"); end   # In-place Z rotation
@@ -222,6 +247,7 @@ analysis_turbo(::SHTConfig, ::Any) = error("LoopVectorization extension not load
 synthesis_turbo(::SHTConfig, ::Any; real_output::Bool=true) = error("LoopVectorization extension not loaded")  # Vectorized synthesis
 turbo_apply_laplacian!(::SHTConfig, ::Any) = error("LoopVectorization extension not loaded")            # Vectorized Laplacian
 benchmark_turbo_vs_simd(::SHTConfig; kwargs...) = error("LoopVectorization extension not loaded")      # Performance comparison
+
 # ===== LOW-LEVEL SHTNS LIBRARY INTERFACE =====
 # Direct bindings to the underlying SHTns C library functions
 export shtns_verbose, shtns_print_version, shtns_get_build_info           # Library information

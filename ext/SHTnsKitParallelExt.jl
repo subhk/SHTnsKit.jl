@@ -38,16 +38,11 @@ const _sparse_gather_cache = Dict{Tuple{DataType,Int}, NamedTuple{(:idx,:val),Tu
 const _ceildiv = isdefined(Base, :ceildiv) ? Base.ceildiv : (a, b) -> cld(a, b)
 ceildiv(a::Integer, b::Integer) = _ceildiv(a, b)
 
-function SHTnsKit.fft_plan_cache_enabled()
+function _fft_plan_cache_enabled_impl()
     return _CACHE_PENCILFFTS[]
 end
-Base.@doc """
-    SHTnsKit.fft_plan_cache_enabled() -> Bool
 
-Return whether distributed FFT plan caching is currently enabled.
-""" SHTnsKit.fft_plan_cache_enabled
-
-function SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
+function _fft_plan_cache_set_impl(flag::Bool; clear::Bool=true)
     _CACHE_PENCILFFTS[] = flag
     if !flag && clear
         lock(_cache_lock) do
@@ -56,31 +51,19 @@ function SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
     end
     return flag
 end
-Base.@doc """
-    SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
 
-Enable or disable caching of PencilFFT plans. When disabling and `clear=true`, any
-cached plans are freed immediately to release memory.
-""" SHTnsKit.set_fft_plan_cache!
-
-function SHTnsKit.enable_fft_plan_cache!()
-    return SHTnsKit.set_fft_plan_cache!(true)
+function _fft_plan_cache_enable_impl()
+    return _fft_plan_cache_set_impl(true)
 end
-Base.@doc """
-    SHTnsKit.enable_fft_plan_cache!()
 
-Convenience wrapper to enable distributed FFT plan caching.
-""" SHTnsKit.enable_fft_plan_cache!
-
-function SHTnsKit.disable_fft_plan_cache!(; clear::Bool=true)
-    return SHTnsKit.set_fft_plan_cache!(false; clear)
+function _fft_plan_cache_disable_impl(; clear::Bool=true)
+    return _fft_plan_cache_set_impl(false; clear=clear)
 end
-Base.@doc """
-    SHTnsKit.disable_fft_plan_cache!(; clear::Bool=true)
 
-Disable distributed FFT plan caching. Pass `clear=false` to keep previously cached
-plans in memory for later reuse.
-""" SHTnsKit.disable_fft_plan_cache!
+SHTnsKit._fft_plan_cache_enabled_cb[] = _fft_plan_cache_enabled_impl
+SHTnsKit._fft_plan_cache_set_cb[] = _fft_plan_cache_set_impl
+SHTnsKit._fft_plan_cache_enable_cb[] = _fft_plan_cache_enable_impl
+SHTnsKit._fft_plan_cache_disable_cb[] = _fft_plan_cache_disable_impl
 
 # Generate cache key based on array characteristics for FFT plan reuse
 function _cache_key(kind::Symbol, A)

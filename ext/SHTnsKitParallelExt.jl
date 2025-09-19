@@ -17,7 +17,6 @@ Key capabilities:
 """
 
 using Base.Threads                       # Threads.@threads and locks/macros
-using Base: ceildiv
 import MPI                               # Bring MPI module into scope for MPI.* calls
 using MPI: Allreduce, Allreduce!, Allgather, Allgatherv, Comm_size, COMM_WORLD
 import PencilArrays                      # Bring PencilArrays module for qualified calls
@@ -35,19 +34,19 @@ const _pfft_cache = IdDict{Any,Any}()
 const _cache_lock = Threads.ReentrantLock()
 const _sparse_gather_cache = Dict{Tuple{DataType,Int}, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}()
 
-"""
+# Compat helper: `ceildiv` was added in Julia 1.11
+const _ceildiv = isdefined(Base, :ceildiv) ? Base.ceildiv : (a, b) -> cld(a, b)
+ceildiv(a::Integer, b::Integer) = _ceildiv(a, b)
+
+function SHTnsKit.fft_plan_cache_enabled()
+    return _CACHE_PENCILFFTS[]
+end
+Base.@doc """
     SHTnsKit.fft_plan_cache_enabled() -> Bool
 
 Return whether distributed FFT plan caching is currently enabled.
-"""
-SHTnsKit.fft_plan_cache_enabled() = _CACHE_PENCILFFTS[]
+""" SHTnsKit.fft_plan_cache_enabled
 
-"""
-    SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
-
-Enable or disable caching of PencilFFT plans. When disabling and `clear=true`, any
-cached plans are freed immediately to release memory.
-"""
 function SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
     _CACHE_PENCILFFTS[] = flag
     if !flag && clear
@@ -57,21 +56,31 @@ function SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
     end
     return flag
 end
+Base.@doc """
+    SHTnsKit.set_fft_plan_cache!(flag::Bool; clear::Bool=true)
 
-"""
+Enable or disable caching of PencilFFT plans. When disabling and `clear=true`, any
+cached plans are freed immediately to release memory.
+""" SHTnsKit.set_fft_plan_cache!
+
+function SHTnsKit.enable_fft_plan_cache!()
+    return SHTnsKit.set_fft_plan_cache!(true)
+end
+Base.@doc """
     SHTnsKit.enable_fft_plan_cache!()
 
 Convenience wrapper to enable distributed FFT plan caching.
-"""
-SHTnsKit.enable_fft_plan_cache!() = SHTnsKit.set_fft_plan_cache!(true)
+""" SHTnsKit.enable_fft_plan_cache!
 
-"""
+function SHTnsKit.disable_fft_plan_cache!(; clear::Bool=true)
+    return SHTnsKit.set_fft_plan_cache!(false; clear)
+end
+Base.@doc """
     SHTnsKit.disable_fft_plan_cache!(; clear::Bool=true)
 
 Disable distributed FFT plan caching. Pass `clear=false` to keep previously cached
 plans in memory for later reuse.
-"""
-SHTnsKit.disable_fft_plan_cache!(; clear::Bool=true) = SHTnsKit.set_fft_plan_cache!(false; clear)
+""" SHTnsKit.disable_fft_plan_cache!
 
 # Generate cache key based on array characteristics for FFT plan reuse
 function _cache_key(kind::Symbol, A)

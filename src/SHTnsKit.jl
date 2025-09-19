@@ -15,29 +15,29 @@ using Base.Threads  # For multi-threading support
 phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : nlon)
 
 # Include all module source files
-include("fftutils.jl")      # FFT utility functions and helpers
-include("layout.jl")        # Data layout and memory organization
-include("mathutils.jl")     # Mathematical utility functions
-include("gausslegendre.jl") # Gauss-Legendre quadrature implementation
-include("legendre.jl")      # Legendre polynomial computations
-include("normalization.jl") # Spherical harmonic normalization
-include("config.jl")              # Configuration and setup functions
-include("buffer_utils.jl")  # Common buffer allocation patterns
-include("plan.jl")                # Transform planning and optimization
-include("core_transforms.jl")     # Core 2D grid ↔ spectral transforms
-include("specialized_transforms.jl") # Vector and point transforms
-include("complex_packed.jl")      # Complex number packing utilities
-include("qst_transforms.jl")       # QST (3D) vector field operations
-include("sphtor_transforms.jl")    # Spheroidal/toroidal (2D) vector operations
-include("operators.jl")     # Differential operators on sphere
-include("rotations.jl")           # Spherical rotation operations
-include("local.jl")              # Local (thread-local) operations
-include("energy_diagnostics.jl") # Energy calculations and gradients
-include("spectral_diagnostics.jl") # Spectral analysis and spectrum functions
-include("vorticity_diagnostics.jl") # Vorticity and enstrophy calculations
-include("api_compat.jl")         # API compatibility layer
-include("parallel_dense.jl")# Parallel dense matrix operations
-include("device_utils.jl")  # GPU device utilities and management
+include("fftutils.jl")                      # FFT utility functions and helpers
+include("layout.jl")                        # Data layout and memory organization
+include("mathutils.jl")                      # Mathematical utility functions
+include("gausslegendre.jl")                  # Gauss-Legendre quadrature implementation
+include("legendre.jl")                       # Legendre polynomial computations
+include("normalization.jl")                  # Spherical harmonic normalization
+include("config.jl")                         # Configuration and setup functions
+include("buffer_utils.jl")                   # Common buffer allocation patterns
+include("plan.jl")                           # Transform planning and optimization
+include("core_transforms.jl")                # Core 2D grid ↔ spectral transforms
+include("specialized_transforms.jl")         # Vector and point transforms
+include("complex_packed.jl")                  # Complex number packing utilities
+include("qst_transforms.jl")                  # QST (3D) vector field operations
+include("sphtor_transforms.jl")               # Spheroidal/toroidal (2D) vector operations
+include("operators.jl")                       # Differential operators on sphere
+include("rotations.jl")                       # Spherical rotation operations
+include("local.jl")                           # Local (thread-local) operations
+include("energy_diagnostics.jl")              # Energy calculations and gradients
+include("spectral_diagnostics.jl")            # Spectral analysis and spectrum functions
+include("vorticity_diagnostics.jl")           # Vorticity and enstrophy calculations
+include("api_compat.jl")                      # API compatibility layer
+include("parallel_dense.jl")                  # Parallel dense matrix operations
+include("device_utils.jl")                    # GPU device utilities and management
 
 # ===== CORE CONFIGURATION AND SETUP =====
 export SHTConfig, create_gauss_config, create_config, destroy_config  # Configuration management
@@ -139,6 +139,22 @@ export dist_SH_Zrotate_packed, dist_SH_Yrotate_packed, dist_SH_Yrotate90_packed,
 
 # ===== EXTENSION FALLBACK FUNCTIONS =====
 # These provide informative error messages when extension packages are not loaded
+
+# Parallel extension fallbacks
+_fft_plan_cache_enabled_fallback() = false
+_fft_plan_cache_set_fallback(flag::Bool; clear::Bool=true) = error("Parallel extension not loaded")
+_fft_plan_cache_enable_fallback() = error("Parallel extension not loaded")
+_fft_plan_cache_disable_fallback(; clear::Bool=true) = error("Parallel extension not loaded")
+
+const _fft_plan_cache_enabled_cb = Ref{Function}(_fft_plan_cache_enabled_fallback)
+const _fft_plan_cache_set_cb = Ref{Function}(_fft_plan_cache_set_fallback)
+const _fft_plan_cache_enable_cb = Ref{Function}(_fft_plan_cache_enable_fallback)
+const _fft_plan_cache_disable_cb = Ref{Function}(_fft_plan_cache_disable_fallback)
+
+fft_plan_cache_enabled() = _fft_plan_cache_enabled_cb[]()
+set_fft_plan_cache!(flag::Bool; clear::Bool=true) = (_fft_plan_cache_set_cb[])(flag; clear=clear)
+enable_fft_plan_cache!() = (_fft_plan_cache_enable_cb[])()
+disable_fft_plan_cache!(; clear::Bool=true) = (_fft_plan_cache_disable_cb[])(; clear=clear)
 
 # GPU extension fallbacks
 get_device() = error("GPU extension not loaded. Install and load CUDA.jl or AMDGPU.jl with GPUArrays and KernelAbstractions")

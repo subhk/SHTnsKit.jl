@@ -2,8 +2,6 @@
 # Unified dispatch helpers for PencilArray inputs
 ##########
 
-SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray) = SHTnsKit.dist_analysis(cfg, fθφ)
-
 function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; 
                     prototype_θφ::PencilArray, real_output::Bool=true)
 

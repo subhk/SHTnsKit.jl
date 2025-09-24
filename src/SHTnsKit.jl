@@ -181,155 +181,29 @@ Disable distributed FFT plan caching. Pass `clear=false` to retain existing cach
 """ disable_fft_plan_cache!
 
 # ===== PENCIL GRID SUGGESTION =====
-const _MPI_PKGID = Base.PkgId(Base.UUID("da04e1cc-30fd-572f-bb4f-1f8673147195"), "MPI")
-
-@inline function _maybe_loaded_mpi()
-    get(Base.loaded_modules, _MPI_PKGID, nothing)
-end
-
-@inline function _infer_comm_size(comm)
-    comm === nothing && return 1
-    comm isa Integer && return max(1, Int(comm))
-
-    # Common explicit fields used by MPI wrappers
-    for accessor in ((obj -> getfield(obj, :nprocs)), (obj -> getproperty(obj, :nprocs)))
-        try
-            nprocs = accessor(comm)
-            nprocs isa Integer && nprocs > 0 && return Int(nprocs)
-        catch
-        end
-    end
-
-    # Loaded MPI module without importing it eagerly
-    if (mpi_mod = _maybe_loaded_mpi()) !== nothing
-        comm_size = try
-            Base.invokelatest(getproperty(mpi_mod, :Comm_size), comm)
-        catch
-            nothing
-        end
-        comm_size isa Integer && comm_size > 0 && return Int(comm_size)
-    end
-
-    # Generic fallbacks: size/length accessors
-    if hasmethod(size, Tuple{typeof(comm)})
-        sz = size(comm)
-        if !isempty(sz)
-            val = first(sz)
-            val isa Integer && val > 0 && return Int(val)
-        end
-    end
-    if hasmethod(length, Tuple{typeof(comm)})
-        val = length(comm)
-        val isa Integer && val > 0 && return Int(val)
-    end
-
-    return 1
-end
-
-@inline _candidate_remainder_penalty(total::Int, splits::Int) = (total % splits == 0 ? 0.0 : 0.3)
-
-@inline function _candidate_score(nlat::Int, nlon::Int, pθ::Int, pφ::Int, prefer_square::Bool)
-    θchunk = cld(nlat, pθ)
-    φchunk = cld(nlon, pφ)
-
-    chunk_penalty = (max(θchunk, φchunk) / max(1, min(θchunk, φchunk))) - 1.0
-    shape_ratio = (max(pθ, pφ) / max(1, min(pθ, pφ))) - 1.0
-    shape_penalty = prefer_square ? shape_ratio : 0.25 * shape_ratio
-
-    lat_penalty = _candidate_remainder_penalty(nlat, pθ)
-    lon_penalty = _candidate_remainder_penalty(nlon, pφ)
-
-    thin_penalty = (θchunk < 2 ? 1.0 : 0.0) + (φchunk < 2 ? 1.0 : 0.0)
-
-    grid_ratio = nlon == 0 ? 1.0 : float(nlat) / max(1.0, float(nlon))
-    proc_ratio = pφ == 0 ? 1.0 : float(pθ) / max(1.0, float(pφ))
-    anisotropy_penalty = abs(proc_ratio - grid_ratio) / max(grid_ratio, 1.0)
-
-    return chunk_penalty + shape_penalty + lat_penalty + lon_penalty + thin_penalty + 0.3 * anisotropy_penalty
-end
-
-function suggest_pencil_grid(comm::Any, nlat::Integer, nlon::Integer;
-                              prefer_square::Bool=true,
-                              allow_one_dim::Bool=true)
-    nprocs = _infer_comm_size(comm)
-    return suggest_pencil_grid(nprocs, nlat, nlon;
-                               prefer_square=prefer_square,
-                               allow_one_dim=allow_one_dim)
-end
-
-function suggest_pencil_grid(::Nothing, nlat::Integer, nlon::Integer;
-                              prefer_square::Bool=true,
-                              allow_one_dim::Bool=true)
+function _suggest_pencil_grid_fallback(comm_or_nprocs::Any, nlat::Integer, nlon::Integer;
+                                       prefer_square::Bool=true,
+                                       allow_one_dim::Bool=true)
     return (1, 1)
 end
 
-function suggest_pencil_grid(nprocs::Integer, nlat::Integer, nlon::Integer;
+const _suggest_pencil_grid_cb = Ref{Function}(_suggest_pencil_grid_fallback)
+
+function suggest_pencil_grid(comm_or_nprocs::Any, nlat::Integer, nlon::Integer;
                               prefer_square::Bool=true,
                               allow_one_dim::Bool=true)
-    nlat <= 0 && throw(ArgumentError("nlat must be positive"))
-    nlon <= 0 && throw(ArgumentError("nlon must be positive"))
-    nprocs_val = max(1, Int(nprocs))
-
-    if nprocs_val == 1
-        return (1, 1)
-    end
-
-    best = nothing
-    best_score = Inf
-
-    limit = isqrt(nprocs_val)
-    for pθ in 1:limit
-        if nprocs_val % pθ != 0
-            continue
-        end
-        pφ = nprocs_val ÷ pθ
-        for (a, b) in ((pθ, pφ), (pφ, pθ))
-            if a <= 0 || b <= 0
-                continue
-            end
-            if !allow_one_dim && min(a, b) == 1
-                continue
-            end
-            if a > nlat && b > nlon
-                continue
-            end
-            score = _candidate_score(Int(nlat), Int(nlon), a, b, prefer_square)
-            if score < best_score - 1e-8
-                best = (a, b)
-                best_score = score
-            elseif abs(score - best_score) <= 1e-8 && best !== nothing
-                if max(a, b) - min(a, b) < max(best...) - min(best...)
-                    best = (a, b)
-                elseif max(a, b) - min(a, b) == max(best...) - min(best...)
-                    best = (a >= b && best[1] < best[2]) ? (a, b) : best
-                end
-            end
-        end
-    end
-
-    if best === nothing
-        if allow_one_dim
-            if nlon >= nlat
-                return (1, nprocs_val)
-            else
-                return (nprocs_val, 1)
-            end
-        else
-            return (1, nprocs_val)
-        end
-    end
-
-    return best
+    return (_suggest_pencil_grid_cb[])(comm_or_nprocs, Int(nlat), Int(nlon);
+                                       prefer_square=prefer_square,
+                                       allow_one_dim=allow_one_dim)
 end
 
 """
     suggest_pencil_grid(comm_or_nprocs, nlat, nlon; prefer_square=true, allow_one_dim=true)
 
-Heuristically choose an MPI pencil decomposition `(pθ, pφ)` for a grid with
-`nlat` latitude points and `nlon` longitude points. Accepts either an MPI
-communicator or the number of processes and prefers balanced 2D decompositions
-when available. Set `allow_one_dim=false` to filter out one-dimensional
-decompositions unless no other options exist.
+Return a suggested MPI pencil decomposition `(pθ, pφ)` for a grid of size
+`nlat × nlon`. The base package provides a `(1,1)` fallback so the function is
+always defined; when `SHTnsKitParallelExt` is loaded the callback is replaced
+with an MPI-aware heuristic that favours balanced 2D decompositions.
 """
 suggest_pencil_grid
 

@@ -200,7 +200,7 @@ end
 """
     suggest_pencil_grid(comm_or_nprocs, nlat, nlon; prefer_square=true, allow_one_dim=true)
 
-Return a suggested MPI pencil decomposition `(pθ, pφ)` for a grid of size
+Return a suggested MPI pencil decomposition `(p_theta, p_phi)` for a grid of size
 `nlat × nlon`. The base package provides a `(1,1)` fallback so the function is
 always defined; when `SHTnsKitParallelExt` is loaded the callback is replaced
 with an MPI-aware heuristic that favours balanced 2D decompositions.

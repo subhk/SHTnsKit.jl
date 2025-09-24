@@ -181,7 +181,7 @@ Disable distributed FFT plan caching. Pass `clear=false` to retain existing cach
 """ disable_fft_plan_cache!
 
 # ===== PENCIL GRID SUGGESTION =====
-const _MPI_PKGID = Base.PkgId(UUID("da04e1cc-30fd-572f-bb4f-1f8673147195"), "MPI")
+const _MPI_PKGID = Base.PkgId(Base.UUID("da04e1cc-30fd-572f-bb4f-1f8673147195"), "MPI")
 
 @inline function _maybe_loaded_mpi()
     get(Base.loaded_modules, _MPI_PKGID, nothing)
@@ -301,7 +301,7 @@ function suggest_pencil_grid(nprocs::Integer, nlat::Integer, nlon::Integer;
                 if max(a, b) - min(a, b) < max(best...) - min(best...)
                     best = (a, b)
                 elseif max(a, b) - min(a, b) == max(best...) - min(best...)
-                    best = (a ≥ b && best[1] < best[2]) ? (a, b) : best
+                    best = (a >= b && best[1] < best[2]) ? (a, b) : best
                 end
             end
         end
@@ -309,7 +309,7 @@ function suggest_pencil_grid(nprocs::Integer, nlat::Integer, nlon::Integer;
 
     if best === nothing
         if allow_one_dim
-            if nlon ≥ nlat
+            if nlon >= nlat
                 return (1, nprocs_val)
             else
                 return (nprocs_val, 1)

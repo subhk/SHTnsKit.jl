@@ -141,6 +141,113 @@ end
 # Robust API compatibility patterns for PencilArrays across versions
 # Uses method-based dispatch and try-catch for maximum reliability
 
+# ===== PENCIL GRID SUGGESTION =====
+@inline function _infer_comm_size(comm_or_nprocs::Any)
+    comm_or_nprocs === nothing && return 1
+    if comm_or_nprocs isa Integer
+        return max(1, Int(comm_or_nprocs))
+    elseif comm_or_nprocs isa MPI.Comm
+        return MPI.Comm_size(comm_or_nprocs)
+    end
+
+    try
+        return MPI.Comm_size(comm_or_nprocs)
+    catch
+    end
+
+    for accessor in (:nprocs, :size, :length)
+        try
+            val = getproperty(comm_or_nprocs, accessor)
+            val isa Integer && val > 0 && return Int(val)
+        catch
+        end
+        try
+            val = getfield(comm_or_nprocs, accessor)
+            val isa Integer && val > 0 && return Int(val)
+        catch
+        end
+    end
+
+    return 1
+end
+
+@inline _candidate_remainder_penalty(total::Int, splits::Int) = (total % splits == 0 ? 0.0 : 0.3)
+
+@inline function _candidate_score(nlat::Int, nlon::Int, p_theta::Int, p_phi::Int, prefer_square::Bool)
+    theta_chunk = cld(nlat, p_theta)
+    phi_chunk = cld(nlon, p_phi)
+
+    chunk_penalty = (max(theta_chunk, phi_chunk) / max(1, min(theta_chunk, phi_chunk))) - 1.0
+    shape_ratio = (max(p_theta, p_phi) / max(1, min(p_theta, p_phi))) - 1.0
+    shape_penalty = prefer_square ? shape_ratio : 0.25 * shape_ratio
+
+    lat_penalty = _candidate_remainder_penalty(nlat, p_theta)
+    lon_penalty = _candidate_remainder_penalty(nlon, p_phi)
+
+    thin_penalty = (theta_chunk < 2 ? 1.0 : 0.0) + (phi_chunk < 2 ? 1.0 : 0.0)
+
+    grid_ratio = nlon == 0 ? 1.0 : float(nlat) / max(1.0, float(nlon))
+    proc_ratio = p_phi == 0 ? 1.0 : float(p_theta) / max(1.0, float(p_phi))
+    anisotropy_penalty = abs(proc_ratio - grid_ratio) / max(grid_ratio, 1.0)
+
+    return chunk_penalty + shape_penalty + lat_penalty + lon_penalty + thin_penalty + 0.3 * anisotropy_penalty
+end
+
+function _suggest_pencil_grid_impl(comm_or_nprocs::Any, nlat::Integer, nlon::Integer;
+                                   prefer_square::Bool=true,
+                                   allow_one_dim::Bool=true)
+    nlat_val = Int(nlat)
+    nlon_val = Int(nlon)
+    nlat_val > 0 || throw(ArgumentError("nlat must be positive"))
+    nlon_val > 0 || throw(ArgumentError("nlon must be positive"))
+
+    nprocs = _infer_comm_size(comm_or_nprocs)
+    nprocs <= 1 && return (1, 1)
+
+    best = nothing
+    best_score = Inf
+
+    limit = isqrt(nprocs)
+    for p_theta in 1:limit
+        nprocs % p_theta == 0 || continue
+        p_phi = nprocs ÷ p_theta
+        for (a, b) in ((p_theta, p_phi), (p_phi, p_theta))
+            (a > 0 && b > 0) || continue
+            if !allow_one_dim && min(a, b) == 1
+                continue
+            end
+            if a > nlat_val && b > nlon_val
+                continue
+            end
+            score = _candidate_score(nlat_val, nlon_val, a, b, prefer_square)
+            if score < best_score - 1e-8
+                best = (a, b)
+                best_score = score
+            elseif best !== nothing && abs(score - best_score) <= 1e-8
+                spread = max(a, b) - min(a, b)
+                best_spread = max(best...) - min(best...)
+                if spread < best_spread
+                    best = (a, b)
+                elseif spread == best_spread && a >= b && best[1] < best[2]
+                    best = (a, b)
+                end
+            end
+        end
+    end
+
+    if best === nothing
+        if allow_one_dim
+            return nlon_val >= nlat_val ? (1, nprocs) : (nprocs, 1)
+        else
+            return (1, nprocs)
+        end
+    end
+
+    return best
+end
+
+SHTnsKit._suggest_pencil_grid_cb[] = _suggest_pencil_grid_impl
+
 # Diagnostic function to detect PencilArrays version and capabilities
 function _detect_pencilarray_version()
     version_info = Dict{Symbol, Any}()
@@ -230,46 +337,6 @@ function allocate(args...; kwargs...)
 
     error("Unable to allocate PencilArray with provided arguments. " *
           "This may indicate an incompatible PencilArrays version or API change.")
-end
-
-"""
-    SHTnsKit.suggest_pencil_grid(comm::MPI.Comm, nlat::Integer, nlon::Integer;
-                                 prefer_square::Bool=true, allow_one_dim::Bool=true)
-
-Suggest a `(pθ, pφ)` processor grid for a Pencil decomposition that splits the
-θ and φ dimensions across the MPI communicator `comm`. When `prefer_square` is
-true (default), the heuristic favours balanced local tiles; otherwise it
-minimises the total local grid area. Set `allow_one_dim=false` to require both
-factors to be greater than one (falls back to one-dimensional decomposition when
-no such factorisation exists).
-"""
-function SHTnsKit.suggest_pencil_grid(comm::MPI.Comm, nlat::Integer, nlon::Integer;
-                                      prefer_square::Bool=true, allow_one_dim::Bool=true)
-    total = MPI.Comm_size(comm)
-    best = (1, total)
-    best_cost = typemax(Float64)
-    for pθ in 1:total
-        total % pθ == 0 || continue
-        pφ = div(total, pθ)
-        if !allow_one_dim && (pθ == 1 || pφ == 1)
-            continue
-        end
-        lθ = ceildiv(Int(nlat), pθ)
-        lφ = ceildiv(Int(nlon), pφ)
-        cost = if prefer_square
-            abs(lθ - lφ)
-        else
-            lθ * lφ
-        end
-        if cost < best_cost || (cost == best_cost && max(pθ, pφ) < max(best...))
-            best_cost = cost
-            best = (pθ, pφ)
-        end
-    end
-    if !allow_one_dim && best == (1, total) && total > 1
-        @warn "Unable to find a 2D pencil decomposition for $total processes; falling back to 1D split"
-    end
-    return best
 end
 
 # Get global indices with robust fallback patterns

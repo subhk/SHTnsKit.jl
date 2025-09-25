@@ -25,26 +25,6 @@ function SHTnsKit.spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray,
     return SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ; use_tables)
 end
 
-function SHTnsKit.SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::PencilArray, Tlm::PencilArray; 
-                                   prototype_θφ::PencilArray, real_output::Bool=true)
-    return SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ, real_output)
-end
-
-function SHTnsKit.SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; 
-                                   prototype_θφ::PencilArray, real_output::Bool=true)
-    return SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ, real_output)
-end
-
 function SHTnsKit.spat_to_SHqst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray)
     return SHTnsKit.dist_spat_to_SHqst(cfg, Vrθφ, Vtθφ, Vpθφ)
-end
-
-function SHTnsKit.SHqst_to_spat(cfg::SHTnsKit.SHTConfig, Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray; 
-                                prototype_θφ::PencilArray, real_output::Bool=true)
-    return SHTnsKit.dist_SHqst_to_spat(cfg, Qlm, Slm, Tlm; prototype_θφ, real_output)
-end
-
-function SHTnsKit.SHqst_to_spat(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; 
-                                prototype_θφ::PencilArray, real_output::Bool=true)
-    return SHTnsKit.dist_SHqst_to_spat(cfg, Qlm, Slm, Tlm; prototype_θφ, real_output)
 end

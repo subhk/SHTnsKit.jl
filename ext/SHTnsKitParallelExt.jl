@@ -246,7 +246,9 @@ function _suggest_pencil_grid_impl(comm_or_nprocs::Any, nlat::Integer, nlon::Int
     return best
 end
 
-SHTnsKit._suggest_pencil_grid_cb[] = _suggest_pencil_grid_impl
+function __init__()
+    SHTnsKit._suggest_pencil_grid_cb[] = _suggest_pencil_grid_impl
+end
 
 # Diagnostic function to detect PencilArrays version and capabilities
 function _detect_pencilarray_version()

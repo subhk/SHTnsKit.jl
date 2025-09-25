@@ -17,12 +17,6 @@ function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 end
 
 # Convenience: synthesis dispatch sugar from dense Alm to PencilArray
-function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; 
-                prototype_θφ::PencilArray, real_output::Bool=true)
-                
-    return SHTnsKit.dist_synthesis(cfg, PencilArray(Alm); prototype_θφ, real_output)
-end
-
 ##########
 # Vector/QST dispatch for PencilArrays
 ##########

@@ -1,7 +1,7 @@
 name = "SHTnsKit"
 uuid = "1b9d0af0-2e90-4fb0-9eae-4a2e2cdf5320"
 authors = ["Subhajit Kar <subhajitkar19@gmail.com>"]
-version = "1.1.8"
+version = "1.1.9"
 
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"

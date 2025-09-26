@@ -269,11 +269,11 @@ function dist_SH_Yrotate90(::SHTConfig, ::Any, ::Any); error("Parallel extension
 function dist_SH_Xrotate90(::SHTConfig, ::Any, ::Any); error("Parallel extension not loaded"); end                   # 90° X rotation
 
 # ===== LOOPVECTORIZATION EXTENSION FALLBACKS =====
-# LoopVectorization extension fallbacks (broad signatures to avoid overwriting)
-analysis_turbo(::SHTConfig, ::Any) = error("LoopVectorization extension not loaded")                    # Vectorized analysis
-synthesis_turbo(::SHTConfig, ::Any; real_output::Bool=true) = error("LoopVectorization extension not loaded")  # Vectorized synthesis
-turbo_apply_laplacian!(::SHTConfig, ::Any) = error("LoopVectorization extension not loaded")            # Vectorized Laplacian
-benchmark_turbo_vs_simd(::SHTConfig; kwargs...) = error("LoopVectorization extension not loaded")      # Performance comparison
+# LoopVectorization extension fallbacks (keep methods broad so extensions can specialize)
+analysis_turbo(::Any, ::Any) = error("LoopVectorization extension not loaded")                    # Vectorized analysis
+synthesis_turbo(::Any, ::Any; real_output::Bool=true) = error("LoopVectorization extension not loaded")  # Vectorized synthesis
+turbo_apply_laplacian!(::Any, ::Any) = error("LoopVectorization extension not loaded")            # Vectorized Laplacian
+benchmark_turbo_vs_simd(::Any; kwargs...) = error("LoopVectorization extension not loaded")      # Performance comparison
 
 # ===== LOW-LEVEL SHTNS LIBRARY INTERFACE =====
 # Direct bindings to the underlying SHTns C library functions

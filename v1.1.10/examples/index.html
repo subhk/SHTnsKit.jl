@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples Gallery · SHTnsKit.jl</title><meta name="title" content="Examples Gallery · SHTnsKit.jl"/><meta property="og:title" content="Examples Gallery · SHTnsKit.jl"/><meta property="twitter:title" content="Examples Gallery · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../distributed/">Distributed Guide</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li class="is-active"><a class="tocitem" href>Examples Gallery</a><ul class="internal"><li><a class="tocitem" href="#Beginner-Examples"><span>Beginner Examples</span></a></li><li><a class="tocitem" href="#Intermediate-Examples"><span>Intermediate Examples</span></a></li><li><a class="tocitem" href="#Geophysics-Applications"><span>Geophysics Applications</span></a></li><li><a class="tocitem" href="#Climate-Science-Applications"><span>Climate Science Applications</span></a></li><li><a class="tocitem" href="#Parallel-Computing-Examples"><span>Parallel Computing Examples</span></a></li><li><a class="tocitem" href="#Advanced-Applications"><span>Advanced Applications</span></a></li><li><a class="tocitem" href="#High-Performance-Examples"><span>High-Performance Examples</span></a></li><li><a class="tocitem" href="#Validation-and-Testing-Examples"><span>Validation and Testing Examples</span></a></li></ul></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Examples Gallery</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples Gallery</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/examples/index.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples-Gallery"><a class="docs-heading-anchor" href="#Examples-Gallery">Examples Gallery</a><a id="Examples-Gallery-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-Gallery" title="Permalink"></a></h1><p>Real-world examples and tutorials demonstrating SHTnsKit.jl capabilities, organized by difficulty level.</p><p><strong>How to use this guide:</strong></p><ul><li><strong>Beginner</strong>: Start here if you&#39;re new to spherical harmonics</li><li><strong>Intermediate</strong>: For users comfortable with basic transforms</li><li><strong>Advanced</strong>: Complex workflows and specialized applications</li></ul><p><strong>Learning path:</strong> Work through the examples in order for the best learning experience.</p><h2 id="Beginner-Examples"><a class="docs-heading-anchor" href="#Beginner-Examples">Beginner Examples</a><a id="Beginner-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Beginner-Examples" title="Permalink"></a></h2><p>Start here if you&#39;re new to spherical harmonics. These examples teach fundamental concepts with simple, well-explained code.</p><h3 id="Example-1:-Your-First-Transform"><a class="docs-heading-anchor" href="#Example-1:-Your-First-Transform">Example 1: Your First Transform</a><a id="Example-1:-Your-First-Transform-1"></a><a class="docs-heading-anchor-permalink" href="#Example-1:-Your-First-Transform" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn the basic workflow of spherical harmonic transforms</p><pre><code class="language-julia hljs">using SHTnsKit
+
+# Step 1: Create a configuration (like setting up your workspace)
+cfg = create_gauss_config(16, 16)  # Start small for learning
+println(&quot;Created configuration for degree up to 16&quot;)
+
+# Step 2: Create a simple temperature pattern
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+# Simple pattern: warm equator (θ = π/2), cold poles (θ = 0, π)
+temperature = @. 273.15 + 30 * sin(θ)^2  # Base temp + equatorial warming
+
+println(&quot;Temperature range: $(extrema(temperature)) K&quot;)
+
+# Step 3: Transform to spherical harmonic coefficients (analysis)
+T_coeffs = analysis(cfg, temperature)
+println(&quot;Number of coefficients: &quot;, length(T_coeffs))
+
+# Step 4: Find the most important coefficient
+max_coeff_idx = argmax(abs.(T_coeffs))
+l, m = SHTnsKit.lm_from_index(cfg, max_coeff_idx)
+println(&quot;Strongest mode: l=$l, m=$m&quot;)
+
+# Step 5: Reconstruct the original field (synthesis)
+T_reconstructed = synthesize(cfg, T_coeffs)
+error = maximum(abs.(temperature - T_reconstructed))
+println(&quot;Reconstruction error: $error (should be tiny!)&quot;)
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts learned:</strong></p><ul><li>Configuration setup (<code>create_gauss_config</code>)</li><li>Creating realistic data patterns</li><li>Analysis: spatial → spectral (<code>analyze</code>)</li><li>Synthesis: spectral → spatial (<code>synthesize</code>)</li><li>Understanding (l,m) mode indices</li></ul><h3 id="Example-2:-Pure-Spherical-Harmonic-Patterns"><a class="docs-heading-anchor" href="#Example-2:-Pure-Spherical-Harmonic-Patterns">Example 2: Pure Spherical Harmonic Patterns</a><a id="Example-2:-Pure-Spherical-Harmonic-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Example-2:-Pure-Spherical-Harmonic-Patterns" title="Permalink"></a></h3><p><strong>Goal:</strong> Understand how individual spherical harmonic modes look</p><pre><code class="language-julia hljs">using SHTnsKit
+using Plots  # For visualization
+
+cfg = create_gauss_config(32, 32)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Create pure Y_2^0 spherical harmonic (zonal mode)
+sh = zeros(cfg.nlm)
+idx = SHTnsKit.lmidx(cfg, 2, 0)  # l=2, m=0 (depends only on latitude)
+sh[idx] = 1.0
+println(&quot;Creating Y₂⁰ pattern (zonal, m=0)&quot;)
+
+# Synthesize to spatial domain
+Y20_pattern = synthesis(cfg, sh)
+
+# This creates a pattern that varies only with latitude
+println(&quot;Pattern statistics:&quot;)
+println(&quot;  Min value: $(minimum(Y20_pattern))&quot;)
+println(&quot;  Max value: $(maximum(Y20_pattern))&quot;)
+println(&quot;  At north pole (θ=0): $(Y20_pattern[1,1])&quot;)
+println(&quot;  At equator (θ=π/2): $(Y20_pattern[div(end,2),1])&quot;)
+
+# Plot the pattern
+heatmap(φ*180/π, θ*180/π, Y20_pattern, 
+        xlabel=&quot;Longitude (°)&quot;, ylabel=&quot;Colatitude (°)&quot;,
+        title=&quot;Y₂⁰ Spherical Harmonic (Zonal Pattern)&quot;,
+        color=:RdBu)
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts learned:</strong></p><ul><li>How to create pure spherical harmonic patterns</li><li>Understanding zonal (m=0) vs sectoral (m≠0) modes</li><li>The relationship between (l,m) indices and spatial patterns</li><li>Basic visualization of spherical data</li></ul><p><strong>Try this:</strong> Change <code>(2,0)</code> to <code>(2,2)</code> to see a sectoral pattern!</p><h3 id="Example-3:-Understanding-Power-Spectra"><a class="docs-heading-anchor" href="#Example-3:-Understanding-Power-Spectra">Example 3: Understanding Power Spectra</a><a id="Example-3:-Understanding-Power-Spectra-1"></a><a class="docs-heading-anchor-permalink" href="#Example-3:-Understanding-Power-Spectra" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn how energy is distributed across different spatial scales</p><pre><code class="language-julia hljs">using SHTnsKit
+using Plots
+
+cfg = create_gauss_config(32, 32)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Create a field with multiple scales (like weather patterns)
+field = @. (2*sin(2*θ)*cos(φ) +        # Large scale (continental)
+           0.5*sin(6*θ)*cos(3*φ) +     # Medium scale (regional)  
+           0.1*sin(12*θ)*cos(6*φ))     # Small scale (local)
+
+println(&quot;Created multi-scale field with 3 different spatial scales&quot;)
+
+# Transform to spectral domain
+coeffs = analysis(cfg, field)
+
+# Compute power spectrum (energy at each degree l)
+power = power_spectrum(cfg, coeffs)
+
+# Find which scales dominate
+max_power_degree = argmax(power[2:end])  # Skip l=0 (global mean)
+println(&quot;Peak energy at degree l = $max_power_degree&quot;)
+println(&quot;This corresponds to ~$(360/max_power_degree)° wavelength&quot;)
+
+# Plot the power spectrum
+plot(0:length(power)-1, power, 
+     xlabel=&quot;Spherical Harmonic Degree l&quot;, 
+     ylabel=&quot;Power&quot;,
+     title=&quot;Energy vs Spatial Scale&quot;,
+     linewidth=2, marker=:circle)
+plot!(yscale=:log10)  # Log scale often reveals more details
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts learned:</strong></p><ul><li>How to create multi-scale patterns</li><li>Power spectrum analysis shows energy distribution</li><li>Relationship between degree l and spatial wavelength</li><li>Using log scales for visualization</li></ul><p><strong>Physical meaning:</strong> In meteorology, this tells you whether your weather system is dominated by large-scale patterns (like jet streams) or small-scale features (like thunderstorms).</p><h2 id="Intermediate-Examples"><a class="docs-heading-anchor" href="#Intermediate-Examples">Intermediate Examples</a><a id="Intermediate-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Intermediate-Examples" title="Permalink"></a></h2><p>Ready to tackle more complex problems? These examples introduce vector fields, real-world data patterns, and scientific applications.</p><h3 id="Vector-Field-Decomposition"><a class="docs-heading-anchor" href="#Vector-Field-Decomposition">Vector Field Decomposition</a><a id="Vector-Field-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Field-Decomposition" title="Permalink"></a></h3><h3 id="Vorticity-Divergence-Decomposition"><a class="docs-heading-anchor" href="#Vorticity-Divergence-Decomposition">Vorticity-Divergence Decomposition</a><a id="Vorticity-Divergence-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Vorticity-Divergence-Decomposition" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(64, 64)
+
+# Create a realistic atmospheric flow pattern
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+nlat, nphi = size(θ)
+
+# Jet stream pattern with vortices
+u = @. 20 * sin(2θ) * (1 + 0.4 * cos(4φ))  # Zonal wind
+v = @. 5 * cos(3θ) * sin(2φ)                # Meridional wind
+
+S_lm, T_lm = analyze_vector(cfg, u, v)
+
+# Spatial divergence and vorticity
+divergence = SHTnsKit.spatial_divergence(cfg, u, v)
+vorticity  = SHTnsKit.spatial_vorticity(cfg, u, v)
+
+println(&quot;Max vorticity: &quot;, maximum(abs.(vorticity)))
+println(&quot;Max divergence: &quot;, maximum(abs.(divergence)))
+
+# Reconstruct original velocity
+u_recon, v_recon = synthesize_vector(cfg, S_lm, T_lm)
+velocity_error = norm(u - u_recon) + norm(v - v_recon)
+println(&quot;Velocity reconstruction error: $velocity_error&quot;)
+
+destroy_config(cfg)</code></pre><h3 id="Stream-Function-from-Vorticity"><a class="docs-heading-anchor" href="#Stream-Function-from-Vorticity">Stream Function from Vorticity</a><a id="Stream-Function-from-Vorticity-1"></a><a class="docs-heading-anchor-permalink" href="#Stream-Function-from-Vorticity" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using LinearAlgebra
+
+cfg = create_gauss_config(48, 48)
+
+# Create vorticity field (e.g., from observations)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+vorticity = @. exp(-((θ - π/2)^2 + (φ - π)^2) / 0.5^2) * sin(4φ)
+
+# Transform vorticity to spectral domain
+ζ_lm = analysis(cfg, vorticity)
+
+# Solve ∇²ψ = ζ for stream function ψ
+# In spectral domain: -l(l+1) ψ_lm = ζ_lm
+ψ_lm = similar(ζ_lm)
+for i in 1:cfg.nlm
+    l, m = lm_from_index(cfg, i)
+    if l &gt; 0
+        ψ_lm[i] = -ζ_lm[i] / (l * (l + 1))
+    else
+        ψ_lm[i] = 0.0  # l=0 mode: constant not uniquely determined
+    end
+end
+
+u_stream, v_stream = synthesize_vector(cfg, zero(ψ_lm), ψ_lm)
+
+# Convert stream function to spatial domain
+stream_function = synthesize(cfg, ψ_lm)
+
+println(&quot;Stream function range: &quot;, extrema(stream_function))
+println(&quot;Max velocity from stream: &quot;, maximum(sqrt.(u_stream.^2 + v_stream.^2)))
+
+destroy_config(cfg)</code></pre><h2 id="Geophysics-Applications"><a class="docs-heading-anchor" href="#Geophysics-Applications">Geophysics Applications</a><a id="Geophysics-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Geophysics-Applications" title="Permalink"></a></h2><h3 id="Gravitational-Potential-Analysis"><a class="docs-heading-anchor" href="#Gravitational-Potential-Analysis">Gravitational Potential Analysis</a><a id="Gravitational-Potential-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Gravitational-Potential-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(72, 72)  # High resolution for Earth
+
+# Simulate Earth&#39;s gravitational field coefficients
+# (In practice, these would come from satellite measurements)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Create realistic gravity anomalies
+# J₂ (Earth&#39;s oblate shape) + smaller harmonics
+gravity_field = @. -9.81 * (1 + 0.001082 * (1.5 * cos(θ)^2 - 0.5) + 
+                           0.0001 * sin(3θ) * cos(2φ))
+
+# Analyze gravity field
+g_lm = analysis(cfg, gravity_field)
+
+# Extract major components
+J2_coeff = g_lm[lmidx(cfg, 2, 0)]  # J₂ term
+println(&quot;J₂ coefficient: $J2_coeff&quot;)
+
+# Compute power spectrum
+power = power_spectrum(cfg, g_lm)
+
+# Plot power vs degree
+using Plots
+plot(0:length(power)-1, log10.(power), 
+     xlabel=&quot;Spherical Harmonic Degree l&quot;, 
+     ylabel=&quot;log₁₀(Power)&quot;,
+     title=&quot;Gravity Field Power Spectrum&quot;)
+
+destroy_config(cfg)</code></pre><h3 id="Magnetic-Field-Modeling"><a class="docs-heading-anchor" href="#Magnetic-Field-Modeling">Magnetic Field Modeling</a><a id="Magnetic-Field-Modeling-1"></a><a class="docs-heading-anchor-permalink" href="#Magnetic-Field-Modeling" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(48, 48)
+
+# Simulate magnetic field measurements (3 components)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Dipole + quadrupole + small-scale fields
+Br = @. 30000 * cos(θ) * (1 + 0.1 * cos(2θ) * sin(φ))  # Radial
+Bθ = @. 15000 * sin(θ) * (1 - 0.05 * sin(3φ))          # Colatitude  
+Bφ = @. 5000 * sin(θ) * cos(θ) * cos(2φ)                # Azimuthal
+
+# Magnetic field is potential: B = -∇V
+# So horizontal components relate to potential derivatives
+# This is a simplified analysis - real magnetic modeling is more complex
+
+# Analyze radial component (related to potential)
+V_lm = analysis(cfg, -Br / 30000)  # Normalized
+
+# Compute horizontal components from potential (spheroidal only)
+Bθ_computed, Bφ_computed = synthesize_vector(cfg, V_lm, zeros(V_lm))
+
+# Compare with input
+θ_error = norm(Bθ/15000 - Bθ_computed) / norm(Bθ/15000)
+φ_error = norm(Bφ/5000 - Bφ_computed) / norm(Bφ/5000)
+
+println(&quot;Magnetic field modeling errors:&quot;)
+println(&quot;θ component: $θ_error&quot;)  
+println(&quot;φ component: $φ_error&quot;)
+
+destroy_config(cfg)</code></pre><h2 id="Climate-Science-Applications"><a class="docs-heading-anchor" href="#Climate-Science-Applications">Climate Science Applications</a><a id="Climate-Science-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Climate-Science-Applications" title="Permalink"></a></h2><h3 id="Temperature-Anomaly-Analysis"><a class="docs-heading-anchor" href="#Temperature-Anomaly-Analysis">Temperature Anomaly Analysis</a><a id="Temperature-Anomaly-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Temperature-Anomaly-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using Statistics
+
+cfg = create_gauss_config(64, 64)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Simulate monthly temperature anomalies
+n_months = 120  # 10 years
+anomalies = []
+
+for month in 1:n_months
+    # Seasonal cycle + trend + random variations
+    seasonal = @. 5 * cos(2π * month / 12) * cos(θ)
+    trend = @. 0.01 * month * ones(size(θ))
+    random = @. 2 * randn(size(θ)...) * exp(-3 * (θ - π/2)^2)
+    
+    temp_anomaly = seasonal + trend + random
+    push!(anomalies, temp_anomaly)
+end
+
+# Analyze each month
+monthly_spectra = []
+for anomaly in anomalies
+    T_lm = analysis(cfg, anomaly)
+    push!(monthly_spectra, T_lm)
+end
+
+# Compute time-averaged power spectrum
+avg_power = mean([power_spectrum(cfg, spectrum) for spectrum in monthly_spectra])
+
+# Find dominant modes
+max_power_idx = argmax(avg_power[2:end]) + 1  # Skip l=0
+println(&quot;Dominant mode: l = $(max_power_idx-1)&quot;)
+println(&quot;Power: $(avg_power[max_power_idx])&quot;)
+
+# Trend analysis - extract l=0,m=0 component (global mean)
+global_means = [spectrum[1] for spectrum in monthly_spectra]
+using Plots
+plot(1:n_months, global_means, 
+     xlabel=&quot;Month&quot;, ylabel=&quot;Global Mean Anomaly&quot;,
+     title=&quot;Global Temperature Trend&quot;)
+
+destroy_config(cfg)</code></pre><h3 id="Precipitation-Pattern-Analysis"><a class="docs-heading-anchor" href="#Precipitation-Pattern-Analysis">Precipitation Pattern Analysis</a><a id="Precipitation-Pattern-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Precipitation-Pattern-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(32, 32)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Seasonal precipitation patterns
+# Summer: ITCZ near equator, winter: shifted south
+precip_summer = @. max(0, 10 * exp(-5 * (θ - π/2)^2) * 
+                      (1 + 0.3 * cos(2φ)))
+precip_winter = @. max(0, 8 * exp(-5 * (θ - π/2 - 0.2)^2) * 
+                      (1 + 0.2 * cos(3φ)))
+
+# Transform to spectral domain
+P_summer_lm = analysis(cfg, precip_summer)
+P_winter_lm = analysis(cfg, precip_winter)
+
+# Compute seasonal difference
+seasonal_diff_lm = P_summer_lm - P_winter_lm
+seasonal_diff = synthesize(cfg, seasonal_diff_lm)
+
+# Power spectrum of seasonal difference
+diff_power = power_spectrum(cfg, seasonal_diff_lm)
+
+println(&quot;Seasonal precipitation analysis:&quot;)
+println(&quot;Summer total: &quot;, sum(precip_summer))
+println(&quot;Winter total: &quot;, sum(precip_winter))
+println(&quot;Max seasonal difference: &quot;, maximum(abs.(seasonal_diff)))
+
+# Find regions of maximum seasonal variation
+max_diff_locations = findall(abs.(seasonal_diff) .&gt; 0.8 * maximum(abs.(seasonal_diff)))
+println(&quot;High variability regions: $(length(max_diff_locations)) grid points&quot;)
+
+destroy_config(cfg)</code></pre><h2 id="Parallel-Computing-Examples"><a class="docs-heading-anchor" href="#Parallel-Computing-Examples">Parallel Computing Examples</a><a id="Parallel-Computing-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Computing-Examples" title="Permalink"></a></h2><h3 id="MPI-Distributed-Computing"><a class="docs-heading-anchor" href="#MPI-Distributed-Computing">MPI Distributed Computing</a><a id="MPI-Distributed-Computing-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Distributed-Computing" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn how to use MPI for large-scale parallel spherical harmonic computations</p><pre><code class="language-julia hljs"># Save as parallel_example.jl and run with: mpiexec -n 4 julia parallel_example.jl
+using SHTnsKit, MPI, PencilArrays, PencilFFTs
+
+MPI.Init()
+
+comm = COMM_WORLD
+rank = Comm_rank(comm)
+size = Comm_size(comm)
+
+if rank == 0
+    println(&quot;Running SHTnsKit parallel example with $size processes&quot;)
+end
+
+# Create configuration (same on all processes)
+cfg = create_gauss_config(30, 24; mres=64, nlon=96)
+pcfg = create_parallel_config(cfg, comm)
+
+if rank == 0
+    println(&quot;Problem size: $(cfg.nlm) spectral coefficients&quot;)
+    println(&quot;Grid: $(cfg.nlat) × $(cfg.nphi) spatial points&quot;)
+end
+
+# Create test data
+sh_coeffs = randn(Complex{Float64}, cfg.nlm)
+result = similar(sh_coeffs)
+
+# Benchmark parallel Laplacian operator
+Barrier(comm)  # Synchronize timing
+start_time = Wtime()
+
+for i in 1:50
+    apply_laplacian!(cfg, sh_coeffs)  # Using standard matrix operators
+end
+
+Barrier(comm)
+end_time = Wtime()
+
+if rank == 0
+    avg_time = (end_time - start_time) / 50
+    println(&quot;Parallel Laplacian: $(avg_time*1000) ms per operation&quot;)
+    
+    # Compare with performance model
+    perf_model = parallel_performance_model(cfg, size)
+    println(&quot;Expected speedup: $(perf_model.speedup)x&quot;)
+    println(&quot;Parallel efficiency: $(perf_model.efficiency*100)%&quot;)
+end
+
+# Test parallel transforms
+spatial_data = allocate_spatial(cfg)
+memory_efficient_parallel_transform!(pcfg, :synthesis, sh_coeffs, spatial_data)
+
+if rank == 0
+    println(&quot;Parallel synthesis completed&quot;)
+end
+
+# Test communication-intensive operator (cos θ)
+apply_costheta_operator!(cfg, sh_coeffs, result)  # Using standard matrix operators
+
+if rank == 0
+    println(&quot;Parallel cos(θ) operator completed&quot;)
+end
+
+MPI.Finalize()</code></pre><p><strong>Key concepts:</strong></p><ul><li>MPI initialization and communicator setup</li><li>Creating parallel configurations with domain decomposition</li><li>Using parallel operators for distributed computation</li><li>Performance timing and comparison with models</li></ul><h3 id="Run-Example-Scripts"><a class="docs-heading-anchor" href="#Run-Example-Scripts">Run Example Scripts</a><a id="Run-Example-Scripts-1"></a><a class="docs-heading-anchor-permalink" href="#Run-Example-Scripts" title="Permalink"></a></h3><pre><code class="language-bash hljs"># Per-rank SHT scalar roundtrip (safe PencilArrays allocation)
+mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl
+
+# Distributed FFT roundtrip along φ using PencilFFTs
+mpiexec -n 2 julia --project=. examples/parallel_fft_roundtrip.jl</code></pre><h3 id="SIMD-Vectorization-Example"><a class="docs-heading-anchor" href="#SIMD-Vectorization-Example">SIMD Vectorization Example</a><a id="SIMD-Vectorization-Example-1"></a><a class="docs-heading-anchor-permalink" href="#SIMD-Vectorization-Example" title="Permalink"></a></h3><p><strong>Goal:</strong> Leverage advanced SIMD optimizations for single-node performance</p><pre><code class="language-julia hljs">using SHTnsKit, LoopVectorization, BenchmarkTools
+
+cfg = create_gauss_config(64, 64)
+sh_coeffs = randn(Complex{Float64}, cfg.nlm)
+
+println(&quot;SIMD Optimization Comparison&quot;)
+println(&quot;=&quot;^40)
+
+# Benchmark regular SIMD
+regular_time = @belapsed apply_laplacian!($cfg, copy($sh_coeffs))
+println(&quot;Regular SIMD: $(regular_time*1000) ms&quot;)
+
+# Same function for comparison (all optimizations are built-in)
+optimized_time = @belapsed apply_laplacian!($cfg, copy($sh_coeffs))
+println(&quot;Optimized:    $(optimized_time*1000) ms&quot;)
+
+# Since we&#39;re using the same function, speedup will be ~1.0
+speedup = regular_time / optimized_time
+println(&quot;Implementation speedup: $(speedup)x&quot;)
+
+# Both results are identical (same function)
+result1 = copy(sh_coeffs)
+result2 = copy(sh_coeffs)
+
+apply_laplacian!(cfg, result1)
+apply_laplacian!(cfg, result2)
+
+max_diff = maximum(abs.(result1 - result2))
+println(&quot;Max difference: $max_diff (should be ~0)&quot;)
+
+# Benchmark comprehensive comparison
+results = benchmark_turbo_vs_simd(cfg)
+println(&quot;\nDetailed Benchmark Results:&quot;)
+println(&quot;  SIMD time: $(results.simd_time*1000) ms&quot;)
+println(&quot;  Turbo time: $(results.turbo_time*1000) ms&quot;) 
+println(&quot;  Speedup: $(results.speedup)x&quot;)
+println(&quot;  Accuracy: max diff = $(results.max_difference)&quot;)
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts:</strong></p><ul><li>LoopVectorization.jl integration for enhanced SIMD</li><li>Performance benchmarking and verification</li><li>Automatic optimization selection</li></ul><h3 id="Hybrid-MPI-SIMD-Example"><a class="docs-heading-anchor" href="#Hybrid-MPI-SIMD-Example">Hybrid MPI + SIMD Example</a><a id="Hybrid-MPI-SIMD-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Hybrid-MPI-SIMD-Example" title="Permalink"></a></h3><p><strong>Goal:</strong> Combine distributed and SIMD parallelization for maximum performance</p><pre><code class="language-julia hljs"># Save as hybrid_example.jl, run with: mpiexec -n 4 julia hybrid_example.jl
+using SHTnsKit, MPI, PencilArrays, PencilFFTs, LoopVectorization
+
+MPI.Init()
+
+comm = COMM_WORLD
+rank = Comm_rank(comm)
+size = Comm_size(comm)
+
+# Large problem that benefits from both MPI and SIMD
+cfg = create_gauss_config(128, 128; mres=256, nlon=512)
+pcfg = create_parallel_config(cfg, comm)
+
+if rank == 0
+    println(&quot;Hybrid MPI + SIMD Example&quot;)
+    println(&quot;Problem: $(cfg.nlm) coefficients, $(cfg.nlat)×$(cfg.nphi) grid&quot;)
+    println(&quot;MPI processes: $size&quot;)
+    println(&quot;SIMD: LoopVectorization enabled&quot;)
+end
+
+# Test data
+sh_coeffs = randn(Complex{Float64}, cfg.nlm)
+result = similar(sh_coeffs)
+
+# Benchmark different approaches
+tests = [
+    (&quot;Parallel standard&quot;, () -&gt; apply_laplacian!(cfg, sh_coeffs)  # Using standard matrix operators),
+    (&quot;Parallel + turbo&quot;, () -&gt; begin
+        # This would use turbo optimizations within parallel operations
+        apply_laplacian!(cfg, sh_coeffs)  # Using standard matrix operators
+    end)
+]
+
+if rank == 0
+    println(&quot;\nPerformance Comparison:&quot;)
+end
+
+for (name, test_func) in tests
+    Barrier(comm)
+    start_time = Wtime()
+    
+    for i in 1:20
+        test_func()
+    end
+    
+    Barrier(comm)
+    end_time = Wtime()
+    
+    if rank == 0
+        avg_time = (end_time - start_time) / 20
+        println(&quot;$name: $(avg_time*1000) ms per operation&quot;)
+    end
+end
+
+# Test scaling efficiency
+if rank == 0
+    println(&quot;\nScaling Analysis:&quot;)
+    for test_size in [2, 4, 8, 16]
+        if test_size &lt;= size * 2  # Don&#39;t test more than 2x current size
+            model = parallel_performance_model(cfg, test_size)
+            println(&quot;$test_size processes: $(model.speedup)x speedup, $(model.efficiency*100)% efficiency&quot;)
+        end
+    end
+end
+
+MPI.Finalize()</code></pre><h3 id="Asynchronous-Parallel-Operations"><a class="docs-heading-anchor" href="#Asynchronous-Parallel-Operations">Asynchronous Parallel Operations</a><a id="Asynchronous-Parallel-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Asynchronous-Parallel-Operations" title="Permalink"></a></h3><p><strong>Goal:</strong> Use non-blocking communication for better performance overlap</p><pre><code class="language-julia hljs">using SHTnsKit, MPI, PencilArrays, PencilFFTs
+
+MPI.Init()
+
+comm = COMM_WORLD
+rank = Comm_rank(comm)
+size = Comm_size(comm)
+
+cfg = create_gauss_config(64, 48; mres=128, nlon=192)
+pcfg = create_parallel_config(cfg, comm)
+
+if rank == 0
+    println(&quot;Asynchronous Parallel Operations Example&quot;)
+end
+
+sh_coeffs = randn(Complex{Float64}, cfg.nlm)
+result = similar(sh_coeffs)
+
+# Compare synchronous vs asynchronous operations
+if rank == 0
+    println(&quot;Benchmarking communication patterns...&quot;)
+end
+
+# Synchronous (blocking)
+Barrier(comm)
+sync_time = @elapsed begin
+    for i in 1:30
+        apply_costheta_operator!(cfg, sh_coeffs, result)  # Using standard matrix operators
+    end
+end
+
+# Asynchronous (non-blocking, if available)
+Barrier(comm)
+async_time = @elapsed begin
+    for i in 1:30
+        try
+            # Try asynchronous version
+            apply_costheta_operator!(cfg, sh_coeffs, result)  # Standard implementation
+        catch
+            # Fall back to synchronous if not available
+            apply_costheta_operator!(cfg, sh_coeffs, result)  # Using standard matrix operators
+        end
+    end
+end
+
+if rank == 0
+    println(&quot;Communication Performance:&quot;)
+    println(&quot;  Synchronous:  $(sync_time/30*1000) ms per operation&quot;)
+    println(&quot;  Asynchronous: $(async_time/30*1000) ms per operation&quot;)
+    if async_time &lt; sync_time
+        println(&quot;  Async speedup: $(sync_time/async_time)x&quot;)
+    else
+        println(&quot;  No async improvement (likely using fallback)&quot;)
+    end
+end
+
+MPI.Finalize()</code></pre><p><strong>Key concepts:</strong></p><ul><li>Non-blocking MPI communication patterns</li><li>Communication-computation overlap</li><li>Performance analysis of different parallel strategies</li></ul><h2 id="Advanced-Applications"><a class="docs-heading-anchor" href="#Advanced-Applications">Advanced Applications</a><a id="Advanced-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Applications" title="Permalink"></a></h2><h3 id="Multiscale-Analysis"><a class="docs-heading-anchor" href="#Multiscale-Analysis">Multiscale Analysis</a><a id="Multiscale-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Multiscale-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+# Create different resolution configurations
+cfgs = [create_gauss_config(l, l) for l in [16, 32, 64, 128]]
+
+# Create test field with multiple scales
+θ, φ = SHTnsKit.create_coordinate_matrices(cfgs[end])  # Use highest resolution grid
+field = @. (sin(2θ) * cos(φ) +           # Large scale
+           0.3 * sin(8θ) * cos(4φ) +     # Medium scale
+           0.1 * sin(16θ) * cos(8φ))     # Small scale
+
+# Analyze at different resolutions
+powers = []
+for (i, cfg) in enumerate(cfgs)
+    # Interpolate field to current grid if needed
+    θ_i, φ_i = SHTnsKit.create_coordinate_matrices(cfg)
+    field_i = field[1:cfg.nlat, 1:cfg.nlon]  # Simple subsampling
+    
+    # Analyze and compute power spectrum
+    f_lm = analysis(cfg, field_i)
+    power_i = power_spectrum(cfg, f_lm)
+    push!(powers, power_i)
+    
+    println(&quot;Resolution $(get_lmax(cfg)): $(length(power_i)) modes&quot;)
+end
+
+# Compare power spectra
+using Plots
+p = plot(xlabel=&quot;Spherical Harmonic Degree&quot;, ylabel=&quot;Power&quot;, yscale=:log10)
+for (i, power) in enumerate(powers)
+    plot!(p, 0:length(power)-1, power, 
+          label=&quot;lmax = $(get_lmax(cfgs[i]))&quot;, linewidth=2)
+end
+display(p)
+
+# Cleanup
+for cfg in cfgs
+    destroy_config(cfg)
+end</code></pre><h3 id="Field-Rotation-and-Coordinate-Transformations"><a class="docs-heading-anchor" href="#Field-Rotation-and-Coordinate-Transformations">Field Rotation and Coordinate Transformations</a><a id="Field-Rotation-and-Coordinate-Transformations-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Rotation-and-Coordinate-Transformations" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(32, 32)
+
+# Create field in one coordinate system
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+original_field = @. sin(3θ) * cos(2φ)
+
+# Rotate coordinates (simulate different observation viewpoint)
+α, β, γ = π/4, π/6, π/8  # Euler angles
+
+f_lm = analysis(cfg, original_field)
+f_rot = copy(f_lm)
+rotate_real!(cfg, f_rot; alpha=α, beta=β, gamma=γ)
+rotated_field = synthesize(cfg, f_rot)
+
+destroy_config(cfg)</code></pre><h2 id="High-Performance-Examples"><a class="docs-heading-anchor" href="#High-Performance-Examples">High-Performance Examples</a><a id="High-Performance-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#High-Performance-Examples" title="Permalink"></a></h2><h3 id="Multi-threaded-Batch-Processing"><a class="docs-heading-anchor" href="#Multi-threaded-Batch-Processing">Multi-threaded Batch Processing</a><a id="Multi-threaded-Batch-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-threaded-Batch-Processing" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using Base.Threads
+
+cfg = create_gauss_config(64, 64)
+set_optimal_threads!()
+
+# Large batch of fields to process
+n_batch = 1000
+# Create bandlimited test fields (smooth functions prevent errors)
+input_fields = []
+for i in 1:n_batch
+    θ, φ = cfg.θ, cfg.φ
+    field = zeros(cfg.nlat, cfg.nlon)
+    for j in 1:cfg.nlat, k in 1:cfg.nlon
+        field[j,k] = 1.0 + 0.3 * sin(2*θ[j]) * cos(φ[k]) * (1 + 0.1*sin(i))
+    end
+    push!(input_fields, field)
+end
+
+# Process with threading
+println(&quot;Processing $n_batch fields with $(nthreads()) Julia threads...&quot;)
+results = Vector{Float64}(undef, n_batch)
+
+@time @threads for i in 1:n_batch
+    # Each thread gets its own work
+    field = input_fields[i]
+    
+    # Transform and compute some property
+    sh = analysis(cfg, field)
+    power = power_spectrum(cfg, sh)
+    
+    # Store result
+    results[i] = sum(power)  # Total energy
+end
+
+println(&quot;Mean energy per field: &quot;, mean(results))
+println(&quot;Energy std dev: &quot;, std(results))
+
+destroy_config(cfg)</code></pre><h2 id="Validation-and-Testing-Examples"><a class="docs-heading-anchor" href="#Validation-and-Testing-Examples">Validation and Testing Examples</a><a id="Validation-and-Testing-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-and-Testing-Examples" title="Permalink"></a></h2><h3 id="Analytical-Test-Cases"><a class="docs-heading-anchor" href="#Analytical-Test-Cases">Analytical Test Cases</a><a id="Analytical-Test-Cases-1"></a><a class="docs-heading-anchor-permalink" href="#Analytical-Test-Cases" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(24, 24)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Test Case 1: Pure spherical harmonics
+test_cases = [
+    (l=0, m=0, Y=(θ,φ) -&gt; 1/sqrt(4π)),
+    (l=1, m=-1, Y=(θ,φ) -&gt; sqrt(3/(8π)) * sin.(θ) .* sin.(φ)),  
+    (l=1, m=0, Y=(θ,φ) -&gt; sqrt(3/(4π)) * cos.(θ)),
+    (l=1, m=1, Y=(θ,φ) -&gt; -sqrt(3/(8π)) * sin.(θ) .* cos.(φ)),
+    (l=2, m=0, Y=(θ,φ) -&gt; sqrt(5/(16π)) * (3*cos.(θ).^2 .- 1))
+]
+
+println(&quot;Analytical validation tests:&quot;)
+for (i, case) in enumerate(test_cases)
+    # Create analytical field
+    Y_analytical = case.Y(θ, φ)
+    
+    # Transform to spectral
+    sh = analysis(cfg, Y_analytical)
+    
+    # Check that only the correct coefficient is non-zero
+expected_idx = lmidx(cfg, case.l, case.m)
+    
+    # Find largest coefficient
+    max_idx = argmax(abs.(sh))
+    max_val = sh[max_idx]
+    
+    println(&quot;Test $i: l=$(case.l), m=$(case.m)&quot;)
+    println(&quot;  Expected index: $expected_idx, Found: $max_idx&quot;)
+    println(&quot;  Coefficient value: $max_val&quot;)
+    
+    if max_idx == expected_idx
+        println(&quot;   PASS&quot;)
+    else
+        println(&quot;  FAIL&quot;)
+    end
+end
+
+destroy_config(cfg)</code></pre><h3 id="Numerical-Accuracy-Tests"><a class="docs-heading-anchor" href="#Numerical-Accuracy-Tests">Numerical Accuracy Tests</a><a id="Numerical-Accuracy-Tests-1"></a><a class="docs-heading-anchor-permalink" href="#Numerical-Accuracy-Tests" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+# Test different resolutions and grid types
+resolutions = [16, 32, 64]
+grid_types = [:gauss, :regular]
+
+println(&quot;Accuracy vs Resolution Test:&quot;)
+for grid_type in grid_types
+    println(&quot;\n$grid_type Grid:&quot;)
+    
+    for lmax in resolutions
+        cfg = grid_type == :gauss ? 
+              create_gauss_config(lmax, lmax) : 
+              create_regular_config(lmax, lmax)
+        
+        # Random test field
+        # Create bandlimited test coefficients (prevents roundtrip errors)
+sh_original = zeros(cfg.nlm)
+sh_original[1] = 1.0
+if cfg.nlm &gt; 10
+    sh_original[2:min(10, cfg.nlm)] .= 0.1 * rand(min(9, cfg.nlm-1))
+end
+        
+        # Round-trip transform
+        spatial = synthesize(cfg, sh_original)
+        sh_recovered = analysis(cfg, spatial)
+        
+        # Measure error
+        error = norm(sh_original - sh_recovered) / norm(sh_original)
+        
+        println(&quot;  lmax=$lmax: error = $error&quot;)
+        
+        destroy_config(cfg)
+    end
+end</code></pre><p>These examples demonstrate the full range of SHTnsKit.jl capabilities from basic transforms to advanced scientific applications. Each example can serve as a starting point for your specific research needs.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><a class="docs-footer-nextpage" href="../performance/">Performance Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Friday 26 September 2025 15:10">Friday 26 September 2025</span>. Using Julia version 1.11.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

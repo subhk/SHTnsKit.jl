@@ -114,6 +114,16 @@ end
 
 _device_enum(sym::Symbol) = sym == :cuda ? CUDA_DEVICE : sym == :amdgpu ? AMDGPU_DEVICE : CPU_DEVICE
 
+function _ensure_device(array, device::SHTDevice)
+    if device == CUDA_DEVICE
+        return array isa CUDA.CuArray ? array : to_device(array, device)
+    elseif device == AMDGPU_DEVICE && AMDGPU_LOADED
+        return array isa AMDGPU.AbstractGPUArray ? array : to_device(array, device)
+    else
+        return array
+    end
+end
+
 # GPU transform planning -----------------------------------------------------
 
 const AbstractSHTPlan = SHTnsKit.AbstractSHTPlan
@@ -1713,18 +1723,21 @@ function multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_
     set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
     
     cfg = mgpu_config.base_config
-    final_sph_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    final_tor_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    device_enum = _device_enum(mgpu_config.gpu_devices[1].device)
+    final_sph_gpu = _ensure_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device_enum)
+    final_tor_gpu = _ensure_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device_enum)
     
     for (sph_result, tor_result) in zip(partial_sph_results, partial_tor_results)
-        final_sph_coeffs .+= sph_result
-        final_tor_coeffs .+= tor_result
+        final_sph_gpu .+= _ensure_device(sph_result, device_enum)
+        final_tor_gpu .+= _ensure_device(tor_result, device_enum)
     end
     
+    final_sph = Array(final_sph_gpu)
+    final_tor = Array(final_tor_gpu)
     if real_output && eltype(vθ) <: Real && eltype(vφ) <: Real
-        return real(final_sph_coeffs), real(final_tor_coeffs)
+        return real(final_sph), real(final_tor)
     else
-        return final_sph_coeffs, final_tor_coeffs
+        return final_sph, final_tor
     end
 end
 
@@ -1884,17 +1897,15 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
     set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
     
     cfg = mgpu_config.base_config
-    final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    
+    device_enum = _device_enum(mgpu_config.gpu_devices[1].device)
+    final_coeffs_gpu = _ensure_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device_enum)
+
     for result in partial_results
-        final_coeffs .+= result.coeffs
+        final_coeffs_gpu .+= _ensure_device(result.coeffs, device_enum)
     end
-    
-    if real_output && eltype(spatial_data) <: Real
-        return real(final_coeffs)
-    else
-        return final_coeffs
-    end
+
+    final_coeffs = Array(final_coeffs_gpu)
+    return real_output && eltype(spatial_data) <: Real ? real(final_coeffs) : final_coeffs
 end
 
 """
@@ -1942,9 +1953,10 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
             
             # Perform synthesis on this GPU
             chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
+            chunk_gpu = _ensure_device(chunk_result, _device_enum(gpu.device))
             
             push!(distributed_results, (
-                data=chunk_result,
+                data=chunk_gpu,
                 gpu=gpu,
                 indices=(lat_indices, 1:cfg.nlon)
             ))
@@ -1992,9 +2004,10 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
             
             # Perform synthesis on longitude sector
             chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
+            chunk_gpu = _ensure_device(chunk_result, _device_enum(gpu.device))
             
             push!(distributed_results, (
-                data=chunk_result,
+                data=chunk_gpu,
                 gpu=gpu,
                 indices=(1:cfg.nlat, lon_indices)
             ))
@@ -2048,9 +2061,10 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
             
             # Perform synthesis with coefficient subset
             chunk_result = gpu_synthesis(temp_cfg, coeffs_chunk; real_output=real_output)
+            chunk_gpu = _ensure_device(chunk_result, _device_enum(gpu.device))
             
             push!(distributed_results, (
-                data=chunk_result,
+                data=chunk_gpu,
                 gpu=gpu,
                 m_range=m_indices
             ))
@@ -2060,13 +2074,14 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
         
         # Combine results from different m modes
         set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
-        final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
+        device_enum = _device_enum(mgpu_config.gpu_devices[1].device)
+        final_gpu = _ensure_device(zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon), device_enum)
         
         for result in distributed_results
-            final_result .+= result.data
+            final_gpu .+= _ensure_device(result.data, device_enum)
         end
         
-        return Array(final_result)
+        return Array(final_gpu)
         
     else
         error("Multi-GPU synthesis supports :latitude, :longitude, and :spectral distribution strategies")

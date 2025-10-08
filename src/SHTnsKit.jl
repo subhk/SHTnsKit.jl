@@ -22,6 +22,7 @@ include("gausslegendre.jl")                  # Gauss-Legendre quadrature impleme
 include("legendre.jl")                       # Legendre polynomial computations
 include("normalization.jl")                  # Spherical harmonic normalization
 include("device_types.jl")                   # Device enumeration shared by configs/extensions
+include("gpu/core.jl")                       # Shared GPU helpers (extension bridge)
 include("config.jl")                         # Configuration and setup functions
 include("buffer_utils.jl")                   # Common buffer allocation patterns
 include("plan.jl")                           # Transform planning and optimization
@@ -39,7 +40,6 @@ include("vorticity_diagnostics.jl")           # Vorticity and enstrophy calculat
 include("api_compat.jl")                      # API compatibility layer
 include("parallel_dense.jl")                  # Parallel dense matrix operations
 include("device_utils.jl")                    # GPU device utilities and management
-include("gpu/core.jl")                        # Shared GPU helpers (extension bridge)
 
 # ===== CORE CONFIGURATION AND SETUP =====
 export SHTConfig, create_gauss_config, create_config, destroy_config  # Configuration management

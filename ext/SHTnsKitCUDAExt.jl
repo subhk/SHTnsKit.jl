@@ -134,15 +134,7 @@ function SHTnsKit.gpu_create_plan(cfg::SHTConfig; use_rfft::Bool=false)
     return SHTGPUPlan(cfg, CUDA_DEVICE, use_rfft, spatial_cache, coeffs_cache)
 end
 
-function SHTnsKit.destroy_plan!(plan::SHTGPUPlan)
-    if plan.spatial_cache isa CUDA.CuArray
-        CUDA.unsafe_free!(plan.spatial_cache)
-    end
-    if plan.coeffs_cache isa CUDA.CuArray
-        CUDA.unsafe_free!(plan.coeffs_cache)
-    end
-    return nothing
-end
+SHTnsKit.destroy_plan!(::SHTGPUPlan) = nothing
 
 """
     MultiGPUConfig
@@ -840,13 +832,19 @@ end
 GPU-accelerated spherical harmonic synthesis transform.
 Performs complete spectral → spatial transform using GPU kernels and inverse FFTs.
 """
-function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
+function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true, coeffs_workspace=nothing)
     if device == CPU_DEVICE
         return SHTnsKit.synthesis_cpu(cfg, coeffs; real_output=real_output)
     end
     
-    # Transfer coefficients to GPU
-    gpu_coeffs = to_device(ComplexF64.(coeffs), device)
+    gpu_coeffs = if coeffs isa GPUArraysCore.AbstractGPUArray
+        coeffs
+    elseif coeffs_workspace !== nothing
+        coeffs_workspace .= coeffs
+        coeffs_workspace
+    else
+        to_device(ComplexF64.(coeffs), device)
+    end
     
     # Allocate GPU arrays
     spatial_data = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
@@ -957,13 +955,20 @@ function gpu_SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; device=g
 end
 
 function SHTnsKit.analysis!(plan::SHTGPUPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
-    result = gpu_analysis(plan.cfg, f; device=plan.device, real_output=false)
+    result = gpu_analysis(plan.cfg, f;
+                          device=plan.device,
+                          real_output=false,
+                          workspace=plan.spatial_cache,
+                          coeffs_workspace=plan.coeffs_cache)
     copyto!(alm_out, result)
     return alm_out
 end
 
 function SHTnsKit.synthesis!(plan::SHTGPUPlan, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true)
-    result = gpu_synthesis(plan.cfg, alm; device=plan.device, real_output=real_output)
+    result = gpu_synthesis(plan.cfg, alm;
+                           device=plan.device,
+                           real_output=real_output,
+                           coeffs_workspace=plan.coeffs_cache)
     copyto!(f_out, result)
     return f_out
 end

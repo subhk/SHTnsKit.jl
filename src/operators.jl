@@ -121,3 +121,55 @@ function SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVect
     return Rlm
 end
 
+# ===== SPECTRAL LAPLACIAN =====
+
+"""
+    apply_laplacian!(cfg, alm)
+
+Scale spherical harmonic coefficients in-place by −l(l+1), corresponding to
+applying the surface Laplacian in spectral space.
+"""
+function apply_laplacian!(cfg::SHTConfig, alm::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_apply_laplacian!(cfg, alm)
+    end
+    return apply_laplacian_cpu!(cfg, alm)
+end
+
+function apply_laplacian!(cfg::SHTConfig, alm_in::AbstractMatrix, alm_out::AbstractMatrix)
+    size(alm_out) == size(alm_in) || throw(DimensionMismatch("output must match input size"))
+    copyto!(alm_out, alm_in)
+    return apply_laplacian!(cfg, alm_out)
+end
+
+"""Packed-coefficient Laplacian acting on 1D LM vectors."""
+function apply_laplacian!(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_apply_laplacian!(cfg, Qlm)
+    end
+    return apply_laplacian_packed_cpu!(cfg, Qlm)
+end
+
+function apply_laplacian!(cfg::SHTConfig, Qlm_in::AbstractVector{<:Complex}, Qlm_out::AbstractVector{<:Complex})
+    length(Qlm_in) == length(Qlm_out) || throw(DimensionMismatch("output must match input length"))
+    copyto!(Qlm_out, Qlm_in)
+    return apply_laplacian!(cfg, Qlm_out)
+end
+
+function apply_laplacian_cpu!(cfg::SHTConfig, alm::AbstractMatrix)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    @inbounds for m in 0:mmax, l in m:lmax
+        ll1 = l * (l + 1)
+        alm[l+1, m+1] *= -ll1
+    end
+    return alm
+end
+
+function apply_laplacian_packed_cpu!(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
+    @inbounds for k in eachindex(Qlm)
+        l = cfg.li[k]
+        Qlm[k] *= -(l * (l + 1))
+    end
+    return Qlm
+end

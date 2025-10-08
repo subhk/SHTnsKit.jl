@@ -1185,7 +1185,7 @@ GPU-accelerated Laplacian operator in spectral space.
 """
 function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=get_device())
     if device == CPU_DEVICE
-        return SHTnsKit.apply_laplacian!(cfg, coeffs)
+        return SHTnsKit.apply_laplacian_cpu!(cfg, coeffs)
     end
     
     gpu_coeffs = to_device(coeffs, device)

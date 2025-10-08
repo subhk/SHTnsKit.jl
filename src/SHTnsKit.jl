@@ -72,7 +72,7 @@ export SHsphtor_to_spat_cplx, spat_cplx_to_SHsphtor, SH_to_grad_spat_ml
 export suggest_pencil_grid, set_fft_plan_cache!, enable_fft_plan_cache!, disable_fft_plan_cache!, fft_plan_cache_enabled
 
 # ===== MATRIX OPERATIONS AND DIFFERENTIAL OPERATORS =====
-export mul_ct_matrix, st_dt_matrix, SH_mul_mx          # Matrix multiplication utilities
+export mul_ct_matrix, st_dt_matrix, SH_mul_mx, apply_laplacian!          # Matrix multiplication utilities
 export SH_to_lat, SHqst_to_lat                         # Latitude-specific transforms
 
 # ===== ROTATIONS =====

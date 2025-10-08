@@ -23,6 +23,39 @@ module SHTnsKitZygoteExt
 
 using Zygote
 using SHTnsKit
+using GPUArraysCore
+
+const _zygote_gpu_warned = Ref(false)
+
+_identity(x) = x
+
+function _stage_cfg_for_zygote(cfg::SHTnsKit.SHTConfig)
+    if SHTnsKit.is_gpu_config(cfg)
+        cfg_cpu = deepcopy(cfg)
+        cfg_cpu.compute_device = SHTnsKit.CPU
+        cfg_cpu.device_backend = :cpu
+        if !_zygote_gpu_warned[]
+            @warn "Zygote gradients for GPU configs stage through CPU fallbacks"
+            _zygote_gpu_warned[] = true
+        end
+        return cfg_cpu, true
+    end
+    return cfg, false
+end
+
+function _stage_array_for_zygote(x)
+    if x isa GPUArraysCore.AbstractGPUArray
+        cpu = Array(x)
+        restore = y -> begin
+            out = similar(x)
+            copyto!(out, y)
+            out
+        end
+        return cpu, restore
+    else
+        return x, _identity
+    end
+end
 
 # ===== SCALAR FIELD GRADIENTS =====
 
@@ -43,8 +76,12 @@ Returns:
 - Gradient matrix of same size as f, computed via reverse-mode AD
 """
 function SHTnsKit.zgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
-    loss(x) = SHTnsKit.energy_scalar(cfg, SHTnsKit.analysis(cfg, x))
-    return Zygote.gradient(loss, f)[1]
+    cfg_cpu, staged = _stage_cfg_for_zygote(cfg)
+    f_cpu, restore = _stage_array_for_zygote(f)
+    loss(x) = SHTnsKit.energy_scalar(cfg_cpu, SHTnsKit.analysis(cfg_cpu, x))
+    grad_cpu = Zygote.gradient(loss, f_cpu)[1]
+    grad = restore(grad_cpu)
+    return grad
 end
 
 # ===== DISTRIBUTED ARRAY SUPPORT =====
@@ -65,8 +102,11 @@ the distributed array types, preserving their structure throughout the
 automatic differentiation process.
 """
 function SHTnsKit.zgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, fθφ::AbstractArray)
-    loss(x) = SHTnsKit.energy_scalar(cfg, SHTnsKit.analysis(cfg, x))
-    return Zygote.gradient(loss, fθφ)[1]
+    cfg_cpu, _ = _stage_cfg_for_zygote(cfg)
+    x_cpu, restore = _stage_array_for_zygote(fθφ)
+    loss(x) = SHTnsKit.energy_scalar(cfg_cpu, SHTnsKit.analysis(cfg_cpu, x))
+    grad_cpu = Zygote.gradient(loss, x_cpu)[1]
+    return restore(grad_cpu)
 end
 
 # ===== VECTOR FIELD GRADIENTS =====
@@ -89,27 +129,30 @@ Returns:
 - Tuple of gradient arrays (∂E/∂Vt, ∂E/∂Vp) with same structure as inputs
 """
 function SHTnsKit.zgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::AbstractArray, Vpθφ::AbstractArray)
-    # Define vector energy functional for two-argument case
+    cfg_cpu, _ = _stage_cfg_for_zygote(cfg)
+    Xt_cpu, restore_t = _stage_array_for_zygote(Vtθφ)
+    Xp_cpu, restore_p = _stage_array_for_zygote(Vpθφ)
     loss(Xt, Xp) = begin
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)      # Spheroidal/toroidal analysis
-        SHTnsKit.energy_vector(cfg, Slm, Tlm)                  # Compute vector energy
+        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg_cpu, Xt, Xp)
+        SHTnsKit.energy_vector(cfg_cpu, Slm, Tlm)
     end
-    
-    # Use Zygote to compute gradients with respect to both vector components
-    g = Zygote.gradient(loss, Vtθφ, Vpθφ)
-    return g[1], g[2]                                          # Return (∂E/∂Vt, ∂E/∂Vp)
+    gT_cpu, gP_cpu = Zygote.gradient(loss, Xt_cpu, Xp_cpu)
+    return restore_t(gT_cpu), restore_p(gP_cpu)
 end
 
 """
     zgrad_vector_energy(cfg, Vt, Vp) -> (∂E/∂Vt, ∂E/∂Vp)
 """
 function SHTnsKit.zgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    cfg_cpu, _ = _stage_cfg_for_zygote(cfg)
+    Xt_cpu, restore_t = _stage_array_for_zygote(Vt)
+    Xp_cpu, restore_p = _stage_array_for_zygote(Vp)
     loss(Xt, Xp) = begin
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)
-        SHTnsKit.energy_vector(cfg, Slm, Tlm)
+        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg_cpu, Xt, Xp)
+        SHTnsKit.energy_vector(cfg_cpu, Slm, Tlm)
     end
-    g = Zygote.gradient(loss, Vt, Vp)
-    return g[1], g[2]
+    gT_cpu, gP_cpu = Zygote.gradient(loss, Xt_cpu, Xp_cpu)
+    return restore_t(gT_cpu), restore_p(gP_cpu)
 end
 
 """
@@ -118,8 +161,11 @@ end
 Zygote gradient of enstrophy with respect to toroidal spectrum Tlm.
 """
 function SHTnsKit.zgrad_enstrophy_Tlm(cfg::SHTnsKit.SHTConfig, Tlm::AbstractMatrix)
-    loss(X) = SHTnsKit.enstrophy(cfg, X)
-    return Zygote.gradient(loss, Tlm)[1]
+    cfg_cpu, _ = _stage_cfg_for_zygote(cfg)
+    X_cpu, restore = _stage_array_for_zygote(Tlm)
+    loss(X) = SHTnsKit.enstrophy(cfg_cpu, X)
+    grad_cpu = Zygote.gradient(loss, X_cpu)[1]
+    return restore(grad_cpu)
 end
 
 """

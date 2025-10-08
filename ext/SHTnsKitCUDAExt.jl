@@ -1864,6 +1864,15 @@ export gpu_spat_to_SH, gpu_SH_to_spat
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat  
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat
 export gpu_apply_laplacian!, gpu_legendre!
+export gpu_energy_scalar, gpu_energy_vector
+export gpu_grid_energy_scalar, gpu_grid_energy_vector
+export gpu_energy_scalar_l_spectrum, gpu_energy_scalar_m_spectrum
+export gpu_energy_vector_l_spectrum, gpu_energy_vector_m_spectrum
+export gpu_energy_scalar_lm, gpu_energy_vector_lm
+export gpu_energy_scalar_packed, gpu_energy_vector_packed
+export gpu_grad_energy_scalar_alm, gpu_grad_energy_scalar_packed
+export gpu_grad_energy_vector_Slm_Tlm, gpu_grad_energy_vector_packed
+export gpu_grad_grid_energy_scalar_field, gpu_grad_grid_energy_vector_fields
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!
 export estimate_memory_usage
 

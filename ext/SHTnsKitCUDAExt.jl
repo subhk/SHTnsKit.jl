@@ -284,8 +284,6 @@ function distribute_spatial_array(array::AbstractArray, mgpu_config::MultiGPUCon
     ngpus = length(mgpu_config.gpu_devices)
     nlat, nlon = size(array)
     distributed_arrays = []
-
-    _device_enum(sym) = sym == :cuda ? CUDA_DEVICE : sym == :amdgpu ? AMDGPU_DEVICE : CPU_DEVICE
     
     if mgpu_config.distribution_strategy == :latitude
         # Split by latitude bands

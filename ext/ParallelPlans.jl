@@ -2,6 +2,22 @@
 # Minimal plan structs to keep API stable
 ##########
 
+const _gpu_dist_warned = Ref(false)
+
+function ensure_cpu_cfg(cfg::SHTnsKit.SHTConfig)
+    if SHTnsKit.is_gpu_config(cfg)
+        cfg_cpu = deepcopy(cfg)
+        cfg_cpu.compute_device = SHTnsKit.CPU
+        cfg_cpu.device_backend = :cpu
+        if !_gpu_dist_warned[]
+            @warn "Distributed transforms currently stage GPU configurations through CPU paths"
+            _gpu_dist_warned[] = true
+        end
+        return cfg_cpu, true
+    end
+    return cfg, false
+end
+
 struct DistAnalysisPlan
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray

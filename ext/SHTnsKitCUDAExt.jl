@@ -1275,6 +1275,125 @@ function SHTnsKit.shtns_rotation_apply_cplx(r::SHTnsKit.SHTRotation, Zlm::Abstra
     return Rlm
 end
 
+function gpu_enstrophy(cfg::SHTConfig, Tlm; real_field::Bool=true)
+    T_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    ll1_sq = ll1 .* ll1
+    power = abs2.(T_cu) .* mask .* reshape(weights, 1, :) .* ll1_sq
+    return 0.5 * sum(power)
+end
+
+function gpu_vorticity_spectral(cfg::SHTConfig, Tlm)
+    T_cu = _ensure_cu(Tlm)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    mask = _cu_valid_mask(cfg)
+    ζ = (-ll1) .* T_cu
+    ζ .*= mask
+    return Array(ζ)
+end
+
+function gpu_vorticity_grid(cfg::SHTConfig, Tlm)
+    device = _device_enum(cfg.device_backend)
+    ζlm = gpu_vorticity_spectral(cfg, Tlm)
+    return gpu_synthesis(cfg, ζlm; device=device, real_output=true)
+end
+
+function gpu_grid_enstrophy(cfg::SHTConfig, ζ)
+    ζ_cu = _ensure_cu(ζ)
+    wlat = CUDA.CuArray(cfg.wlat)
+    weighted = abs2.(ζ_cu) .* reshape(wlat, :, 1)
+    return 0.5 * sum(weighted) * (2π / cfg.nlon)
+end
+
+function gpu_grad_enstrophy_Tlm(cfg::SHTConfig, Tlm; real_field::Bool=true)
+    T_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    ll1_sq = ll1 .* ll1
+    grad = ll1_sq .* reshape(weights, 1, :) .* T_cu .* mask
+    return Array(grad)
+end
+
+function gpu_grad_grid_enstrophy_zeta(cfg::SHTConfig, ζ)
+    ζ_cu = _ensure_cu(ζ)
+    wlat = CUDA.CuArray(cfg.wlat)
+    scale = 2π / cfg.nlon
+    grad = ζ_cu .* reshape(wlat, :, 1) .* scale
+    return Array(grad)
+end
+
+function gpu_enstrophy_l_spectrum(cfg::SHTConfig, Tlm; real_field::Bool=true)
+    T_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    ll1_sq = ll1 .* ll1
+    power = abs2.(T_cu) .* mask .* reshape(weights, 1, :) .* ll1_sq
+    Zl = 0.5 .* Array(sum(power; dims=2))
+    return vec(Zl)
+end
+
+function gpu_enstrophy_m_spectrum(cfg::SHTConfig, Tlm; real_field::Bool=true)
+    T_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    ll1_sq = ll1 .* ll1
+    power = abs2.(T_cu) .* mask .* reshape(weights, 1, :) .* ll1_sq
+    Zm = 0.5 .* Array(sum(power; dims=1))
+    return vec(Zm)
+end
+
+function gpu_enstrophy_lm(cfg::SHTConfig, Tlm; real_field::Bool=true)
+    T_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    ll1_sq = ll1 .* ll1
+    Elm = 0.5 .* Array(abs2.(T_cu) .* mask .* reshape(weights, 1, :) .* ll1_sq)
+    return Elm
+end
+
+function gpu_loss_vorticity_grid(cfg::SHTConfig, Tlm, ζ_target)
+    ζ = gpu_vorticity_grid(cfg, Tlm)
+    residual = ζ .- Array(ζ_target)
+    return SHTnsKit._grid_enstrophy_cpu(cfg, residual)
+end
+
+function gpu_grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm, ζ_target)
+    device = _device_enum(cfg.device_backend)
+    ζ = gpu_vorticity_grid(cfg, Tlm)
+    residual = ζ .- Array(ζ_target)
+    gζlm = gpu_analysis(cfg, residual; device=device, real_output=false)
+    gζlm_cpu = Array(gζlm)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    grad = zeros(eltype(gζlm_cpu), size(Tlm)...)
+    for m in 0:mmax, l in max(1, m):lmax
+        L2 = l * (l + 1)
+        grad[l+1, m+1] = -L2 * gζlm_cpu[l+1, m+1]
+    end
+    return grad
+end
+
+function gpu_loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm, ζ_target)
+    device = _device_enum(cfg.device_backend)
+    ζ = gpu_vorticity_grid(cfg, Tlm)
+    residual = ζ .- Array(ζ_target)
+    loss = SHTnsKit._grid_enstrophy_cpu(cfg, residual)
+    gζlm = gpu_analysis(cfg, residual; device=device, real_output=false)
+    gζlm_cpu = Array(gζlm)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    grad = zeros(eltype(gζlm_cpu), size(Tlm)...)
+    for m in 0:mmax, l in max(1, m):lmax
+        L2 = l * (l + 1)
+        grad[l+1, m+1] = -L2 * gζlm_cpu[l+1, m+1]
+    end
+    return loss, grad
+end
+
 """
     gpu_spat_to_SHqst(cfg::SHTConfig, Vr, Vt, Vp; device=get_device())
 

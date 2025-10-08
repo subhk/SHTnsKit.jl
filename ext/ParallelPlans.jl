@@ -100,7 +100,7 @@ end
 
 function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
     cfg_cpu, _ = ensure_cpu_cfg(cfg)
-    return Core.apply_type(DistPlan, )(cfg_cpu, prototype_θφ, use_rfft)
+    return DistPlan(cfg_cpu, prototype_θφ, use_rfft)
 end
 function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray, use_rfft::Bool)
     cfg_cpu, _ = ensure_cpu_cfg(cfg)

@@ -1275,6 +1275,33 @@ function SHTnsKit.shtns_rotation_apply_cplx(r::SHTnsKit.SHTRotation, Zlm::Abstra
     return Rlm
 end
 
+@cuda function _zrotate_kernel!(R, Q, mi, alpha, mres)
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if idx <= length(Q)
+        m = mi[idx]
+        if m % mres == 0
+            phase = Complex(promote_type(Float64, eltype(alpha)))(cos(alpha * m), sin(alpha * m))
+            R[idx] = Q[idx] * phase
+        end
+    end
+    return nothing
+end
+
+function gpu_SH_Zrotate(cfg::SHTConfig, Qlm, alpha::Real, Rlm)
+    mi_cu = CUDA.CuArray(cfg.mi)
+    mres = cfg.mres
+    Q_dev = Qlm isa CUDA.CuArray ? Qlm : CUDA.CuArray(Qlm)
+    R_dev = Rlm isa CUDA.CuArray ? Rlm : CUDA.CuArray(Rlm)
+    threads = 256
+    blocks = cld(length(Q_dev), threads)
+    @cuda threads=threads blocks=blocks _zrotate_kernel!(R_dev, Q_dev, mi_cu, float(alpha), mres)
+    CUDA.synchronize()
+    if !(Rlm isa CUDA.CuArray)
+        copyto!(Rlm, Array(R_dev))
+    end
+    return Rlm isa CUDA.CuArray ? Rlm : Rlm
+end
+
 function gpu_enstrophy(cfg::SHTConfig, Tlm; real_field::Bool=true)
     T_cu = _ensure_cu(Tlm)
     mask = _cu_valid_mask(cfg)

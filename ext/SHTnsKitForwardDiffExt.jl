@@ -23,6 +23,31 @@ module SHTnsKitForwardDiffExt
 using ForwardDiff
 using SHTnsKit
 
+const _REAL = true
+
+@inline _use_cpu_paths(cfg::SHTnsKit.SHTConfig) = SHTnsKit.is_gpu_config(cfg)
+
+function _energy_scalar_cpu(cfg::SHTnsKit.SHTConfig, alm; real_field::Bool)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    weights = real_field ? SHTnsKit._wm_real(cfg) : ones(mmax + 1)
+    acc = zero(eltype(alm))
+    @inbounds for m in 0:mmax, l in m:lmax
+        acc += weights[m+1] * abs2(alm[l+1, m+1])
+    end
+    return 0.5 * acc
+end
+
+function _energy_vector_cpu(cfg::SHTnsKit.SHTConfig, Slm, Tlm; real_field::Bool)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    weights = real_field ? SHTnsKit._wm_real(cfg) : ones(mmax + 1)
+    acc = zero(eltype(Slm))
+    @inbounds for m in 0:mmax, l in max(1, m):lmax
+        ll1 = l * (l + 1)
+        acc += weights[m+1] * ll1 * (abs2(Slm[l+1, m+1]) + abs2(Tlm[l+1, m+1]))
+    end
+    return 0.5 * acc
+end
+
 # ===== SCALAR FIELD GRADIENT COMPUTATION =====
 
 """
@@ -43,9 +68,14 @@ Returns:
 """
 function SHTnsKit.fdgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     nlat, nlon = size(f)
+    use_cpu = _use_cpu_paths(cfg)
     
     # Define the energy functional as a function of flattened field
-    loss(x) = SHTnsKit.energy_scalar(cfg, SHTnsKit.analysis(cfg, reshape(x, nlat, nlon)))
+    function loss(x)
+        field = reshape(x, nlat, nlon)
+        alm = use_cpu ? SHTnsKit.analysis_cpu(cfg, field) : SHTnsKit.analysis(cfg, field)
+        return use_cpu ? _energy_scalar_cpu(cfg, alm, _REAL) : SHTnsKit.energy_scalar(cfg, alm)
+    end
     
     # Use ForwardDiff to compute gradient via dual numbers
     g = ForwardDiff.gradient(loss, vec(f))
@@ -72,11 +102,13 @@ The conversion pattern is:
 """
 function SHTnsKit.fdgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, fθφ::AbstractArray)
     nlat = length(axes(fθφ, 1)); nlon = length(axes(fθφ, 2))
+    use_cpu = _use_cpu_paths(cfg)
     
     # Define energy loss function for flattened distributed array
     function loss_flat(z)
         xloc = reshape(z, nlat, nlon)
-        return SHTnsKit.energy_scalar(cfg, SHTnsKit.analysis(cfg, xloc))
+        alm = use_cpu ? SHTnsKit.analysis_cpu(cfg, xloc) : SHTnsKit.analysis(cfg, xloc)
+        return use_cpu ? _energy_scalar_cpu(cfg, alm, _REAL) : SHTnsKit.energy_scalar(cfg, alm)
     end
     
     # Compute gradient on local array data
@@ -117,13 +149,19 @@ Returns:
 """
 function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::AbstractArray, Vpθφ::AbstractArray)
     nlat = length(axes(Vtθφ, 1)); nlon = length(axes(Vtθφ, 2))
+    use_cpu = _use_cpu_paths(cfg)
     
     # Define vector energy functional for combined state vector [Vt; Vp]
     function loss_flat(z)
         Xt = reshape(view(z, 1:nlat*nlon), nlat, nlon)           # Extract Vt component
         Xp = reshape(view(z, nlat*nlon+1:2*nlat*nlon), nlat, nlon) # Extract Vp component
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)      # Spheroidal/toroidal analysis
-        return SHTnsKit.energy_vector(cfg, Slm, Tlm)            # Compute vector energy
+        if use_cpu
+            Slm, Tlm = SHTnsKit.spat_to_SHsphtor_cpu(cfg, Xt, Xp)
+            return _energy_vector_cpu(cfg, Slm, Tlm, _REAL)
+        else
+            Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)
+            return SHTnsKit.energy_vector(cfg, Slm, Tlm)
+        end
     end
     
     # Create combined state vector and compute gradient
@@ -166,13 +204,19 @@ Returns:
 """
 function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = size(Vt)
+    use_cpu = _use_cpu_paths(cfg)
     
     # Define vector energy functional for matrix inputs
     function loss_flat(z)
         Xt = reshape(view(z, 1:nlat*nlon), nlat, nlon)           # Extract Vt component
         Xp = reshape(view(z, nlat*nlon+1:2*nlat*nlon), nlat, nlon) # Extract Vp component
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)      # Transform to spectral
-        return SHTnsKit.energy_vector(cfg, Slm, Tlm)            # Compute energy
+        if use_cpu
+            Slm, Tlm = SHTnsKit.spat_to_SHsphtor_cpu(cfg, Xt, Xp)
+            return _energy_vector_cpu(cfg, Slm, Tlm, _REAL)
+        else
+            Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)
+            return SHTnsKit.energy_vector(cfg, Slm, Tlm)
+        end
     end
     
     # Compute gradient directly on matrix data

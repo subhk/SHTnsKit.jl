@@ -736,16 +736,26 @@ end
 GPU-accelerated spherical harmonic analysis transform.
 Performs complete spatial → spectral transform using GPU kernels and FFTs.
 """
-function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
+function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true, workspace=nothing, coeffs_workspace=nothing)
     if device == CPU_DEVICE
         return SHTnsKit.analysis_cpu(cfg, spatial_data)
     end
     
-    # Transfer input data to GPU
-    gpu_data = to_device(ComplexF64.(spatial_data), device)
+    gpu_data = if spatial_data isa GPUArraysCore.AbstractGPUArray
+        spatial_data
+    elseif workspace !== nothing
+        workspace .= spatial_data
+        workspace
+    else
+        to_device(ComplexF64.(spatial_data), device)
+    end
     
-    # Allocate GPU arrays
-    coeffs = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
+    coeffs = if coeffs_workspace !== nothing
+        fill!(coeffs_workspace, 0)
+        coeffs_workspace
+    else
+        to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
+    end
     Plm = to_device(zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1), device)
     normalization = to_device(cfg.Nlm, device)
     weights = to_device(cfg.w, device)

@@ -208,8 +208,8 @@ Create a spherical harmonic configuration with GPU device selection.
 Enhanced version of `create_gauss_config` with automatic device detection.
 
 # Arguments
-- `device::Symbol`: Target device (:auto, :cpu, :cuda, :amdgpu)
-- `device_preference::Vector{Symbol}`: Preference order when device=:auto
+- `device::Union{Symbol,Device}`: Target device (`:auto`, `CPU`, `GPU`, etc.)
+- `device_preference::Vector{Union{Symbol,Device}}`: Preference order when `device = :auto`
 """
 function create_gauss_config_gpu(lmax::Int, nlat::Int; 
                                 nlon::Union{Int,Nothing}=nothing, 

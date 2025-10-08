@@ -28,6 +28,9 @@ This represents the L² norm of the field, which is conserved under orthonormal
 spherical harmonic transforms (Parseval's identity).
 """
 function energy_scalar(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_scalar(cfg, alm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -47,6 +50,9 @@ For a vector field V = ∇×(T Y_l^m êᵣ) + ∇ₕ(S Y_l^m), the kinetic energ
 KE = (1/2) ∫ |V|² dΩ = (1/2) Σ [l(l+1)|S_lm|² + l(l+1)|T_lm|²]
 """
 function energy_vector(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_vector(cfg, Slm, Tlm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     

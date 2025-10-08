@@ -883,6 +883,37 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
     end
 end
 
+"""
+    gpu_spat_to_SH(cfg::SHTConfig, Vr; device=get_device())
+
+Packed scalar analysis driven by the GPU backend.
+"""
+function gpu_spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_to_SH_cpu(cfg, Vr)
+    end
+
+    length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
+    spatial = reshape(Vr, cfg.nlat, cfg.nlon)
+    alm_mat = gpu_analysis(cfg, spatial; device=device, real_output=false)
+    return SHTnsKit._pack_scalar_coeffs(cfg, alm_mat)
+end
+
+"""
+    gpu_SH_to_spat(cfg::SHTConfig, Qlm; device=get_device())
+
+Packed scalar synthesis routed through the GPU backend.
+"""
+function gpu_SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_spat_cpu(cfg, Qlm)
+    end
+
+    alm_mat = SHTnsKit._unpack_scalar_coeffs(cfg, Qlm)
+    spatial = gpu_synthesis(cfg, alm_mat; device=device, real_output=true)
+    return vec(spatial)
+end
+
 # Vector field GPU operations
 
 @kernel function vector_divergence_kernel!(div_field, vθ, vφ, sintheta, dtheta, dphi, nlat, nlon)
@@ -1722,6 +1753,7 @@ end
 export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE
 export get_device, set_device!, to_device
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe
+export gpu_spat_to_SH, gpu_SH_to_spat
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat  
 export gpu_apply_laplacian!, gpu_legendre!
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!

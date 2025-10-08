@@ -107,6 +107,7 @@ export prepare_plm_tables!, enable_plm_tables!, disable_plm_tables!  # Precomput
 # GPU Computing functions (SHTnsKitCUDAExt extension)
 export get_device, set_device!, to_device                 # Device utilities
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU transforms
+export gpu_spat_to_SH, gpu_SH_to_spat                     # GPU scalar transforms
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
 export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
@@ -214,6 +215,8 @@ set_device!(::Any) = error("GPU extension not loaded")
 to_device(::Any, ::Any) = error("GPU extension not loaded")
 gpu_analysis(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_synthesis(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_spat_to_SH(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_SH_to_spat(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")

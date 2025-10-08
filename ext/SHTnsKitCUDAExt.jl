@@ -112,6 +112,8 @@ function set_gpu_device(device_type::Symbol, device_id::Int)
     end
 end
 
+_device_enum(sym::Symbol) = sym == :cuda ? CUDA_DEVICE : sym == :amdgpu ? AMDGPU_DEVICE : CPU_DEVICE
+
 # GPU transform planning -----------------------------------------------------
 
 const AbstractSHTPlan = SHTnsKit.AbstractSHTPlan
@@ -272,6 +274,8 @@ function distribute_spatial_array(array::AbstractArray, mgpu_config::MultiGPUCon
     ngpus = length(mgpu_config.gpu_devices)
     nlat, nlon = size(array)
     distributed_arrays = []
+
+    _device_enum(sym) = sym == :cuda ? CUDA_DEVICE : sym == :amdgpu ? AMDGPU_DEVICE : CPU_DEVICE
     
     if mgpu_config.distribution_strategy == :latitude
         # Split by latitude bands
@@ -287,7 +291,11 @@ function distribute_spatial_array(array::AbstractArray, mgpu_config::MultiGPUCon
             # Set device and transfer data chunk
             set_gpu_device(gpu.device, gpu.id)
             chunk = array[lat_start:lat_end, :]
-            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+            if chunk isa GPUArraysCore.AbstractGPUArray
+                gpu_chunk = chunk
+            else
+                gpu_chunk = to_device(chunk, _device_enum(gpu.device))
+            end
             
             push!(distributed_arrays, (
                 data=gpu_chunk, 
@@ -310,7 +318,11 @@ function distribute_spatial_array(array::AbstractArray, mgpu_config::MultiGPUCon
             
             set_gpu_device(gpu.device, gpu.id)
             chunk = array[:, lon_start:lon_end]
-            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+            if chunk isa GPUArraysCore.AbstractGPUArray
+                gpu_chunk = chunk
+            else
+                gpu_chunk = to_device(chunk, _device_enum(gpu.device))
+            end
             
             push!(distributed_arrays, (
                 data=gpu_chunk,
@@ -350,7 +362,11 @@ function distribute_coefficient_array(coeffs::AbstractArray, mgpu_config::MultiG
             
             set_gpu_device(gpu.device, gpu.id)
             chunk = coeffs[l_start:l_end, :]
-            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
+            if chunk isa GPUArraysCore.AbstractGPUArray
+                gpu_chunk = chunk
+            else
+                gpu_chunk = to_device(chunk, _device_enum(gpu.device))
+            end
             
             push!(distributed_coeffs, (
                 data=gpu_chunk,
@@ -1682,7 +1698,8 @@ function multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_
             )
             
             # Perform GPU vector analysis on this chunk
-            chunk_sph, chunk_tor = gpu_spat_to_SHsphtor(temp_cfg, Array(chunk_vθ.data), Array(chunk_vφ.data))
+            device_enum = _device_enum(chunk_vθ.gpu.device)
+            chunk_sph, chunk_tor = gpu_spat_to_SHsphtor(temp_cfg, chunk_vθ.data, chunk_vφ.data; device=device_enum)
             
         else
             error("Multi-GPU vector analysis currently only supports :latitude distribution strategy")
@@ -1827,8 +1844,8 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
             )
             
             # Perform GPU analysis on this chunk
-            chunk_coeffs = gpu_analysis(temp_cfg, Array(chunk.data); real_output=false)
-            
+            chunk_coeffs = gpu_analysis(temp_cfg, chunk.data; device=_device_enum(chunk.gpu.device), real_output=false)
+
         elseif mgpu_config.distribution_strategy == :longitude
             # For longitude distribution, each GPU processes longitude sectors
             lon_indices = chunk.indices[2]
@@ -1853,7 +1870,7 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
             )
             
             # Perform GPU analysis on longitude sector
-            chunk_coeffs = gpu_analysis(temp_cfg, Array(chunk.data); real_output=false)
+            chunk_coeffs = gpu_analysis(temp_cfg, chunk.data; device=_device_enum(chunk.gpu.device), real_output=false)
             
         else
             error("Multi-GPU analysis currently supports :latitude and :longitude distribution strategies")

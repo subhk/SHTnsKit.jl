@@ -19,6 +19,13 @@ Transform spheroidal/toroidal coefficients to horizontal vector field components
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
 function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_SHsphtor_to_spat(cfg, Slm, Tlm; real_output=real_output)
+    end
+    return SHsphtor_to_spat_cpu(cfg, Slm, Tlm; real_output=real_output)
+end
+
+function SHsphtor_to_spat_cpu(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     # Validate input dimensions
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
@@ -111,6 +118,13 @@ Transform horizontal vector field components to spheroidal/toroidal coefficients
 Input: colatitude (Vt) and azimuthal (Vp) components on spatial grid.
 """
 function spat_to_SHsphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SHsphtor(cfg, Vt, Vp)
+    end
+    return spat_to_SHsphtor_cpu(cfg, Vt, Vp)
+end
+
+function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
     
     # Validate input dimensions  

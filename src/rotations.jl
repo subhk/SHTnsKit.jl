@@ -10,7 +10,7 @@ Currently supports fast rotation around the Z-axis by angle `alpha` in radians.
 Rotate a real-field SH expansion around the Z-axis by angle `alpha`.
 Input and output are packed `Qlm` vectors (LM order, m ≥ 0). In-place supported if `Rlm === Qlm`.
 """
-function SH_Zrotate(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, alpha::Real, Rlm::AbstractVector{<:Complex})
+function _sh_zrotate_cpu!(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, alpha::Real, Rlm::AbstractVector{<:Complex})
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
     length(Rlm) == cfg.nlm || throw(DimensionMismatch("Rlm length must be nlm=$(cfg.nlm)"))
     lmax = cfg.lmax; mres = cfg.mres
@@ -23,6 +23,10 @@ function SH_Zrotate(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, alpha::Real,
         end
     end
     return Rlm
+end
+
+function SH_Zrotate(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, alpha::Real, Rlm::AbstractVector{<:Complex})
+    return _sh_zrotate_cpu!(cfg, Qlm, alpha, Rlm)
 end
 
 """
@@ -232,7 +236,7 @@ end
 
 Apply rotation with Euler angles (ZYZ/ZXZ) to complex SH coefficients in LM_cplx packing (mres==1).
 """
-function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
+function _shtns_rotation_apply_cplx_cpu!(r::SHTRotation, Zlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
     r.lmax ≥ 0 || return Rlm
     length(Zlm) == length(Rlm) || throw(DimensionMismatch("Zlm and Rlm length mismatch"))
     mres = 1
@@ -271,12 +275,16 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
     return Rlm
 end
 
+function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
+    return _shtns_rotation_apply_cplx_cpu!(r, Zlm, Rlm)
+end
+
 """
     shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
 
 Apply rotation to real-field SH coefficients in packed LM layout (m ≥ 0). Requires `mres==1`.
 """
-function shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
+function _shtns_rotation_apply_real_cpu!(r::SHTRotation, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
     expected = nlm_calc(r.lmax, r.mmax, 1)
     length(Qlm) == expected || throw(DimensionMismatch("LM packed size mismatch"))
     length(Rlm) == expected || throw(DimensionMismatch("LM packed size mismatch"))
@@ -314,4 +322,8 @@ function shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex
         end
     end
     return Rlm
+end
+
+function shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
+    return _shtns_rotation_apply_real_cpu!(r, Qlm, Rlm)
 end

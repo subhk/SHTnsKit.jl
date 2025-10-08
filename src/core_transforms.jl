@@ -15,6 +15,13 @@ Forward transform on Gauss–Legendre × equiangular grid.
 Returns coefficients `alm[l+1, m+1]` with orthonormal normalization.
 """
 function analysis(cfg::SHTConfig, f::AbstractMatrix; use_fused_loops::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_analysis(cfg, f)
+    end
+    return analysis_cpu(cfg, f; use_fused_loops=use_fused_loops)
+end
+
+function analysis_cpu(cfg::SHTConfig, f::AbstractMatrix; use_fused_loops::Bool=true)
     if use_fused_loops
         return analysis_fused(cfg, f)
     else
@@ -116,6 +123,13 @@ Inverse transform back to a grid `(nlat, nlon)`. If `real_output=true`,
 Hermitian symmetry is enforced before IFFT.
 """
 function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_synthesis(cfg, alm; real_output=real_output)
+    end
+    return synthesis_cpu(cfg, alm; real_output=real_output, use_fused_loops=use_fused_loops)
+end
+
+function synthesis_cpu(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true)
     if use_fused_loops
         return synthesis_fused(cfg, alm; real_output=real_output)
     else
@@ -222,4 +236,3 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     f = ifft_phi(Fφ)
     return real_output ? real.(f) : f
 end
-

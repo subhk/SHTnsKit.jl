@@ -706,7 +706,7 @@ Performs complete spatial → spectral transform using GPU kernels and FFTs.
 """
 function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
     if device == CPU_DEVICE
-        return SHTnsKit.analysis(cfg, spatial_data)
+        return SHTnsKit.analysis_cpu(cfg, spatial_data)
     end
     
     # Transfer input data to GPU
@@ -800,7 +800,7 @@ Performs complete spectral → spatial transform using GPU kernels and inverse F
 """
 function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
-        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+        return SHTnsKit.synthesis_cpu(cfg, coeffs; real_output=real_output)
     end
     
     # Transfer coefficients to GPU
@@ -1225,14 +1225,14 @@ Memory-safe version of gpu_analysis with automatic fallback to CPU if needed.
 """
 function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
     if device == CPU_DEVICE
-        return SHTnsKit.analysis(cfg, spatial_data)
+        return SHTnsKit.analysis_cpu(cfg, spatial_data)
     end
     
     # Check memory requirements
     required_memory = estimate_memory_usage(cfg, :analysis)
     if !check_gpu_memory(required_memory, device)
         @info "Falling back to CPU due to memory constraints"
-        return SHTnsKit.analysis(cfg, spatial_data)
+        return SHTnsKit.analysis_cpu(cfg, spatial_data)
     end
     
     try
@@ -1240,7 +1240,7 @@ function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), re
     catch e
         if isa(e, OutOfMemoryError) || contains(string(e), "memory")
             @warn "GPU out of memory, falling back to CPU: $e"
-            return SHTnsKit.analysis(cfg, spatial_data)
+            return SHTnsKit.analysis_cpu(cfg, spatial_data)
         else
             rethrow(e)
         end
@@ -1254,14 +1254,14 @@ Memory-safe version of gpu_synthesis with automatic fallback to CPU if needed.
 """
 function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
-        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+        return SHTnsKit.synthesis_cpu(cfg, coeffs; real_output=real_output)
     end
     
     # Check memory requirements
     required_memory = estimate_memory_usage(cfg, :synthesis)
     if !check_gpu_memory(required_memory, device)
         @info "Falling back to CPU due to memory constraints"
-        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+        return SHTnsKit.synthesis_cpu(cfg, coeffs; real_output=real_output)
     end
     
     try
@@ -1269,7 +1269,7 @@ function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_ou
     catch e
         if isa(e, OutOfMemoryError) || contains(string(e), "memory")
             @warn "GPU out of memory, falling back to CPU: $e"
-            return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+            return SHTnsKit.synthesis_cpu(cfg, coeffs; real_output=real_output)
         else
             rethrow(e)
         end

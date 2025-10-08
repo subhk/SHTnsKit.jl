@@ -26,6 +26,9 @@ function _sh_zrotate_cpu!(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, alpha:
 end
 
 function SH_Zrotate(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, alpha::Real, Rlm::AbstractVector{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_SH_Zrotate(cfg, Qlm, alpha, Rlm)
+    end
     return _sh_zrotate_cpu!(cfg, Qlm, alpha, Rlm)
 end
 

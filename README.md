@@ -147,6 +147,30 @@ Vr2, Vt2, Vp2 = SHTnsKit.dist_SHqst_to_spat(cfg, Q, S, T; prototype_θφ=Vr, rea
 MPI.Finalize()
 ```
 
+### GPU Acceleration
+
+```julia
+using SHTnsKit
+using CUDA
+
+CUDA.functional() || error("CUDA device not available")
+
+lmax = 32
+cfg = create_gauss_config_gpu(lmax, lmax + 2; nlon=2*lmax + 1, device=SHTnsKit.GPU)
+
+θ, φ = cfg.θ, cfg.φ
+spatial = [sin(θ[i]) * cos(φ[j]) for i in eachindex(θ), j in eachindex(φ)]
+
+alm = analysis(cfg, spatial)
+recon = synthesis(cfg, alm; real_output=true)
+
+println("GPU roundtrip error = ", maximum(abs.(spatial .- recon)))
+
+destroy_config(cfg)
+```
+
+For multi-GPU runs use `create_multi_gpu_config` and the `multi_gpu_*` helpers provided by `ext/SHTnsKitCUDAExt.jl`. A runnable script is available at `examples/gpu_roundtrip.jl`.
+
 ### High-Performance SIMD
 
 ```julia

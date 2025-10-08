@@ -1212,26 +1212,9 @@ end
 
 # GPU-aware rotation helpers -------------------------------------------------
 
-function SHTnsKit.SH_Zrotate(cfg::SHTConfig, Qlm::CUDA.CuVector{T}, alpha::Real, Rlm::CUDA.CuVector{T}) where {T<:Complex}
-    q_cpu = Array(Qlm)
-    r_cpu = Array(Rlm)
-    SHTnsKit._sh_zrotate_cpu!(cfg, q_cpu, alpha, r_cpu)
-    copyto!(Rlm, r_cpu)
-    return Rlm
-end
-
-function SHTnsKit.SH_Zrotate(cfg::SHTConfig, Qlm::CUDA.CuVector{T}, alpha::Real, Rlm::AbstractVector{T}) where {T<:Complex}
-    q_cpu = Array(Qlm)
-    SHTnsKit._sh_zrotate_cpu!(cfg, q_cpu, alpha, Rlm)
-    return Rlm
-end
-
-function SHTnsKit.SH_Zrotate(cfg::SHTConfig, Qlm::AbstractVector{T}, alpha::Real, Rlm::CUDA.CuVector{T}) where {T<:Complex}
-    r_cpu = Array(Rlm)
-    SHTnsKit._sh_zrotate_cpu!(cfg, Qlm, alpha, r_cpu)
-    copyto!(Rlm, r_cpu)
-    return Rlm
-end
+SHTnsKit.SH_Zrotate(cfg::SHTConfig, Qlm::CUDA.CuVector, alpha::Real, Rlm::CUDA.CuVector) = gpu_SH_Zrotate(cfg, Qlm, alpha, Rlm)
+SHTnsKit.SH_Zrotate(cfg::SHTConfig, Qlm::CUDA.CuVector, alpha::Real, Rlm::AbstractVector) = gpu_SH_Zrotate(cfg, Qlm, alpha, Rlm)
+SHTnsKit.SH_Zrotate(cfg::SHTConfig, Qlm::AbstractVector, alpha::Real, Rlm::CUDA.CuVector) = gpu_SH_Zrotate(cfg, Qlm, alpha, Rlm)
 
 function SHTnsKit.shtns_rotation_apply_real(r::SHTnsKit.SHTRotation, Qlm::CUDA.CuVector{T}, Rlm::CUDA.CuVector{T}) where {T<:Complex}
     q_cpu = Array(Qlm)

@@ -120,6 +120,10 @@ export gpu_energy_scalar_packed, gpu_energy_vector_packed
 export gpu_grad_energy_scalar_alm, gpu_grad_energy_scalar_packed
 export gpu_grad_energy_vector_Slm_Tlm, gpu_grad_energy_vector_packed
 export gpu_grad_grid_energy_scalar_field, gpu_grad_grid_energy_vector_fields
+export gpu_enstrophy, gpu_vorticity_spectral, gpu_vorticity_grid
+export gpu_grid_enstrophy, gpu_grad_enstrophy_Tlm, gpu_grad_grid_enstrophy_zeta
+export gpu_enstrophy_l_spectrum, gpu_enstrophy_m_spectrum, gpu_enstrophy_lm
+export gpu_loss_vorticity_grid, gpu_grad_loss_vorticity_Tlm, gpu_loss_and_grad_vorticity_Tlm
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
 export MultiGPUConfig, create_multi_gpu_config           # Multi-GPU configuration
 export get_available_gpus, set_gpu_device                # Multi-GPU device management
@@ -251,6 +255,18 @@ gpu_grad_energy_vector_Slm_Tlm(::SHTConfig, ::Any, ::Any; kwargs...) = error("GP
 gpu_grad_energy_vector_packed(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_grad_grid_energy_scalar_field(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_grad_grid_energy_vector_fields(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_enstrophy(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_vorticity_spectral(::SHTConfig, ::Any) = error("GPU extension not loaded")
+gpu_vorticity_grid(::SHTConfig, ::Any) = error("GPU extension not loaded")
+gpu_grid_enstrophy(::SHTConfig, ::Any) = error("GPU extension not loaded")
+gpu_grad_enstrophy_Tlm(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grad_grid_enstrophy_zeta(::SHTConfig, ::Any) = error("GPU extension not loaded")
+gpu_enstrophy_l_spectrum(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_enstrophy_m_spectrum(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_enstrophy_lm(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_loss_vorticity_grid(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
+gpu_grad_loss_vorticity_Tlm(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
+gpu_loss_and_grad_vorticity_Tlm(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 
 # Default fallbacks if extensions are not loaded (use broad signatures to avoid overwriting)
 zgrad_scalar_energy(::SHTConfig, ::Any) = error("Zygote extension not loaded")

@@ -21,7 +21,7 @@ Z = (1/2) ∫ |∇×V|² dΩ = (1/2) Σ l²(l+1)²|T_lm|²
 
 This is a measure of the small-scale intensity of rotational motion.
 """
-function enstrophy(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+function _enstrophy_cpu(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -33,13 +33,20 @@ function enstrophy(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     return 0.5 * Z
 end
 
+function enstrophy(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_enstrophy(cfg, Tlm; real_field=real_field)
+    end
+    return _enstrophy_cpu(cfg, Tlm; real_field=real_field)
+end
+
 """
     vorticity_spectral(cfg, Tlm) -> Matrix{ComplexF64}
 
 Compute vorticity coefficients ζ_lm from toroidal stream function coefficients T_lm.
 Relationship: ζ_lm = -l(l+1) T_lm
 """
-function vorticity_spectral(cfg::SHTConfig, Tlm::AbstractMatrix)
+function _vorticity_spectral_cpu(cfg::SHTConfig, Tlm::AbstractMatrix)
     lmax, mmax = cfg.lmax, cfg.mmax
     ζlm = similar(Tlm)
     fill!(ζlm, 0.0)
@@ -51,6 +58,13 @@ function vorticity_spectral(cfg::SHTConfig, Tlm::AbstractMatrix)
     return ζlm
 end
 
+function vorticity_spectral(cfg::SHTConfig, Tlm::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_vorticity_spectral(cfg, Tlm)
+    end
+    return _vorticity_spectral_cpu(cfg, Tlm)
+end
+
 """
     vorticity_grid(cfg, Tlm) -> Matrix
 
@@ -58,7 +72,10 @@ Transform toroidal coefficients to vorticity on the spatial grid.
 This combines spectral vorticity calculation with spherical harmonic synthesis.
 """
 function vorticity_grid(cfg::SHTConfig, Tlm::AbstractMatrix)
-    ζlm = vorticity_spectral(cfg, Tlm)
+    if is_gpu_config(cfg)
+        return gpu_vorticity_grid(cfg, Tlm)
+    end
+    ζlm = _vorticity_spectral_cpu(cfg, Tlm)
     return synthesis(cfg, ζlm; real_output=true)
 end
 
@@ -68,7 +85,7 @@ end
 Compute enstrophy directly from gridded vorticity field using quadrature.
 Z = (1/2) ∫ ζ² dΩ using Gauss-Legendre integration.
 """
-function grid_enstrophy(cfg::SHTConfig, ζ::AbstractMatrix)
+function _grid_enstrophy_cpu(cfg::SHTConfig, ζ::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
     wlat = cfg.wlat  # Gauss-Legendre weights
     
@@ -79,13 +96,20 @@ function grid_enstrophy(cfg::SHTConfig, ζ::AbstractMatrix)
     return 0.5 * Z * (2π / nlon)
 end
 
+function grid_enstrophy(cfg::SHTConfig, ζ::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_grid_enstrophy(cfg, ζ)
+    end
+    return _grid_enstrophy_cpu(cfg, ζ)
+end
+
 """
     grad_enstrophy_Tlm(cfg, Tlm; real_field=true) -> Matrix
 
 Compute gradient of enstrophy with respect to toroidal coefficients.
 Returns ∂Z/∂T_lm = l²(l+1)² T_lm for optimization applications.
 """
-function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+function _grad_enstrophy_Tlm_cpu(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -99,13 +123,20 @@ function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Boo
     return grad
 end
 
+function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_grad_enstrophy_Tlm(cfg, Tlm; real_field=real_field)
+    end
+    return _grad_enstrophy_Tlm_cpu(cfg, Tlm; real_field=real_field)
+end
+
 """
     grad_grid_enstrophy_zeta(cfg, ζ) -> Matrix
 
 Compute gradient of grid-based enstrophy with respect to vorticity field values.
 Returns ∂Z/∂ζ for each grid point.
 """
-function grad_grid_enstrophy_zeta(cfg::SHTConfig, ζ::AbstractMatrix)
+function _grad_grid_enstrophy_zeta_cpu(cfg::SHTConfig, ζ::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
     wlat = cfg.wlat
     scale = (2π / nlon)
@@ -117,13 +148,20 @@ function grad_grid_enstrophy_zeta(cfg::SHTConfig, ζ::AbstractMatrix)
     return grad
 end
 
+function grad_grid_enstrophy_zeta(cfg::SHTConfig, ζ::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_grad_grid_enstrophy_zeta(cfg, ζ)
+    end
+    return _grad_grid_enstrophy_zeta_cpu(cfg, ζ)
+end
+
 """
     enstrophy_l_spectrum(cfg, Tlm; real_field=true) -> Vector{Float64}
 
 Compute enstrophy spectrum as a function of degree l.
 Returns Z(l) = Σₘ l²(l+1)²|T_lm|² for each l = 1..lmax.
 """
-function enstrophy_l_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+function _enstrophy_l_spectrum_cpu(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -135,13 +173,20 @@ function enstrophy_l_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::B
     return 0.5 * Zl
 end
 
+function enstrophy_l_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_enstrophy_l_spectrum(cfg, Tlm; real_field=real_field)
+    end
+    return _enstrophy_l_spectrum_cpu(cfg, Tlm; real_field=real_field)
+end
+
 """
     enstrophy_m_spectrum(cfg, Tlm; real_field=true) -> Vector{Float64}
 
 Compute enstrophy spectrum as a function of order m.
 Returns Z(m) = Σₗ l²(l+1)²|T_lm|² for each m = 0..mmax.
 """
-function enstrophy_m_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+function _enstrophy_m_spectrum_cpu(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -153,13 +198,20 @@ function enstrophy_m_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::B
     return 0.5 * Zm
 end
 
+function enstrophy_m_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_enstrophy_m_spectrum(cfg, Tlm; real_field=real_field)
+    end
+    return _enstrophy_m_spectrum_cpu(cfg, Tlm; real_field=real_field)
+end
+
 """
     enstrophy_lm(cfg, Tlm; real_field=true) -> Matrix{Float64}
 
 Compute per-mode enstrophy Z_lm = l²(l+1)²|T_lm|² for each (l,m) mode.
 Returns matrix of size (lmax+1, mmax+1) with enstrophy contributions.
 """
-function enstrophy_lm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+function _enstrophy_lm_cpu(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -173,6 +225,13 @@ function enstrophy_lm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true
     return Zlm
 end
 
+function enstrophy_lm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_enstrophy_lm(cfg, Tlm; real_field=real_field)
+    end
+    return _enstrophy_lm_cpu(cfg, Tlm; real_field=real_field)
+end
+
 # ===== INVERSE PROBLEM FUNCTIONS =====
 # These functions support optimization problems where we want to find
 # spectral coefficients that produce a desired vorticity pattern
@@ -184,9 +243,12 @@ Compute loss function for vorticity matching problem.
 L = (1/2) ∫ [ζ(Tlm) - ζ_target]² dΩ where ζ(Tlm) is computed vorticity.
 """
 function loss_vorticity_grid(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_target::AbstractMatrix)
-    ζ = vorticity_grid(cfg, Tlm)
+    if is_gpu_config(cfg)
+        return gpu_loss_vorticity_grid(cfg, Tlm, ζ_target)
+    end
+    ζ = _vorticity_grid_cpu(cfg, Tlm)
     diff = ζ .- ζ_target
-    return grid_enstrophy(cfg, diff)
+    return _grid_enstrophy_cpu(cfg, diff)
 end
 
 """
@@ -195,21 +257,23 @@ end
 Compute gradient of vorticity loss with respect to toroidal coefficients.
 Uses adjoint method for efficient computation.
 """
+function _vorticity_grid_cpu(cfg::SHTConfig, Tlm::AbstractMatrix)
+    ζlm = _vorticity_spectral_cpu(cfg, Tlm)
+    return synthesis(cfg, ζlm; real_output=true)
+end
+
 function grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_target::AbstractMatrix)
-    # Forward pass: compute vorticity and residual
-    ζ = vorticity_grid(cfg, Tlm)
+    if is_gpu_config(cfg)
+        return gpu_grad_loss_vorticity_Tlm(cfg, Tlm, ζ_target)
+    end
+    ζ = _vorticity_grid_cpu(cfg, Tlm)
     residual = ζ .- ζ_target
-    
-    # Backward pass: adjoint of vorticity calculation
     gζlm = analysis(cfg, residual)
-    
-    # Apply chain rule: ∂L/∂T_lm = ∂L/∂ζ_lm * ∂ζ_lm/∂T_lm
     lmax, mmax = cfg.lmax, cfg.mmax
     gT = similar(Tlm)
     fill!(gT, 0.0)
-    
     for m in 0:mmax, l in max(1,m):lmax
-        L2 = l * (l + 1)  # Note: negative sign from ζ = -l(l+1)T
+        L2 = l * (l + 1)
         gT[l+1, m+1] = -L2 * gζlm[l+1, m+1]
     end
     return gT
@@ -222,21 +286,19 @@ Combined computation of loss and gradient for vorticity optimization.
 More efficient than separate computations due to shared forward pass.
 """
 function loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_target::AbstractMatrix)
-    # Forward pass
-    ζ = vorticity_grid(cfg, Tlm)
+    if is_gpu_config(cfg)
+        return gpu_loss_and_grad_vorticity_Tlm(cfg, Tlm, ζ_target)
+    end
+    ζ = _vorticity_grid_cpu(cfg, Tlm)
     residual = ζ .- ζ_target
-    loss = grid_enstrophy(cfg, residual)
-    
-    # Backward pass for gradient
+    loss = _grid_enstrophy_cpu(cfg, residual)
     gζlm = analysis(cfg, residual)
     lmax, mmax = cfg.lmax, cfg.mmax
     gT = similar(Tlm)
     fill!(gT, 0.0)
-    
     for m in 0:mmax, l in max(1,m):lmax
         L2 = l * (l + 1)
         gT[l+1, m+1] = -L2 * gζlm[l+1, m+1]
     end
-    
     return loss, gT
 end

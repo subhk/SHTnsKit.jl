@@ -946,6 +946,32 @@ function gpu_SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; device=g
     return vec(spatial)
 end
 
+function SHTnsKit.analysis!(plan::SHTGPUPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
+    result = gpu_analysis(plan.cfg, f; device=plan.device, real_output=false)
+    copyto!(alm_out, result)
+    return alm_out
+end
+
+function SHTnsKit.synthesis!(plan::SHTGPUPlan, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true)
+    result = gpu_synthesis(plan.cfg, alm; device=plan.device, real_output=real_output)
+    copyto!(f_out, result)
+    return f_out
+end
+
+function SHTnsKit.spat_to_SHsphtor!(plan::SHTGPUPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    Slm, Tlm = gpu_spat_to_SHsphtor(plan.cfg, Vt, Vp; device=plan.device)
+    copyto!(Slm_out, Slm)
+    copyto!(Tlm_out, Tlm)
+    return Slm_out, Tlm_out
+end
+
+function SHTnsKit.SHsphtor_to_spat!(plan::SHTGPUPlan, Vt_out::AbstractMatrix, Vp_out::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+    Vt, Vp = gpu_SHsphtor_to_spat(plan.cfg, Slm, Tlm; device=plan.device, real_output=real_output)
+    copyto!(Vt_out, Vt)
+    copyto!(Vp_out, Vp)
+    return Vt_out, Vp_out
+end
+
 """
     gpu_spat_to_SHqst(cfg::SHTConfig, Vr, Vt, Vp; device=get_device())
 

@@ -1806,7 +1806,10 @@ function multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data;
                     sintheta=cfg.st[lat_indices],
                     norm=cfg.norm, cs_phase=cfg.cs_phase,
                     real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                    compute_device=cfg.compute_device, device_preference=cfg.device_preference
+                    compute_device=cfg.compute_device,
+                    device_backend=cfg.device_backend,
+                    device_preference=cfg.device_preference,
+                    backend_preference=cfg.backend_preference
                 ),
                 gpu_devices=mgpu_config.gpu_devices,
                 distribution_strategy=mgpu_config.distribution_strategy
@@ -1886,7 +1889,10 @@ function multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs;
                     sintheta=cfg.st[lat_indices],
                     norm=cfg.norm, cs_phase=cfg.cs_phase,
                     real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                    compute_device=cfg.compute_device, device_preference=cfg.device_preference
+                    compute_device=cfg.compute_device,
+                    device_backend=cfg.device_backend,
+                    device_preference=cfg.device_preference,
+                    backend_preference=cfg.backend_preference
                 ),
                 gpu_devices=mgpu_config.gpu_devices,
                 distribution_strategy=mgpu_config.distribution_strategy

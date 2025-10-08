@@ -16,7 +16,9 @@ The SHTPlan stores all necessary working arrays and can handle both complex
 FFTs and real-optimized FFTs (RFFT) depending on the use case.
 """
 
-struct SHTPlan
+abstract type AbstractSHTPlan end
+
+struct SHTPlan <: AbstractSHTPlan
     cfg::SHTConfig                # Configuration parameters
     P::Vector{Float64}           # Working array for Legendre polynomials P_l^m(x)
     dPdx::Vector{Float64}        # Working array for derivatives dP_l^m/dx  
@@ -51,6 +53,9 @@ Complex FFT mode (use_rfft=false):
 - Required for complex-valued fields or analysis operations
 """
 function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
+    if is_gpu_config(cfg)
+        return gpu_create_plan(cfg; use_rfft=use_rfft)
+    end
     # Allocate working arrays for Legendre polynomial computation
     P = Vector{Float64}(undef, cfg.lmax + 1)     # P_l^m(cos θ) values
     dPdx = Vector{Float64}(undef, cfg.lmax + 1)  # dP_l^m/d(cos θ) derivatives
@@ -77,6 +82,16 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
         
         return SHTPlan(cfg, P, dPdx, G, Fθk, fft_plan, ifft_plan, false)
     end
+end
+
+gpu_create_plan(::SHTConfig; use_rfft::Bool=false) = error("GPU plan support requires SHTnsKitCUDAExt to be loaded.")
+
+destroy_plan!(::AbstractSHTPlan) = nothing
+
+function destroy_plan!(plan::SHTPlan)
+    plan.fft_plan !== nothing && FFTW.destroy_plan(plan.fft_plan)
+    plan.ifft_plan !== nothing && FFTW.destroy_plan(plan.ifft_plan)
+    return nothing
 end
 
 """

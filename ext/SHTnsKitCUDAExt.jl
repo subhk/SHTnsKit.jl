@@ -112,6 +112,38 @@ function set_gpu_device(device_type::Symbol, device_id::Int)
     end
 end
 
+# GPU transform planning -----------------------------------------------------
+
+const AbstractSHTPlan = SHTnsKit.AbstractSHTPlan
+
+struct SHTGPUPlan <: AbstractSHTPlan
+    cfg::SHTConfig
+    device::SHTDevice
+    use_rfft::Bool
+    spatial_cache::Union{Nothing, AbstractArray}
+    coeffs_cache::Union{Nothing, AbstractArray}
+end
+
+function SHTnsKit.gpu_create_plan(cfg::SHTConfig; use_rfft::Bool=false)
+    cfg.device_backend == :cuda || error("Only CUDA GPU plans are supported.")
+    CUDA_LOADED || error("CUDA backend not available")
+    # Ensure desired device is selected
+    set_gpu_device(:cuda, CUDA.device())
+    spatial_cache = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), CUDA_DEVICE)
+    coeffs_cache = to_device(zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1), CUDA_DEVICE)
+    return SHTGPUPlan(cfg, CUDA_DEVICE, use_rfft, spatial_cache, coeffs_cache)
+end
+
+function SHTnsKit.destroy_plan!(plan::SHTGPUPlan)
+    if plan.spatial_cache isa CUDA.CuArray
+        CUDA.unsafe_free!(plan.spatial_cache)
+    end
+    if plan.coeffs_cache isa CUDA.CuArray
+        CUDA.unsafe_free!(plan.coeffs_cache)
+    end
+    return nothing
+end
+
 """
     MultiGPUConfig
 

@@ -1280,7 +1280,12 @@ end
     if idx <= length(Q)
         m = mi[idx]
         if m % mres == 0
-            phase = Complex(promote_type(Float64, eltype(alpha)))(cos(alpha * m), sin(alpha * m))
+            T = eltype(R)
+            realT = eltype(real(zero(T)))
+            α = realT(alpha)
+            a = realT(cos(α * realT(m)))
+            b = realT(sin(α * realT(m)))
+            phase = Complex{realT}(a, b)
             R[idx] = Q[idx] * phase
         end
     end
@@ -1294,7 +1299,7 @@ function gpu_SH_Zrotate(cfg::SHTConfig, Qlm, alpha::Real, Rlm)
     R_dev = Rlm isa CUDA.CuArray ? Rlm : CUDA.CuArray(Rlm)
     threads = 256
     blocks = cld(length(Q_dev), threads)
-    @cuda threads=threads blocks=blocks _zrotate_kernel!(R_dev, Q_dev, mi_cu, float(alpha), mres)
+    @cuda threads=threads blocks=blocks _zrotate_kernel!(R_dev, Q_dev, mi_cu, alpha, mres)
     CUDA.synchronize()
     if !(Rlm isa CUDA.CuArray)
         copyto!(Rlm, Array(R_dev))

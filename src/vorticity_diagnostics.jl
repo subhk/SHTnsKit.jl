@@ -269,8 +269,12 @@ function grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_target:
     ζ = _vorticity_grid_cpu(cfg, Tlm)
     residual = ζ .- ζ_target
     gζlm = analysis(cfg, residual)
+    return _grad_loss_vorticity_Tlm_cpu(cfg, gζlm)
+end
+
+function _grad_loss_vorticity_Tlm_cpu(cfg::SHTConfig, gζlm)
     lmax, mmax = cfg.lmax, cfg.mmax
-    gT = similar(Tlm)
+    gT = similar(gζlm)
     fill!(gT, 0.0)
     for m in 0:mmax, l in max(1,m):lmax
         L2 = l * (l + 1)
@@ -293,12 +297,6 @@ function loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_tar
     residual = ζ .- ζ_target
     loss = _grid_enstrophy_cpu(cfg, residual)
     gζlm = analysis(cfg, residual)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    gT = similar(Tlm)
-    fill!(gT, 0.0)
-    for m in 0:mmax, l in max(1,m):lmax
-        L2 = l * (l + 1)
-        gT[l+1, m+1] = -L2 * gζlm[l+1, m+1]
-    end
-    return loss, gT
+    grad = _grad_loss_vorticity_Tlm_cpu(cfg, gζlm)
+    return loss, grad
 end

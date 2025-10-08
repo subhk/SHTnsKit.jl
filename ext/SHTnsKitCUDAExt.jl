@@ -1403,13 +1403,7 @@ function gpu_grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm, ζ_target)
     ζ = SHTnsKit._vorticity_grid_cpu(cfg, T_cpu)
     residual = ζ .- ζ_target_cpu
     gζlm = SHTnsKit.analysis_cpu(cfg, residual)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    grad_cpu = similar(T_cpu)
-    fill!(grad_cpu, zero(eltype(grad_cpu)))
-    for m in 0:mmax, l in max(1, m):lmax
-        L2 = l * (l + 1)
-        grad_cpu[l+1, m+1] = -L2 * gζlm[l+1, m+1]
-    end
+    grad_cpu = SHTnsKit._grad_loss_vorticity_Tlm_cpu(cfg, gζlm)
     return Tlm isa CUDA.CuArray ? CUDA.CuArray(grad_cpu) : grad_cpu
 end
 
@@ -1420,13 +1414,7 @@ function gpu_loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm, ζ_target)
     residual = ζ .- ζ_target_cpu
     loss = SHTnsKit._grid_enstrophy_cpu(cfg, residual)
     gζlm = SHTnsKit.analysis_cpu(cfg, residual)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    grad_cpu = similar(T_cpu)
-    fill!(grad_cpu, zero(eltype(grad_cpu)))
-    for m in 0:mmax, l in max(1, m):lmax
-        L2 = l * (l + 1)
-        grad_cpu[l+1, m+1] = -L2 * gζlm[l+1, m+1]
-    end
+    grad_cpu = SHTnsKit._grad_loss_vorticity_Tlm_cpu(cfg, gζlm)
     grad = Tlm isa CUDA.CuArray ? CUDA.CuArray(grad_cpu) : grad_cpu
     return loss, grad
 end

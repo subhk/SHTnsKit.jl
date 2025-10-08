@@ -987,6 +987,203 @@ function SHTnsKit.SHsphtor_to_spat!(plan::SHTGPUPlan, Vt_out::AbstractMatrix, Vp
     return Vt_out, Vp_out
 end
 
+# Energy diagnostics ---------------------------------------------------------
+
+function _ensure_cu(array)
+    array isa CUDA.CuArray && return array
+    CUDA_LOADED || error("CUDA backend not available")
+    return CUDA.CuArray(array)
+end
+
+function _cu_valid_mask(cfg::SHTConfig)
+    l_vals = CUDA.CuArray(collect(0:cfg.lmax))
+    m_vals = CUDA.CuArray(collect(0:cfg.mmax))
+    reshape(l_vals, cfg.lmax + 1, 1) .>= reshape(m_vals, 1, cfg.mmax + 1)
+end
+
+function _cu_m_weights(cfg::SHTConfig, real_field::Bool)
+    data = real_field ? SHTnsKit._wm_real(cfg) : ones(Float64, cfg.mmax + 1)
+    CUDA.CuArray(data)
+end
+
+function _cu_ll1(cfg::SHTConfig)
+    CUDA.CuArray((0:cfg.lmax) .* ((0:cfg.lmax) .+ 1))
+end
+
+function gpu_energy_scalar(cfg::SHTConfig, alm; real_field::Bool=true)
+    alm_cu = _ensure_cu(alm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    weighted = abs2.(alm_cu) .* mask .* reshape(weights, 1, :)
+    return 0.5 * sum(weighted)
+end
+
+function gpu_energy_vector(cfg::SHTConfig, Slm, Tlm; real_field::Bool=true)
+    Slm_cu = _ensure_cu(Slm)
+    Tlm_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    power = (abs2.(Slm_cu) + abs2.(Tlm_cu)) .* mask
+    weighted = power .* reshape(weights, 1, :) .* ll1
+    return 0.5 * sum(weighted)
+end
+
+function gpu_grid_energy_scalar(cfg::SHTConfig, f)
+    f_cu = _ensure_cu(f)
+    wlat = CUDA.CuArray(cfg.wlat)
+    weighted = abs2.(f_cu) .* reshape(wlat, :, 1)
+    return 0.5 * sum(weighted) * (2π / cfg.nlon)
+end
+
+function gpu_grid_energy_vector(cfg::SHTConfig, Vt, Vp)
+    Vt_cu = _ensure_cu(Vt)
+    Vp_cu = _ensure_cu(Vp)
+    wlat = CUDA.CuArray(cfg.wlat)
+    weighted = (abs2.(Vt_cu) + abs2.(Vp_cu)) .* reshape(wlat, :, 1)
+    return 0.5 * sum(weighted) * (2π / cfg.nlon)
+end
+
+function gpu_energy_scalar_l_spectrum(cfg::SHTConfig, alm; real_field::Bool=true)
+    alm_cu = _ensure_cu(alm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    weighted = abs2.(alm_cu) .* mask .* reshape(weights, 1, :)
+    El = 0.5 .* Array(sum(weighted; dims=2))
+    return vec(El)
+end
+
+function gpu_energy_scalar_m_spectrum(cfg::SHTConfig, alm; real_field::Bool=true)
+    alm_cu = _ensure_cu(alm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    weighted = abs2.(alm_cu) .* mask .* reshape(weights, 1, :)
+    Em = 0.5 .* Array(sum(weighted; dims=1))
+    return vec(Em)
+end
+
+function gpu_energy_vector_l_spectrum(cfg::SHTConfig, Slm, Tlm; real_field::Bool=true)
+    Slm_cu = _ensure_cu(Slm)
+    Tlm_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    power = (abs2.(Slm_cu) + abs2.(Tlm_cu)) .* mask
+    El = 0.5 .* Array(sum(power .* reshape(weights, 1, :) .* ll1; dims=2))
+    return vec(El)
+end
+
+function gpu_energy_vector_m_spectrum(cfg::SHTConfig, Slm, Tlm; real_field::Bool=true)
+    Slm_cu = _ensure_cu(Slm)
+    Tlm_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    power = (abs2.(Slm_cu) + abs2.(Tlm_cu)) .* mask
+    Em = 0.5 .* Array(sum(power .* reshape(weights, 1, :) .* ll1; dims=1))
+    return vec(Em)
+end
+
+function gpu_energy_scalar_lm(cfg::SHTConfig, alm; real_field::Bool=true)
+    alm_cu = _ensure_cu(alm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    Elm = 0.5 .* Array(abs2.(alm_cu) .* mask .* reshape(weights, 1, :))
+    return Elm
+end
+
+function gpu_energy_vector_lm(cfg::SHTConfig, Slm, Tlm; real_field::Bool=true)
+    Slm_cu = _ensure_cu(Slm)
+    Tlm_cu = _ensure_cu(Tlm)
+    mask = _cu_valid_mask(cfg)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = reshape(_cu_ll1(cfg), :, 1)
+    Elm = 0.5 .* Array((abs2.(Slm_cu) + abs2.(Tlm_cu)) .* mask .* reshape(weights, 1, :) .* ll1)
+    return Elm
+end
+
+function gpu_energy_scalar_packed(cfg::SHTConfig, Qlm; real_field::Bool=true)
+    Q_cu = _ensure_cu(Qlm)
+    weights = _cu_m_weights(cfg, real_field)
+    mi = CUDA.CuArray(cfg.mi)
+    weights_per = CUDA.map(m -> weights[m+1], mi)
+    return 0.5 * sum(weights_per .* abs2.(Q_cu))
+end
+
+function gpu_energy_vector_packed(cfg::SHTConfig, Spacked, Tpacked; real_field::Bool=true)
+    S_cu = _ensure_cu(Spacked)
+    T_cu = _ensure_cu(Tpacked)
+    weights = _cu_m_weights(cfg, real_field)
+    mi = CUDA.CuArray(cfg.mi)
+    li = CUDA.CuArray(cfg.li)
+    weights_per = CUDA.map(m -> weights[m+1], mi)
+    ll1_per = CUDA.map(l -> l >= 1 ? l * (l + 1) : 0, li)
+    power = abs2.(S_cu) + abs2.(T_cu)
+    return 0.5 * sum(weights_per .* ll1_per .* power)
+end
+
+function gpu_grad_energy_scalar_alm(cfg::SHTConfig, alm; real_field::Bool=true)
+    alm_cu = _ensure_cu(alm)
+    weights = _cu_m_weights(cfg, real_field)
+    mask = _cu_valid_mask(cfg)
+    grad = alm_cu .* reshape(weights, 1, :) .* mask
+    return Array(grad)
+end
+
+function gpu_grad_energy_scalar_packed(cfg::SHTConfig, Qlm; real_field::Bool=true)
+    Q_cu = _ensure_cu(Qlm)
+    weights = _cu_m_weights(cfg, real_field)
+    mi = CUDA.CuArray(cfg.mi)
+    weights_per = CUDA.map(m -> weights[m+1], mi)
+    grad = weights_per .* Q_cu
+    return Array(grad)
+end
+
+function gpu_grad_energy_vector_Slm_Tlm(cfg::SHTConfig, Slm, Tlm; real_field::Bool=true)
+    Slm_cu = _ensure_cu(Slm)
+    Tlm_cu = _ensure_cu(Tlm)
+    weights = _cu_m_weights(cfg, real_field)
+    ll1 = _cu_ll1(cfg)
+    mask = _cu_valid_mask(cfg)
+    w_l = reshape(ll1, :, 1) .* mask .* reshape(weights, 1, :)
+    grad_S = w_l .* Slm_cu
+    grad_T = w_l .* Tlm_cu
+    return Array(grad_S), Array(grad_T)
+end
+
+function gpu_grad_grid_energy_scalar_field(cfg::SHTConfig, f)
+    f_cu = _ensure_cu(f)
+    wlat = CUDA.CuArray(cfg.wlat)
+    scale = 2π / cfg.nlon
+    grad = f_cu .* reshape(wlat, :, 1) .* scale
+    return Array(grad)
+end
+
+function gpu_grad_grid_energy_vector_fields(cfg::SHTConfig, Vt, Vp)
+    Vt_cu = _ensure_cu(Vt)
+    Vp_cu = _ensure_cu(Vp)
+    wlat = CUDA.CuArray(cfg.wlat)
+    scale = 2π / cfg.nlon
+    weight = reshape(wlat, :, 1) .* scale
+    grad_Vt = Vt_cu .* weight
+    grad_Vp = Vp_cu .* weight
+    return Array(grad_Vt), Array(grad_Vp)
+end
+
+function gpu_grad_energy_vector_packed(cfg::SHTConfig, Spacked, Tpacked; real_field::Bool=true)
+    S_cu = _ensure_cu(Spacked)
+    T_cu = _ensure_cu(Tpacked)
+    weights = _cu_m_weights(cfg, real_field)
+    mi = CUDA.CuArray(cfg.mi)
+    li = CUDA.CuArray(cfg.li)
+    weights_per = CUDA.map(m -> weights[m+1], mi)
+    ll1_per = CUDA.map(l -> l >= 1 ? l * (l + 1) : 0, li)
+    scale = weights_per .* ll1_per
+    grad_S = scale .* S_cu
+    grad_T = scale .* T_cu
+    return Array(grad_S), Array(grad_T)
+end
+
 """
     gpu_spat_to_SHqst(cfg::SHTConfig, Vr, Vt, Vp; device=get_device())
 

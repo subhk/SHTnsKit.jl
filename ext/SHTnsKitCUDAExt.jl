@@ -1685,8 +1685,10 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
                 ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
                 norm=cfg.norm, cs_phase=cfg.cs_phase,
                 real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+                compute_device=SHTnsKit.GPU,
+                device_backend=:cuda,
+                device_preference=SHTnsKit.Device[SHTnsKit.GPU],
+                backend_preference=Symbol[:cuda]
             )
             
             # Perform synthesis with coefficient subset

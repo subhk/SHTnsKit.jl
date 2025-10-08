@@ -914,6 +914,40 @@ function gpu_SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; device=g
     return vec(spatial)
 end
 
+"""
+    gpu_spat_to_SHqst(cfg::SHTConfig, Vr, Vt, Vp; device=get_device())
+
+GPU-accelerated QST decomposition of vector fields.
+"""
+function gpu_spat_to_SHqst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_to_SHqst_cpu(cfg, Vr, Vt, Vp)
+    end
+
+    SHTnsKit.validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
+
+    Qlm = gpu_analysis(cfg, Vr; device=device, real_output=false)
+    Slm, Tlm = gpu_spat_to_SHsphtor(cfg, Vt, Vp; device=device)
+
+    return Qlm, Slm, Tlm
+end
+
+"""
+    gpu_SHqst_to_spat(cfg::SHTConfig, Qlm, Slm, Tlm; device=get_device(), real_output=true)
+
+GPU-accelerated QST synthesis back to spatial vector components.
+"""
+function gpu_SHqst_to_spat(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; device=get_device(), real_output::Bool=true)
+    if device == CPU_DEVICE
+        return SHTnsKit.SHqst_to_spat_cpu(cfg, Qlm, Slm, Tlm; real_output=real_output)
+    end
+
+    Vr = gpu_synthesis(cfg, Qlm; device=device, real_output=real_output)
+    Vt, Vp = gpu_SHsphtor_to_spat(cfg, Slm, Tlm; device=device, real_output=real_output)
+
+    return Vr, Vt, Vp
+end
+
 # Vector field GPU operations
 
 @kernel function vector_divergence_kernel!(div_field, vθ, vφ, sintheta, dtheta, dphi, nlat, nlon)
@@ -969,7 +1003,7 @@ Computes divergence and curl, then transforms to spectral space.
 """
 function gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     if device == CPU_DEVICE
-        return SHTnsKit.spat_to_SHsphtor(cfg, vθ, vφ)
+        return SHTnsKit.spat_to_SHsphtor_cpu(cfg, vθ, vφ)
     end
     
     # Transfer to GPU
@@ -1044,7 +1078,7 @@ Reconstructs vθ and vφ from spheroidal and toroidal spectral coefficients.
 """
 function gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
-        return SHTnsKit.SHsphtor_to_spat(cfg, sph_coeffs, tor_coeffs; real_output=real_output)
+        return SHTnsKit.SHsphtor_to_spat_cpu(cfg, sph_coeffs, tor_coeffs; real_output=real_output)
     end
     
     # Transfer to GPU
@@ -1755,6 +1789,7 @@ export get_device, set_device!, to_device
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe
 export gpu_spat_to_SH, gpu_SH_to_spat
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat  
+export gpu_spat_to_SHqst, gpu_SHqst_to_spat
 export gpu_apply_laplacian!, gpu_legendre!
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!
 export estimate_memory_usage

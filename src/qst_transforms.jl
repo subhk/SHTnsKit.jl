@@ -17,6 +17,13 @@ Transform QST spectral coefficients to 3D spatial vector field components.
 Returns radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
 function SHqst_to_spat(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_SHqst_to_spat(cfg, Qlm, Slm, Tlm; real_output=real_output)
+    end
+    return SHqst_to_spat_cpu(cfg, Qlm, Slm, Tlm; real_output=real_output)
+end
+
+function SHqst_to_spat_cpu(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat, nlon = cfg.nlat, cfg.nlon
     
@@ -24,8 +31,8 @@ function SHqst_to_spat(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix,
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
     
     # Get the spatial components
-    Vr = synthesis(cfg, Qlm; real_output=real_output)
-    Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=real_output)
+    Vr = synthesis_cpu(cfg, Qlm; real_output=real_output)
+    Vt, Vp = SHsphtor_to_spat_cpu(cfg, Slm, Tlm; real_output=real_output)
     
     return Vr, Vt, Vp
 end
@@ -37,14 +44,21 @@ Transform 3D spatial vector field to QST spectral coefficients.
 Input: radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
 function spat_to_SHqst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SHqst(cfg, Vr, Vt, Vp)
+    end
+    return spat_to_SHqst_cpu(cfg, Vr, Vt, Vp)
+end
+
+function spat_to_SHqst_cpu(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
     
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
     
     # Transform each component
-    Qlm = analysis(cfg, Vr)
-    Slm, Tlm = spat_to_SHsphtor(cfg, Vt, Vp)
+    Qlm = analysis_cpu(cfg, Vr)
+    Slm, Tlm = spat_to_SHsphtor_cpu(cfg, Vt, Vp)
     
     return Qlm, Slm, Tlm
 end
@@ -55,10 +69,13 @@ end
 Complex version of QST to spatial transform, preserving complex values.
 """
 function SHqst_to_spat_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_SHqst_to_spat(cfg, Qlm, Slm, Tlm; real_output=false)
+    end
     nlat, nlon = cfg.nlat, cfg.nlon
     
     # Transform to spatial fields keeping complex values
-    Vr = synthesis(cfg, Qlm; real_output=false)
+    Vr = synthesis_cpu(cfg, Qlm; real_output=false)
     Vt, Vp = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
     
     return Vr, Vt, Vp
@@ -70,13 +87,16 @@ end
 Transform complex spatial vector field to QST coefficients.
 """
 function spat_cplx_to_SHqst(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SHqst(cfg, Vr, Vt, Vp)
+    end
     nlat, nlon = cfg.nlat, cfg.nlon
     
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
     
     # Transform each component
-    Qlm = analysis(cfg, Vr)
+    Qlm = analysis_cpu(cfg, Vr)
     Slm, Tlm = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
     
     return Qlm, Slm, Tlm

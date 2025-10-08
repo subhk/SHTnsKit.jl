@@ -135,8 +135,8 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
     # Full version would involve proper vector analysis including divergence/curl decomposition
     
     # For now, perform forward transforms and apply inverse scaling
-    Slm_temp = analysis(cfg, Vt)  
-    Tlm_temp = analysis(cfg, Vp)
+    Slm_temp = analysis_cpu(cfg, Vt)
+    Tlm_temp = analysis_cpu(cfg, Vp)
     
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm = similar(Slm_temp)

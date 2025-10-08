@@ -16,6 +16,9 @@ Compute energy spectrum as a function of spherical harmonic degree l.
 Returns E(l) = Σₘ |a_lm|² for each l = 0..lmax.
 """
 function energy_scalar_l_spectrum(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_scalar_l_spectrum(cfg, alm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -33,6 +36,9 @@ Compute energy spectrum as a function of spherical harmonic order m.
 Returns E(m) = Σₗ |a_lm|² for each m = 0..mmax.
 """
 function energy_scalar_m_spectrum(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_scalar_m_spectrum(cfg, alm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -50,6 +56,9 @@ Compute kinetic energy spectrum by degree l for vector fields.
 Returns KE(l) = Σₘ l(l+1)[|S_lm|² + |T_lm|²] for each l = 1..lmax.
 """
 function energy_vector_l_spectrum(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_vector_l_spectrum(cfg, Slm, Tlm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -68,6 +77,9 @@ Compute kinetic energy spectrum by order m for vector fields.
 Returns KE(m) = Σₗ l(l+1)[|S_lm|² + |T_lm|²] for each m = 0..mmax.
 """
 function energy_vector_m_spectrum(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_vector_m_spectrum(cfg, Slm, Tlm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -86,6 +98,9 @@ Compute per-mode energy distribution E_lm = |a_lm|² for each (l,m) mode.
 Returns matrix of size (lmax+1, mmax+1) with energy contributions.
 """
 function energy_scalar_lm(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_scalar_lm(cfg, alm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -105,6 +120,9 @@ Compute per-mode kinetic energy KE_lm = l(l+1)[|S_lm|² + |T_lm|²] for vector f
 Returns matrix of size (lmax+1, mmax+1) with energy contributions.
 """
 function energy_vector_lm(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_vector_lm(cfg, Slm, Tlm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     

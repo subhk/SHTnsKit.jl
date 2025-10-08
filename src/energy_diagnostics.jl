@@ -71,6 +71,9 @@ Compute energy of a scalar field directly from its spatial representation.
 Uses Gauss-Legendre quadrature for accurate integration.
 """
 function grid_energy_scalar(cfg::SHTConfig, f::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_grid_energy_scalar(cfg, f)
+    end
     nlat, nlon = cfg.nlat, cfg.nlon
     wlat = cfg.wlat  # Gauss-Legendre weights
     
@@ -87,6 +90,9 @@ end
 Compute kinetic energy of a vector field from its θ and φ components.
 """
 function grid_energy_vector(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_grid_energy_vector(cfg, Vt, Vp)
+    end
     nlat, nlon = cfg.nlat, cfg.nlon
     wlat = cfg.wlat
     
@@ -104,6 +110,9 @@ Compute gradient of scalar field energy with respect to spectral coefficients.
 Returns ∂E/∂a_lm for use in optimization problems.
 """
 function grad_energy_scalar_alm(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_grad_energy_scalar_alm(cfg, alm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -120,6 +129,9 @@ end
 Compute energy from packed spectral coefficients (1D vector format).
 """
 function energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_scalar_packed(cfg, Qlm; real_field=real_field)
+    end
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
     wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     E = 0.0
@@ -136,6 +148,9 @@ end
 Compute energy gradient for packed coefficients format.
 """
 function grad_energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_grad_energy_scalar_packed(cfg, Qlm; real_field=real_field)
+    end
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
     wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     grad = similar(Qlm)
@@ -152,6 +167,9 @@ end
 Compute gradients of vector field kinetic energy with respect to S and T coefficients.
 """
 function grad_energy_vector_Slm_Tlm(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_grad_energy_vector_Slm_Tlm(cfg, Slm, Tlm; real_field=real_field)
+    end
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
     
@@ -174,6 +192,9 @@ end
 Compute gradient of grid-based scalar energy with respect to spatial field values.
 """
 function grad_grid_energy_scalar_field(cfg::SHTConfig, f::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_grad_grid_energy_scalar_field(cfg, f)
+    end
     nlat, nlon = cfg.nlat, cfg.nlon
     wlat = cfg.wlat
     scale = (2π / nlon)
@@ -191,6 +212,9 @@ end
 Compute gradients of grid-based vector energy with respect to vector components.
 """
 function grad_grid_energy_vector_fields(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_grad_grid_energy_vector_fields(cfg, Vt, Vp)
+    end
     nlat, nlon = cfg.nlat, cfg.nlon
     wlat = cfg.wlat
     scale = (2π / nlon)
@@ -211,6 +235,9 @@ end
 Compute vector field kinetic energy from packed S and T coefficients.
 """
 function energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}, Tpacked::AbstractVector{<:Complex}; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_energy_vector_packed(cfg, Spacked, Tpacked; real_field=real_field)
+    end
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
     wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
@@ -231,6 +258,9 @@ end
 Compute energy gradients for packed vector coefficients.
 """
 function grad_energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}, Tpacked::AbstractVector{<:Complex}; real_field::Bool=true)
+    if is_gpu_config(cfg)
+        return gpu_grad_energy_vector_packed(cfg, Spacked, Tpacked; real_field=real_field)
+    end
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
     wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)

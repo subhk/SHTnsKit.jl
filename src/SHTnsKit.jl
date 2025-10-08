@@ -111,6 +111,15 @@ export gpu_spat_to_SH, gpu_SH_to_spat                     # GPU scalar transform
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat              # GPU QST transforms
 export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
+export gpu_energy_scalar, gpu_energy_vector
+export gpu_grid_energy_scalar, gpu_grid_energy_vector
+export gpu_energy_scalar_l_spectrum, gpu_energy_scalar_m_spectrum
+export gpu_energy_vector_l_spectrum, gpu_energy_vector_m_spectrum
+export gpu_energy_scalar_lm, gpu_energy_vector_lm
+export gpu_energy_scalar_packed, gpu_energy_vector_packed
+export gpu_grad_energy_scalar_alm, gpu_grad_energy_scalar_packed
+export gpu_grad_energy_vector_Slm_Tlm, gpu_grad_energy_vector_packed
+export gpu_grad_grid_energy_scalar_field, gpu_grad_grid_energy_vector_fields
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
 export MultiGPUConfig, create_multi_gpu_config           # Multi-GPU configuration
 export get_available_gpus, set_gpu_device                # Multi-GPU device management
@@ -224,6 +233,24 @@ gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extensio
 gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_legendre!(::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_scalar(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_vector(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grid_energy_scalar(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grid_energy_vector(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_scalar_l_spectrum(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_scalar_m_spectrum(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_vector_l_spectrum(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_vector_m_spectrum(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_scalar_lm(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_vector_lm(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_scalar_packed(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_energy_vector_packed(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grad_energy_scalar_alm(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grad_energy_scalar_packed(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grad_energy_vector_Slm_Tlm(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grad_energy_vector_packed(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grad_grid_energy_scalar_field(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_grad_grid_energy_vector_fields(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 
 # Default fallbacks if extensions are not loaded (use broad signatures to avoid overwriting)
 zgrad_scalar_energy(::SHTConfig, ::Any) = error("Zygote extension not loaded")

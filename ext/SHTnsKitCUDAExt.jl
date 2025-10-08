@@ -990,23 +990,26 @@ end
 # Energy diagnostics ---------------------------------------------------------
 
 function _ensure_cu(array)
-    array isa CUDA.CuArray && return array
     CUDA_LOADED || error("CUDA backend not available")
+    array isa CUDA.CuArray && return array
     return CUDA.CuArray(array)
 end
 
 function _cu_valid_mask(cfg::SHTConfig)
+    CUDA_LOADED || error("CUDA backend not available")
     l_vals = CUDA.CuArray(collect(0:cfg.lmax))
     m_vals = CUDA.CuArray(collect(0:cfg.mmax))
     reshape(l_vals, cfg.lmax + 1, 1) .>= reshape(m_vals, 1, cfg.mmax + 1)
 end
 
 function _cu_m_weights(cfg::SHTConfig, real_field::Bool)
+    CUDA_LOADED || error("CUDA backend not available")
     data = real_field ? SHTnsKit._wm_real(cfg) : ones(Float64, cfg.mmax + 1)
     CUDA.CuArray(data)
 end
 
 function _cu_ll1(cfg::SHTConfig)
+    CUDA_LOADED || error("CUDA backend not available")
     CUDA.CuArray((0:cfg.lmax) .* ((0:cfg.lmax) .+ 1))
 end
 

@@ -45,9 +45,39 @@ end
 Packed scalar analysis from flattened grid values (length nlat*nlon) to Qlm (LM order).
 """
 function spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real})
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SH(cfg, Vr)
+    end
+    return spat_to_SH_cpu(cfg, Vr)
+end
+
+function spat_to_SH_cpu(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
     f = reshape(Vr, cfg.nlat, cfg.nlon)
-    alm_mat = analysis(cfg, f)
+    alm_mat = analysis_cpu(cfg, f)
+    return _pack_scalar_coeffs(cfg, alm_mat)
+end
+
+"""
+    SH_to_spat(cfg, Qlm::AbstractVector{<:Complex}) -> Vector{Float64}
+
+Packed scalar synthesis from Qlm (LM order) to flattened real grid (length nlat*nlon).
+"""
+function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_SH_to_spat(cfg, Qlm)
+    end
+    return SH_to_spat_cpu(cfg, Qlm)
+end
+
+function SH_to_spat_cpu(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
+    alm_mat = _unpack_scalar_coeffs(cfg, Qlm)
+    f = synthesis_cpu(cfg, alm_mat; real_output=true)
+    return vec(f)
+end
+
+function _pack_scalar_coeffs(cfg::SHTConfig, alm_mat::AbstractMatrix)
     Qlm = Vector{eltype(alm_mat)}(undef, cfg.nlm)
     @inbounds for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
@@ -59,14 +89,9 @@ function spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     return Qlm
 end
 
-"""
-    SH_to_spat(cfg, Qlm::AbstractVector{<:Complex}) -> Vector{Float64}
-
-Packed scalar synthesis from Qlm (LM order) to flattened real grid (length nlat*nlon).
-"""
-function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+function _unpack_scalar_coeffs(cfg::SHTConfig, Qlm::AbstractVector{T}) where {T}
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
-    alm_mat = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    alm_mat = zeros(T, cfg.lmax + 1, cfg.mmax + 1)
     @inbounds for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
         for l in m:cfg.lmax
@@ -74,8 +99,7 @@ function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
             alm_mat[l+1, m+1] = Qlm[lm]
         end
     end
-    f = synthesis(cfg, alm_mat; real_output=true)
-    return vec(f)
+    return alm_mat
 end
 
 """

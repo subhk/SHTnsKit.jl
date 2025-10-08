@@ -177,6 +177,25 @@ To gauge performance, run `benchmarks/gpu_performance.jl` on a CUDA-enabled syst
 julia --project benchmarks/gpu_performance.jl
 ```
 
+```julia
+# Zygote gradient on a GPU config (stages intermediates through CPU helpers)
+using SHTnsKit, Zygote, CUDA
+
+CUDA.functional() || error("CUDA device not available")
+
+cfg = create_gauss_config_gpu(16, 18; nlon=33, device=SHTnsKit.GPU)
+
+θ, φ = cfg.θ, cfg.φ
+field = [sin(θ[i]) * cos(φ[j]) for i in eachindex(θ), j in eachindex(φ)]
+
+energy(x) = energy_scalar(cfg, x)
+grad = Zygote.gradient(energy, field)[1]
+
+println("Gradient max = ", maximum(abs.(grad)))
+
+destroy_config(cfg)
+```
+
 ### High-Performance SIMD
 
 ```julia

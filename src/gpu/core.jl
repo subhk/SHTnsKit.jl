@@ -6,6 +6,29 @@ utility functions live in the main package so both CPU and GPU code paths can
 share device-selection logic without introducing heavy dependencies.
 """
 
+"""
+    select_compute_device(preference_order)
+
+Automatically select the best available compute device based on preference
+order. Returns both the logical device (`Device`) and the concrete backend
+symbol.
+"""
+function select_compute_device(preference_order=Device[GPU, CPU])
+    normalized = [_normalize_device_entry(entry) for entry in preference_order]
+
+    for backend in normalized
+        if backend == :cpu
+            return CPU, :cpu, false
+        elseif backend == :cuda || backend == :gpu
+            if cuda_available()
+                return GPU, :cuda, true
+            end
+        end
+    end
+
+    return CPU, :cpu, false
+end
+
 function _normalize_device_preferences(entries::Vector{Union{Symbol,Device}})
     devices = Device[]
     backends = Symbol[]
@@ -75,4 +98,3 @@ function _promote_backend_preference(backend::Symbol, existing::Vector{Symbol})
     end
     return new_pref
 end
-

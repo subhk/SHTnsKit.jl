@@ -1358,39 +1358,44 @@ function gpu_enstrophy_lm(cfg::SHTConfig, Tlm; real_field::Bool=true)
 end
 
 function gpu_loss_vorticity_grid(cfg::SHTConfig, Tlm, ζ_target)
-    ζ = gpu_vorticity_grid(cfg, Tlm)
-    residual = ζ .- Array(ζ_target)
+    T_cpu = Tlm isa CUDA.CuArray ? Array(Tlm) : Tlm
+    ζ_target_cpu = ζ_target isa CUDA.CuArray ? Array(ζ_target) : ζ_target
+    ζ = SHTnsKit._vorticity_grid_cpu(cfg, T_cpu)
+    residual = ζ .- ζ_target_cpu
     return SHTnsKit._grid_enstrophy_cpu(cfg, residual)
 end
 
 function gpu_grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm, ζ_target)
-    device = _device_enum(cfg.device_backend)
-    ζ = gpu_vorticity_grid(cfg, Tlm)
-    residual = ζ .- Array(ζ_target)
-    gζlm = gpu_analysis(cfg, residual; device=device, real_output=false)
-    gζlm_cpu = Array(gζlm)
+    T_cpu = Tlm isa CUDA.CuArray ? Array(Tlm) : Tlm
+    ζ_target_cpu = ζ_target isa CUDA.CuArray ? Array(ζ_target) : ζ_target
+    ζ = SHTnsKit._vorticity_grid_cpu(cfg, T_cpu)
+    residual = ζ .- ζ_target_cpu
+    gζlm = SHTnsKit.analysis_cpu(cfg, residual)
     lmax, mmax = cfg.lmax, cfg.mmax
-    grad = zeros(eltype(gζlm_cpu), size(Tlm)...)
+    grad_cpu = similar(T_cpu)
+    fill!(grad_cpu, zero(eltype(grad_cpu)))
     for m in 0:mmax, l in max(1, m):lmax
         L2 = l * (l + 1)
-        grad[l+1, m+1] = -L2 * gζlm_cpu[l+1, m+1]
+        grad_cpu[l+1, m+1] = -L2 * gζlm[l+1, m+1]
     end
-    return grad
+    return Tlm isa CUDA.CuArray ? CUDA.CuArray(grad_cpu) : grad_cpu
 end
 
 function gpu_loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm, ζ_target)
-    device = _device_enum(cfg.device_backend)
-    ζ = gpu_vorticity_grid(cfg, Tlm)
-    residual = ζ .- Array(ζ_target)
+    T_cpu = Tlm isa CUDA.CuArray ? Array(Tlm) : Tlm
+    ζ_target_cpu = ζ_target isa CUDA.CuArray ? Array(ζ_target) : ζ_target
+    ζ = SHTnsKit._vorticity_grid_cpu(cfg, T_cpu)
+    residual = ζ .- ζ_target_cpu
     loss = SHTnsKit._grid_enstrophy_cpu(cfg, residual)
-    gζlm = gpu_analysis(cfg, residual; device=device, real_output=false)
-    gζlm_cpu = Array(gζlm)
+    gζlm = SHTnsKit.analysis_cpu(cfg, residual)
     lmax, mmax = cfg.lmax, cfg.mmax
-    grad = zeros(eltype(gζlm_cpu), size(Tlm)...)
+    grad_cpu = similar(T_cpu)
+    fill!(grad_cpu, zero(eltype(grad_cpu)))
     for m in 0:mmax, l in max(1, m):lmax
         L2 = l * (l + 1)
-        grad[l+1, m+1] = -L2 * gζlm_cpu[l+1, m+1]
+        grad_cpu[l+1, m+1] = -L2 * gζlm[l+1, m+1]
     end
+    grad = Tlm isa CUDA.CuArray ? CUDA.CuArray(grad_cpu) : grad_cpu
     return loss, grad
 end
 

@@ -110,6 +110,7 @@ export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU
 export gpu_spat_to_SH, gpu_SH_to_spat                     # GPU scalar transforms
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat              # GPU QST transforms
+export gpu_SH_Zrotate
 export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
 export gpu_energy_scalar, gpu_energy_vector
 export gpu_grid_energy_scalar, gpu_grid_energy_vector
@@ -233,6 +234,7 @@ gpu_spat_to_SH(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded"
 gpu_SH_to_spat(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_spat_to_SHqst(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_SHqst_to_spat(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_SH_Zrotate(::SHTConfig, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")

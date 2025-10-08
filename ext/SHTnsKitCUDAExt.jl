@@ -455,14 +455,13 @@ function gather_distributed_arrays(distributed_arrays, original_shape)
     
     # Copy data chunks to appropriate locations
     for chunk in distributed_arrays
+        target_device = _device_enum(primary_gpu.device)
         if chunk.gpu != primary_gpu
-            # Use optimized GPU-to-GPU transfer
             gpu_data = gpu_to_gpu_transfer(chunk.data, chunk.gpu, primary_gpu)
         else
-            gpu_data = chunk.data
+            gpu_data = _ensure_device(chunk.data, target_device)
         end
         
-        # Place in correct location
         lat_range, lon_range = chunk.indices
         result[lat_range, lon_range] .= gpu_data
     end
@@ -1715,8 +1714,11 @@ function multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_
             error("Multi-GPU vector analysis currently only supports :latitude distribution strategy")
         end
         
-        push!(partial_sph_results, chunk_sph)
-        push!(partial_tor_results, chunk_tor)
+        chunk_sph_gpu = _ensure_device(chunk_sph, _device_enum(chunk_vθ.gpu.device))
+        chunk_tor_gpu = _ensure_device(chunk_tor, _device_enum(chunk_vθ.gpu.device))
+
+        push!(partial_sph_results, chunk_sph_gpu)
+        push!(partial_tor_results, chunk_tor_gpu)
     end
     
     # Combine results from all GPUs
@@ -1889,7 +1891,8 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
             error("Multi-GPU analysis currently supports :latitude and :longitude distribution strategies")
         end
         
-        push!(partial_results, (coeffs=chunk_coeffs, chunk=chunk))
+        chunk_coeffs_gpu = _ensure_device(chunk_coeffs, _device_enum(chunk.gpu.device))
+        push!(partial_results, (coeffs=chunk_coeffs_gpu, chunk=chunk))
     end
     
     # Combine results from all GPUs

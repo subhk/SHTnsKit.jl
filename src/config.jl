@@ -50,8 +50,10 @@ Base.@kwdef mutable struct SHTConfig
     use_plm_tables::Bool = false                              # Enable/disable table lookup
     
     # GPU Computing support
-    compute_device::Symbol = :cpu                             # Computing device: :cpu, :cuda, :amdgpu
-    device_preference::Vector{Symbol} = [:cpu]               # Preferred device order
+    compute_device::Device = CPU                             # Logical compute target
+    device_backend::Symbol = :cpu                            # Concrete backend identifier
+    device_preference::Vector{Device} = Device[CPU]          # Preferred device order
+    backend_preference::Vector{Symbol} = [:cpu]              # Backend preference (for GPU backends)
     plm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]   # P_l^m values: [m+1][l+1, lat_idx]
     dplm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]  # dP_l^m/dx values: [m+1][l+1, lat_idx]
 end
@@ -90,7 +92,8 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
     return SHTConfig(; lmax, mmax, mres, nlat, nlon, θ, φ, x, w, wlat = w, Nlm,
                      cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
                      ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form,
-                     compute_device = :cpu, device_preference = [:cpu])
+                     compute_device = CPU, device_backend = :cpu,
+                     device_preference = Device[CPU], backend_preference = [:cpu])
 end
 
 """
@@ -211,54 +214,129 @@ Enhanced version of `create_gauss_config` with automatic device detection.
 function create_gauss_config_gpu(lmax::Int, nlat::Int; 
                                 nlon::Union{Int,Nothing}=nothing, 
                                 mres::Int=1,
-                                device::Symbol=:auto,
-                                device_preference::Vector{Symbol}=[:cuda, :amdgpu, :cpu],
+                                device::Union{Symbol,Device}=:auto,
+                                device_preference::Vector{Union{Symbol,Device}}=Device[GPU, CPU],
                                 kwargs...)
     
     # Create the base configuration
     cfg = create_gauss_config(lmax, nlat; nlon=nlon, mres=mres, kwargs...)
     
     # Determine the compute device
-    if device == :auto
-        selected_device, gpu_available = select_compute_device(device_preference)
-    else
-        selected_device = device
-        gpu_available = (device != :cpu)
+    devices_pref, backend_pref = _normalize_device_preferences(device_preference)
+
+    selected_device, backend, gpu_available = _resolve_device_choice(device, backend_pref)
+
+    if selected_device == GPU && !gpu_available
+        @warn "GPU device selected but CUDA backend unavailable. Falling back to CPU." 
+        selected_device, backend = CPU, :cpu
     end
-    
-    # Set device configuration
+
     cfg.compute_device = selected_device
-    cfg.device_preference = copy(device_preference)
-    
+    cfg.device_backend = backend
+    cfg.device_preference = devices_pref
+    cfg.backend_preference = backend_pref
+
     return cfg
 end
 
-"""
-    set_config_device!(cfg::SHTConfig, device::Symbol)
+function _normalize_device_preferences(entries::Vector{Union{Symbol,Device}})
+    devices = Device[]
+    backends = Symbol[]
 
-Change the compute device for an existing configuration.
-"""
-function set_config_device!(cfg::SHTConfig, device::Symbol)
-    if device ∉ [:cpu, :cuda, :amdgpu]
-        throw(ArgumentError("Unsupported device: $device. Must be :cpu, :cuda, or :amdgpu"))
-    end
-    
-    cfg.compute_device = device
-    
-    # Update device preference to put the selected device first
-    new_preference = [device]
-    for dev in cfg.device_preference
-        if dev != device
-            push!(new_preference, dev)
+    for entry in entries
+        device = entry isa Device ? entry : device_from_symbol(entry)
+        push!(devices, device)
+
+        backend = entry isa Device ? device_symbol(entry) : _normalize_device_entry(entry)
+        if device == GPU && backend in (:cpu, :gpu)
+            backend = :cuda
         end
+        push!(backends, backend)
     end
-    cfg.device_preference = new_preference
-    
+
+    return devices, backends
+end
+
+function _resolve_device_choice(choice::Union{Symbol,Device}, backend_pref::Vector{Symbol})
+    if choice isa Symbol && choice === :auto
+        return select_compute_device(backend_pref)
+    end
+
+    device = choice isa Device ? choice : device_from_symbol(choice)
+    candidate_backend = choice isa Symbol ? _normalize_device_entry(choice) : (device == CPU ? :cpu : _first_gpu_backend(backend_pref))
+    backend = _resolve_backend(candidate_backend, backend_pref, device)
+    available = device == GPU ? (backend == :cuda && cuda_available()) : false
+
+    return device, backend, available
+end
+
+function _resolve_backend(candidate::Symbol, backend_pref::Vector{Symbol}, device::Device)
+    if device == CPU
+        return :cpu
+    end
+
+    if candidate == :cuda
+        return :cuda
+    elseif candidate == :gpu || candidate == :cpu
+        return _first_gpu_backend(backend_pref)
+    else
+        return candidate
+    end
+end
+
+function _first_gpu_backend(backend_pref::Vector{Symbol})
+    for backend in backend_pref
+        backend != :cpu && return backend
+    end
+    return :cuda
+end
+
+function _promote_device_preference(device::Device, existing::Vector{Device})
+    new_pref = Device[device]
+    for entry in existing
+        entry == device && continue
+        push!(new_pref, entry)
+    end
+    return new_pref
+end
+
+function _promote_backend_preference(backend::Symbol, existing::Vector{Symbol})
+    new_pref = Symbol[backend]
+    for entry in existing
+        entry == backend && continue
+        push!(new_pref, entry)
+    end
+    return new_pref
+end
+
+"""
+    set_config_device!(cfg::SHTConfig, device)
+
+Change the compute device for an existing configuration. `device` can be either
+the `Device` enum (`CPU`, `GPU`) or a backend symbol such as `:cpu`, `:cuda`, or
+`:auto`.
+"""
+function set_config_device!(cfg::SHTConfig, device::Union{Device,Symbol})
+    selected_device, backend, gpu_available = _resolve_device_choice(device, cfg.backend_preference)
+
+    if selected_device == GPU && !gpu_available
+        @warn "GPU device selected but CUDA backend unavailable. Falling back to CPU."
+        selected_device, backend = CPU, :cpu
+    end
+
+    cfg.compute_device = selected_device
+    cfg.device_backend = backend
+    cfg.device_preference = _promote_device_preference(selected_device, cfg.device_preference)
+    cfg.backend_preference = _promote_backend_preference(backend, cfg.backend_preference)
+
     return cfg
 end
 
-"""Get the current compute device for a configuration."""
+"""Get the logical compute device for a configuration."""
 get_config_device(cfg::SHTConfig) = cfg.compute_device
 
+"""Return the concrete backend symbol associated with the configuration."""
+get_config_backend(cfg::SHTConfig) = cfg.device_backend
+
 """Check if a configuration is set up for GPU computing."""
-is_gpu_config(cfg::SHTConfig) = cfg.compute_device != :cpu
+is_gpu_config(cfg::SHTConfig) = cfg.compute_device == GPU

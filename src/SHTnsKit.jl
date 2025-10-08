@@ -21,6 +21,7 @@ include("mathutils.jl")                      # Mathematical utility functions
 include("gausslegendre.jl")                  # Gauss-Legendre quadrature implementation
 include("legendre.jl")                       # Legendre polynomial computations
 include("normalization.jl")                  # Spherical harmonic normalization
+include("device_types.jl")                   # Device enumeration shared by configs/extensions
 include("config.jl")                         # Configuration and setup functions
 include("buffer_utils.jl")                   # Common buffer allocation patterns
 include("plan.jl")                           # Transform planning and optimization
@@ -38,11 +39,12 @@ include("vorticity_diagnostics.jl")           # Vorticity and enstrophy calculat
 include("api_compat.jl")                      # API compatibility layer
 include("parallel_dense.jl")                  # Parallel dense matrix operations
 include("device_utils.jl")                    # GPU device utilities and management
+include("gpu/core.jl")                        # Shared GPU helpers (extension bridge)
 
 # ===== CORE CONFIGURATION AND SETUP =====
 export SHTConfig, create_gauss_config, create_config, destroy_config  # Configuration management
-export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_config  # GPU device management
-export select_compute_device, device_transfer_arrays                  # Device utilities
+export create_gauss_config_gpu, set_config_device!, get_config_device, get_config_backend, is_gpu_config
+export Device, CPU, GPU, select_compute_device, device_transfer_arrays
 
 # ===== BASIC TRANSFORMS =====
 export analysis, synthesis                              # Basic forward/backward transforms
@@ -102,8 +104,7 @@ export prepare_plm_tables!, enable_plm_tables!, disable_plm_tables!  # Precomput
 # These functions are implemented in Julia package extensions and only available when
 # the corresponding packages are loaded
 
-# GPU Computing functions (SHTnsKitGPUExt extension)
-export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE  # Device management
+# GPU Computing functions (SHTnsKitCUDAExt extension)
 export get_device, set_device!, to_device                 # Device utilities
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU transforms
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
@@ -208,7 +209,7 @@ with an MPI-aware heuristic that favours balanced 2D decompositions.
 suggest_pencil_grid
 
 # GPU extension fallbacks
-get_device() = error("GPU extension not loaded. Install and load CUDA.jl or AMDGPU.jl with GPUArrays and KernelAbstractions")
+get_device() = error("GPU extension not loaded. Load CUDA.jl so that SHTnsKitCUDAExt is activated.")
 set_device!(::Any) = error("GPU extension not loaded")
 to_device(::Any, ::Any) = error("GPU extension not loaded")
 gpu_analysis(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")

@@ -2,47 +2,52 @@
 Device utilities for GPU-accelerated spherical harmonic transforms.
 
 This module provides device management and selection utilities for SHTnsKit.jl,
-enabling transparent switching between CPU, CUDA, and AMDGPU backends.
+enabling transparent switching between CPU and GPU backends.
 """
 
+
 """
-    select_compute_device(preference_order=[:cpu, :cuda, :amdgpu])
+    select_compute_device(preference_order)
 
 Automatically select the best available compute device based on preference order.
-Returns the selected device as a Symbol and whether GPU extensions are loaded.
+Returns both the logical device (`Device`) and the concrete backend symbol.
 
 # Arguments
-- `preference_order`: Vector of preferred devices in order (:cpu, :cuda, :amdgpu)
+- `preference_order`: Vector describing preferred targets. Each entry can be a
+  `Device` (`CPU` or `GPU`) or a backend symbol (`:cpu`, `:cuda`).
 
 # Returns
-- `(device::Symbol, gpu_available::Bool)`: Selected device and GPU availability status
+- `(device::Device, backend::Symbol, gpu_available::Bool)`
 
 # Examples
 ```julia
-device, gpu_ok = select_compute_device()
-device, gpu_ok = select_compute_device([:cuda, :cpu])  # Prefer CUDA if available
+kind, backend, gpu_ok = select_compute_device()
+kind, backend, gpu_ok = select_compute_device(Device[GPU, CPU])  # Prefer GPU when available
 ```
 """
-function select_compute_device(preference_order::Vector{Symbol}=[:cpu, :cuda, :amdgpu])
-    for device in preference_order
-        if device == :cpu
-            return :cpu, false
-        elseif device == :cuda
-            # Check if CUDA is available (this will be properly implemented in the extension)
-            if isdefined(Main, :CUDA) && try Main.CUDA.functional() catch; false end
-                return :cuda, true
+function select_compute_device(preference_order=Device[GPU, CPU])
+    normalized = [_normalize_device_entry(entry) for entry in preference_order]
+
+    for backend in normalized
+        if backend == :cpu
+            return CPU, :cpu, false
+        elseif backend == :cuda
+            if cuda_available()
+                return GPU, :cuda, true
             end
-        elseif device == :amdgpu  
-            # Check if AMDGPU is available (this will be properly implemented in the extension)
-            if isdefined(Main, :AMDGPU) && try Main.AMDGPU.functional() catch; false end
-                return :amdgpu, true
+        elseif backend == :gpu
+            if cuda_available()
+                return GPU, :cuda, true
             end
         end
     end
-    
-    # Fallback to CPU
-    return :cpu, false
+
+    return CPU, :cpu, false
 end
+
+_normalize_device_entry(entry::Device) = device_symbol(entry)
+_normalize_device_entry(entry::Symbol) = entry
+
 
 """
     device_transfer_arrays(cfg::SHTConfig, arrays...)
@@ -51,10 +56,10 @@ Transfer arrays to the device specified in the configuration.
 This is a placeholder that will be properly implemented in the GPU extension.
 """
 function device_transfer_arrays(cfg, arrays...)
-    if cfg.compute_device == :cpu
+    if cfg.compute_device == CPU
         return arrays  # No transfer needed for CPU
     else
         # This will be implemented in the GPU extension
-        error("GPU extension required for device transfers. Load CUDA.jl or AMDGPU.jl with GPUArrays.")
+        error("GPU extension required for device transfers. Load CUDA.jl so that SHTnsKitCUDAExt is activated.")
     end
 end

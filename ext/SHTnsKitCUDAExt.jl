@@ -1,4 +1,4 @@
-module SHTnsKitGPUExt
+module SHTnsKitCUDAExt
 
 using SHTnsKit
 using KernelAbstractions, GPUArrays, GPUArraysCore
@@ -1337,8 +1337,10 @@ function multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_
                 sintheta=cfg.st[lat_indices],
                 norm=cfg.norm, cs_phase=cfg.cs_phase,
                 real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=chunk_vθ.gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[chunk_vθ.gpu.device == :cuda ? :cuda : :amdgpu]
+                compute_device=SHTnsKit.GPU,
+                device_backend=:cuda,
+                device_preference=SHTnsKit.Device[SHTnsKit.GPU],
+                backend_preference=Symbol[:cuda]
             )
             
             # Perform GPU vector analysis on this chunk
@@ -1409,8 +1411,10 @@ function multi_gpu_SHsphtor_to_spat(mgpu_config::MultiGPUConfig, sph_coeffs, tor
                 sintheta=cfg.st[lat_indices],
                 norm=cfg.norm, cs_phase=cfg.cs_phase,
                 real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+                compute_device=SHTnsKit.GPU,
+                device_backend=:cuda,
+                device_preference=SHTnsKit.Device[SHTnsKit.GPU],
+                backend_preference=Symbol[:cuda]
             )
             
             # Perform synthesis on this GPU
@@ -1478,8 +1482,10 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
                 sintheta=cfg.st[lat_indices],
                 norm=cfg.norm, cs_phase=cfg.cs_phase, 
                 real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=chunk.gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[chunk.gpu.device == :cuda ? :cuda : :amdgpu]
+                compute_device=SHTnsKit.GPU,
+                device_backend=:cuda,
+                device_preference=SHTnsKit.Device[SHTnsKit.GPU],
+                backend_preference=Symbol[:cuda]
             )
             
             # Perform GPU analysis on this chunk
@@ -1502,8 +1508,10 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
                 ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
                 norm=cfg.norm, cs_phase=cfg.cs_phase,
                 real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=chunk.gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[chunk.gpu.device == :cuda ? :cuda : :amdgpu]
+                compute_device=SHTnsKit.GPU,
+                device_backend=:cuda,
+                device_preference=SHTnsKit.Device[SHTnsKit.GPU],
+                backend_preference=Symbol[:cuda]
             )
             
             # Perform GPU analysis on longitude sector
@@ -1571,8 +1579,10 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
                 sintheta=cfg.st[lat_indices],
                 norm=cfg.norm, cs_phase=cfg.cs_phase,
                 real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+                compute_device=SHTnsKit.GPU,
+                device_backend=:cuda,
+                device_preference=SHTnsKit.Device[SHTnsKit.GPU],
+                backend_preference=Symbol[:cuda]
             )
             
             # Perform synthesis on this GPU
@@ -1619,8 +1629,10 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
                 ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
                 norm=cfg.norm, cs_phase=cfg.cs_phase,
                 real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
+                compute_device=SHTnsKit.GPU,
+                device_backend=:cuda,
+                device_preference=SHTnsKit.Device[SHTnsKit.GPU],
+                backend_preference=Symbol[:cuda]
             )
             
             # Perform synthesis on longitude sector
@@ -1908,4 +1920,4 @@ export distribute_spatial_array, distribute_coefficient_array, gather_distribute
 export multi_gpu_analysis, multi_gpu_synthesis
 export multi_gpu_analysis_streaming, multi_gpu_synthesis_streaming, estimate_streaming_chunks
 
-end # module SHTnsKitGPUExt
+end # module SHTnsKitCUDAExt

@@ -35,6 +35,7 @@ struct DistAnalysisPlan
 end
 
 function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false, use_packed_storage::Bool=true, with_spatial_scratch::Bool=false)
+    cfg, _ = ensure_cpu_cfg(cfg)
     # Pre-compute index mappings to avoid expensive lookups in tight loops
     temp_pencil = allocate(prototype_θφ; dims=(:θ,:m), eltype=ComplexF64)
     
@@ -97,7 +98,14 @@ struct DistPlan
     use_rfft::Bool
 end
 
-DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false) = DistPlan(cfg, prototype_θφ, use_rfft)
+function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
+    cfg_cpu, _ = ensure_cpu_cfg(cfg)
+    return Core.apply_type(DistPlan, )(cfg_cpu, prototype_θφ, use_rfft)
+end
+function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray, use_rfft::Bool)
+    cfg_cpu, _ = ensure_cpu_cfg(cfg)
+    return Base.invokelatest(DistPlan, cfg_cpu, prototype_θφ, use_rfft)
+end
 
 struct DistSphtorPlan
     cfg::SHTnsKit.SHTConfig

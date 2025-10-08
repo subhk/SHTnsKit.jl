@@ -92,6 +92,22 @@ benchmark_parallel_performance()
 MPI.Finalize()
 ```
 
+### GPU Benchmarks
+
+The repository ships with `benchmarks/gpu_performance.jl`, which measures analysis and synthesis throughput on both CPU and GPU. Run it on a CUDA-enabled machine:
+
+```bash
+julia --project benchmarks/gpu_performance.jl
+```
+
+Use `SHTNSKIT_LMAX` to sweep different resolutions:
+
+```bash
+SHTNSKIT_LMAX=96 julia --project benchmarks/gpu_performance.jl
+```
+
+The script prints `TrialEstimate` results from BenchmarkTools, letting you compare median execution times. For deeper profiling, wrap GPU calls with `CUDA.@profile` or Nsight Systems.
+
 ### Performance Scaling by Problem Size
 
 | Problem Size (nlm) | Serial | 4 Processes | 16 Processes | Expected Speedup |

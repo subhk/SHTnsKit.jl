@@ -171,6 +171,12 @@ destroy_config(cfg)
 
 For multi-GPU runs use `create_multi_gpu_config` and the `multi_gpu_*` helpers provided by `ext/SHTnsKitCUDAExt.jl`. A runnable script is available at `examples/gpu_roundtrip.jl`.
 
+To gauge performance, run `benchmarks/gpu_performance.jl` on a CUDA-enabled system:
+
+```bash
+julia --project benchmarks/gpu_performance.jl
+```
+
 ### High-Performance SIMD
 
 ```julia

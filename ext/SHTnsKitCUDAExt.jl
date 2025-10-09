@@ -787,6 +787,40 @@ function _pack_cplx_coeffs(cfg::SHTConfig, Alm_pos::Matrix{ComplexF64}, Alm_neg:
             alm[idx] = val
         end
     end
+
+    for m in 1:mmax
+        for l in m:lmax
+            val = Alm_neg[l+1, m+1]
+            if cfg.norm !== :orthonormal || cfg.cs_phase == false
+                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
+                α = SHTnsKit.cs_phase_factor(-m, true, cfg.cs_phase)
+                val /= (k * α)
+            end
+            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1
+            alm[idx] = val
+        end
+    end
+
+    return alm
+end
+
+function _pack_cplx_coeffs(cfg::SHTConfig, Alm_pos::Matrix{ComplexF64}, Alm_neg::Matrix{ComplexF64})
+    lmax, mmax = cfg.lmax, cfg.mmax
+    alm = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
+    fill!(alm, 0.0 + 0.0im)
+
+    for m in 0:mmax
+        for l in m:lmax
+            val = Alm_pos[l+1, m+1]
+            if cfg.norm !== :orthonormal || cfg.cs_phase == false
+                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
+                α = SHTnsKit.cs_phase_factor(m, true, cfg.cs_phase)
+                val /= (k * α)
+            end
+            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1
+            alm[idx] = val
+        end
+    end
     for m in 1:mmax
         for l in m:lmax
             val = Alm_neg[l+1, m+1]
@@ -2040,6 +2074,92 @@ function gpu_SH_to_point_cplx(cfg::SHTConfig, alm_packed::AbstractVector, cost::
     KernelAbstractions.synchronize(backend)
 
     return Array(out_gpu)[1]
+end
+
+function gpu_SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_spat_cplx(cfg, alm_packed)
+    end
+    cfg.mres == 1 || throw(ArgumentError("gpu_SH_to_spat_cplx requires mres == 1 (LM_cplx layout)"))
+
+    Alm_pos, Alm_neg = _prepare_lat_cplx_tables(cfg, alm_packed, cfg.lmax, cfg.mmax)
+    Alm_pos_gpu = to_device(Alm_pos, device)
+    Alm_neg_gpu = to_device(Alm_neg, device)
+
+    normalization = to_device(cfg.Nlm, device)
+    x_values = to_device(cfg.x, device)
+    Plm = to_device(zeros(Float64, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1), device)
+
+    backend = get_backend(Alm_pos_gpu)
+    legendre_kernel! = legendre_associated_kernel!(backend)
+    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax, normalization; ndrange=cfg.nlat)
+    KernelAbstractions.synchronize(backend)
+
+    Fourier_gpu = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg.nlon)
+    synth_kernel! = cplx_synthesis_mode_kernel!(backend)
+
+    for m in 0:cfg.mmax
+        lcount = cfg.lmax - m + 1
+        Plm_slice = view(Plm, :, m+1:cfg.lmax+1, m+1)
+        Alm_pos_col = view(Alm_pos_gpu, m+1:cfg.lmax+1, m+1)
+        Alm_neg_col = view(Alm_neg_gpu, m+1:cfg.lmax+1, m+1)
+        Fourier_pos = view(Fourier_gpu, :, m + 1)
+        has_neg = m > 0
+        Fourier_neg = has_neg ? view(Fourier_gpu, :, cfg.nlon - m + 1) : Fourier_pos
+        synth_kernel!(Fourier_pos, Fourier_neg, Plm_slice, Alm_pos_col, Alm_neg_col, inv_scaleφ, has_neg; ndrange=cfg.nlat)
+        KernelAbstractions.synchronize(backend)
+    end
+
+    spatial_gpu = gpu_ifft!(Fourier_gpu, 2)
+    return Array(spatial_gpu)
+end
+
+function gpu_spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_cplx_to_SH(cfg, z)
+    end
+    cfg.mres == 1 || throw(ArgumentError("gpu_spat_cplx_to_SH requires mres == 1 (LM_cplx layout)"))
+    size(z,1) == cfg.nlat || throw(DimensionMismatch("z first dim must be nlat"))
+    size(z,2) == cfg.nlon || throw(DimensionMismatch("z second dim must be nlon"))
+
+    z_gpu = z isa GPUArraysCore.AbstractGPUArray ? z : to_device(ComplexF64.(z), device)
+    F_gpu = gpu_fft!(copy(z_gpu), 2)
+
+    normalization = to_device(cfg.Nlm, device)
+    x_values = to_device(cfg.x, device)
+    Plm = to_device(zeros(Float64, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1), device)
+
+    backend = get_backend(F_gpu)
+    legendre_kernel! = legendre_associated_kernel!(backend)
+    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax, normalization; ndrange=cfg.nlat)
+    KernelAbstractions.synchronize(backend)
+
+    weights_gpu = to_device(cfg.w, device)
+    coeff_pos = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    coeff_neg = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    analysis_kernel! = cplx_analysis_mode_kernel!(backend)
+
+    for m in 0:cfg.mmax
+        lcount = cfg.lmax - m + 1
+        Plm_slice = view(Plm, :, m+1:cfg.lmax+1, m+1)
+        Fcol_pos = view(F_gpu, :, m + 1)
+        coeff_pos_gpu = to_device(zeros(ComplexF64, lcount), device)
+        analysis_kernel!(coeff_pos_gpu, Fcol_pos, Plm_slice, weights_gpu, cfg.cphi; ndrange=lcount)
+        KernelAbstractions.synchronize(backend)
+        coeff_pos[m+1:cfg.lmax+1, m+1] .= Array(coeff_pos_gpu)
+
+        if m > 0
+            col_neg = cfg.nlon - m + 1
+            Fcol_neg = view(F_gpu, :, col_neg)
+            coeff_neg_gpu = to_device(zeros(ComplexF64, lcount), device)
+            analysis_kernel!(coeff_neg_gpu, Fcol_neg, Plm_slice, weights_gpu, cfg.cphi; ndrange=lcount)
+            KernelAbstractions.synchronize(backend)
+            coeff_neg[m+1:cfg.lmax+1, m+1] .= Array(coeff_neg_gpu)
+        end
+    end
+
+    return _pack_cplx_coeffs(cfg, coeff_pos, coeff_neg)
 end
 
 function gpu_SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector; device=get_device())

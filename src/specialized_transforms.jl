@@ -18,6 +18,9 @@ Input `Vr` should contain values at Gauss latitudes for a specific longitude mod
 Returns coefficients Q_l for l = 0..lmax.
 """
 function spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SH_axisym(cfg, Vr)
+    end
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     
@@ -157,6 +160,9 @@ Input `Qlm` should contain coefficients Q_l for l = 0..lmax.
 Returns spatial values at Gauss latitudes.
 """
 function SH_to_spat_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_SH_to_spat_axisym(cfg, Qlm)
+    end
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Qlm) == lmax + 1 || throw(DimensionMismatch("Qlm length must be lmax+1=$(lmax+1)"))
     
@@ -183,6 +189,9 @@ end
 Axisymmetric degree-limited transform up to degree ltr.
 """
 function spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SH_l_axisym(cfg, Vr, ltr)
+    end
     nlat = cfg.nlat
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
@@ -211,6 +220,9 @@ end
 Axisymmetric degree-limited synthesis using degrees up to ltr.
 """
 function SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Int)
+    if is_gpu_config(cfg)
+        return gpu_SH_to_spat_l_axisym(cfg, Qlm, ltr)
+    end
     nlat = cfg.nlat
     ltr_qlm = length(Qlm) - 1  # Convert length to max degree
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))

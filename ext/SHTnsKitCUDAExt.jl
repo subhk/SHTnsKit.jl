@@ -35,6 +35,161 @@ function __init__()
     end
 end
 
+@kernel function legendre_mode_kernel!(Plm_mode, x, im, lcap)
+    idx = @index(Global)
+    nlat = size(Plm_mode, 1)
+    if idx > nlat
+        return
+    end
+
+    lcount = size(Plm_mode, 2)
+    lcount <= 0 && return
+
+    xi = x[idx]
+    T = eltype(Plm_mode)
+
+    if im == 0
+        if lcount >= 1
+            Plm_mode[idx, 1] = one(T)
+        end
+        if lcount >= 2
+            Plm_mode[idx, 2] = convert(T, xi)
+        end
+        if lcount > 2
+            prev_prev = one(T)
+            prev = convert(T, xi)
+            for col in 3:lcount
+                l = col - 1
+                num = convert(T, (2*l - 1)) * convert(T, xi) * prev - convert(T, (l - 1)) * prev_prev
+                den = convert(T, l)
+                val = num / den
+                Plm_mode[idx, col] = val
+                prev_prev = prev
+                prev = val
+            end
+        end
+    else
+        sx2 = max(zero(T), one(T) - convert(T, xi) * convert(T, xi))
+        sint = sqrt(sx2)
+        pmm = one(T)
+        fact = one(T)
+        for k in 1:im
+            pmm *= -fact * sint
+            fact += convert(T, 2)
+        end
+        Plm_mode[idx, 1] = pmm
+        if lcount >= 2
+            prev_prev = pmm
+            prev = convert(T, xi) * convert(T, 2 * im + 1) * pmm
+            Plm_mode[idx, 2] = prev
+            if lcount > 2
+                for col in 3:lcount
+                    l = im + col - 1
+                    num = convert(T, 2 * l - 1) * convert(T, xi) * prev - convert(T, l + im - 1) * prev_prev
+                    den = convert(T, l - im)
+                    val = num / den
+                    Plm_mode[idx, col] = val
+                    prev_prev = prev
+                    prev = val
+                end
+            end
+        end
+    end
+end
+
+@kernel function scalar_mode_analysis_kernel!(coeffs, Vr, weights, Plm_mode, cphi)
+    lidx = @index(Global)
+    lcount = size(Plm_mode, 2)
+    if lidx > lcount
+        return
+    end
+    nlat = size(Plm_mode, 1)
+    acc = ComplexF64(0, 0)
+    for i in 1:nlat
+        acc += Vr[i] * weights[i] * Plm_mode[i, lidx]
+    end
+    coeffs[lidx] = acc * cphi
+end
+
+@kernel function scalar_mode_synthesis_kernel!(Vr, Ql, Plm_mode)
+    idx = @index(Global)
+    nlat = size(Plm_mode, 1)
+    if idx > nlat
+        return
+    end
+    lcount = size(Plm_mode, 2)
+    acc = ComplexF64(0, 0)
+    for col in 1:lcount
+        acc += Ql[col] * Plm_mode[idx, col]
+    end
+    Vr[idx] = acc
+end
+
+@kernel function sphtor_mode_analysis_kernel!(Sl, Tl, Vt, Vp, weights, Plm_mode, cphi, im)
+    lidx = @index(Global)
+    lcount = size(Plm_mode, 2)
+    if lidx > lcount
+        return
+    end
+    nlat = size(Plm_mode, 1)
+    acc_s = ComplexF64(0, 0)
+    acc_t = ComplexF64(0, 0)
+    for i in 1:nlat
+        basis = Plm_mode[i, lidx]
+        weight = weights[i]
+        acc_s += Vt[i] * weight * basis
+        acc_t += Vp[i] * weight * basis
+    end
+    l = im + lidx - 1
+    ll1 = l * (l + 1)
+    if ll1 > 0
+        scale = cphi / sqrt(Float64(ll1))
+        Sl[lidx] = acc_s * scale
+        Tl[lidx] = acc_t * scale
+    else
+        Sl[lidx] = ComplexF64(0, 0)
+        Tl[lidx] = ComplexF64(0, 0)
+    end
+end
+
+@kernel function sphtor_mode_synthesis_kernel!(Vt, Vp, Sl, Tl, Plm_mode, im)
+    idx = @index(Global)
+    nlat = size(Plm_mode, 1)
+    if idx > nlat
+        return
+    end
+    lcount = size(Plm_mode, 2)
+    vt_acc = ComplexF64(0, 0)
+    vp_acc = ComplexF64(0, 0)
+    for col in 1:lcount
+        l = im + col - 1
+        ll1 = l * (l + 1)
+        if ll1 > 0
+            scale = sqrt(Float64(ll1))
+            basis = Plm_mode[idx, col]
+            vt_acc += Sl[col] * basis * scale
+            vp_acc += Tl[col] * basis * scale
+        end
+    end
+    Vt[idx] = vt_acc
+    Vp[idx] = vp_acc
+end
+
+function _gpu_legendre_mode(cfg::SHTConfig, im::Int, lcap::Int, device::SHTDevice)
+    lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
+    lcount = lcap - im + 1
+    lcount > 0 || throw(ArgumentError("ltr must be ≥ im=$(im)"))
+
+    x_gpu = to_device(cfg.x, device)
+    Plm_mode = to_device(zeros(Float64, cfg.nlat, lcount), device)
+    backend = get_backend(x_gpu)
+    mode_kernel! = legendre_mode_kernel!(backend)
+    mode_kernel!(Plm_mode, x_gpu, im, lcap; ndrange=cfg.nlat)
+    KernelAbstractions.synchronize(backend)
+
+    return Plm_mode, backend
+end
+
 # Device management
 """
     SHTDevice

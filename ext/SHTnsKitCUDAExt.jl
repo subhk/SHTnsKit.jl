@@ -384,44 +384,6 @@ end
     Rlm[idx] = acc
 end
 
-@kernel function cplx_synthesis_mode_kernel!(Fourier, Plm, Alm_pos_m, Alm_neg_m, m::Int, lmax::Int, inv_scaleφ, nlon::Int)
-    i = @index(Global)
-    nlat = size(Plm, 1)
-    if i > nlat
-        return
-    end
-    acc_pos = ComplexF64(0, 0)
-    acc_neg = ComplexF64(0, 0)
-    for l in m:lmax
-        Plm_val = Plm[i, l+1, m+1]
-        acc_pos += Alm_pos_m[l+1] * Plm_val
-        if m > 0
-            acc_neg += Alm_neg_m[l+1] * Plm_val
-        end
-    end
-    Fourier[i, m+1] = inv_scaleφ * acc_pos
-    if m > 0
-        neg_col = nlon - m + 1
-        Fourier[i, neg_col] = inv_scaleφ * acc_neg
-    end
-end
-
-@kernel function cplx_analysis_mode_kernel!(coeffs_out, Fcol, Plm, weights, nlat::Int, lmax::Int, m::Int, scaleφ)
-    lidx = @index(Global)
-    if lidx > lmax + 1
-        return
-    end
-    l = lidx - 1
-    coeff = ComplexF64(0, 0)
-    if l >= m
-        for i in 1:nlat
-            coeff += weights[i] * Plm[i, lidx, m+1] * Fcol[i]
-        end
-        coeff *= scaleφ
-    end
-    coeffs_out[lidx] = coeff
-end
-
 @kernel function point_legendre_kernel!(Plm_table, dPlm_table, x, lcap, mres)
     idx = @index(Global)
     mcount = size(Plm_table, 1)

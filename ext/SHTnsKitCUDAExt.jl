@@ -175,6 +175,95 @@ end
     Vp[idx] = vp_acc
 end
 
+@kernel function legendre_latitude_kernel!(Plm_table, x, lcap, mres)
+    idx = @index(Global)
+    mcount = size(Plm_table, 1)
+    if idx > mcount
+        return
+    end
+    T = eltype(Plm_table)
+    im = idx - 1
+    ncol = size(Plm_table, 2)
+    for j in 1:ncol
+        Plm_table[idx, j] = zero(T)
+    end
+    if im > lcap || im % mres != 0
+        return
+    end
+    xi = convert(T, x)
+    if im == 0
+        Plm_table[idx, 1] = one(T)
+        if lcap >= 1
+            Plm_table[idx, 2] = xi
+        end
+        prev_prev = one(T)
+        prev = xi
+        for l in 2:lcap
+            num = convert(T, 2*l - 1) * xi * prev - convert(T, l - 1) * prev_prev
+            val = num / convert(T, l)
+            Plm_table[idx, l+1] = val
+            prev_prev = prev
+            prev = val
+        end
+    else
+        sx2 = max(zero(T), one(T) - xi * xi)
+        sint = sqrt(sx2)
+        pmm = one(T)
+        fact = one(T)
+        for _ in 1:im
+            pmm *= -fact * sint
+            fact += convert(T, 2)
+        end
+        Plm_table[idx, im+1] = pmm
+        if lcap >= im + 1
+            prev_prev = pmm
+            prev = xi * convert(T, 2*im + 1) * pmm
+            Plm_table[idx, im+2] = prev
+            for l in (im+2):lcap
+                num = convert(T, 2*l - 1) * xi * prev - convert(T, l + im - 1) * prev_prev
+                den = convert(T, l - im)
+                val = num / den
+                Plm_table[idx, l+1] = val
+                prev_prev = prev
+                prev = val
+            end
+        end
+    end
+end
+
+@kernel function lat_mode_accumulate_kernel!(gm, alm, Nlm, Plm_table, lcap, mcap, mres)
+    idx = @index(Global)
+    if idx > size(Plm_table, 1)
+        return
+    end
+    im = idx - 1
+    if im > mcap || im % mres != 0 || im > lcap
+        gm[idx] = ComplexF64(0, 0)
+        return
+    end
+    acc = ComplexF64(0, 0)
+    for l in im:lcap
+        Plm_val = Plm_table[idx, l+1]
+        Ylm = Nlm[l+1, im+1] * Plm_val
+        acc += alm[l+1, im+1] * Ylm
+    end
+    gm[idx] = acc
+end
+
+@kernel function lat_finalize_kernel!(vals, gm, nphi, mcap)
+    idx = @index(Global)
+    if idx > nphi
+        return
+    end
+    φ = 2π * (idx - 1) / nphi
+    acc = real(gm[1])
+    for m in 1:mcap
+        val = gm[m+1]
+        acc += 2 * real(val * cis(m * φ))
+    end
+    vals[idx] = acc
+end
+
 function _gpu_legendre_mode(cfg::SHTConfig, im::Int, lcap::Int, device::SHTDevice)
     lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
     lcount = lcap - im + 1
@@ -1178,11 +1267,38 @@ function gpu_SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex},
 end
 
 function gpu_SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax, device=get_device())
-    if device == CPU_DEVICE
-        return SHTnsKit.SH_to_lat_cpu(cfg, Qlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+    device == CPU_DEVICE && return SHTnsKit.SH_to_lat_cpu(cfg, Qlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+    lcap = min(Int(ltr), cfg.lmax)
+    mcap = min(Int(mtr), cfg.mmax)
+    lcap < 0 && return zeros(Float64, nphi)
+
+    alm = SHTnsKit._unpack_scalar_coeffs(cfg, Qlm)
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        tmp = similar(alm)
+        SHTnsKit.convert_alm_norm!(tmp, alm, cfg; to_internal=true)
+        alm = tmp
     end
-    Qhost = collect(Qlm)
-    return SHTnsKit.SH_to_lat_cpu(cfg, Qhost, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+
+    alm_gpu = to_device(ComplexF64.(alm), device)
+    Nlm_gpu = to_device(cfg.Nlm, device)
+    Plm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
+
+    backend = get_backend(alm_gpu)
+    lat_legendre_kernel! = legendre_latitude_kernel!(backend)
+    lat_legendre_kernel!(Plm_table, float(cost), lcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    gm_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    lat_acc_kernel! = lat_mode_accumulate_kernel!(backend)
+    lat_acc_kernel!(gm_gpu, alm_gpu, Nlm_gpu, Plm_table, lcap, mcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    vals_gpu = to_device(zeros(Float64, nphi), device)
+    lat_fin_kernel! = lat_finalize_kernel!(backend)
+    lat_fin_kernel!(vals_gpu, gm_gpu, nphi, mcap; ndrange=nphi)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(vals_gpu)
 end
 
 function gpu_SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, device=get_device())

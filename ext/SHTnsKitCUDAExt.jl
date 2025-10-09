@@ -2007,6 +2007,92 @@ function gpu_SH_to_point_cplx(cfg::SHTConfig, alm_packed::AbstractVector, cost::
     return Array(out_gpu)[1]
 end
 
+function gpu_SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_spat_cplx(cfg, alm_packed)
+    end
+    cfg.mres == 1 || throw(ArgumentError("gpu_SH_to_spat_cplx requires mres == 1 (LM_cplx layout)"))
+
+    Alm_pos, Alm_neg = _prepare_lat_cplx_tables(cfg, alm_packed, cfg.lmax, cfg.mmax)
+    Alm_pos_gpu = to_device(Alm_pos, device)
+    Alm_neg_gpu = to_device(Alm_neg, device)
+
+    normalization = to_device(cfg.Nlm, device)
+    x_values = to_device(cfg.x, device)
+    Plm = to_device(zeros(Float64, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1), device)
+
+    backend = get_backend(Alm_pos_gpu)
+    legendre_kernel! = legendre_associated_kernel!(backend)
+    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax, normalization; ndrange=cfg.nlat)
+    KernelAbstractions.synchronize(backend)
+
+    Fourier_gpu = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg.nlon)
+    synth_kernel! = cplx_synthesis_mode_kernel!(backend)
+
+    for m in 0:cfg.mmax
+        Alm_pos_col = view(Alm_pos_gpu, :, m+1)
+        Alm_neg_col = view(Alm_neg_gpu, :, m+1)
+        Plm_slice = view(Plm, :, :, m+1)
+        Fourier_pos = view(Fourier_gpu, :, m + 1)
+        has_neg = m > 0
+        Fourier_neg = has_neg ? view(Fourier_gpu, :, cfg.nlon - m + 1) : Fourier_pos
+        synth_kernel!(Fourier_pos, Fourier_neg, Plm_slice, Alm_pos_col, Alm_neg_col, inv_scaleφ, has_neg; ndrange=cfg.nlat)
+        KernelAbstractions.synchronize(backend)
+    end
+
+    spatial_gpu = gpu_ifft!(Fourier_gpu, 2)
+    return Array(spatial_gpu)
+end
+
+function gpu_spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_cplx_to_SH(cfg, z)
+    end
+    cfg.mres == 1 || throw(ArgumentError("gpu_spat_cplx_to_SH requires mres == 1 (LM_cplx layout)"))
+    size(z,1) == cfg.nlat || throw(DimensionMismatch("z first dim must be nlat"))
+    size(z,2) == cfg.nlon || throw(DimensionMismatch("z second dim must be nlon"))
+
+    z_gpu = z isa GPUArraysCore.AbstractGPUArray ? z : to_device(ComplexF64.(z), device)
+    F_gpu = gpu_fft!(copy(z_gpu), 2)
+
+    normalization = to_device(cfg.Nlm, device)
+    x_values = to_device(cfg.x, device)
+    Plm = to_device(zeros(Float64, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1), device)
+
+    backend = get_backend(F_gpu)
+    legendre_kernel! = legendre_associated_kernel!(backend)
+    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax, normalization; ndrange=cfg.nlat)
+    KernelAbstractions.synchronize(backend)
+
+    weights_gpu = to_device(cfg.w, device)
+    coeff_pos_host = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    coeff_neg_host = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    coeff_pos_gpu = to_device(zeros(ComplexF64, cfg.lmax + 1), device)
+    coeff_neg_gpu = to_device(zeros(ComplexF64, cfg.lmax + 1), device)
+    analysis_kernel! = cplx_analysis_mode_kernel!(backend)
+
+    for m in 0:cfg.mmax
+        Plm_slice = view(Plm, :, :, m+1)
+        Fcol_pos = view(F_gpu, :, m + 1)
+        fill!(coeff_pos_gpu, 0)
+        analysis_kernel!(coeff_pos_gpu, Fcol_pos, Plm_slice, weights_gpu, cfg.cphi; ndrange=cfg.lmax - m + 1)
+        KernelAbstractions.synchronize(backend)
+        coeff_pos_host[m+1:cfg.lmax+1, m+1] .= Array(view(coeff_pos_gpu, m+1:cfg.lmax+1))
+
+        if m > 0
+            col_neg = cfg.nlon - m + 1
+            Fcol_neg = view(F_gpu, :, col_neg)
+            fill!(coeff_neg_gpu, 0)
+            analysis_kernel!(coeff_neg_gpu, Fcol_neg, Plm_slice, weights_gpu, cfg.cphi; ndrange=cfg.lmax - m + 1)
+            KernelAbstractions.synchronize(backend)
+            coeff_neg_host[m+1:cfg.lmax+1, m+1] .= Array(view(coeff_neg_gpu, m+1:cfg.lmax+1))
+        end
+    end
+
+    return _pack_cplx_coeffs(cfg, coeff_pos_host, coeff_neg_host)
+end
+
 
 function gpu_mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real}; device=get_device())
     if device == CPU_DEVICE

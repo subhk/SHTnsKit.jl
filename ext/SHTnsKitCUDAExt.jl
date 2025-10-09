@@ -1776,6 +1776,81 @@ function gpu_SH_to_grad_point(cfg::SHTConfig, Slm::AbstractVector, cost::Real, p
     return gpu_SHqst_to_point(cfg, zeroQ, Slm, zeroT, cost, phi; device=device)
 end
 
+function gpu_SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVector, Tlm::AbstractVector, cost::Real;
+                          nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax, device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SHqst_to_lat_cpu(cfg, Qlm, Slm, Tlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+    end
+
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length"))
+    length(Slm) == cfg.nlm || throw(DimensionMismatch("Slm length"))
+    length(Tlm) == cfg.nlm || throw(DimensionMismatch("Tlm length"))
+
+    lcap = min(Int(ltr), cfg.lmax)
+    mcap = min(Int(mtr), cfg.mmax)
+    (0 ≤ lcap ≤ cfg.lmax) || throw(ArgumentError("ltr must be within [0, lmax]"))
+    (0 ≤ mcap ≤ cfg.mmax) || throw(ArgumentError("mtr must be within [0, mmax]"))
+
+    Qvec = Qlm isa GPUArraysCore.AbstractGPUArray ? Array(Qlm) : Qlm
+    Svec = Slm isa GPUArraysCore.AbstractGPUArray ? Array(Slm) : Slm
+    Tvec = Tlm isa GPUArraysCore.AbstractGPUArray ? Array(Tlm) : Tlm
+
+    Q_mat_full = SHTnsKit._unpack_scalar_coeffs(cfg, Qvec)
+    S_mat_full = SHTnsKit._unpack_scalar_coeffs(cfg, Svec)
+    T_mat_full = SHTnsKit._unpack_scalar_coeffs(cfg, Tvec)
+
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        tmpQ = similar(Q_mat_full)
+        tmpS = similar(S_mat_full)
+        tmpT = similar(T_mat_full)
+        SHTnsKit.convert_alm_norm!(tmpQ, Q_mat_full, cfg; to_internal=true)
+        SHTnsKit.convert_alm_norm!(tmpS, S_mat_full, cfg; to_internal=true)
+        SHTnsKit.convert_alm_norm!(tmpT, T_mat_full, cfg; to_internal=true)
+        Q_mat_full = tmpQ
+        S_mat_full = tmpS
+        T_mat_full = tmpT
+    end
+
+    Q_view = view(Q_mat_full, 1:lcap+1, 1:mcap+1)
+    S_view = view(S_mat_full, 1:lcap+1, 1:mcap+1)
+    T_view = view(T_mat_full, 1:lcap+1, 1:mcap+1)
+
+    Q_gpu = to_device(ComplexF64.(Q_view), device)
+    S_gpu = to_device(ComplexF64.(S_view), device)
+    T_gpu = to_device(ComplexF64.(T_view), device)
+    Nlm_gpu = to_device(cfg.Nlm[1:lcap+1, 1:mcap+1], device)
+
+    backend = get_backend(Q_gpu)
+    Plm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
+    dPlm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
+
+    cost_f = Float64(cost)
+    point_legendre_kernel! = point_legendre_kernel!(backend)
+    point_legendre_kernel!(Plm_table, dPlm_table, cost_f, lcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    sθ = sqrt(max(0.0, 1 - cost_f^2))
+    inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+
+    gr_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    gt_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    gp_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+
+    lat_acc_kernel! = qst_lat_accumulate_kernel!(backend)
+    lat_acc_kernel!(gr_gpu, gt_gpu, gp_gpu, Q_gpu, S_gpu, T_gpu, Nlm_gpu, Plm_table, dPlm_table, sθ, inv_sθ, lcap, mcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    Vr_gpu = to_device(zeros(Float64, nphi), device)
+    Vt_gpu = to_device(zeros(Float64, nphi), device)
+    Vp_gpu = to_device(zeros(Float64, nphi), device)
+
+    lat_fin_kernel! = qst_lat_finalize_kernel!(backend)
+    lat_fin_kernel!(Vr_gpu, Vt_gpu, Vp_gpu, gr_gpu, gt_gpu, gp_gpu, nphi, mcap, cfg.mres; ndrange=nphi)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(Vr_gpu), Array(Vt_gpu), Array(Vp_gpu)
+end
+
 function gpu_mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real}; device=get_device())
     if device == CPU_DEVICE
         return SHTnsKit.mul_ct_matrix_cpu(cfg, mx)
@@ -3265,7 +3340,7 @@ export gpu_spat_to_SH, gpu_SH_to_spat, gpu_spat_to_SH_ml, gpu_SH_to_spat_ml
 export gpu_spat_to_SH_axisym, gpu_SH_to_spat_axisym, gpu_spat_to_SH_l_axisym, gpu_SH_to_spat_l_axisym
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat, gpu_spat_to_SHsphtor_ml, gpu_SHsphtor_to_spat_ml
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat
-export gpu_SH_to_lat, gpu_SH_to_lat_cplx, gpu_SHqst_to_point, gpu_SH_to_grad_point
+export gpu_SH_to_lat, gpu_SH_to_lat_cplx, gpu_SHqst_to_lat, gpu_SHqst_to_point, gpu_SH_to_grad_point
 export gpu_SH_to_point
 export gpu_apply_laplacian!, gpu_legendre!
 export gpu_energy_scalar, gpu_energy_vector

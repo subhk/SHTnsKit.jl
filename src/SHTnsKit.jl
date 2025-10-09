@@ -115,6 +115,7 @@ export gpu_spat_to_SHqst, gpu_SHqst_to_spat              # GPU QST transforms
 export gpu_SH_to_point                                   # GPU point evaluation
 export gpu_SH_to_lat, gpu_SH_to_lat_cplx                 # GPU local evaluations
 export gpu_SHqst_to_point, gpu_SH_to_grad_point          # GPU point diagnostics
+export gpu_SHqst_to_lat                                  # GPU QST latitude evaluation
 export gpu_mul_ct_matrix, gpu_st_dt_matrix, gpu_SH_mul_mx
 export gpu_SH_Zrotate
 export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
@@ -246,6 +247,7 @@ gpu_spat_to_SH_l_axisym(::SHTConfig, ::Any, ::Any) = error("GPU extension not lo
 gpu_SH_to_spat_l_axisym(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_spat_to_SHqst(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_SHqst_to_spat(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_SHqst_to_lat(::SHTConfig, ::Any, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SH_to_lat(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SH_to_lat_cplx(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SH_Zrotate(::SHTConfig, ::Any, ::Any, ::Any) = error("GPU extension not loaded")

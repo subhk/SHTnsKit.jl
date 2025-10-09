@@ -10,6 +10,13 @@ Evaluate a real field along a latitude (fixed cosθ = cost) at `nphi` equispaced
 Uses orthonormal harmonics and packed real coefficients `Qlm` (LM order).
 """
 function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax)
+    if is_gpu_config(cfg)
+        return gpu_SH_to_lat(cfg, Qlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+    end
+    return SH_to_lat_cpu(cfg, Qlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+end
+
+function SH_to_lat_cpu(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
     (0 ≤ ltr ≤ cfg.lmax) || throw(ArgumentError("ltr must be within [0, lmax]"))
     (0 ≤ mtr ≤ cfg.mmax) || throw(ArgumentError("mtr must be within [0, mmax]"))
@@ -65,6 +72,13 @@ end
 Evaluate a complex field along a latitude using packed LM_cplx coefficients.
 """
 function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax)
+    if is_gpu_config(cfg)
+        return gpu_SH_to_lat_cplx(cfg, alm_packed, cost; nphi=nphi, ltr=ltr)
+    end
+    return SH_to_lat_cplx_cpu(cfg, alm_packed, cost; nphi=nphi, ltr=ltr)
+end
+
+function SH_to_lat_cplx_cpu(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax)
     lmax, mmax = cfg.lmax, cfg.mmax
     length(alm_packed) == nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("alm_packed length"))
     x = float(cost)

@@ -1606,12 +1606,12 @@ function gpu_SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVe
     Plm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
     dPlm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
 
-    point_legendre_kernel! = point_legendre_kernel!(backend)
     cost_f = Float64(cost)
-    point_legendre_kernel!(Plm_table, dPlm_table, float(cost), lcap, cfg.mres; ndrange=mcap + 1)
+    point_legendre_kernel! = point_legendre_kernel!(backend)
+    point_legendre_kernel!(Plm_table, dPlm_table, cost_f, lcap, cfg.mres; ndrange=mcap + 1)
     KernelAbstractions.synchronize(backend)
 
-    sθ = sqrt(max(0.0, 1 - float(cost)^2))
+    sθ = sqrt(max(0.0, 1 - cost_f^2))
     inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
 
     gvr_gpu = to_device(zeros(ComplexF64, mcap + 1), device)

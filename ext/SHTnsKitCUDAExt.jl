@@ -266,6 +266,57 @@ end
     vals[idx] = acc
 end
 
+@kernel function lat_cplx_accumulate_kernel!(gp, gn, Alm_pos, Alm_neg, Nlm, Plm_table, lcap, mcap, mres)
+    idx = @index(Global)
+    if idx > size(Plm_table, 1)
+        return
+    end
+    im = idx - 1
+    if im > mcap || im % mres != 0 || im > lcap
+        gp[idx] = ComplexF64(0, 0)
+        gn[idx] = ComplexF64(0, 0)
+        return
+    end
+
+    acc_pos = ComplexF64(0, 0)
+    for l in im:lcap
+        Plm_val = Plm_table[idx, l+1]
+        Alm = Alm_pos[l+1, im+1]
+        acc_pos += Alm * (Nlm[l+1, im+1] * Plm_val)
+    end
+    gp[idx] = acc_pos
+
+    if im == 0
+        gn[idx] = ComplexF64(0, 0)
+    else
+        acc_neg = ComplexF64(0, 0)
+        for l in im:lcap
+            Plm_val = Plm_table[idx, l+1]
+            Alm = Alm_neg[l+1, im+1]
+            acc_neg += Alm * (Nlm[l+1, im+1] * Plm_val)
+        end
+        gn[idx] = acc_neg
+    end
+end
+
+@kernel function lat_cplx_finalize_kernel!(vals, gp, gn, nphi, mcap)
+    idx = @index(Global)
+    if idx > nphi
+        return
+    end
+    φ = 2π * (idx - 1) / nphi
+    acc = gp[1]
+    for m in 1:mcap
+        θ = m * φ
+        c = cos(θ)
+        s = sin(θ)
+        phase = ComplexF64(c, s)
+        conj_phase = ComplexF64(c, -s)
+        acc += gp[m+1] * phase + gn[m+1] * conj_phase
+    end
+    vals[idx] = acc
+end
+
 function _gpu_legendre_mode(cfg::SHTConfig, im::Int, lcap::Int, device::SHTDevice)
     lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
     lcount = lcap - im + 1
@@ -279,6 +330,40 @@ function _gpu_legendre_mode(cfg::SHTConfig, im::Int, lcap::Int, device::SHTDevic
     KernelAbstractions.synchronize(backend)
 
     return Plm_mode, backend
+end
+
+function _prepare_lat_cplx_tables(cfg::SHTConfig, alm_packed, lcap, mcap)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    Alm_pos = zeros(ComplexF64, lcap + 1, mcap + 1)
+    Alm_neg = zeros(ComplexF64, lcap + 1, mcap + 1)
+
+    for m in 0:mcap
+        for l in m:lcap
+            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1
+            val = ComplexF64(alm_packed[idx])
+            if cfg.norm !== :orthonormal || cfg.cs_phase == false
+                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
+                α = SHTnsKit.cs_phase_factor(m, true, cfg.cs_phase)
+                val *= (k * α)
+            end
+            Alm_pos[l+1, m+1] = val
+        end
+    end
+
+    for m in 1:mcap
+        for l in m:lcap
+            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1
+            val = ComplexF64(alm_packed[idx])
+            if cfg.norm !== :orthonormal || cfg.cs_phase == false
+                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
+                α = SHTnsKit.cs_phase_factor(-m, true, cfg.cs_phase)
+                val *= (k * α)
+            end
+            Alm_neg[l+1, m+1] = val
+        end
+    end
+
+    return Alm_pos, Alm_neg
 end
 
 # Device management
@@ -1308,8 +1393,34 @@ function gpu_SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector, cost::Re
     if device == CPU_DEVICE
         return SHTnsKit.SH_to_lat_cplx_cpu(cfg, alm_packed, cost; nphi=nphi, ltr=ltr)
     end
-    host_coeffs = collect(alm_packed)
-    return SHTnsKit.SH_to_lat_cplx_cpu(cfg, host_coeffs, cost; nphi=nphi, ltr=ltr)
+    cfg.mres == 1 || throw(ArgumentError("gpu_SH_to_lat_cplx requires mres == 1 (LM_cplx layout)"))
+    lcap = min(Int(ltr), cfg.lmax)
+    mcap = min(cfg.mmax, lcap)
+    lcap < 0 && return zeros(ComplexF64, nphi)
+
+    Alm_pos, Alm_neg = _prepare_lat_cplx_tables(cfg, alm_packed, lcap, mcap)
+    Alm_pos_gpu = to_device(Alm_pos, device)
+    Alm_neg_gpu = to_device(Alm_neg, device)
+    Nlm_gpu = to_device(cfg.Nlm, device)
+    Plm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
+
+    backend = get_backend(Alm_pos_gpu)
+    lat_legendre_kernel! = legendre_latitude_kernel!(backend)
+    lat_legendre_kernel!(Plm_table, float(cost), lcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    gp_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    gn_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    lat_cplx_acc_kernel! = lat_cplx_accumulate_kernel!(backend)
+    lat_cplx_acc_kernel!(gp_gpu, gn_gpu, Alm_pos_gpu, Alm_neg_gpu, Nlm_gpu, Plm_table, lcap, mcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    vals_gpu = to_device(zeros(ComplexF64, nphi), device)
+    lat_cplx_fin_kernel! = lat_cplx_finalize_kernel!(backend)
+    lat_cplx_fin_kernel!(vals_gpu, gp_gpu, gn_gpu, nphi, mcap; ndrange=nphi)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(vals_gpu)
 end
 
 function gpu_SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVector, Tlm::AbstractVector, cost::Real, phi::Real; device=get_device())

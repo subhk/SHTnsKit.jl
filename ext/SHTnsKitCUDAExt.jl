@@ -1132,6 +1132,51 @@ function gpu_SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; device=g
     return vec(spatial)
 end
 
+function gpu_spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_to_SH_axisym(cfg, Vr)
+    end
+    length(Vr) == cfg.nlat || throw(DimensionMismatch("Vr length must be nlat=$(cfg.nlat)"))
+    Vr_host = collect(Vr)
+    Vr_complex = ComplexF64.(Vr_host)
+    coeffs = gpu_spat_to_SH_ml(cfg, 0, Vr_complex, cfg.lmax; device=device)
+    return coeffs
+end
+
+function gpu_SH_to_spat_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_spat_axisym(cfg, Qlm)
+    end
+    length(Qlm) == cfg.lmax + 1 || throw(DimensionMismatch("Qlm length must be lmax+1=$(cfg.lmax+1)"))
+    Vr = gpu_SH_to_spat_ml(cfg, 0, Qlm, cfg.lmax; device=device)
+    return real.(Vr)
+end
+
+function gpu_spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_to_SH_l_axisym(cfg, Vr, ltr)
+    end
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
+    length(Vr) == cfg.nlat || throw(DimensionMismatch("Vr length must be nlat=$(cfg.nlat)"))
+    Vr_host = collect(Vr)
+    Vr_complex = ComplexF64.(Vr_host)
+    coeffs = gpu_spat_to_SH_ml(cfg, 0, Vr_complex, lcap; device=device)
+    return coeffs
+end
+
+function gpu_SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Int; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_spat_l_axisym(cfg, Qlm, ltr)
+    end
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
+    length(Qlm) ≥ lcap + 1 || throw(DimensionMismatch("Qlm length must be ≥ $(lcap+1)"))
+    Qslice = view(Qlm, 1:(lcap+1))
+    Vr = gpu_SH_to_spat_ml(cfg, 0, Qslice, lcap; device=device)
+    return real.(Vr)
+end
+
 function gpu_spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int; device=get_device())
     if device == CPU_DEVICE
         return SHTnsKit.spat_to_SH_ml(cfg, im, Vr_m, ltr)
@@ -2548,6 +2593,7 @@ export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE
 export get_device, set_device!, to_device
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe
 export gpu_spat_to_SH, gpu_SH_to_spat, gpu_spat_to_SH_ml, gpu_SH_to_spat_ml
+export gpu_spat_to_SH_axisym, gpu_SH_to_spat_axisym, gpu_spat_to_SH_l_axisym, gpu_SH_to_spat_l_axisym
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat, gpu_spat_to_SHsphtor_ml, gpu_SHsphtor_to_spat_ml
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat
 export gpu_SH_to_point

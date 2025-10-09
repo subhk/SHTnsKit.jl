@@ -1576,10 +1576,31 @@ function gpu_SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVe
     end
     lcap = cfg.lmax
     mcap = cfg.mmax
+
+    Qvec = Qlm isa GPUArraysCore.AbstractGPUArray ? Array(Qlm) : Qlm
+    Svec = Slm isa GPUArraysCore.AbstractGPUArray ? Array(Slm) : Slm
+    Tvec = Tlm isa GPUArraysCore.AbstractGPUArray ? Array(Tlm) : Tlm
+
+    Q_mat = SHTnsKit._unpack_scalar_coeffs(cfg, Qvec)
+    S_mat = SHTnsKit._unpack_scalar_coeffs(cfg, Svec)
+    T_mat = SHTnsKit._unpack_scalar_coeffs(cfg, Tvec)
+
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        tmpQ = similar(Q_mat)
+        tmpS = similar(S_mat)
+        tmpT = similar(T_mat)
+        SHTnsKit.convert_alm_norm!(tmpQ, Q_mat, cfg; to_internal=true)
+        SHTnsKit.convert_alm_norm!(tmpS, S_mat, cfg; to_internal=true)
+        SHTnsKit.convert_alm_norm!(tmpT, T_mat, cfg; to_internal=true)
+        Q_mat = tmpQ
+        S_mat = tmpS
+        T_mat = tmpT
+    end
+
+    Q_gpu = to_device(ComplexF64.(Q_mat), device)
+    S_gpu = to_device(ComplexF64.(S_mat), device)
+    T_gpu = to_device(ComplexF64.(T_mat), device)
     Nlm_gpu = to_device(cfg.Nlm, device)
-    Q_gpu = Qlm isa GPUArraysCore.AbstractGPUArray ? Qlm : to_device(ComplexF64.(Qlm), device)
-    S_gpu = Slm isa GPUArraysCore.AbstractGPUArray ? Slm : to_device(ComplexF64.(Slm), device)
-    T_gpu = Tlm isa GPUArraysCore.AbstractGPUArray ? Tlm : to_device(ComplexF64.(Tlm), device)
 
     backend = get_backend(Q_gpu)
     Plm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
@@ -1589,18 +1610,24 @@ function gpu_SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVe
     point_legendre_kernel!(Plm_table, dPlm_table, float(cost), lcap, cfg.mres; ndrange=mcap + 1)
     KernelAbstractions.synchronize(backend)
 
-    accum_gpu = to_device(zeros(ComplexF64, 3), device)
-    point_accumulate_kernel! = point_accumulate_kernel!(backend)
-    point_accumulate_kernel!(accum_gpu, Q_gpu, S_gpu, T_gpu, Nlm_gpu, Plm_table, dPlm_table, lcap, mcap, cfg.mres; ndrange=mcap + 1)
+    sθ = sqrt(max(0.0, 1 - float(cost)^2))
+    inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+
+    gvr_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    gvt_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    gvp_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+
+    point_acc_kernel! = point_accumulate_kernel!(backend)
+    point_acc_kernel!(gvr_gpu, gvt_gpu, gvp_gpu, Q_gpu, S_gpu, T_gpu, Nlm_gpu, Plm_table, dPlm_table, sθ, inv_sθ, lcap, mcap, cfg.mres; ndrange=mcap + 1)
     KernelAbstractions.synchronize(backend)
 
-    finalize_gpu = to_device(zeros(ComplexF64, 3), device)
-    point_finalize_kernel! = point_finalize_kernel!(backend)
-    point_finalize_kernel!(finalize_gpu, accum_gpu, phi, mcap; ndrange=1)
+    result_gpu = to_device(zeros(Float64, 3), device)
+    point_fin_kernel! = point_finalize_kernel!(backend)
+    point_fin_kernel!(result_gpu, gvr_gpu, gvt_gpu, gvp_gpu, phi, mcap, cfg.mres; ndrange=1)
     KernelAbstractions.synchronize(backend)
 
-    result = Array(finalize_gpu)
-    return real(result[1]), real(result[2]), real(result[3])
+    result = Array(result_gpu)
+    return result[1], result[2], result[3]
 end
 
 function gpu_SH_to_grad_point(cfg::SHTConfig, Slm::AbstractVector, cost::Real, phi::Real; device=get_device())

@@ -737,38 +737,6 @@ function _prepare_lat_cplx_tables(cfg::SHTConfig, alm_packed, lcap, mcap)
     return Alm_pos, Alm_neg
 end
 
-function _pack_cplx_coeffs(cfg::SHTConfig, Alm_pos::Matrix{ComplexF64}, Alm_neg::Matrix{ComplexF64})
-    lmax, mmax = cfg.lmax, cfg.mmax
-    alm = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
-    fill!(alm, 0.0 + 0.0im)
-
-    for m in 0:mmax
-        for l in m:lmax
-            val = Alm_pos[l+1, m+1]
-            if cfg.norm !== :orthonormal || cfg.cs_phase == false
-                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
-                α = SHTnsKit.cs_phase_factor(m, true, cfg.cs_phase)
-                val /= (k * α)
-            end
-            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1
-            alm[idx] = val
-        end
-    end
-    for m in 1:mmax
-        for l in m:lmax
-            val = Alm_neg[l+1, m+1]
-            if cfg.norm !== :orthonormal || cfg.cs_phase == false
-                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
-                α = SHTnsKit.cs_phase_factor(-m, true, cfg.cs_phase)
-                val /= (k * α)
-            end
-            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1
-            alm[idx] = val
-        end
-    end
-    return alm
-end
-
 # Device management
 """
     SHTDevice

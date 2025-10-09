@@ -600,6 +600,56 @@ end
     Vp[idx] = vp
 end
 
+@kernel function point_cplx_accumulate_kernel!(gp, gn, Alm_pos, Alm_neg, Nlm, Plm_table, lcap, mcap, mres)
+    idx = @index(Global)
+    if idx > size(Plm_table, 1)
+        return
+    end
+    im = idx - 1
+    if im > mcap || im % mres != 0 || im > lcap
+        gp[idx] = ComplexF64(0, 0)
+        gn[idx] = ComplexF64(0, 0)
+        return
+    end
+    acc_pos = ComplexF64(0, 0)
+    for l in im:lcap
+        Plm_val = Plm_table[idx, l+1]
+        Alm = Alm_pos[l+1, im+1]
+        acc_pos += Alm * (Nlm[l+1, im+1] * Plm_val)
+    end
+    gp[idx] = acc_pos
+
+    if im == 0
+        gn[idx] = ComplexF64(0, 0)
+    else
+        acc_neg = ComplexF64(0, 0)
+        for l in im:lcap
+            Plm_val = Plm_table[idx, l+1]
+            Alm = Alm_neg[l+1, im+1]
+            acc_neg += Alm * (Nlm[l+1, im+1] * Plm_val)
+        end
+        gn[idx] = acc_neg
+    end
+end
+
+@kernel function point_cplx_finalize_kernel!(out_val, gp, gn, phi, mcap, mres)
+    idx = @index(Global)
+    if idx > 1
+        return
+    end
+    acc = gp[1]
+    for m in 1:mcap
+        (m % mres == 0) || continue
+        θ = m * phi
+        c = cos(θ)
+        s = sin(θ)
+        phase = ComplexF64(c, s)
+        conj_phase = ComplexF64(c, -s)
+        acc += gp[m+1] * phase + gn[m+1] * conj_phase
+    end
+    out_val[1] = acc
+end
+
 function _gpu_legendre_mode(cfg::SHTConfig, im::Int, lcap::Int, device::SHTDevice)
     lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
     lcount = lcap - im + 1
@@ -1849,6 +1899,44 @@ function gpu_SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVect
     KernelAbstractions.synchronize(backend)
 
     return Array(Vr_gpu), Array(Vt_gpu), Array(Vp_gpu)
+end
+
+function gpu_SH_to_point_cplx(cfg::SHTConfig, alm_packed::AbstractVector, cost::Real, phi::Real; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_point_cplx(cfg, alm_packed, cost, phi)
+    end
+    cfg.mres == 1 || throw(ArgumentError("gpu_SH_to_point_cplx requires mres == 1 (LM_cplx layout)"))
+
+    lcap = cfg.lmax
+    mcap = cfg.mmax
+
+    alm_vec = alm_packed isa GPUArraysCore.AbstractGPUArray ? Array(alm_packed) : alm_packed
+    Alm_pos, Alm_neg = _prepare_lat_cplx_tables(cfg, alm_vec, lcap, mcap)
+
+    Alm_pos_gpu = to_device(Alm_pos, device)
+    Alm_neg_gpu = to_device(Alm_neg, device)
+    Nlm_gpu = to_device(cfg.Nlm, device)
+
+    backend = get_backend(Alm_pos_gpu)
+    Plm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
+
+    cost_f = Float64(cost)
+    lat_legendre_kernel! = legendre_latitude_kernel!(backend)
+    lat_legendre_kernel!(Plm_table, cost_f, lcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    gp_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    gn_gpu = to_device(zeros(ComplexF64, mcap + 1), device)
+    point_cplx_acc_kernel! = point_cplx_accumulate_kernel!(backend)
+    point_cplx_acc_kernel!(gp_gpu, gn_gpu, Alm_pos_gpu, Alm_neg_gpu, Nlm_gpu, Plm_table, lcap, mcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    out_gpu = to_device(zeros(ComplexF64, 1), device)
+    point_cplx_fin_kernel! = point_cplx_finalize_kernel!(backend)
+    point_cplx_fin_kernel!(out_gpu, gp_gpu, gn_gpu, phi, mcap, cfg.mres; ndrange=1)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(out_gpu)[1]
 end
 
 function gpu_mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real}; device=get_device())

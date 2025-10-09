@@ -27,6 +27,13 @@ Out-of-range neighbors (l<m or l>lmax) are automatically ignored.
 Fill `mx` with coupling coefficients for cosθ operator: cosθ Y_l^m = a_l^m Y_{l-1}^m + b_l^m Y_{l+1}^m.
 """
 function mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real})
+    if is_gpu_config(cfg)
+        return gpu_mul_ct_matrix(cfg, mx)
+    end
+    return mul_ct_matrix_cpu(cfg, mx)
+end
+
+function mul_ct_matrix_cpu(cfg::SHTConfig, mx::AbstractVector{<:Real})
     # Validate coefficient matrix size (2 coefficients per (l,m) mode)
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
     
@@ -56,6 +63,13 @@ Fill `mx` with coupling coefficients for sinθ ∂_θ operator:
 sinθ ∂_θ Y_l^m = l b_l^m Y_{l+1}^m - (l+1) a_l^m Y_{l-1}^m.
 """
 function st_dt_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real})
+    if is_gpu_config(cfg)
+        return gpu_st_dt_matrix(cfg, mx)
+    end
+    return st_dt_matrix_cpu(cfg, mx)
+end
+
+function st_dt_matrix_cpu(cfg::SHTConfig, mx::AbstractVector{<:Real})
     # Validate coefficient matrix size (2 coefficients per (l,m) mode)
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
     
@@ -87,6 +101,13 @@ Apply a nearest-neighbor-in-l operator represented by `mx` to `Qlm` and write to
 Both `Qlm` and `Rlm` are length `cfg.nlm` packed vectors (m≥0, SHTns LM order).
 """
 function SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_SH_mul_mx(cfg, mx, Qlm, Rlm)
+    end
+    return SH_mul_mx_cpu(cfg, mx, Qlm, Rlm)
+end
+
+function SH_mul_mx_cpu(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
     # Validate input array dimensions
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))

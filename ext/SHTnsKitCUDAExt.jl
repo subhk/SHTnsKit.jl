@@ -259,7 +259,9 @@ end
     acc = real(gm[1])
     for m in 1:mcap
         val = gm[m+1]
-        acc += 2 * real(val * cis(m * φ))
+        c = cos(m * φ)
+        s = sin(m * φ)
+        acc += 2 * (real(val) * c - imag(val) * s)
     end
     vals[idx] = acc
 end
@@ -1272,7 +1274,8 @@ function gpu_SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector, cost::Real; nphi::In
     mcap = min(Int(mtr), cfg.mmax)
     lcap < 0 && return zeros(Float64, nphi)
 
-    alm = SHTnsKit._unpack_scalar_coeffs(cfg, Qlm)
+    Qvec = Qlm isa GPUArraysCore.AbstractGPUArray ? Array(Qlm) : Qlm
+    alm = SHTnsKit._unpack_scalar_coeffs(cfg, Qvec)
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         tmp = similar(alm)
         SHTnsKit.convert_alm_norm!(tmp, alm, cfg; to_internal=true)

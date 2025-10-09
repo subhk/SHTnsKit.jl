@@ -2550,6 +2550,7 @@ export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe
 export gpu_spat_to_SH, gpu_SH_to_spat, gpu_spat_to_SH_ml, gpu_SH_to_spat_ml
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat, gpu_spat_to_SHsphtor_ml, gpu_SHsphtor_to_spat_ml
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat
+export gpu_SH_to_point
 export gpu_apply_laplacian!, gpu_legendre!
 export gpu_energy_scalar, gpu_energy_vector
 export gpu_grid_energy_scalar, gpu_grid_energy_vector

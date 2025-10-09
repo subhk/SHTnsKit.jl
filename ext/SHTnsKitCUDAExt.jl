@@ -317,6 +317,73 @@ end
     vals[idx] = acc
 end
 
+@kernel function mul_ct_matrix_kernel!(mx, li, mi, lmax)
+    idx = @index(Global)
+    nlm = length(li)
+    if idx > nlm
+        return
+    end
+    l = li[idx]
+    m = mi[idx]
+    T = eltype(mx)
+    l_val = Float64(l)
+    m_val = Float64(m)
+    a_val = l == 0 ? 0.0 : sqrt(max(0.0, (l_val^2 - m_val^2) / ((2l - 1) * (2l + 1))))
+    b_val = l == lmax ? 0.0 : sqrt(max(0.0, ((l_val + 1.0)^2 - m_val^2) / ((2l + 1) * (2l + 3))))
+    base = 2 * (idx - 1)
+    mx[base + 1] = convert(T, a_val)
+    mx[base + 2] = convert(T, b_val)
+end
+
+@kernel function st_dt_matrix_kernel!(mx, li, mi, lmax)
+    idx = @index(Global)
+    nlm = length(li)
+    if idx > nlm
+        return
+    end
+    l = li[idx]
+    m = mi[idx]
+    T = eltype(mx)
+    l_val = Float64(l)
+    m_val = Float64(m)
+    a_val = l == 0 ? 0.0 : sqrt(max(0.0, (l_val^2 - m_val^2) / ((2l - 1) * (2l + 1))))
+    b_val = l == lmax ? 0.0 : sqrt(max(0.0, ((l_val + 1.0)^2 - m_val^2) / ((2l + 1) * (2l + 3))))
+    c_minus = -(l_val + 1.0) * a_val
+    c_plus = l_val * b_val
+    base = 2 * (idx - 1)
+    mx[base + 1] = convert(T, c_minus)
+    mx[base + 2] = convert(T, c_plus)
+end
+
+@inline function lm_index_gpu(lmax::Int, mres::Int, l::Int, m::Int)
+    im = fld(m, mres)
+    base = (im * (2*lmax + 2 - (im + 1)*mres)) >>> 1
+    return base + l
+end
+
+@kernel function sh_mul_mx_kernel!(Rlm, mx, Qlm, li, mi, lmax, mres)
+    idx = @index(Global)
+    nlm = length(li)
+    if idx > nlm
+        return
+    end
+    l = li[idx]
+    m = mi[idx]
+    base = 2 * (idx - 1)
+    c_minus = mx[base + 1]
+    c_plus = mx[base + 2]
+    acc = zero(eltype(Rlm))
+    if l > m && l > 0
+        prev_idx = lm_index_gpu(lmax, mres, l - 1, m) + 1
+        acc += c_minus * Qlm[prev_idx]
+    end
+    if l < lmax
+        next_idx = lm_index_gpu(lmax, mres, l + 1, m) + 1
+        acc += c_plus * Qlm[next_idx]
+    end
+    Rlm[idx] = acc
+end
+
 @kernel function point_legendre_kernel!(Plm_table, dPlm_table, x, lcap, mres)
     idx = @index(Global)
     mcount = size(Plm_table, 1)
@@ -1638,6 +1705,76 @@ function gpu_SH_to_grad_point(cfg::SHTConfig, Slm::AbstractVector, cost::Real, p
     zeroQ = zeros(ComplexF64, cfg.nlm)
     zeroT = zeros(ComplexF64, cfg.nlm)
     return gpu_SHqst_to_point(cfg, zeroQ, Slm, zeroT, cost, phi; device=device)
+end
+
+function gpu_mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.mul_ct_matrix_cpu(cfg, mx)
+    end
+    length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
+    mx_is_gpu = mx isa GPUArraysCore.AbstractGPUArray
+    mx_gpu = mx_is_gpu ? mx : to_device(Float64.(mx), device)
+    li_gpu = to_device(cfg.li, device)
+    mi_gpu = to_device(cfg.mi, device)
+    backend = get_backend(mx_gpu)
+    kernel! = mul_ct_matrix_kernel!(backend)
+    kernel!(mx_gpu, li_gpu, mi_gpu, cfg.lmax; ndrange=cfg.nlm)
+    KernelAbstractions.synchronize(backend)
+    if !mx_is_gpu
+        copyto!(mx, Array(mx_gpu))
+    end
+    return mx
+end
+
+function gpu_st_dt_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.st_dt_matrix_cpu(cfg, mx)
+    end
+    length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
+    mx_is_gpu = mx isa GPUArraysCore.AbstractGPUArray
+    mx_gpu = mx_is_gpu ? mx : to_device(Float64.(mx), device)
+    li_gpu = to_device(cfg.li, device)
+    mi_gpu = to_device(cfg.mi, device)
+    backend = get_backend(mx_gpu)
+    kernel! = st_dt_matrix_kernel!(backend)
+    kernel!(mx_gpu, li_gpu, mi_gpu, cfg.lmax; ndrange=cfg.nlm)
+    KernelAbstractions.synchronize(backend)
+    if !mx_is_gpu
+        copyto!(mx, Array(mx_gpu))
+    end
+    return mx
+end
+
+function gpu_SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex}; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_mul_mx_cpu(cfg, mx, Qlm, Rlm)
+    end
+    length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
+    length(Rlm) == cfg.nlm || throw(DimensionMismatch("Rlm length must be nlm=$(cfg.nlm)"))
+
+    mx_is_gpu = mx isa GPUArraysCore.AbstractGPUArray
+    mx_gpu = mx_is_gpu ? mx : to_device(Float64.(mx), device)
+    Q_is_gpu = Qlm isa GPUArraysCore.AbstractGPUArray
+    Q_gpu = Q_is_gpu ? Qlm : to_device(ComplexF64.(Qlm), device)
+    R_is_gpu = Rlm isa GPUArraysCore.AbstractGPUArray
+    R_gpu = R_is_gpu ? Rlm : to_device(zeros(eltype(Q_gpu), cfg.nlm), device)
+
+    li_gpu = to_device(cfg.li, device)
+    mi_gpu = to_device(cfg.mi, device)
+
+    backend = get_backend(Q_gpu)
+    kernel! = sh_mul_mx_kernel!(backend)
+    kernel!(R_gpu, mx_gpu, Q_gpu, li_gpu, mi_gpu, cfg.lmax, cfg.mres; ndrange=cfg.nlm)
+    KernelAbstractions.synchronize(backend)
+
+    if !mx_is_gpu
+        copyto!(mx, Array(mx_gpu))
+    end
+    if !R_is_gpu
+        copyto!(Rlm, Array(R_gpu))
+    end
+    return Rlm
 end
 
 function gpu_spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int; device=get_device())
@@ -3073,6 +3210,7 @@ export gpu_grad_energy_vector_Slm_Tlm, gpu_grad_energy_vector_packed
 export gpu_grad_grid_energy_scalar_field, gpu_grad_grid_energy_vector_fields
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!
 export estimate_memory_usage
+export gpu_mul_ct_matrix, gpu_st_dt_matrix, gpu_SH_mul_mx
 
 # Multi-GPU memory streaming for large problems
 

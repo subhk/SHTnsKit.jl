@@ -531,6 +531,41 @@ end
     result[3] = vp
 end
 
+@kernel function cplx_synthesis_mode_kernel!(Fourier_pos, Fourier_neg, Plm_slice, Alm_pos_m, Alm_neg_m, inv_scaleφ, has_neg)
+    i = @index(Global)
+    nlat = size(Plm_slice, 1)
+    if i > nlat
+        return
+    end
+    ncols = size(Plm_slice, 2)
+    acc_pos = ComplexF64(0, 0)
+    for lidx in 1:ncols
+        acc_pos += Alm_pos_m[lidx] * Plm_slice[i, lidx]
+    end
+    Fourier_pos[i] = inv_scaleφ * acc_pos
+    if has_neg
+        acc_neg = ComplexF64(0, 0)
+        for lidx in 1:ncols
+            acc_neg += Alm_neg_m[lidx] * Plm_slice[i, lidx]
+        end
+        Fourier_neg[i] = inv_scaleφ * acc_neg
+    end
+end
+
+@kernel function cplx_analysis_mode_kernel!(coeff_out, Fcol, Plm_slice, weights, scaleφ)
+    lidx = @index(Global)
+    ncols = size(Plm_slice, 2)
+    if lidx > ncols
+        return
+    end
+    coeff = ComplexF64(0, 0)
+    nlat = size(Plm_slice, 1)
+    for i in 1:nlat
+        coeff += weights[i] * Plm_slice[i, lidx] * Fcol[i]
+    end
+    coeff_out[lidx] = coeff * scaleφ
+end
+
 @kernel function cplx_synthesis_mode_kernel!(Fourier_pos, Fourier_neg, Plm_m, Alm_pos_m, Alm_neg_m, inv_scaleφ, has_neg)
     i = @index(Global)
     nlat = size(Plm_m, 1)

@@ -384,6 +384,44 @@ end
     Rlm[idx] = acc
 end
 
+@kernel function cplx_synthesis_mode_kernel!(Fourier, Plm, Alm_pos_m, Alm_neg_m, m::Int, lmax::Int, inv_scaleφ, nlon::Int)
+    i = @index(Global)
+    nlat = size(Plm, 1)
+    if i > nlat
+        return
+    end
+    acc_pos = ComplexF64(0, 0)
+    acc_neg = ComplexF64(0, 0)
+    for l in m:lmax
+        Plm_val = Plm[i, l+1, m+1]
+        acc_pos += Alm_pos_m[l+1] * Plm_val
+        if m > 0
+            acc_neg += Alm_neg_m[l+1] * Plm_val
+        end
+    end
+    Fourier[i, m+1] = inv_scaleφ * acc_pos
+    if m > 0
+        neg_col = nlon - m + 1
+        Fourier[i, neg_col] = inv_scaleφ * acc_neg
+    end
+end
+
+@kernel function cplx_analysis_mode_kernel!(coeffs_out, Fcol, Plm, weights, nlat::Int, lmax::Int, m::Int, scaleφ)
+    lidx = @index(Global)
+    if lidx > lmax + 1
+        return
+    end
+    l = lidx - 1
+    coeff = ComplexF64(0, 0)
+    if l >= m
+        for i in 1:nlat
+            coeff += weights[i] * Plm[i, lidx, m+1] * Fcol[i]
+        end
+        coeff *= scaleφ
+    end
+    coeffs_out[lidx] = coeff
+end
+
 @kernel function point_legendre_kernel!(Plm_table, dPlm_table, x, lcap, mres)
     idx = @index(Global)
     mcount = size(Plm_table, 1)
@@ -697,6 +735,38 @@ function _prepare_lat_cplx_tables(cfg::SHTConfig, alm_packed, lcap, mcap)
     end
 
     return Alm_pos, Alm_neg
+end
+
+function _pack_cplx_coeffs(cfg::SHTConfig, Alm_pos::Matrix{ComplexF64}, Alm_neg::Matrix{ComplexF64})
+    lmax, mmax = cfg.lmax, cfg.mmax
+    alm = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
+    fill!(alm, 0.0 + 0.0im)
+
+    for m in 0:mmax
+        for l in m:lmax
+            val = Alm_pos[l+1, m+1]
+            if cfg.norm !== :orthonormal || cfg.cs_phase == false
+                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
+                α = SHTnsKit.cs_phase_factor(m, true, cfg.cs_phase)
+                val /= (k * α)
+            end
+            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1
+            alm[idx] = val
+        end
+    end
+    for m in 1:mmax
+        for l in m:lmax
+            val = Alm_neg[l+1, m+1]
+            if cfg.norm !== :orthonormal || cfg.cs_phase == false
+                k = SHTnsKit.norm_scale_from_orthonormal(l, m, cfg.norm)
+                α = SHTnsKit.cs_phase_factor(-m, true, cfg.cs_phase)
+                val /= (k * α)
+            end
+            idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1
+            alm[idx] = val
+        end
+    end
+    return alm
 end
 
 # Device management

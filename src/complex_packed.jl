@@ -135,6 +135,9 @@ end
 Evaluate a complex field represented by packed `alm` at a single point.
 """
 function SH_to_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    if is_gpu_config(cfg)
+        return gpu_SH_to_point_cplx(cfg, alm, cost, phi)
+    end
     expected = nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     length(alm) == expected || throw(DimensionMismatch("alm length mismatch"))
     x = float(cost)

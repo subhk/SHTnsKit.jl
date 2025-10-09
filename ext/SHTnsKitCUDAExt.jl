@@ -566,42 +566,6 @@ end
     coeff_out[lidx] = coeff * scaleφ
 end
 
-@kernel function cplx_synthesis_mode_kernel!(Fourier_pos, Fourier_neg, Plm_m, Alm_pos_m, Alm_neg_m, inv_scaleφ, has_neg)
-    i = @index(Global)
-    nlat = size(Plm_m, 1)
-    if i > nlat
-        return
-    end
-    acc_pos = ComplexF64(0, 0)
-    ncols = size(Plm_m, 2)
-    # columns run over l = m:lmax; caller passes Alm vectors aligned with columns
-    for lidx in 1:ncols
-        acc_pos += Alm_pos_m[lidx] * Plm_m[i, lidx]
-    end
-    Fourier_pos[i] = inv_scaleφ * acc_pos
-    if has_neg
-        acc_neg = ComplexF64(0, 0)
-        for lidx in 1:ncols
-            acc_neg += Alm_neg_m[lidx] * Plm_m[i, lidx]
-        end
-        Fourier_neg[i] = inv_scaleφ * acc_neg
-    end
-end
-
-@kernel function cplx_analysis_mode_kernel!(coeffs_out, Fcol, Plm_m, weights, scaleφ)
-    lidx = @index(Global)
-    ncols = size(Plm_m, 2)
-    if lidx > ncols
-        return
-    end
-    coeff = ComplexF64(0, 0)
-    nlat = size(Plm_m, 1)
-    for i in 1:nlat
-        coeff += weights[i] * Plm_m[i, lidx] * Fcol[i]
-    end
-    coeffs_out[lidx] = coeff * scaleφ
-end
-
 @kernel function qst_lat_accumulate_kernel!(gr, gt, gp, Qalm, Salm, Talm, Nlm, Plm_table, dPlm_table, sθ, inv_sθ, lcap, mcap, mres)
     idx = @index(Global)
     if idx > size(Plm_table, 1)

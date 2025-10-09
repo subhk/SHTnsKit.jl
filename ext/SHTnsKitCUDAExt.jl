@@ -2031,9 +2031,9 @@ function gpu_SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector; device=
     synth_kernel! = cplx_synthesis_mode_kernel!(backend)
 
     for m in 0:cfg.mmax
-        Alm_pos_col = view(Alm_pos_gpu, :, m+1)
-        Alm_neg_col = view(Alm_neg_gpu, :, m+1)
-        Plm_slice = view(Plm, :, :, m+1)
+        Plm_slice = view(Plm, :, m+1:cfg.lmax+1, m+1)
+        Alm_pos_col = view(Alm_pos_gpu, m+1:cfg.lmax+1, m+1)
+        Alm_neg_col = view(Alm_neg_gpu, m+1:cfg.lmax+1, m+1)
         Fourier_pos = view(Fourier_gpu, :, m + 1)
         has_neg = m > 0
         Fourier_neg = has_neg ? view(Fourier_gpu, :, cfg.nlon - m + 1) : Fourier_pos
@@ -2068,25 +2068,24 @@ function gpu_spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex}; devic
     weights_gpu = to_device(cfg.w, device)
     coeff_pos_host = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
     coeff_neg_host = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
-    coeff_pos_gpu = to_device(zeros(ComplexF64, cfg.lmax + 1), device)
-    coeff_neg_gpu = to_device(zeros(ComplexF64, cfg.lmax + 1), device)
     analysis_kernel! = cplx_analysis_mode_kernel!(backend)
 
     for m in 0:cfg.mmax
-        Plm_slice = view(Plm, :, :, m+1)
+        Plm_slice = view(Plm, :, m+1:cfg.lmax+1, m+1)
         Fcol_pos = view(F_gpu, :, m + 1)
-        fill!(coeff_pos_gpu, 0)
-        analysis_kernel!(coeff_pos_gpu, Fcol_pos, Plm_slice, weights_gpu, cfg.cphi; ndrange=cfg.lmax - m + 1)
+        lcount = cfg.lmax - m + 1
+        coeff_pos_gpu = to_device(zeros(ComplexF64, lcount), device)
+        analysis_kernel!(coeff_pos_gpu, Fcol_pos, Plm_slice, weights_gpu, cfg.cphi; ndrange=lcount)
         KernelAbstractions.synchronize(backend)
-        coeff_pos_host[m+1:cfg.lmax+1, m+1] .= Array(view(coeff_pos_gpu, m+1:cfg.lmax+1))
+        coeff_pos_host[m+1:cfg.lmax+1, m+1] .= Array(coeff_pos_gpu)
 
         if m > 0
             col_neg = cfg.nlon - m + 1
             Fcol_neg = view(F_gpu, :, col_neg)
-            fill!(coeff_neg_gpu, 0)
-            analysis_kernel!(coeff_neg_gpu, Fcol_neg, Plm_slice, weights_gpu, cfg.cphi; ndrange=cfg.lmax - m + 1)
+            coeff_neg_gpu = to_device(zeros(ComplexF64, lcount), device)
+            analysis_kernel!(coeff_neg_gpu, Fcol_neg, Plm_slice, weights_gpu, cfg.cphi; ndrange=lcount)
             KernelAbstractions.synchronize(backend)
-            coeff_neg_host[m+1:cfg.lmax+1, m+1] .= Array(view(coeff_neg_gpu, m+1:cfg.lmax+1))
+            coeff_neg_host[m+1:cfg.lmax+1, m+1] .= Array(coeff_neg_gpu)
         end
     end
 

@@ -38,6 +38,9 @@ Synthesize complex spatial field from packed complex coefficients (LM_cplx order
 Returns an `nlat × nlon` complex array.
 """
 function SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_SH_to_spat_cplx(cfg, alm_packed)
+    end
     mres = cfg.mres
     mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
     expected = nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
@@ -92,6 +95,9 @@ Analyze complex spatial field into packed complex coefficients (LM_cplx order).
 Input `z` must be `nlat × nlon` complex.
 """
 function spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
+    if is_gpu_config(cfg)
+        return gpu_spat_cplx_to_SH(cfg, z)
+    end
     size(z,1) == cfg.nlat || throw(DimensionMismatch("z first dim must be nlat"))
     size(z,2) == cfg.nlon || throw(DimensionMismatch("z second dim must be nlon"))
     mres = cfg.mres

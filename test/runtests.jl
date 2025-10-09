@@ -10,6 +10,20 @@ using Random           # For reproducible random number generation
 using SHTnsKit         # The package being tested
 using Zygote          # For automatic differentiation tests
 
+const GPU_AVAILABLE = let
+    available = false
+    try
+        @eval begin
+            using CUDA
+        end
+        available = CUDA.functional()
+        available && CUDA.allowscalar(false)
+    catch
+        available = false
+    end
+    available
+end
+
 const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
 try
     @eval using FFTW
@@ -161,6 +175,34 @@ end
             @test idx == LM_cplx_index(cfg.lmax, cfg.mmax, l, m)
         end
     end
+end
+
+if GPU_AVAILABLE
+    @testset "LM_cplx GPU parity" begin
+        norms = [(:orthonormal, true), (:orthonormal, false), (:schmidt, true)]
+        lmax_values = [4, 6]
+        rng = MersenneTwister(314)
+        for (norm, cs_phase) in norms
+            for lmax in lmax_values
+                nlat = lmax + 2
+                nlon = 2*lmax + 1
+                cfg_cpu = create_gauss_config(lmax, nlat; nlon=nlon, norm=norm, cs_phase=cs_phase)
+                cfg_gpu = deepcopy(cfg_cpu)
+                set_config_device!(cfg_gpu, GPU)
+                is_gpu_config(cfg_gpu) || continue
+
+                alm = ComplexF64.(randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1))
+                spat_cpu = SH_to_spat_cplx(cfg_cpu, alm)
+                spat_gpu = SH_to_spat_cplx(cfg_gpu, alm)
+                @test isapprox(spat_gpu, spat_cpu; rtol=1e-10, atol=1e-12)
+
+                coeff_gpu = spat_cplx_to_SH(cfg_gpu, spat_cpu)
+                @test isapprox(coeff_gpu, alm; rtol=1e-9, atol=1e-11)
+            end
+        end
+    end
+elseif VERBOSE
+    @info "Skipping LM_cplx GPU parity tests (CUDA unavailable)"
 end
 
 """

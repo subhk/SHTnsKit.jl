@@ -287,6 +287,9 @@ Mode-limited transform for specific azimuthal mode im.
 Input vectors contain spatial values for that mode at all latitudes.
 """
 function spat_to_SHsphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SHsphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
+    end
     nlat = cfg.nlat
     length(Vt_m) == nlat || throw(DimensionMismatch("Vt_m length must be nlat"))
     length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat"))
@@ -330,6 +333,9 @@ end
 Mode-limited synthesis for specific azimuthal mode im.
 """
 function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
+    if is_gpu_config(cfg)
+        return gpu_SHsphtor_to_spat_ml(cfg, im, Sl, Tl, ltr)
+    end
     nlat = cfg.nlat
     expected_len = ltr - im + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))

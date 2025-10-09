@@ -241,6 +241,9 @@ Transform spatial field for specific azimuthal mode m to spherical harmonic coef
 Returns coefficients Q_l for degrees l = m..ltr.
 """
 function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int)
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SH_ml(cfg, im, Vr_m, ltr)
+    end
     nlat = cfg.nlat
     length(Vr_m) == nlat || throw(DimensionMismatch("Vr_m length must be nlat=$(nlat)"))
     im >= 0 || throw(ArgumentError("im must be >= 0"))
@@ -275,6 +278,9 @@ Transform spherical harmonic coefficients for specific mode m to spatial field.
 Returns complex spatial values for that azimuthal mode.
 """
 function SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, ltr::Int)
+    if is_gpu_config(cfg)
+        return gpu_SH_to_spat_ml(cfg, im, Ql, ltr)
+    end
     nlat = cfg.nlat
     im >= 0 || throw(ArgumentError("im must be >= 0"))
     im <= cfg.mmax || throw(ArgumentError("im must be <= mmax=$(cfg.mmax)"))
@@ -310,6 +316,9 @@ Evaluate spherical harmonic expansion at a single point (θ,φ).
 Returns the field value at the specified point.
 """
 function SH_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    if is_gpu_config(cfg)
+        return gpu_SH_to_point(cfg, Qlm, cost, phi)
+    end
     lmax = cfg.lmax
     length(Qlm) == (lmax+1)^2 || throw(DimensionMismatch("Qlm must have length (lmax+1)^2"))
     

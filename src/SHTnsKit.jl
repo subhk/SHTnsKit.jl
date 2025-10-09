@@ -247,6 +247,7 @@ gpu_spat_to_SH_l_axisym(::SHTConfig, ::Any, ::Any) = error("GPU extension not lo
 gpu_SH_to_spat_l_axisym(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_spat_to_SHqst(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_SHqst_to_spat(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_SH_to_point_cplx(::SHTConfig, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SHqst_to_lat(::SHTConfig, ::Any, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SH_to_lat(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SH_to_lat_cplx(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")

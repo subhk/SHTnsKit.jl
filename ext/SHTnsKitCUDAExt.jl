@@ -531,6 +531,75 @@ end
     result[3] = vp
 end
 
+@kernel function qst_lat_accumulate_kernel!(gr, gt, gp, Qalm, Salm, Talm, Nlm, Plm_table, dPlm_table, sθ, inv_sθ, lcap, mcap, mres)
+    idx = @index(Global)
+    if idx > size(Plm_table, 1)
+        return
+    end
+    im = idx - 1
+    if im > mcap || im % mres != 0 || im > lcap
+        gr[idx] = ComplexF64(0, 0)
+        gt[idx] = ComplexF64(0, 0)
+        gp[idx] = ComplexF64(0, 0)
+        return
+    end
+    acc_r = ComplexF64(0, 0)
+    acc_t = ComplexF64(0, 0)
+    acc_p = ComplexF64(0, 0)
+    col = im + 1
+    for l in im:lcap
+        row = l + 1
+        N = Nlm[row, col]
+        Plm_val = Plm_table[idx, row]
+        dPdx = dPlm_table[idx, row]
+        Y = N * Plm_val
+        dθY = -sθ * N * dPdx
+
+        aQ = Qalm[row, col]
+        aS = Salm[row, col]
+        aT = Talm[row, col]
+
+        acc_r += Y * aQ
+        acc_t += dθY * aS
+        acc_p += (sθ * N * dPdx) * aT
+
+        if im > 0 && sθ != 0
+            imcoef = ComplexF64(0, 1) * im * inv_sθ
+            acc_t += imcoef * Y * aT
+            acc_p += imcoef * Y * aS
+        end
+    end
+    gr[idx] = acc_r
+    gt[idx] = acc_t
+    gp[idx] = acc_p
+end
+
+@kernel function qst_lat_finalize_kernel!(Vr, Vt, Vp, gr, gt, gp, nphi, mcap, mres)
+    idx = @index(Global)
+    if idx > nphi
+        return
+    end
+    φ = 2π * (idx - 1) / nphi
+    vr = real(gr[1])
+    vt = real(gt[1])
+    vp = real(gp[1])
+    for m in 1:mcap
+        (m % mres == 0) || continue
+        θ = m * φ
+        c = cos(θ)
+        s = sin(θ)
+        gr_val = gr[m+1]
+        gt_val = gt[m+1]
+        gp_val = gp[m+1]
+        vr += 2 * (real(gr_val) * c - imag(gr_val) * s)
+        vt += 2 * (real(gt_val) * c - imag(gt_val) * s)
+        vp += 2 * (real(gp_val) * c - imag(gp_val) * s)
+    end
+    Vr[idx] = vr
+    Vt[idx] = vt
+    Vp[idx] = vp
+end
+
 function _gpu_legendre_mode(cfg::SHTConfig, im::Int, lcap::Int, device::SHTDevice)
     lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
     lcount = lcap - im + 1

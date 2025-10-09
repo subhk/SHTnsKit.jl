@@ -235,6 +235,14 @@ Inputs `Qlm, Slm, Tlm` are all packed (LM order) vectors for each component.
 """
 function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::AbstractVector{<:Complex}, Tlm::AbstractVector{<:Complex}, cost::Real;
                       nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax)
+    if is_gpu_config(cfg)
+        return gpu_SHqst_to_lat(cfg, Qlm, Slm, Tlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+    end
+    return SHqst_to_lat_cpu(cfg, Qlm, Slm, Tlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+end
+
+function SHqst_to_lat_cpu(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::AbstractVector{<:Complex}, Tlm::AbstractVector{<:Complex}, cost::Real;
+                          nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length"))
     length(Slm) == cfg.nlm || throw(DimensionMismatch("Slm length"))
     length(Tlm) == cfg.nlm || throw(DimensionMismatch("Tlm length"))

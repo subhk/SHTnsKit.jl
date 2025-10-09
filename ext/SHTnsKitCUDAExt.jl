@@ -317,6 +317,153 @@ end
     vals[idx] = acc
 end
 
+@kernel function point_legendre_kernel!(Plm_table, dPlm_table, x, lcap, mres)
+    idx = @index(Global)
+    mcount = size(Plm_table, 1)
+    if idx > mcount
+        return
+    end
+    T = eltype(Plm_table)
+    im = idx - 1
+    ncol = size(Plm_table, 2)
+    for j in 1:ncol
+        Plm_table[idx, j] = zero(T)
+        dPlm_table[idx, j] = zero(T)
+    end
+    if im > lcap || im % mres != 0
+        return
+    end
+
+    xi = convert(T, x)
+    if im == 0
+        Plm_table[idx, 1] = one(T)
+        if lcap >= 1
+            Plm_table[idx, 2] = xi
+        end
+        prev_prev = one(T)
+        prev = xi
+        for l in 2:lcap
+            num = convert(T, 2*l - 1) * xi * prev - convert(T, l - 1) * prev_prev
+            val = num / convert(T, l)
+            Plm_table[idx, l+1] = val
+            prev_prev = prev
+            prev = val
+        end
+    else
+        sx2 = max(zero(T), one(T) - xi * xi)
+        sint = sqrt(sx2)
+        pmm = one(T)
+        fact = one(T)
+        for _ in 1:im
+            pmm *= -fact * sint
+            fact += convert(T, 2)
+        end
+        Plm_table[idx, im+1] = pmm
+        if lcap >= im + 1
+            prev_prev = pmm
+            prev = xi * convert(T, 2*im + 1) * pmm
+            Plm_table[idx, im+2] = prev
+            for l in (im+2):lcap
+                num = convert(T, 2*l - 1) * xi * prev - convert(T, l + im - 1) * prev_prev
+                den = convert(T, l - im)
+                val = num / den
+                Plm_table[idx, l+1] = val
+                prev_prev = prev
+                prev = val
+            end
+        end
+    end
+
+    if im <= lcap
+        x2m1 = xi * xi - one(T)
+        if abs(x2m1) <= convert(T, eps(Float64))
+            for l in im:lcap
+                dPlm_table[idx, l+1] = zero(T)
+            end
+        else
+            if im == 0
+                dPlm_table[idx, im+1] = zero(T)
+            else
+                dPlm_table[idx, im+1] = (convert(T, im) * xi * Plm_table[idx, im+1]) / x2m1
+            end
+            for l in (im+1):lcap
+                dPlm_table[idx, l+1] = (convert(T, l) * xi * Plm_table[idx, l+1] - convert(T, l + im) * Plm_table[idx, l]) / x2m1
+            end
+        end
+    end
+end
+
+@kernel function point_accumulate_kernel!(gvr, gvt, gvp, Qalm, Salm, Talm, Nlm, Plm_table, dPlm_table, sθ, inv_sθ, lcap, mcap, mres)
+    idx = @index(Global)
+    if idx > size(Plm_table, 1)
+        return
+    end
+    im = idx - 1
+    if im > mcap || im % mres != 0 || im > lcap
+        gvr[idx] = ComplexF64(0, 0)
+        gvt[idx] = ComplexF64(0, 0)
+        gvp[idx] = ComplexF64(0, 0)
+        return
+    end
+
+    acc_vr = ComplexF64(0, 0)
+    acc_vt = ComplexF64(0, 0)
+    acc_vp = ComplexF64(0, 0)
+    col = im + 1
+    mval = im
+    for l in im:lcap
+        row = l + 1
+        N = Nlm[row, col]
+        Plm_val = Plm_table[idx, row]
+        dPdx = dPlm_table[idx, row]
+        Y = N * Plm_val
+        dθY = -sθ * N * dPdx
+
+        aQ = Qalm[row, col]
+        aS = Salm[row, col]
+        aT = Talm[row, col]
+
+        acc_vr += Y * aQ
+        acc_vt += dθY * aS
+        acc_vp += (sθ * N * dPdx) * aT
+
+        if mval > 0 && sθ != 0
+            imcoef = ComplexF64(0, 1) * mval * inv_sθ
+            acc_vt += imcoef * Y * aT
+            acc_vp += imcoef * Y * aS
+        end
+    end
+
+    gvr[idx] = acc_vr
+    gvt[idx] = acc_vt
+    gvp[idx] = acc_vp
+end
+
+@kernel function point_finalize_kernel!(result, gvr, gvt, gvp, phi, mcap, mres)
+    idx = @index(Global)
+    if idx > 1
+        return
+    end
+    vr = real(gvr[1])
+    vt = real(gvt[1])
+    vp = real(gvp[1])
+    for m in 1:mcap
+        (m % mres == 0) || continue
+        val_r = gvr[m+1]
+        val_t = gvt[m+1]
+        val_p = gvp[m+1]
+        θ = m * phi
+        c = cos(θ)
+        s = sin(θ)
+        vr += 2 * (real(val_r) * c - imag(val_r) * s)
+        vt += 2 * (real(val_t) * c - imag(val_t) * s)
+        vp += 2 * (real(val_p) * c - imag(val_p) * s)
+    end
+    result[1] = vr
+    result[2] = vt
+    result[3] = vp
+end
+
 function _gpu_legendre_mode(cfg::SHTConfig, im::Int, lcap::Int, device::SHTDevice)
     lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
     lcount = lcap - im + 1

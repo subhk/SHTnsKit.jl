@@ -1177,6 +1177,40 @@ function gpu_SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex},
     return real.(Vr)
 end
 
+function gpu_SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax, device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_lat_cpu(cfg, Qlm, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+    end
+    Qhost = collect(Qlm)
+    return SHTnsKit.SH_to_lat_cpu(cfg, Qhost, cost; nphi=nphi, ltr=ltr, mtr=mtr)
+end
+
+function gpu_SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_lat_cplx_cpu(cfg, alm_packed, cost; nphi=nphi, ltr=ltr)
+    end
+    host_coeffs = collect(alm_packed)
+    return SHTnsKit.SH_to_lat_cplx_cpu(cfg, host_coeffs, cost; nphi=nphi, ltr=ltr)
+end
+
+function gpu_SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVector, Tlm::AbstractVector, cost::Real, phi::Real; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SHqst_to_point_cpu(cfg, Qlm, Slm, Tlm, cost, phi)
+    end
+    Qhost = collect(Qlm)
+    Shost = collect(Slm)
+    Thost = collect(Tlm)
+    return SHTnsKit.SHqst_to_point_cpu(cfg, Qhost, Shost, Thost, cost, phi)
+end
+
+function gpu_SH_to_grad_point(cfg::SHTConfig, Slm::AbstractVector, cost::Real, phi::Real; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_grad_point_cpu(cfg, Slm, cost, phi)
+    end
+    Shost = collect(Slm)
+    return SHTnsKit.SH_to_grad_point_cpu(cfg, Shost, cost, phi)
+end
+
 function gpu_spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int; device=get_device())
     if device == CPU_DEVICE
         return SHTnsKit.spat_to_SH_ml(cfg, im, Vr_m, ltr)
@@ -2596,6 +2630,7 @@ export gpu_spat_to_SH, gpu_SH_to_spat, gpu_spat_to_SH_ml, gpu_SH_to_spat_ml
 export gpu_spat_to_SH_axisym, gpu_SH_to_spat_axisym, gpu_spat_to_SH_l_axisym, gpu_SH_to_spat_l_axisym
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat, gpu_spat_to_SHsphtor_ml, gpu_SHsphtor_to_spat_ml
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat
+export gpu_SH_to_lat, gpu_SH_to_lat_cplx, gpu_SHqst_to_point, gpu_SH_to_grad_point
 export gpu_SH_to_point
 export gpu_apply_laplacian!, gpu_legendre!
 export gpu_energy_scalar, gpu_energy_vector

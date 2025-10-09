@@ -113,6 +113,8 @@ export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
 export gpu_spat_to_SHsphtor_ml, gpu_SHsphtor_to_spat_ml  # GPU mode-limited vector transforms
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat              # GPU QST transforms
 export gpu_SH_to_point                                   # GPU point evaluation
+export gpu_SH_to_lat, gpu_SH_to_lat_cplx                 # GPU local evaluations
+export gpu_SHqst_to_point, gpu_SH_to_grad_point          # GPU point diagnostics
 export gpu_SH_Zrotate
 export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
 export gpu_energy_scalar, gpu_energy_vector
@@ -243,6 +245,8 @@ gpu_spat_to_SH_l_axisym(::SHTConfig, ::Any, ::Any) = error("GPU extension not lo
 gpu_SH_to_spat_l_axisym(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_spat_to_SHqst(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_SHqst_to_spat(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+gpu_SH_to_lat(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
+gpu_SH_to_lat_cplx(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SH_Zrotate(::SHTConfig, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
 gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
@@ -281,6 +285,8 @@ gpu_loss_vorticity_grid(::SHTConfig, ::Any, ::Any) = error("GPU extension not lo
 gpu_grad_loss_vorticity_Tlm(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_loss_and_grad_vorticity_Tlm(::SHTConfig, ::Any, ::Any) = error("GPU extension not loaded")
 gpu_SH_to_point(::SHTConfig, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
+gpu_SHqst_to_point(::SHTConfig, ::Any, ::Any, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
+gpu_SH_to_grad_point(::SHTConfig, ::Any, ::Any, ::Any) = error("GPU extension not loaded")
 
 # Default fallbacks if extensions are not loaded (use broad signatures to avoid overwriting)
 zgrad_scalar_energy(::SHTConfig, ::Any) = error("Zygote extension not loaded")

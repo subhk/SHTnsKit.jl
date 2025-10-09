@@ -136,6 +136,13 @@ end
 Evaluate 3D field at a single point using packed real spectra.
 """
 function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::AbstractVector{<:Complex}, Tlm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    if is_gpu_config(cfg)
+        return gpu_SHqst_to_point(cfg, Qlm, Slm, Tlm, cost, phi)
+    end
+    return SHqst_to_point_cpu(cfg, Qlm, Slm, Tlm, cost, phi)
+end
+
+function SHqst_to_point_cpu(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::AbstractVector{<:Complex}, Tlm::AbstractVector{<:Complex}, cost::Real, phi::Real)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length"))
     length(Slm) == cfg.nlm || throw(DimensionMismatch("Slm length"))
     length(Tlm) == cfg.nlm || throw(DimensionMismatch("Tlm length"))
@@ -207,9 +214,16 @@ Evaluate gradient of a scalar field at a point. Vr is returned as 0.0.
 `DrSlm` is ignored for this pure-Julia core.
 """
 function SH_to_grad_point(cfg::SHTConfig, ::AbstractVector{<:Complex}, Slm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    if is_gpu_config(cfg)
+        return gpu_SH_to_grad_point(cfg, Slm, cost, phi)
+    end
+    return SH_to_grad_point_cpu(cfg, Slm, cost, phi)
+end
+
+function SH_to_grad_point_cpu(cfg::SHTConfig, Slm::AbstractVector{<:Complex}, cost::Real, phi::Real)
     zeroQ = zeros(ComplexF64, cfg.nlm)
     zeroT = zeros(ComplexF64, cfg.nlm)
-    return SHqst_to_point(cfg, zeroQ, Slm, zeroT, cost, phi)
+    return SHqst_to_point_cpu(cfg, zeroQ, Slm, zeroT, cost, phi)
 end
 
 """

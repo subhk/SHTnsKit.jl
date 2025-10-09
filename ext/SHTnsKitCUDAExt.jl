@@ -1427,18 +1427,42 @@ function gpu_SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector, Slm::AbstractVe
     if device == CPU_DEVICE
         return SHTnsKit.SHqst_to_point_cpu(cfg, Qlm, Slm, Tlm, cost, phi)
     end
-    Qhost = collect(Qlm)
-    Shost = collect(Slm)
-    Thost = collect(Tlm)
-    return SHTnsKit.SHqst_to_point_cpu(cfg, Qhost, Shost, Thost, cost, phi)
+    lcap = cfg.lmax
+    mcap = cfg.mmax
+    Nlm_gpu = to_device(cfg.Nlm, device)
+    Q_gpu = Qlm isa GPUArraysCore.AbstractGPUArray ? Qlm : to_device(ComplexF64.(Qlm), device)
+    S_gpu = Slm isa GPUArraysCore.AbstractGPUArray ? Slm : to_device(ComplexF64.(Slm), device)
+    T_gpu = Tlm isa GPUArraysCore.AbstractGPUArray ? Tlm : to_device(ComplexF64.(Tlm), device)
+
+    backend = get_backend(Q_gpu)
+    Plm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
+    dPlm_table = to_device(zeros(Float64, mcap + 1, lcap + 1), device)
+
+    point_legendre_kernel! = point_legendre_kernel!(backend)
+    point_legendre_kernel!(Plm_table, dPlm_table, float(cost), lcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    accum_gpu = to_device(zeros(ComplexF64, 3), device)
+    point_accumulate_kernel! = point_accumulate_kernel!(backend)
+    point_accumulate_kernel!(accum_gpu, Q_gpu, S_gpu, T_gpu, Nlm_gpu, Plm_table, dPlm_table, lcap, mcap, cfg.mres; ndrange=mcap + 1)
+    KernelAbstractions.synchronize(backend)
+
+    finalize_gpu = to_device(zeros(ComplexF64, 3), device)
+    point_finalize_kernel! = point_finalize_kernel!(backend)
+    point_finalize_kernel!(finalize_gpu, accum_gpu, phi, mcap; ndrange=1)
+    KernelAbstractions.synchronize(backend)
+
+    result = Array(finalize_gpu)
+    return real(result[1]), real(result[2]), real(result[3])
 end
 
 function gpu_SH_to_grad_point(cfg::SHTConfig, Slm::AbstractVector, cost::Real, phi::Real; device=get_device())
     if device == CPU_DEVICE
         return SHTnsKit.SH_to_grad_point_cpu(cfg, Slm, cost, phi)
     end
-    Shost = collect(Slm)
-    return SHTnsKit.SH_to_grad_point_cpu(cfg, Shost, cost, phi)
+    zeroQ = zeros(ComplexF64, cfg.nlm)
+    zeroT = zeros(ComplexF64, cfg.nlm)
+    return gpu_SHqst_to_point(cfg, zeroQ, Slm, zeroT, cost, phi; device=device)
 end
 
 function gpu_spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int; device=get_device())

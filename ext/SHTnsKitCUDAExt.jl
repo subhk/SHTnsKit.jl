@@ -1132,6 +1132,113 @@ function gpu_SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; device=g
     return vec(spatial)
 end
 
+function gpu_spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_to_SH_ml(cfg, im, Vr_m, ltr)
+    end
+
+    nlat = cfg.nlat
+    length(Vr_m) == nlat || throw(DimensionMismatch("Vr_m length must be nlat=$(nlat)"))
+    im >= 0 || throw(ArgumentError("im must be ≥ 0"))
+    im <= cfg.mmax || throw(ArgumentError("im must be ≤ mmax=$(cfg.mmax)"))
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
+    lcount = lcap - im + 1
+
+    Vr_gpu = Vr_m isa GPUArraysCore.AbstractGPUArray ? Vr_m : to_device(ComplexF64.(Vr_m), device)
+    weights_gpu = to_device(cfg.wlat, device)
+    Plm_mode, backend = _gpu_legendre_mode(cfg, im, lcap, device)
+    coeffs_gpu = to_device(zeros(ComplexF64, lcount), device)
+
+    analysis_kernel! = scalar_mode_analysis_kernel!(backend)
+    analysis_kernel!(coeffs_gpu, Vr_gpu, weights_gpu, Plm_mode, cfg.cphi; ndrange=lcount)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(coeffs_gpu)
+end
+
+function gpu_SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, ltr::Int; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SH_to_spat_ml(cfg, im, Ql, ltr)
+    end
+
+    im >= 0 || throw(ArgumentError("im must be ≥ 0"))
+    im <= cfg.mmax || throw(ArgumentError("im must be ≤ mmax=$(cfg.mmax)"))
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
+    expected_len = lcap - im + 1
+    length(Ql) == expected_len || throw(DimensionMismatch("Ql length must be $(expected_len)"))
+
+    Ql_gpu = Ql isa GPUArraysCore.AbstractGPUArray ? Ql : to_device(ComplexF64.(Ql), device)
+    Plm_mode, backend = _gpu_legendre_mode(cfg, im, lcap, device)
+    Vr_gpu = to_device(zeros(ComplexF64, cfg.nlat), device)
+
+    synthesis_kernel! = scalar_mode_synthesis_kernel!(backend)
+    synthesis_kernel!(Vr_gpu, Ql_gpu, Plm_mode; ndrange=cfg.nlat)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(Vr_gpu)
+end
+
+function gpu_spat_to_SHsphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.spat_to_SHsphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
+    end
+
+    nlat = cfg.nlat
+    length(Vt_m) == nlat || throw(DimensionMismatch("Vt_m length must be nlat=$(nlat)"))
+    length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat=$(nlat)"))
+    im >= 0 || throw(ArgumentError("im must be ≥ 0"))
+    im <= cfg.mmax || throw(ArgumentError("im must be ≤ mmax=$(cfg.mmax)"))
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
+    lcount = lcap - im + 1
+
+    Vt_gpu = Vt_m isa GPUArraysCore.AbstractGPUArray ? Vt_m : to_device(ComplexF64.(Vt_m), device)
+    Vp_gpu = Vp_m isa GPUArraysCore.AbstractGPUArray ? Vp_m : to_device(ComplexF64.(Vp_m), device)
+    weights_gpu = to_device(cfg.wlat, device)
+    Plm_mode, backend = _gpu_legendre_mode(cfg, im, lcap, device)
+    Sl_gpu = to_device(zeros(ComplexF64, lcount), device)
+    Tl_gpu = to_device(zeros(ComplexF64, lcount), device)
+
+    analysis_kernel! = sphtor_mode_analysis_kernel!(backend)
+    analysis_kernel!(Sl_gpu, Tl_gpu, Vt_gpu, Vp_gpu, weights_gpu, Plm_mode, cfg.cphi, im; ndrange=lcount)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(Sl_gpu), Array(Tl_gpu)
+end
+
+function gpu_SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int; device=get_device())
+    if device == CPU_DEVICE
+        return SHTnsKit.SHsphtor_to_spat_ml(cfg, im, Sl, Tl, ltr)
+    end
+
+    im >= 0 || throw(ArgumentError("im must be ≥ 0"))
+    im <= cfg.mmax || throw(ArgumentError("im must be ≤ mmax=$(cfg.mmax)"))
+    lcap = min(Int(ltr), cfg.lmax)
+    lcap >= im || throw(ArgumentError("ltr must be ≥ im=$(im)"))
+    expected_len = lcap - im + 1
+    length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
+    length(Tl) == expected_len || throw(DimensionMismatch("Tl length mismatch"))
+
+    Sl_gpu = Sl isa GPUArraysCore.AbstractGPUArray ? Sl : to_device(ComplexF64.(Sl), device)
+    Tl_gpu = Tl isa GPUArraysCore.AbstractGPUArray ? Tl : to_device(ComplexF64.(Tl), device)
+    Plm_mode, backend = _gpu_legendre_mode(cfg, im, lcap, device)
+    Vt_gpu = to_device(zeros(ComplexF64, cfg.nlat), device)
+    Vp_gpu = to_device(zeros(ComplexF64, cfg.nlat), device)
+
+    synthesis_kernel! = sphtor_mode_synthesis_kernel!(backend)
+    synthesis_kernel!(Vt_gpu, Vp_gpu, Sl_gpu, Tl_gpu, Plm_mode, im; ndrange=cfg.nlat)
+    KernelAbstractions.synchronize(backend)
+
+    return Array(Vt_gpu), Array(Vp_gpu)
+end
+
+function gpu_SH_to_point(cfg::SHTConfig, Qlm::AbstractVector, cost::Real, phi::Real; device=get_device())
+    q_cpu = Qlm isa GPUArraysCore.AbstractGPUArray ? Array(Qlm) : Qlm
+    return SHTnsKit.SH_to_point(cfg, q_cpu, cost, phi)
+end
+
 function SHTnsKit.analysis!(plan::SHTGPUPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     result = gpu_analysis(plan.cfg, f;
                           device=plan.device,
@@ -2440,8 +2547,8 @@ end
 export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE
 export get_device, set_device!, to_device
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe
-export gpu_spat_to_SH, gpu_SH_to_spat
-export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat  
+export gpu_spat_to_SH, gpu_SH_to_spat, gpu_spat_to_SH_ml, gpu_SH_to_spat_ml
+export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat, gpu_spat_to_SHsphtor_ml, gpu_SHsphtor_to_spat_ml
 export gpu_spat_to_SHqst, gpu_SHqst_to_spat
 export gpu_apply_laplacian!, gpu_legendre!
 export gpu_energy_scalar, gpu_energy_vector

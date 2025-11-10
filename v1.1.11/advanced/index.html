@@ -1,0 +1,1174 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Advanced Usage · SHTnsKit.jl</title><meta name="title" content="Advanced Usage · SHTnsKit.jl"/><meta property="og:title" content="Advanced Usage · SHTnsKit.jl"/><meta property="twitter:title" content="Advanced Usage · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/advanced/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/advanced/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/advanced/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../distributed/">Distributed Guide</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../examples/">Examples Gallery</a></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li class="is-active"><a class="tocitem" href>Advanced Usage</a><ul class="internal"><li><a class="tocitem" href="#Advanced-Configuration-Management"><span>Advanced Configuration Management</span></a></li><li><a class="tocitem" href="#Spectral-Domain-Operations"><span>Spectral Domain Operations</span></a></li><li><a class="tocitem" href="#Multi-Field-Processing-Patterns"><span>Multi-Field Processing Patterns</span></a></li><li><a class="tocitem" href="#Advanced-Vector-Field-Analysis"><span>Advanced Vector Field Analysis</span></a></li><li><a class="tocitem" href="#Temporal-Evolution-and-Time-Series"><span>Temporal Evolution and Time Series</span></a></li><li><a class="tocitem" href="#Custom-Interpolation-and-Remapping"><span>Custom Interpolation and Remapping</span></a></li><li><a class="tocitem" href="#Memory-Mapped-Large-Dataset-Processing"><span>Memory-Mapped Large Dataset Processing</span></a></li><li><a class="tocitem" href="#Integration-with-External-Libraries"><span>Integration with External Libraries</span></a></li><li><a class="tocitem" href="#Automatic-Differentiation-Integration"><span>Automatic Differentiation Integration</span></a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Advanced Usage</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Advanced Usage</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/advanced.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Advanced-Usage-Patterns"><a class="docs-heading-anchor" href="#Advanced-Usage-Patterns">Advanced Usage Patterns</a><a id="Advanced-Usage-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Usage-Patterns" title="Permalink"></a></h1><p>This guide covers sophisticated usage patterns and advanced techniques for experienced SHTnsKit.jl users.</p><h2 id="Advanced-Configuration-Management"><a class="docs-heading-anchor" href="#Advanced-Configuration-Management">Advanced Configuration Management</a><a id="Advanced-Configuration-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Configuration-Management" title="Permalink"></a></h2><h3 id="Configuration-Factories"><a class="docs-heading-anchor" href="#Configuration-Factories">Configuration Factories</a><a id="Configuration-Factories-1"></a><a class="docs-heading-anchor-permalink" href="#Configuration-Factories" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+# Create a factory for consistent configuration creation
+struct SHTnsConfigFactory
+    default_lmax::Int
+    cache::Dict{Tuple{Int,Int}, SHTnsConfig}
+end
+
+function SHTnsConfigFactory(lmax::Int=64)
+    SHTnsConfigFactory(lmax, Dict())
+end
+
+function get_config(factory::SHTnsConfigFactory, lmax::Int, mmax::Int)
+    key = (lmax, mmax)
+    if !haskey(factory.cache, key)
+        cfg = create_gauss_config(lmax, mmax)
+        factory.cache[key] = cfg
+    end
+    return factory.cache[key]
+end
+
+function cleanup!(factory::SHTnsConfigFactory)
+    for cfg in values(factory.cache)
+        destroy_config(cfg)
+    end
+    empty!(factory.cache)
+end
+
+# Usage
+factory = SHTnsConfigFactory()
+cfg32 = get_config(factory, 32, 32)
+cfg64 = get_config(factory, 64, 64)
+# ... use configurations ...
+cleanup!(factory)</code></pre><h3 id="Dynamic-Resolution-Adaptation"><a class="docs-heading-anchor" href="#Dynamic-Resolution-Adaptation">Dynamic Resolution Adaptation</a><a id="Dynamic-Resolution-Adaptation-1"></a><a class="docs-heading-anchor-permalink" href="#Dynamic-Resolution-Adaptation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+mutable struct AdaptiveSpectralTransform
+    current_lmax::Int
+    max_lmax::Int
+    configs::Dict{Int, SHTnsConfig}
+    tolerance::Float64
+end
+
+function AdaptiveSpectralTransform(max_lmax::Int, tolerance::Float64=1e-10)
+    AdaptiveSpectralTransform(16, max_lmax, Dict{Int, SHTnsConfig}(), tolerance)
+end
+
+function get_config!(transform::AdaptiveSpectralTransform, lmax::Int)
+    if !haskey(transform.configs, lmax)
+        transform.configs[lmax] = create_gauss_config(lmax, lmax)
+    end
+    return transform.configs[lmax]
+end
+
+function adaptive_analyze(transform::AdaptiveSpectralTransform, field::Matrix{Float64})
+    lmax = transform.current_lmax
+    
+    while lmax &lt;= transform.max_lmax
+        cfg = get_config!(transform, lmax)
+        
+        # Interpolate field to current resolution if needed
+        field_resized = resize_spatial_field(field, cfg)
+        
+        # Analyze
+        sh = analysis(cfg, field_resized)
+        
+        # Check convergence by looking at high-degree coefficients
+        high_degree_power = sum(abs2, sh[end-min(10, div(length(sh), 4)):end])
+        total_power = sum(abs2, sh)
+        
+        if high_degree_power / total_power &lt; transform.tolerance
+            transform.current_lmax = lmax
+            return sh, lmax
+        end
+        
+        lmax = min(lmax * 2, transform.max_lmax)
+    end
+    
+    # Maximum resolution reached
+    cfg = get_config!(transform, transform.max_lmax)
+    field_resized = resize_spatial_field(field, cfg)
+    sh = analysis(cfg, field_resized)
+    transform.current_lmax = transform.max_lmax
+    
+    return sh, transform.max_lmax
+end
+
+function cleanup!(transform::AdaptiveSpectralTransform)
+    for cfg in values(transform.configs)
+        destroy_config(cfg)
+    end
+    empty!(transform.configs)
+end</code></pre><h2 id="Spectral-Domain-Operations"><a class="docs-heading-anchor" href="#Spectral-Domain-Operations">Spectral Domain Operations</a><a id="Spectral-Domain-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Domain-Operations" title="Permalink"></a></h2><h3 id="Custom-Spectral-Filtering"><a class="docs-heading-anchor" href="#Custom-Spectral-Filtering">Custom Spectral Filtering</a><a id="Custom-Spectral-Filtering-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Spectral-Filtering" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+function create_spectral_filter(lmax::Int; 
+                               low_pass::Union{Int,Nothing}=nothing,
+                               high_pass::Union{Int,Nothing}=nothing,
+                               band_pass::Union{Tuple{Int,Int},Nothing}=nothing)
+    
+    filter = ones(Float64, (lmax+1)*(lmax+2)÷2)
+    
+    cfg_temp = create_gauss_config(lmax, lmax)
+    
+    for i in 1:length(filter)
+        l, m = lm_from_index(cfg_temp, i)
+        
+        if low_pass !== nothing &amp;&amp; l &gt; low_pass
+            filter[i] = 0.0
+        elseif high_pass !== nothing &amp;&amp; l &lt; high_pass
+            filter[i] = 0.0
+        elseif band_pass !== nothing
+            l_min, l_max = band_pass
+            if l &lt; l_min || l &gt; l_max
+                filter[i] = 0.0
+            end
+        end
+    end
+    
+    destroy_config(cfg_temp)
+    return filter
+end
+
+function apply_spectral_filter!(sh::Vector{Float64}, filter::Vector{Float64})
+    @assert length(sh) == length(filter) &quot;Filter size mismatch&quot;
+    sh .*= filter
+    return sh
+end
+
+# Example: Smooth a noisy field
+cfg = create_gauss_config(64, 64)
+# Create bandlimited test field (smooth function suitable for SHT)
+θ, φ = cfg.θ, cfg.φ
+noisy_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    noisy_field[i,j] = 1.0 + 0.3 * sin(3*θ[i]) * cos(2*φ[j]) + 0.1 * cos(5*θ[i])
+end
+
+# Low-pass filter (keep only l ≤ 20)
+sh = analysis(cfg, noisy_field)
+lowpass_filter = create_spectral_filter(64, low_pass=20)
+apply_spectral_filter!(sh, lowpass_filter)
+smooth_field = synthesis(cfg, sh)
+
+destroy_config(cfg)</code></pre><h3 id="Spectral-Derivative-Operations"><a class="docs-heading-anchor" href="#Spectral-Derivative-Operations">Spectral Derivative Operations</a><a id="Spectral-Derivative-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Derivative-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+function spectral_laplacian(cfg::SHTnsConfig, sh::Vector{Float64})
+    # ∇²f has spectral coefficients: -l(l+1) * f_lm
+    laplacian_sh = copy(sh)
+    
+    for i in 1:length(sh)
+        l, m = lm_from_index(cfg, i)
+        laplacian_sh[i] *= -l * (l + 1)
+    end
+    
+    return laplacian_sh
+end
+
+function spectral_horizontal_gradient(cfg::SHTnsConfig, sh::Vector{Float64})
+    # Returns (∂f/∂θ, ∂f/∂φ/sin(θ)) in spectral domain
+    # These are vector field components
+    
+    # This is complex - need to compute derivatives of Y_l^m
+    # Implementation depends on SHTns internal representation
+    # For now, use spatial domain computation
+    
+    spatial = synthesis(cfg, sh)
+    θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+    
+    # Finite differences (not optimal, but illustrative)
+    dθ = θ[2,1] - θ[1,1]
+    dφ = φ[1,2] - φ[1,1]
+    
+    ∂f_∂θ = similar(spatial)
+    ∂f_∂φ = similar(spatial)
+    
+    # Central differences
+    ∂f_∂θ[2:end-1, :] = (spatial[3:end, :] - spatial[1:end-2, :]) / (2*dθ)
+    ∂f_∂φ[:, 2:end-1] = (spatial[:, 3:end] - spatial[:, 1:end-2]) / (2*dφ)
+    
+    # Handle boundaries (simplified)
+    ∂f_∂θ[[1,end], :] = ∂f_∂θ[[2,end-1], :]
+    ∂f_∂φ[:, [1,end]] = ∂f_∂φ[:, [2,end-1]]
+    
+    return ∂f_∂θ, ∂f_∂φ
+end
+
+# Example: Compute and analyze gradients
+cfg = create_gauss_config(32, 32)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+test_field = @. sin(3θ) * cos(2φ)
+
+sh = analysis(cfg, test_field)
+∂f_∂θ, ∂f_∂φ = spectral_horizontal_gradient(cfg, sh)
+
+println(&quot;Gradient magnitudes:&quot;)
+println(&quot;  ∂f/∂θ: &quot;, extrema(∂f_∂θ))
+println(&quot;  ∂f/∂φ: &quot;, extrema(∂f_∂φ))
+
+destroy_config(cfg)</code></pre><h2 id="Multi-Field-Processing-Patterns"><a class="docs-heading-anchor" href="#Multi-Field-Processing-Patterns">Multi-Field Processing Patterns</a><a id="Multi-Field-Processing-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Field-Processing-Patterns" title="Permalink"></a></h2><h3 id="Coherent-Transform-Pipeline"><a class="docs-heading-anchor" href="#Coherent-Transform-Pipeline">Coherent Transform Pipeline</a><a id="Coherent-Transform-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#Coherent-Transform-Pipeline" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+struct SpectralPipeline
+    cfg::SHTnsConfig
+    stages::Vector{Function}
+    buffers::Dict{Symbol, Any}
+end
+
+function SpectralPipeline(lmax::Int, mmax::Int)
+    cfg = create_gauss_config(lmax, mmax)
+    stages = Function[]
+    buffers = Dict{Symbol, Any}()
+    
+    # Pre-allocate common buffers
+    buffers[:sh_temp] = allocate_spectral(cfg)
+    buffers[:spatial_temp] = allocate_spatial(cfg)
+    
+    SpectralPipeline(cfg, stages, buffers)
+end
+
+function add_stage!(pipeline::SpectralPipeline, stage_func::Function)
+    push!(pipeline.stages, stage_func)
+end
+
+function process(pipeline::SpectralPipeline, input_field::Matrix{Float64})
+    # Initial analysis
+    analyze!(pipeline.cfg, input_field, pipeline.buffers[:sh_temp])
+    
+    # Apply all stages
+    for stage in pipeline.stages
+        stage(pipeline.cfg, pipeline.buffers)
+    end
+    
+    # Final synthesis
+    synthesize!(pipeline.cfg, pipeline.buffers[:sh_temp], pipeline.buffers[:spatial_temp])
+    
+    return copy(pipeline.buffers[:spatial_temp])
+end
+
+function cleanup!(pipeline::SpectralPipeline)
+    destroy_config(pipeline.cfg)
+end
+
+# Example pipeline: smooth -&gt; amplify low modes -&gt; threshold
+pipeline = SpectralPipeline(32, 32)
+
+# Stage 1: Low-pass filter
+add_stage!(pipeline, function(cfg, buffers)
+    sh = buffers[:sh_temp]
+    for i in 1:length(sh)
+        l, m = lm_from_index(cfg, i)
+        if l &gt; 16
+            sh[i] = 0.0
+        end
+    end
+end)
+
+# Stage 2: Amplify low modes
+add_stage!(pipeline, function(cfg, buffers)
+    sh = buffers[:sh_temp]
+    for i in 1:length(sh)
+        l, m = lm_from_index(cfg, i)
+        if l &lt;= 8
+            sh[i] *= 2.0
+        end
+    end
+end)
+
+# Process data
+test_field = rand(get_nlat(pipeline.cfg), get_nphi(pipeline.cfg))
+result = process(pipeline, test_field)
+
+cleanup!(pipeline)</code></pre><h3 id="Batch-Transform-Manager"><a class="docs-heading-anchor" href="#Batch-Transform-Manager">Batch Transform Manager</a><a id="Batch-Transform-Manager-1"></a><a class="docs-heading-anchor-permalink" href="#Batch-Transform-Manager" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using Base.Threads
+
+struct BatchTransformManager
+    configs::Dict{Int, SHTnsConfig}
+    thread_buffers::Vector{Dict{Symbol, Any}}
+    max_lmax::Int
+end
+
+function BatchTransformManager(max_lmax::Int=128)
+    configs = Dict{Int, SHTnsConfig}()
+    thread_buffers = [Dict{Symbol, Any}() for _ in 1:nthreads()]
+    BatchTransformManager(configs, thread_buffers, max_lmax)
+end
+
+function get_config!(manager::BatchTransformManager, lmax::Int)
+    if !haskey(manager.configs, lmax)
+        manager.configs[lmax] = create_gauss_config(lmax, lmax)
+    end
+    return manager.configs[lmax]
+end
+
+function get_buffers!(manager::BatchTransformManager, thread_id::Int, lmax::Int)
+    buffers = manager.thread_buffers[thread_id]
+    key = Symbol(&quot;buffers_$lmax&quot;)
+    
+    if !haskey(buffers, key)
+        cfg = get_config!(manager, lmax)
+        buffers[key] = Dict(
+            :sh =&gt; allocate_spectral(cfg),
+            :spatial =&gt; allocate_spatial(cfg)
+        )
+    end
+    
+    return buffers[key]
+end
+
+function batch_process(manager::BatchTransformManager, 
+                      fields::Vector{Matrix{Float64}}, 
+                      lmax::Int,
+                      process_func::Function)
+    
+    results = Vector{Any}(undef, length(fields))
+    cfg = get_config!(manager, lmax)
+    
+    @threads for i in 1:length(fields)
+        thread_id = threadid()
+        buffers = get_buffers!(manager, thread_id, lmax)
+        
+        # Resize field if necessary
+        field = fields[i]
+        if size(field) != (cfg.nlat, cfg.nlon)
+            field = resize_spatial_field(field, cfg)
+        end
+        
+        # Transform
+        analyze!(cfg, field, buffers[:sh])
+        
+        # Process in spectral domain
+        result_sh = process_func(cfg, buffers[:sh])
+        
+        # Transform back
+        synthesize!(cfg, result_sh, buffers[:spatial])
+        
+        results[i] = copy(buffers[:spatial])
+    end
+    
+    return results
+end
+
+function cleanup!(manager::BatchTransformManager)
+    for cfg in values(manager.configs)
+        destroy_config(cfg)
+    end
+    empty!(manager.configs)
+end
+
+# Example: Batch low-pass filtering
+manager = BatchTransformManager()
+
+# Generate test data
+test_fields = [rand(65, 129) for _ in 1:100]
+
+# Process function: low-pass filter
+function lowpass_filter(cfg, sh)
+    result = copy(sh)
+    for i in 1:length(result)
+        l, m = lm_from_index(cfg, i)
+        if l &gt; 20
+            result[i] = 0.0
+        end
+    end
+    return result
+end
+
+# Process batch
+filtered_fields = batch_process(manager, test_fields, 64, lowpass_filter)
+
+println(&quot;Processed $(length(filtered_fields)) fields&quot;)
+
+cleanup!(manager)</code></pre><h2 id="Advanced-Vector-Field-Analysis"><a class="docs-heading-anchor" href="#Advanced-Vector-Field-Analysis">Advanced Vector Field Analysis</a><a id="Advanced-Vector-Field-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Vector-Field-Analysis" title="Permalink"></a></h2><h3 id="Helmholtz-Decomposition"><a class="docs-heading-anchor" href="#Helmholtz-Decomposition">Helmholtz Decomposition</a><a id="Helmholtz-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Helmholtz-Decomposition" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+function helmholtz_decomposition(cfg::SHTnsConfig, u::Matrix{Float64}, v::Matrix{Float64})
+    # Decompose vector field into rotational and divergent parts
+    # u = u_rot + u_div, v = v_rot + v_div
+    
+    # Get spheroidal and toroidal components
+    S_lm, T_lm = analyze_vector(cfg, u, v)
+    
+    # Rotational part (from toroidal component)
+    u_rot, v_rot = synthesize_vector(cfg, zeros(length(S_lm)), T_lm)
+    
+    # Divergent part (from spheroidal component)  
+    u_div, v_div = synthesize_vector(cfg, S_lm, zeros(length(T_lm)))
+    
+    return (u_rot, v_rot), (u_div, v_div), (S_lm, T_lm)
+end
+
+function vector_field_properties(cfg::SHTnsConfig, u::Matrix{Float64}, v::Matrix{Float64})
+    # Compute various properties of vector field
+    
+    (u_rot, v_rot), (u_div, v_div), (S_lm, T_lm) = helmholtz_decomposition(cfg, u, v)
+    
+    # Energy in each component
+    rot_energy = sum(u_rot.^2 + v_rot.^2)
+    div_energy = sum(u_div.^2 + v_div.^2)
+    total_energy = sum(u.^2 + v.^2)
+    
+    # Spectral energies
+    spheroidal_energy = sum(abs2, S_lm)
+    toroidal_energy = sum(abs2, T_lm)
+    
+    return Dict(
+        :rotational_fraction =&gt; rot_energy / total_energy,
+        :divergent_fraction =&gt; div_energy / total_energy,
+        :spheroidal_energy =&gt; spheroidal_energy,
+        :toroidal_energy =&gt; toroidal_energy,
+        :total_spectral_energy =&gt; spheroidal_energy + toroidal_energy
+    )
+end
+
+# Example analysis
+cfg = create_gauss_config(48, 48)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Create test vector field with known properties
+u = @. 10 * sin(2θ) * cos(φ)    # Mostly divergent
+v = @. 5 * cos(θ) * sin(2φ)     # Mixed
+
+properties = vector_field_properties(cfg, u, v)
+
+println(&quot;Vector Field Analysis:&quot;)
+for (key, value) in properties
+    println(&quot;  $key: $value&quot;)
+end
+
+destroy_config(cfg)</code></pre><h3 id="Enstrophy-and-Energy-Cascade-Analysis"><a class="docs-heading-anchor" href="#Enstrophy-and-Energy-Cascade-Analysis">Enstrophy and Energy Cascade Analysis</a><a id="Enstrophy-and-Energy-Cascade-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Enstrophy-and-Energy-Cascade-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+function compute_enstrophy_spectrum(cfg::SHTnsConfig, u::Matrix{Float64}, v::Matrix{Float64})
+    # Enstrophy Z(l) = l(l+1) * |ω_l|² where ω is vorticity
+    
+    # Get toroidal component (related to vorticity)
+    S_lm, T_lm = analyze_vector(cfg, u, v)
+    
+    # Compute enstrophy per degree
+    lmax = get_lmax(cfg)
+    enstrophy = zeros(lmax + 1)
+    
+    for i in 1:length(T_lm)
+        l, m = lm_from_index(cfg, i)
+        enstrophy[l + 1] += l * (l + 1) * abs2(T_lm[i])
+    end
+    
+    return enstrophy
+end
+
+function compute_energy_spectrum(cfg::SHTnsConfig, u::Matrix{Float64}, v::Matrix{Float64})
+    # Kinetic energy E(l) = |u_l|²
+    
+    S_lm, T_lm = analyze_vector(cfg, u, v)
+    
+    lmax = get_lmax(cfg)
+    energy = zeros(lmax + 1)
+    
+    for i in 1:length(S_lm)
+        l, m = lm_from_index(cfg, i)
+        energy[l + 1] += abs2(S_lm[i]) + abs2(T_lm[i])
+    end
+    
+    return energy
+end
+
+function analyze_turbulent_cascade(cfg::SHTnsConfig, 
+                                  velocity_fields::Vector{Tuple{Matrix{Float64}, Matrix{Float64}}})
+    # Analyze energy cascade in turbulent flow
+    
+    n_snapshots = length(velocity_fields)
+    lmax = get_lmax(cfg)
+    
+    mean_energy = zeros(lmax + 1)
+    mean_enstrophy = zeros(lmax + 1)
+    
+    for (u, v) in velocity_fields
+        energy = compute_energy_spectrum(cfg, u, v)
+        enstrophy = compute_enstrophy_spectrum(cfg, u, v)
+        
+        mean_energy .+= energy
+        mean_enstrophy .+= enstrophy
+    end
+    
+    mean_energy ./= n_snapshots
+    mean_enstrophy ./= n_snapshots
+    
+    # Find inertial range (power law behavior)
+    degrees = 1:lmax
+    
+    return Dict(
+        :degrees =&gt; degrees,
+        :energy_spectrum =&gt; mean_energy[2:end],  # Skip l=0
+        :enstrophy_spectrum =&gt; mean_enstrophy[2:end],
+        :energy_slope =&gt; fit_power_law_slope(degrees[5:end÷2], mean_energy[6:end÷2+1]),
+        :enstrophy_slope =&gt; fit_power_law_slope(degrees[5:end÷2], mean_enstrophy[6:end÷2+1])
+    )
+end
+
+function fit_power_law_slope(x, y)
+    # Simple linear fit in log-log space
+    log_x = log.(x)
+    log_y = log.(y[y .&gt; 0])  # Avoid log(0)
+    
+    if length(log_y) &lt; 2
+        return NaN
+    end
+    
+    # Linear regression
+    n = length(log_x)
+    sum_x = sum(log_x)
+    sum_y = sum(log_y[1:length(log_x)])
+    sum_xy = sum(log_x .* log_y[1:length(log_x)])
+    sum_x2 = sum(log_x.^2)
+    
+    slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x^2)
+    return slope
+end</code></pre><h2 id="Temporal-Evolution-and-Time-Series"><a class="docs-heading-anchor" href="#Temporal-Evolution-and-Time-Series">Temporal Evolution and Time Series</a><a id="Temporal-Evolution-and-Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Temporal-Evolution-and-Time-Series" title="Permalink"></a></h2><h3 id="Spectral-Time-Series-Analysis"><a class="docs-heading-anchor" href="#Spectral-Time-Series-Analysis">Spectral Time Series Analysis</a><a id="Spectral-Time-Series-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Time-Series-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using FFTW
+
+struct SpectralTimeSeries
+    cfg::SHTnsConfig
+    time_series::Vector{Vector{Float64}}  # Each element is sh coefficients
+    times::Vector{Float64}
+    lmax::Int
+end
+
+function SpectralTimeSeries(cfg::SHTnsConfig)
+    SpectralTimeSeries(cfg, Vector{Float64}[], Float64[], get_lmax(cfg))
+end
+
+function add_snapshot!(sts::SpectralTimeSeries, field::Matrix{Float64}, time::Float64)
+    sh = analyze(sts.cfg, field)
+    push!(sts.time_series, sh)
+    push!(sts.times, time)
+end
+
+function temporal_power_spectrum(sts::SpectralTimeSeries, l::Int, m::Int)
+    # Get time evolution of specific (l,m) mode
+    idx = lmidx(sts.cfg, l, m)
+    
+    mode_evolution = [sh[idx] for sh in sts.time_series]
+    
+    # Compute temporal Fourier transform
+    fft_result = fft(mode_evolution)
+    power_spectrum = abs2.(fft_result)
+    
+    # Frequency axis
+    dt = length(sts.times) &gt; 1 ? sts.times[2] - sts.times[1] : 1.0
+    frequencies = fftfreq(length(mode_evolution), 1/dt)
+    
+    return frequencies, power_spectrum
+end
+
+function mode_correlation_matrix(sts::SpectralTimeSeries)
+    # Compute correlation between different spherical harmonic modes
+    
+    n_modes = length(sts.time_series[1])
+    n_times = length(sts.time_series)
+    
+    # Create matrix: modes × time
+    mode_matrix = zeros(n_modes, n_times)
+    for (i, sh) in enumerate(sts.time_series)
+        mode_matrix[:, i] = sh
+    end
+    
+    # Compute correlation matrix
+    correlation_matrix = cor(mode_matrix&#39;)
+    
+    return correlation_matrix
+end
+
+function dominant_mode_evolution(sts::SpectralTimeSeries, n_modes::Int=10)
+    # Find most energetic modes and track their evolution
+    
+    # Compute mean energy per mode
+    mean_energies = zeros(length(sts.time_series[1]))
+    for sh in sts.time_series
+        mean_energies .+= abs2.(sh)
+    end
+    mean_energies ./= length(sts.time_series)
+    
+    # Find dominant modes
+    dominant_indices = sortperm(mean_energies, rev=true)[1:n_modes]
+    
+    # Extract evolution
+    evolutions = []
+    for idx in dominant_indices
+        l, m = lm_from_index(sts.cfg, idx)
+        evolution = [sh[idx] for sh in sts.time_series]
+        push!(evolutions, (l=l, m=m, evolution=evolution, mean_energy=mean_energies[idx]))
+    end
+    
+    return evolutions
+end
+
+# Example usage
+cfg = create_gauss_config(32, 32)
+sts = SpectralTimeSeries(cfg)
+
+# Generate synthetic time series (e.g., decaying turbulence)
+for t in 0:0.1:10.0
+    # Synthetic field with time evolution
+    θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+    decay_factor = exp(-0.1 * t)
+    field = decay_factor * (
+        sin(3θ) .* cos(2φ) +
+        0.5 * sin(5θ) .* cos(4φ) * cos(0.5π * t) +
+        randn(size(θ)...) * 0.1
+    )
+    
+    add_snapshot!(sts, field, t)
+end
+
+# Analysis
+dominant_modes = dominant_mode_evolution(sts, 5)
+for mode in dominant_modes
+    println(&quot;Mode l=$(mode.l), m=$(mode.m): mean energy = $(mode.mean_energy)&quot;)
+end
+
+# Temporal spectrum of dominant mode
+if length(dominant_modes) &gt; 0
+    l, m = dominant_modes[1].l, dominant_modes[1].m
+    freqs, power = temporal_power_spectrum(sts, l, m)
+    println(&quot;Temporal spectrum computed for mode ($l, $m)&quot;)
+end
+
+destroy_config(cfg)</code></pre><h2 id="Custom-Interpolation-and-Remapping"><a class="docs-heading-anchor" href="#Custom-Interpolation-and-Remapping">Custom Interpolation and Remapping</a><a id="Custom-Interpolation-and-Remapping-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Interpolation-and-Remapping" title="Permalink"></a></h2><h3 id="Adaptive-Mesh-Refinement-Interface"><a class="docs-heading-anchor" href="#Adaptive-Mesh-Refinement-Interface">Adaptive Mesh Refinement Interface</a><a id="Adaptive-Mesh-Refinement-Interface-1"></a><a class="docs-heading-anchor-permalink" href="#Adaptive-Mesh-Refinement-Interface" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+struct AdaptiveMesh
+    base_cfg::SHTnsConfig
+    refined_regions::Vector{Dict{Symbol, Any}}
+    global_field::Union{Vector{Float64}, Nothing}
+end
+
+function AdaptiveMesh(base_lmax::Int)
+    base_cfg = create_gauss_config(base_lmax, base_lmax)
+    AdaptiveMesh(base_cfg, Dict{Symbol, Any}[], nothing)
+end
+
+function add_refined_region!(mesh::AdaptiveMesh, 
+                           θ_center::Float64, φ_center::Float64, 
+                           radius::Float64, refinement_lmax::Int)
+    
+    refined_cfg = create_gauss_config(refinement_lmax, refinement_lmax)
+    
+    region = Dict(
+        :center =&gt; (θ_center, φ_center),
+        :radius =&gt; radius,
+        :cfg =&gt; refined_cfg,
+        :lmax =&gt; refinement_lmax,
+        :local_field =&gt; nothing
+    )
+    
+    push!(mesh.refined_regions, region)
+end
+
+function interpolate_to_refined_region!(mesh::AdaptiveMesh, region_idx::Int)
+    if mesh.global_field === nothing
+        error(&quot;No global field set&quot;)
+    end
+    
+    region = mesh.refined_regions[region_idx]
+    base_spatial = synthesize(mesh.base_cfg, mesh.global_field)
+    
+    # Extract region from global field (simplified interpolation)
+    θ_global, φ_global = SHTnsKit.create_coordinate_matrices(mesh.base_cfg)
+    θ_local, φ_local = SHTnsKit.create_coordinate_matrices(region[:cfg])
+    
+    # Simple nearest-neighbor interpolation (in practice, use proper interpolation)
+    local_spatial = zeros(size(θ_local))
+    
+    for i in 1:size(θ_local, 1), j in 1:size(θ_local, 2)
+        # Find nearest point in global grid
+        distances = (θ_global .- θ_local[i,j]).^2 + (φ_global .- φ_local[i,j]).^2
+        min_idx = argmin(distances)
+        local_spatial[i,j] = base_spatial[min_idx]
+    end
+    
+    # Analyze to get local spectral representation
+    region[:local_field] = analyze(region[:cfg], local_spatial)
+end
+
+function project_refined_to_global!(mesh::AdaptiveMesh, region_idx::Int)
+    region = mesh.refined_regions[region_idx]
+    
+    if region[:local_field] === nothing
+        error(&quot;No refined field in region $region_idx&quot;)
+    end
+    
+    # Convert refined solution back to global grid
+    local_spatial = synthesize(region[:cfg], region[:local_field])
+    
+    # Project onto global spectral representation
+    # This requires careful handling of overlapping regions
+    
+    global_spatial = synthesize(mesh.base_cfg, mesh.global_field)
+    
+    # Weighted blending (simplified)
+    θ_center, φ_center = region[:center]
+    radius = region[:radius]
+    
+    θ_global, φ_global = SHTnsKit.create_coordinate_matrices(mesh.base_cfg)
+    θ_local, φ_local = SHTnsKit.create_coordinate_matrices(region[:cfg])
+    
+    # Apply refined solution in the local region
+    # (Proper implementation would use overlap integrals)
+    
+    mesh.global_field = analyze(mesh.base_cfg, global_spatial)
+end
+
+function cleanup!(mesh::AdaptiveMesh)
+    destroy_config(mesh.base_cfg)
+    for region in mesh.refined_regions
+        destroy_config(region[:cfg])
+    end
+end</code></pre><h2 id="Memory-Mapped-Large-Dataset-Processing"><a class="docs-heading-anchor" href="#Memory-Mapped-Large-Dataset-Processing">Memory-Mapped Large Dataset Processing</a><a id="Memory-Mapped-Large-Dataset-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Mapped-Large-Dataset-Processing" title="Permalink"></a></h2><pre><code class="language-julia hljs">using SHTnsKit
+using Mmap
+
+struct MemoryMappedSpectralData
+    file_path::String
+    cfg::SHTnsConfig
+    n_snapshots::Int
+    nlm::Int
+    mmap_array::Array{Float64, 2}  # nlm × n_snapshots
+end
+
+function create_mmap_spectral_data(file_path::String, cfg::SHTnsConfig, n_snapshots::Int)
+    nlm = cfg.nlm
+    
+    # Create memory-mapped file
+    file_size = nlm * n_snapshots * sizeof(Float64)
+    
+    open(file_path, &quot;w+&quot;) do io
+        write(io, zeros(UInt8, file_size))
+    end
+    
+    # Memory map the file
+    mmap_array = Mmap.mmap(file_path, Array{Float64, 2}, (nlm, n_snapshots))
+    
+    MemoryMappedSpectralData(file_path, cfg, n_snapshots, nlm, mmap_array)
+end
+
+function add_snapshot!(mmsd::MemoryMappedSpectralData, 
+                      spatial_field::Matrix{Float64}, 
+                      snapshot_idx::Int)
+    if snapshot_idx &gt; mmsd.n_snapshots
+        error(&quot;Snapshot index $snapshot_idx exceeds capacity $(mmsd.n_snapshots)&quot;)
+    end
+    
+    # Analyze and store directly in memory-mapped array
+    sh = analyze(mmsd.cfg, spatial_field)
+    mmsd.mmap_array[:, snapshot_idx] = sh
+end
+
+function process_snapshots_streaming(mmsd::MemoryMappedSpectralData, 
+                                   process_func::Function,
+                                   chunk_size::Int=100)
+    results = []
+    
+    n_chunks = div(mmsd.n_snapshots, chunk_size)
+    
+    for chunk in 1:n_chunks
+        start_idx = (chunk - 1) * chunk_size + 1
+        end_idx = min(chunk * chunk_size, mmsd.n_snapshots)
+        
+        # Process chunk
+        chunk_data = mmsd.mmap_array[:, start_idx:end_idx]
+        chunk_result = process_func(mmsd.cfg, chunk_data)
+        push!(results, chunk_result)
+        
+        # Optional: trigger garbage collection
+        if chunk % 10 == 0
+            GC.gc()
+        end
+    end
+    
+    return results
+end
+
+function compute_temporal_statistics(mmsd::MemoryMappedSpectralData)
+    # Compute statistics without loading all data into memory
+    
+    mean_spectrum = zeros(mmsd.nlm)
+    var_spectrum = zeros(mmsd.nlm)
+    
+    # First pass: compute mean
+    for i in 1:mmsd.n_snapshots
+        mean_spectrum .+= mmsd.mmap_array[:, i]
+    end
+    mean_spectrum ./= mmsd.n_snapshots
+    
+    # Second pass: compute variance
+    for i in 1:mmsd.n_snapshots
+        diff = mmsd.mmap_array[:, i] - mean_spectrum
+        var_spectrum .+= diff.^2
+    end
+    var_spectrum ./= (mmsd.n_snapshots - 1)
+    
+    return mean_spectrum, sqrt.(var_spectrum)
+end
+
+function cleanup!(mmsd::MemoryMappedSpectralData)
+    # Close memory mapping and optionally remove file
+    finalize(mmsd.mmap_array)
+    # rm(mmsd.file_path)  # Uncomment to delete file
+end
+
+# Example: Process large climate dataset
+# cfg = create_gauss_config(128, 128)
+# n_years = 100
+# n_snapshots_per_year = 365
+# total_snapshots = n_years * n_snapshots_per_year
+
+# mmsd = create_mmap_spectral_data(&quot;climate_data.bin&quot;, cfg, total_snapshots)
+
+# # Add data (in practice, this would come from files)
+# for i in 1:total_snapshots
+#     synthetic_field = generate_climate_snapshot(i)  # User function
+#     add_snapshot!(mmsd, synthetic_field, i)
+# end
+
+# # Compute statistics
+# mean_spec, std_spec = compute_temporal_statistics(mmsd)
+
+# cleanup!(mmsd)
+# destroy_config(cfg)</code></pre><h2 id="Integration-with-External-Libraries"><a class="docs-heading-anchor" href="#Integration-with-External-Libraries">Integration with External Libraries</a><a id="Integration-with-External-Libraries-1"></a><a class="docs-heading-anchor-permalink" href="#Integration-with-External-Libraries" title="Permalink"></a></h2><h3 id="Interfacing-with-Climate-Models"><a class="docs-heading-anchor" href="#Interfacing-with-Climate-Models">Interfacing with Climate Models</a><a id="Interfacing-with-Climate-Models-1"></a><a class="docs-heading-anchor-permalink" href="#Interfacing-with-Climate-Models" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+# using NCDatasets  # For NetCDF files
+
+function read_climate_model_output(file_path::String, variable::String, time_index::Int)
+    # Read data from NetCDF file (pseudo-code)
+    # In practice, use NCDatasets.jl or similar
+    
+    # data = NCDatasets.Dataset(file_path) do ds
+    #     ds[variable][:, :, time_index]
+    # end
+    
+    # For demonstration, create synthetic data
+    nlat, nlon = 96, 192  # Typical climate model resolution
+    data = rand(nlat, nlon)
+    
+    return data
+end
+
+function climate_model_to_shtns(data::Matrix{Float64}, target_lmax::Int)
+    # Convert climate model grid to SHTns format
+    
+    input_nlat, input_nlon = size(data)
+    
+    # Create appropriate configuration
+    cfg = create_regular_config(target_lmax, target_lmax)
+    target_nlat, target_nlon = cfg.nlat, cfg.nlon
+    
+    # Interpolate to target grid (simplified)
+    if (input_nlat, input_nlon) != (target_nlat, target_nlon)
+        # Bilinear interpolation (in practice, use proper spherical interpolation)
+        data_interpolated = imresize(data, (target_nlat, target_nlon))
+    else
+        data_interpolated = data
+    end
+    
+    # Analyze
+    sh = analysis(cfg, data_interpolated)
+    
+    return cfg, sh
+end
+
+function process_climate_ensemble(file_paths::Vector{String}, 
+                                variable::String, 
+                                target_lmax::Int)
+    
+    ensemble_spectra = []
+    reference_cfg = nothing
+    
+    for file_path in file_paths
+        println(&quot;Processing: $file_path&quot;)
+        
+        # Read multiple time steps
+        n_time_steps = get_time_dimension_size(file_path)  # User function
+        
+        for t in 1:min(n_time_steps, 100)  # Limit for example
+            data = read_climate_model_output(file_path, variable, t)
+            cfg, sh = climate_model_to_shtns(data, target_lmax)
+            
+            if reference_cfg === nothing
+                reference_cfg = cfg
+            end
+            
+            push!(ensemble_spectra, sh)
+        end
+    end
+    
+    return reference_cfg, ensemble_spectra
+end
+
+# Example usage
+# file_paths = [&quot;model1_output.nc&quot;, &quot;model2_output.nc&quot;, &quot;model3_output.nc&quot;]
+# cfg, ensemble = process_climate_ensemble(file_paths, &quot;temperature&quot;, 64)
+
+# # Compute ensemble statistics
+# n_members = length(ensemble)
+# mean_spectrum = sum(ensemble) / n_members
+# variance_spectrum = sum([(sp - mean_spectrum).^2 for sp in ensemble]) / (n_members - 1)
+
+# println(&quot;Ensemble analysis complete&quot;)
+# destroy_config(cfg)</code></pre><h2 id="Automatic-Differentiation-Integration"><a class="docs-heading-anchor" href="#Automatic-Differentiation-Integration">Automatic Differentiation Integration</a><a id="Automatic-Differentiation-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Automatic-Differentiation-Integration" title="Permalink"></a></h2><p>SHTnsKit.jl provides seamless integration with Julia&#39;s automatic differentiation ecosystem through package extensions for ForwardDiff.jl and Zygote.jl.</p><h3 id="ForwardDiff.jl-Support-(Forward-Mode-AD)"><a class="docs-heading-anchor" href="#ForwardDiff.jl-Support-(Forward-Mode-AD)">ForwardDiff.jl Support (Forward-Mode AD)</a><a id="ForwardDiff.jl-Support-(Forward-Mode-AD)-1"></a><a class="docs-heading-anchor-permalink" href="#ForwardDiff.jl-Support-(Forward-Mode-AD)" title="Permalink"></a></h3><p>Forward-mode automatic differentiation is ideal for functions with few inputs and many outputs, common in parameter estimation problems.</p><pre><code class="language-julia hljs">using SHTnsKit
+using ForwardDiff
+
+cfg = create_gauss_config(16, 16)
+
+# Example: Parameter estimation for spherical harmonic coefficients
+function objective(params)
+    # Create spherical harmonic field from parameters
+    sh = zeros(cfg.nlm)
+    sh[1:length(params)] = params
+    
+    # Transform to spatial domain
+    spatial = synthesis(cfg, sh)
+    
+    # Compute some objective (e.g., match target pattern)
+    target = rand(size(spatial))
+    return sum((spatial - target).^2)
+end
+
+# Initial parameters
+params₀ = rand(10)
+
+# Compute gradient using ForwardDiff
+∇f = ForwardDiff.gradient(objective, params₀)
+
+# Use gradient for optimization
+params₁ = params₀ - 0.01 * ∇f
+
+destroy_config(cfg)</code></pre><h3 id="Zygote.jl-Support-(Reverse-Mode-AD)"><a class="docs-heading-anchor" href="#Zygote.jl-Support-(Reverse-Mode-AD)">Zygote.jl Support (Reverse-Mode AD)</a><a id="Zygote.jl-Support-(Reverse-Mode-AD)-1"></a><a class="docs-heading-anchor-permalink" href="#Zygote.jl-Support-(Reverse-Mode-AD)" title="Permalink"></a></h3><p>Reverse-mode AD is ideal for functions with many inputs and few outputs, common in neural networks and optimization problems.</p><pre><code class="language-julia hljs">using SHTnsKit
+using Zygote
+
+cfg = create_gauss_config(16, 16)
+
+# Example: Optimizing spatial field patterns
+function loss_function(spatial_field)
+    # Transform to spectral domain
+    sh = analysis(cfg, spatial_field)
+    
+    # Regularize high-frequency components
+    high_freq_penalty = sum(sh[end-20:end].^2)
+    
+    # Target smooth field
+    smooth_penalty = sum(abs2, spatial_field .- mean(spatial_field))
+    
+    return 0.1 * high_freq_penalty + smooth_penalty
+end
+
+# Initial spatial field
+spatial₀ = randn(cfg.nlat, cfg.nlon)
+
+# Compute gradient using Zygote
+∇L = Zygote.gradient(loss_function, spatial₀)[1]
+
+# Update field
+spatial₁ = spatial₀ - 0.01 * ∇L
+
+destroy_config(cfg)</code></pre><h3 id="Advanced-AD-Patterns"><a class="docs-heading-anchor" href="#Advanced-AD-Patterns">Advanced AD Patterns</a><a id="Advanced-AD-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-AD-Patterns" title="Permalink"></a></h3><h4 id="Differentiable-Vector-Field-Operations"><a class="docs-heading-anchor" href="#Differentiable-Vector-Field-Operations">Differentiable Vector Field Operations</a><a id="Differentiable-Vector-Field-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Differentiable-Vector-Field-Operations" title="Permalink"></a></h4><pre><code class="language-julia hljs">using SHTnsKit
+using ForwardDiff
+
+cfg = create_gauss_config(12, 12)
+
+function vector_field_energy(params)
+    n = length(params) ÷ 2
+    S_lm = params[1:n]          # Spheroidal coefficients
+    T_lm = params[n+1:end]      # Toroidal coefficients
+    
+    # Synthesize vector field
+    Vθ, Vφ = synthesize_vector(cfg, S_lm, T_lm)
+    
+    # Compute kinetic energy
+    kinetic_energy = sum(Vθ.^2 + Vφ.^2)
+    
+    # Add enstrophy (related to vorticity)
+    _, T_reconstructed = analyze_vector(cfg, Vθ, Vφ)
+    enstrophy = sum(abs2, T_reconstructed)
+    
+    return 0.5 * kinetic_energy + 0.1 * enstrophy
+end
+
+# Optimize vector field parameters
+nlm = cfg.nlm
+vector_params = randn(2 * nlm)
+
+# Gradient descent
+for i in 1:10
+    grad = ForwardDiff.gradient(vector_field_energy, vector_params)
+    vector_params .-= 0.01 * grad
+    
+    energy = vector_field_energy(vector_params)
+    println(&quot;Iteration $i: Energy = $energy&quot;)
+end
+
+destroy_config(cfg)</code></pre><h4 id="Differentiable-Field-Rotations"><a class="docs-heading-anchor" href="#Differentiable-Field-Rotations">Differentiable Field Rotations</a><a id="Differentiable-Field-Rotations-1"></a><a class="docs-heading-anchor-permalink" href="#Differentiable-Field-Rotations" title="Permalink"></a></h4><pre><code class="language-julia hljs">using SHTnsKit
+using ForwardDiff
+
+cfg = create_gauss_config(16, 16)
+
+# Optimize rotation angles to match target field
+function rotation_objective(angles)
+    α, β, γ = angles
+    
+    # Original field
+    # Create bandlimited test coefficients
+sh_original = zeros(cfg.nlm)
+sh_original[1] = 1.0
+if cfg.nlm &gt; 10
+    sh_original[2:5] = [0.5, 0.3, 0.2, 0.1]
+end
+    
+    # Rotate field (in-place helper for real-basis coefficients)
+    sh_rotated = copy(sh_original)
+    rotate_real!(cfg, sh_rotated; alpha=α, beta=β, gamma=γ)
+    
+    # Target field (e.g., aligned with some axis)
+    sh_target = zeros(cfg.nlm)
+    sh_target[1] = 1.0  # Y₀⁰ mode only
+    
+    return sum((sh_rotated - sh_target).^2)
+end
+
+# Find optimal rotation angles
+angles₀ = [0.1, 0.1, 0.1]
+
+for i in 1:20
+    grad = ForwardDiff.gradient(rotation_objective, angles₀)
+    angles₀ .-= 0.01 * grad
+    
+    obj = rotation_objective(angles₀)
+    println(&quot;Iteration $i: Objective = $obj, Angles = $angles₀&quot;)
+end
+
+destroy_config(cfg)</code></pre><h4 id="Neural-Differential-Equations-on-the-Sphere"><a class="docs-heading-anchor" href="#Neural-Differential-Equations-on-the-Sphere">Neural Differential Equations on the Sphere</a><a id="Neural-Differential-Equations-on-the-Sphere-1"></a><a class="docs-heading-anchor-permalink" href="#Neural-Differential-Equations-on-the-Sphere" title="Permalink"></a></h4><pre><code class="language-julia hljs">using SHTnsKit
+using Zygote
+# using DifferentialEquations  # For ODE solving
+
+cfg = create_gauss_config(20, 20)
+
+# Define a neural ODE on the sphere using SHT
+function sphere_neural_ode!(du, u, p, t)
+    # u contains spherical harmonic coefficients
+    # p contains neural network parameters
+    
+    # Transform to spatial domain
+    spatial = synthesize(cfg, u)
+    
+    # Apply nonlinear transformation (neural network layer)
+    # This is a simplified version - real neural networks would be more complex
+    W, b = p[1:length(spatial)], p[length(spatial)+1:end]
+    transformed = tanh.(W .* spatial .+ b[1:size(spatial, 1), 1:size(spatial, 2)])
+    
+    # Transform back to spectral domain for time derivative
+    du .= analysis(cfg, transformed)
+end
+
+# Example usage would involve solving the ODE and differentiating through the solution</code></pre><h3 id="Performance-Considerations-for-AD"><a class="docs-heading-anchor" href="#Performance-Considerations-for-AD">Performance Considerations for AD</a><a id="Performance-Considerations-for-AD-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Considerations-for-AD" title="Permalink"></a></h3><h4 id="Memory-Management"><a class="docs-heading-anchor" href="#Memory-Management">Memory Management</a><a id="Memory-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Management" title="Permalink"></a></h4><pre><code class="language-julia hljs">using SHTnsKit
+using ForwardDiff
+
+cfg = create_gauss_config(32, 32)
+
+# Pre-allocate buffers to avoid repeated allocation during AD
+struct ADBuffers
+    sh_buffer::Vector{Float64}
+    spatial_buffer::Matrix{Float64}
+    grad_buffer::Vector{Float64}
+end
+
+function create_ad_buffers(cfg)
+    ADBuffers(
+        allocate_spectral(cfg),
+        allocate_spatial(cfg),
+        zeros(cfg.nlm)
+    )
+end
+
+buffers = create_ad_buffers(cfg)
+
+# Use buffers in AD computations to reduce allocation
+function efficient_objective(params, buffers)
+    # Use pre-allocated buffers
+    buffers.sh_buffer[1:length(params)] = params
+    fill!(buffers.sh_buffer, 0.0)
+    buffers.sh_buffer[1:length(params)] = params
+    
+    synthesize!(cfg, buffers.sh_buffer, buffers.spatial_buffer)
+    
+    return sum(abs2, buffers.spatial_buffer)
+end
+
+# This version is more memory efficient
+grad = ForwardDiff.gradient(p -&gt; efficient_objective(p, buffers), rand(10))
+
+destroy_config(cfg)</code></pre><h4 id="Choosing-Between-Forward-and-Reverse-Mode"><a class="docs-heading-anchor" href="#Choosing-Between-Forward-and-Reverse-Mode">Choosing Between Forward and Reverse Mode</a><a id="Choosing-Between-Forward-and-Reverse-Mode-1"></a><a class="docs-heading-anchor-permalink" href="#Choosing-Between-Forward-and-Reverse-Mode" title="Permalink"></a></h4><pre><code class="language-julia hljs">using BenchmarkTools
+
+# Rule of thumb:
+# - Use ForwardDiff when: n_parameters &lt; n_outputs
+# - Use Zygote when: n_parameters &gt; n_outputs
+
+cfg = create_gauss_config(16, 16)
+n_params = 50
+n_spatial = cfg.nlat * cfg.nlon
+
+println(&quot;Parameters: $n_params, Spatial points: $n_spatial&quot;)
+
+function test_objective(params)
+    sh = zeros(cfg.nlm)
+    sh[1:n_params] = params
+    spatial = synthesis(cfg, sh)
+    return sum(abs2, spatial)  # Single output
+end
+
+params = rand(n_params)
+
+if n_params &lt; n_spatial
+    println(&quot;ForwardDiff recommended (fewer parameters than outputs)&quot;)
+    @btime ForwardDiff.gradient($test_objective, $params)
+else
+    println(&quot;Zygote recommended (more parameters than outputs)&quot;)
+    @btime Zygote.gradient($test_objective, $params)
+end
+
+destroy_config(cfg)</code></pre><h3 id="Applications-in-Scientific-Computing"><a class="docs-heading-anchor" href="#Applications-in-Scientific-Computing">Applications in Scientific Computing</a><a id="Applications-in-Scientific-Computing-1"></a><a class="docs-heading-anchor-permalink" href="#Applications-in-Scientific-Computing" title="Permalink"></a></h3><h4 id="Inverse-Problems"><a class="docs-heading-anchor" href="#Inverse-Problems">Inverse Problems</a><a id="Inverse-Problems-1"></a><a class="docs-heading-anchor-permalink" href="#Inverse-Problems" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Parameter estimation from observations
+function solve_inverse_problem(observations, initial_guess, cfg)
+    using ForwardDiff
+    using Optim
+    
+    function forward_model(params)
+        # Convert parameters to spherical harmonic field
+        sh = param_to_sh(params, cfg)
+        return synthesis(cfg, sh)
+    end
+    
+    function objective(params)
+        predicted = forward_model(params)
+        return sum((observations - predicted).^2)
+    end
+    
+    # Use automatic differentiation for optimization
+    result = optimize(objective, initial_guess, BFGS(), 
+                     autodiff=:forward)
+    
+    return result.minimizer
+end</code></pre><h4 id="Data-Assimilation"><a class="docs-heading-anchor" href="#Data-Assimilation">Data Assimilation</a><a id="Data-Assimilation-1"></a><a class="docs-heading-anchor-permalink" href="#Data-Assimilation" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Variational data assimilation with spherical harmonic background
+function variational_assimilation(observations, background_sh, obs_locations, cfg)
+    using Zygote
+    
+    function cost_function(analysis_sh)
+        # Background term
+        background_cost = sum((analysis_sh - background_sh).^2)
+        
+        # Observation term
+        analysis_spatial = synthesize(cfg, analysis_sh)
+        obs_cost = sum((analysis_spatial[obs_locations] - observations).^2)
+        
+        return 0.5 * (background_cost + obs_cost)
+    end
+    
+    # Minimize cost function using gradients
+    analysis_sh = copy(background_sh)
+    
+    for i in 1:100
+        grad = Zygote.gradient(cost_function, analysis_sh)[1]
+        analysis_sh .-= 0.01 * grad
+        
+        cost = cost_function(analysis_sh)
+        println(&quot;Iteration $i: Cost = $cost&quot;)
+        
+        if norm(grad) &lt; 1e-6
+            break
+        end
+    end
+    
+    return analysis_sh
+end</code></pre><p>This comprehensive advanced usage guide demonstrates sophisticated patterns for expert users of SHTnsKit.jl, covering everything from configuration management to large-scale data processing, automatic differentiation, and integration with external scientific computing workflows.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../performance_tips/">« Performance Tips</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.15.0 on <span class="colophon-date" title="Monday 10 November 2025 09:06">Monday 10 November 2025</span>. Using Julia version 1.12.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

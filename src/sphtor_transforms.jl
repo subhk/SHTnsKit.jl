@@ -111,37 +111,97 @@ Transform horizontal vector field components to spheroidal/toroidal coefficients
 Input: colatitude (Vt) and azimuthal (Vp) components on spatial grid.
 """
 function spat_to_SHsphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    if is_gpu_config(cfg)
+        return gpu_spat_to_SHsphtor(cfg, Vt, Vp)
+    end
+    return spat_to_SHsphtor_cpu(cfg, Vt, Vp)
+end
+
+function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    
-    # Validate input dimensions  
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
-    
-    # This is a simplified implementation
-    # Full version would involve proper vector analysis including divergence/curl decomposition
-    
-    # For now, perform forward transforms and apply inverse scaling
-    Slm_temp = analysis(cfg, Vt)  
-    Tlm_temp = analysis(cfg, Vp)
-    
+
+    Ftθm = fft_phi(complex.(Vt))
+    Fpθm = fft_phi(complex.(Vp))
+
     lmax, mmax = cfg.lmax, cfg.mmax
-    Slm = similar(Slm_temp)
-    Tlm = similar(Tlm_temp)
-    fill!(Slm, 0.0)
-    fill!(Tlm, 0.0)
-    
-    # Inverse of the scaling applied in SHsphtor_to_spat
-    @inbounds for m in 0:mmax, l in max(1,m):lmax
-        row, col = l + 1, m + 1
-        ll1 = l * (l + 1)
-        if ll1 > 0
-            scale_inv = 1.0 / sqrt(ll1)
-            Slm[row, col] = Slm_temp[row, col] * scale_inv
-            Tlm[row, col] = Tlm_temp[row, col] * scale_inv
+    Slm_int = zeros(ComplexF64, lmax + 1, mmax + 1)
+    Tlm_int = zeros(ComplexF64, lmax + 1, mmax + 1)
+    scaleφ = cfg.cphi
+
+    use_tbl = cfg.use_plm_tables &&
+              length(cfg.plm_tables) == mmax + 1 &&
+              length(cfg.dplm_tables) == mmax + 1 &&
+              !isempty(cfg.plm_tables)
+
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+
+    @threads for m in 0:mmax
+        col = m + 1
+        tid = Threads.threadid()
+        Sacc = thread_local_Sacc[tid]; fill!(Sacc, 0.0 + 0.0im)
+        Tacc = thread_local_Tacc[tid]; fill!(Tacc, 0.0 + 0.0im)
+
+        for i in 1:nlat
+            x = cfg.x[i]
+            sθ = sqrt(max(0.0, 1 - x*x))
+            inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+            wi = cfg.w[i]
+            Fθ = Ftθm[i, col]
+            Fφ = Fpθm[i, col]
+
+            if cfg.robert_form && sθ > 0
+                Fθ /= sθ
+                Fφ /= sθ
+            end
+
+            if use_tbl
+                tblP = cfg.plm_tables[col]
+                tbld = cfg.dplm_tables[col]
+                @inbounds for l in max(1, m):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = -sθ * N * tbld[l+1, i]
+                    Y = N * tblP[l+1, i]
+                    coeff = wi * scaleφ / (l * (l + 1))
+                    term = (0 + 1im) * m * inv_sθ * Y
+                    Sacc[l+1] += coeff * (Fθ * dθY - term * Fφ)
+                    Tacc[l+1] += coeff * (term * Fθ - dθY * Fφ)
+                end
+            else
+                P = thread_local_P[tid]
+                dPdx = thread_local_dPdx[tid]
+                Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
+                @inbounds for l in max(1, m):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = -sθ * N * dPdx[l+1]
+                    Y = N * P[l+1]
+                    coeff = wi * scaleφ / (l * (l + 1))
+                    term = (0 + 1im) * m * inv_sθ * Y
+                    Sacc[l+1] += coeff * (Fθ * dθY - term * Fφ)
+                    Tacc[l+1] += coeff * (term * Fθ - dθY * Fφ)
+                end
+            end
+        end
+
+        for l in max(1, m):lmax
+            Slm_int[l+1, col] = Sacc[l+1]
+            Tlm_int[l+1, col] = Tacc[l+1]
         end
     end
-    
-    return Slm, Tlm
+
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        S2 = similar(Slm_int)
+        T2 = similar(Tlm_int)
+        convert_alm_norm!(S2, Slm_int, cfg; to_internal=false)
+        convert_alm_norm!(T2, Tlm_int, cfg; to_internal=false)
+        return S2, T2
+    else
+        return Slm_int, Tlm_int
+    end
 end
 
 """
@@ -182,6 +242,93 @@ function SHtor_to_spat(cfg::SHTConfig, Tlm::AbstractMatrix; real_output::Bool=tr
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm_zero = zeros(eltype(Tlm), lmax+1, mmax+1)
     return SHsphtor_to_spat(cfg, Slm_zero, Tlm; real_output=real_output)
+end
+
+"""
+    divergence_from_spheroidal(cfg, Slm) -> Matrix
+
+Return divergence spectral coefficients δ_lm corresponding to spheroidal modes
+via δ_lm = −l(l+1) S_lm (`δ_{00} = 0`).
+"""
+function divergence_from_spheroidal(cfg::SHTConfig, Slm::AbstractMatrix)
+    δ = similar(Slm)
+    return divergence_from_spheroidal!(cfg, δ, Slm)
+end
+
+function divergence_from_spheroidal!(cfg::SHTConfig, δ::AbstractMatrix, Slm::AbstractMatrix)
+    size(δ) == size(Slm) || throw(DimensionMismatch("divergence output dims"))
+    fill!(δ, zero(eltype(δ)))
+    lmax, mmax = cfg.lmax, cfg.mmax
+    @inbounds for m in 0:mmax, l in max(1, m):lmax
+        row = l + 1; col = m + 1
+        δ[row, col] = -(l * (l + 1)) * Slm[row, col]
+    end
+    return δ
+end
+
+"""
+    spheroidal_from_divergence(cfg, δlm) -> Matrix
+
+Invert δ_lm = −l(l+1) S_lm for l ≥ 1 to recover spheroidal coefficients.
+"""
+function spheroidal_from_divergence(cfg::SHTConfig, δlm::AbstractMatrix)
+    Slm = similar(δlm)
+    return spheroidal_from_divergence!(cfg, Slm, δlm)
+end
+
+function spheroidal_from_divergence!(cfg::SHTConfig, Slm::AbstractMatrix, δlm::AbstractMatrix)
+    size(Slm) == size(δlm) || throw(DimensionMismatch("spheroidal output dims"))
+    fill!(Slm, zero(eltype(Slm)))
+    lmax, mmax = cfg.lmax, cfg.mmax
+    @inbounds for m in 0:mmax, l in max(1, m):lmax
+        row = l + 1; col = m + 1
+        ll1 = l * (l + 1)
+        Slm[row, col] = ll1 == 0 ? zero(eltype(Slm)) : -(δlm[row, col] / ll1)
+    end
+    return Slm
+end
+
+"""
+    vorticity_from_toroidal(cfg, Tlm) -> Matrix
+
+Return vorticity spectral coefficients ζ_lm = −l(l+1) T_lm.
+"""
+function vorticity_from_toroidal(cfg::SHTConfig, Tlm::AbstractMatrix)
+    ζ = similar(Tlm)
+    return vorticity_from_toroidal!(cfg, ζ, Tlm)
+end
+
+function vorticity_from_toroidal!(cfg::SHTConfig, ζ::AbstractMatrix, Tlm::AbstractMatrix)
+    size(ζ) == size(Tlm) || throw(DimensionMismatch("vorticity output dims"))
+    fill!(ζ, zero(eltype(ζ)))
+    lmax, mmax = cfg.lmax, cfg.mmax
+    @inbounds for m in 0:mmax, l in max(1, m):lmax
+        row = l + 1; col = m + 1
+        ζ[row, col] = -(l * (l + 1)) * Tlm[row, col]
+    end
+    return ζ
+end
+
+"""
+    toroidal_from_vorticity(cfg, ζlm) -> Matrix
+
+Recover toroidal stream function coefficients from vorticity spectra.
+"""
+function toroidal_from_vorticity(cfg::SHTConfig, ζlm::AbstractMatrix)
+    Tlm = similar(ζlm)
+    return toroidal_from_vorticity!(cfg, Tlm, ζlm)
+end
+
+function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::AbstractMatrix)
+    size(Tlm) == size(ζlm) || throw(DimensionMismatch("toroidal output dims"))
+    fill!(Tlm, zero(eltype(Tlm)))
+    lmax, mmax = cfg.lmax, cfg.mmax
+    @inbounds for m in 0:mmax, l in max(1, m):lmax
+        row = l + 1; col = m + 1
+        ll1 = l * (l + 1)
+        Tlm[row, col] = ll1 == 0 ? zero(eltype(Tlm)) : -(ζlm[row, col] / ll1)
+    end
+    return Tlm
 end
 
 """

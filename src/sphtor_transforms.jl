@@ -10,6 +10,10 @@ Key relationships:
 - Vp = (1/sin θ) ∂S/∂φ + ∂T/∂θ  (azimuthal component)
 
 Where S represents the spheroidal (curl-free) part and T the toroidal (div-free) part.
+The corresponding scalar invariants are:
+- Divergence: δ = ∇·V = -∑_{l,m} l(l+1) S_lm Y_l^m  
+- Vorticity:  ζ = (∇×V)·r̂ = -∑_{l,m} l(l+1) T_lm Y_l^m
+so spheroidal/toroidal spectra are directly tied to divergence and vorticity.
 """
 
 """

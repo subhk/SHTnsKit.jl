@@ -137,6 +137,8 @@ export dist_spat_to_SH_packed, dist_SH_packed_to_spat                   # Distri
 export dist_spat_cplx_to_SH, dist_SH_to_spat_cplx                      # Distributed complex transforms
 export dist_SHqst_to_lat                                                # Distributed Q,S,T to latitude
 export dist_SH_rotate_euler                                             # Distributed Euler rotations
+export dist_spatial_divergence, dist_spatial_vorticity                  # Distributed vector invariants
+export dist_scalar_laplacian, dist_scalar_laplacian!                    # Distributed scalar Laplacian
 export dist_SH_Zrotate_packed, dist_SH_Yrotate_packed, dist_SH_Yrotate90_packed, dist_SH_Xrotate90_packed
 
 # ===== EXTENSION FALLBACK FUNCTIONS =====

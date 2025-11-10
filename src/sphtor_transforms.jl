@@ -113,6 +113,8 @@ end
 
 Transform horizontal vector field components to spheroidal/toroidal coefficients.
 Input: colatitude (Vt) and azimuthal (Vp) components on spatial grid.
+The returned coefficients satisfy δ_lm = −l(l+1) S_lm (divergence) and
+ζ_lm = −l(l+1) T_lm (vorticity) when expressed in the internal normalization.
 """
 function spat_to_SHsphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     if is_gpu_config(cfg)

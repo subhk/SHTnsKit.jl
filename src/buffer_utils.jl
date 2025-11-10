@@ -189,11 +189,11 @@ function validate_vector_spatial_dimensions(Vr::AbstractMatrix, Vt::AbstractMatr
 end
 
 """
-    thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.nthreads()) -> Vector{Vector{Float64}}
+    thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.maxthreadid()) -> Vector{Vector{Float64}}
 
 Create thread-local Legendre polynomial buffers to avoid allocations and race conditions.
 Returns vector of buffers, one per thread.
 """
-function thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.nthreads())
+function thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.maxthreadid())
     return [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
 end

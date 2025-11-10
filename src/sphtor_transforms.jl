@@ -45,8 +45,8 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     fill!(Fθ, 0); fill!(Fφ, 0)
 
     # Thread-local working arrays for Legendre polynomial computation
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     # Scale continuous Fourier coefficients to DFT bins for ifft (factor nlon or nlon/(2π))
     inv_scaleφ = phi_inv_scale(nlon)
 
@@ -141,10 +141,10 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
               length(cfg.dplm_tables) == mmax + 1 &&
               !isempty(cfg.plm_tables)
 
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-    thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-    thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
     @threads for m in 0:mmax
         col = m + 1

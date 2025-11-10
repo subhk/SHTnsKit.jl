@@ -34,7 +34,7 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
     fill!(alm, 0)
     scaleφ = cfg.cphi
 
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
     @threads for m in 0:mmax
         col = m + 1
@@ -91,7 +91,7 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix)
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -134,7 +134,7 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
     fill!(Fφ, 0)
     inv_scaleφ = phi_inv_scale(nlon)
 
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     @threads for m in 0:mmax
         col = m + 1
         P = thread_local_P[Threads.threadid()]
@@ -192,7 +192,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -222,4 +222,3 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     f = ifft_phi(Fφ)
     return real_output ? real.(f) : f
 end
-

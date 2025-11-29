@@ -15,6 +15,17 @@ using Base.Threads  # For multi-threading support
 #   "quad" -> scale by nlon/(2π) to match φ quadrature weights (better for regular grids)
 #   "auto" -> Gauss uses "dft", regular grids use "quad"
 phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : nlon)
+
+# Include all module source files
+include("fftutils.jl")                      # FFT utility functions and helpers
+include("layout.jl")                        # Data layout and memory organization
+include("mathutils.jl")                      # Mathematical utility functions
+include("gausslegendre.jl")                  # Gauss-Legendre quadrature implementation
+include("legendre.jl")                       # Legendre polynomial computations
+include("normalization.jl")                  # Spherical harmonic normalization
+include("config.jl")                         # Configuration and setup functions
+
+# Config-aware φ scaling (requires SHTConfig definition)
 function phi_inv_scale(cfg::SHTConfig)
     mode = get(ENV, "SHTNSKIT_PHI_SCALE", "auto")
     if mode == "quad"
@@ -27,14 +38,6 @@ function phi_inv_scale(cfg::SHTConfig)
     end
 end
 
-# Include all module source files
-include("fftutils.jl")                      # FFT utility functions and helpers
-include("layout.jl")                        # Data layout and memory organization
-include("mathutils.jl")                      # Mathematical utility functions
-include("gausslegendre.jl")                  # Gauss-Legendre quadrature implementation
-include("legendre.jl")                       # Legendre polynomial computations
-include("normalization.jl")                  # Spherical harmonic normalization
-include("config.jl")                         # Configuration and setup functions
 include("buffer_utils.jl")                   # Common buffer allocation patterns
 include("plan.jl")                           # Transform planning and optimization
 include("core_transforms.jl")                # Core 2D grid ↔ spectral transforms

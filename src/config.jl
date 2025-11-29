@@ -9,6 +9,7 @@ Fields
 - `lmax, mmax`: maximum degree and order for spherical harmonics
 - `mres`: resolution parameter for m-modes (typically 1)
 - `nlat, nlon`: grid size in latitude (Gauss–Legendre) and longitude (equiangular)
+- `grid_type`: :gauss, :regular, or :regular_poles
 - `θ, φ`: polar and azimuth angle arrays for the computational grid
 - `x, w`: Gauss–Legendre nodes and weights for numerical integration (x = cos(θ))
 - `Nlm`: normalization factors matrix indexed as (l+1, m+1)
@@ -21,6 +22,7 @@ Base.@kwdef mutable struct SHTConfig
     mres::Int                    # M-resolution parameter
     nlat::Int                    # Number of latitude points (Gauss-Legendre)
     nlon::Int                    # Number of longitude points (equiangular)
+    grid_type::Symbol = :gauss   # Grid type (:gauss, :regular, :regular_poles)
     
     # Grid coordinates and quadrature
     θ::Vector{Float64}          # Polar angles (colatitude) [0, π]
@@ -87,10 +89,74 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
     st = sin.(θ)  # sine of colatitude
     
     # Construct and return the complete configuration
-    return SHTConfig(; lmax, mmax, mres, nlat, nlon, θ, φ, x, w, wlat = w, Nlm,
+    return SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type=:gauss, θ, φ, x, w, wlat = w, Nlm,
                      cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
                      ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form,
                      compute_device = :cpu, device_preference = [:cpu])
+end
+
+"""
+    create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
+                          nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                          cs_phase::Bool=true, real_norm::Bool=false,
+                          robert_form::Bool=false, include_poles::Bool=false,
+                          precompute_plm::Bool=true) -> SHTConfig
+
+Create an equiangular (regular) grid configuration. Regular grids use simple
+`θ = (i+0.5)π/nlat` nodes by default; set `include_poles=true` to place nodes
+directly on the poles. By default associated Legendre tables are precomputed,
+which mirrors SHTns' regular-grid behaviour and improves performance.
+"""
+function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
+                               nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                               cs_phase::Bool=true, real_norm::Bool=false,
+                               robert_form::Bool=false, include_poles::Bool=false,
+                               precompute_plm::Bool=true)
+    lmax ≥ 0 || throw(ArgumentError("lmax must be ≥ 0"))
+    mmax ≥ 0 || throw(ArgumentError("mmax must be ≥ 0"))
+    mmax ≤ lmax || throw(ArgumentError("mmax must be ≤ lmax"))
+    mres ≥ 1 || throw(ArgumentError("mres must be ≥ 1"))
+    nlon ≥ (2*mmax + 1) || throw(ArgumentError("nlon must be ≥ 2*mmax+1"))
+    # Regular grids benefit from a slight oversampling in latitude for accuracy
+    min_nlat = include_poles ? (lmax + 1) : (lmax + 2)
+    nlat ≥ min_nlat || throw(ArgumentError("nlat must be ≥ $(min_nlat) for regular grids"))
+
+    θ = zeros(Float64, nlat)
+    w = zeros(Float64, nlat)
+    x = zeros(Float64, nlat)
+    if include_poles
+        for i in 0:(nlat-1)
+            θi = i * (π / (nlat - 1))
+            θ[i+1] = θi
+            w[i+1] = (π / (nlat - 1)) * sin(θi)
+            x[i+1] = cos(θi)
+        end
+    else
+        for i in 0:(nlat-1)
+            θi = (i + 0.5) * (π / nlat)
+            θ[i+1] = θi
+            w[i+1] = (π / nlat) * sin(θi)
+            x[i+1] = cos(θi)
+        end
+    end
+    φ = (2π / nlon) .* collect(0:(nlon-1))
+
+    # Compute normalization factors and indexing helpers
+    Nlm = Nlm_table(lmax, mmax)
+    nlm = nlm_calc(lmax, mmax, mres)
+    li, mi = build_li_mi(lmax, mmax, mres)
+    ct = cos.(θ); st = sin.(θ)
+
+    cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type = include_poles ? :regular_poles : :regular,
+                    θ, φ, x, w, wlat = w, Nlm,
+                    cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
+                    ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form,
+                    compute_device = :cpu, device_preference = [:cpu])
+
+    if precompute_plm
+        prepare_plm_tables!(cfg)
+    end
+    return cfg
 end
 
 """
@@ -100,22 +166,31 @@ end
                    grid_type::Symbol=:gauss) -> SHTConfig
 
 Compatibility wrapper for configuration creation used in some docs/snippets.
-Currently supports only `grid_type = :gauss`, and forwards to `create_gauss_config`.
-`nlat`/`nlon` default to typical exactness choices for Gauss grids.
+Supports Gauss–Legendre (`grid_type = :gauss`) and regular equiangular
+(`grid_type = :regular` or `:regular_poles`) grids, forwarding to the
+appropriate creator. `nlat`/`nlon` defaults are adjusted to satisfy accuracy
+constraints for the chosen grid.
 """
 function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
                        nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
                        cs_phase::Bool=true, real_norm::Bool=false,
-                       robert_form::Bool=false, grid_type::Symbol=:gauss)
-    if grid_type != :gauss
-        throw(ArgumentError("only grid_type=:gauss is supported; use create_gauss_config for Gauss grids"))
-    end
+                       robert_form::Bool=false, grid_type::Symbol=:gauss,
+                       include_poles::Bool=false, precompute_plm::Bool=grid_type != :gauss)
     # Make args robust to underspecified values from older docs/snippets
-    nlat_eff = max(nlat, lmax + 1)              # Gauss exactness requires ≥ lmax+1
+    nlat_eff = max(nlat, lmax + (grid_type == :gauss ? 1 : 2))  # Regular grids benefit from a small oversampling
     nlon_eff = max(nlon, 2*mmax + 1)            # Azimuthal resolution requires ≥ 2*mmax+1
-    return create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,
-                               norm=norm, cs_phase=cs_phase,
-                               real_norm=real_norm, robert_form=robert_form)
+    if grid_type == :gauss
+        return create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,
+                                   norm=norm, cs_phase=cs_phase,
+                                   real_norm=real_norm, robert_form=robert_form)
+    elseif grid_type == :regular || grid_type == :regular_poles
+        return create_regular_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,
+                                     norm=norm, cs_phase=cs_phase, real_norm=real_norm,
+                                     robert_form=robert_form, include_poles=include_poles,
+                                     precompute_plm=precompute_plm)
+    else
+        throw(ArgumentError("unsupported grid_type=$(grid_type); choose :gauss or :regular"))
+    end
 end
 
 """

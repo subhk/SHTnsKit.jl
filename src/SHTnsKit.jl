@@ -40,7 +40,7 @@ include("parallel_dense.jl")                  # Parallel dense matrix operations
 include("device_utils.jl")                    # GPU device utilities and management
 
 # ===== CORE CONFIGURATION AND SETUP =====
-export SHTConfig, create_gauss_config, create_config, destroy_config  # Configuration management
+export SHTConfig, create_gauss_config, create_regular_config, create_config, destroy_config  # Configuration management
 export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_config  # GPU device management
 export select_compute_device, device_transfer_arrays                  # Device utilities
 

@@ -135,15 +135,17 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
             iseven(nlat) || throw(ArgumentError("DH weights require even nlat"))
             nlat == 2*(lmax + 1) || @warn "DH weights are exact when nlat=2*(lmax+1)=$(2*(lmax+1)), got nlat=$nlat"
 
-            # Use Driscoll-Healy quadrature weights
+            # Use Driscoll-Healy grid: θ = π*j/n for j=0,...,n-1
+            # This includes north pole (j=0, θ=0) but not south pole (j=n would give θ=π)
+            # The last point is at θ = π*(n-1)/n, just before the south pole
             w = driscoll_healy_weights(nlat)
             for i in 0:(nlat-1)
-                θi = i * (π / (nlat - 1))
+                θi = π * i / nlat
                 θ[i+1] = θi
                 x[i+1] = cos(θi)
             end
         else
-            # Use simple trapezoidal rule
+            # Use simple trapezoidal rule with both poles
             for i in 0:(nlat-1)
                 θi = i * (π / (nlat - 1))
                 θ[i+1] = θi
@@ -167,7 +169,16 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     li, mi = build_li_mi(lmax, mmax, mres)
     ct = cos.(θ); st = sin.(θ)
 
-    cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type = include_poles ? :regular_poles : :regular,
+    # Determine grid type based on configuration
+    grid_type = if use_dh_weights
+        :driscoll_healy
+    elseif include_poles
+        :regular_poles
+    else
+        :regular
+    end
+
+    cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
                     θ, φ, x, w, wlat = w, Nlm,
                     cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
                     ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form,

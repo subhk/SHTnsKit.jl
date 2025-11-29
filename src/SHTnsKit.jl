@@ -10,10 +10,8 @@ using FFTW          # For Fast Fourier Transform operations
 using Base.Threads  # For multi-threading support
 
 # Runtime knob for inverse-FFT φ scaling during synthesis.
-# ENV SHTNSKIT_PHI_SCALE supports:
-#   "dft"  -> scale by nlon (cancels FFT normalization, default for Gauss grids)
-#   "quad" -> scale by nlon/(2π) to match φ quadrature weights (better for regular grids)
-#   "auto" -> Gauss uses "dft", regular grids use "quad"
+# Defaults: Gauss grids use "dft" (nlon), regular/equiangular use "quad" (nlon/(2π)).
+# Override via cfg.phi_scale=:dft/:quad or ENV SHTNSKIT_PHI_SCALE=dft|quad.
 phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : nlon)
 
 # Include all module source files

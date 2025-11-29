@@ -115,12 +115,13 @@ end
 Compute Driscoll-Healy quadrature weights for n latitude points.
 
 The Driscoll-Healy quadrature provides an exact integration rule for spherical
-harmonics up to degree n/2-1 when using n equally-spaced latitude samples
-(including both poles). The weights are computed as:
+harmonics up to degree n/2-1 when using n equally-spaced latitude samples.
+The weights approximate: ∫₀^π f(θ) sin(θ) dθ ≈ Σⱼ w[j] f(θ[j])
 
-    w[j] = (√8/n) * sin(πj/n) * Σ(l=0 to n/2-1) [sin((2l+1)πj/n) / (2l+1)]
+Formula (normalized for ∫₀^π sin(θ)dθ = 2):
+    w[j] = (4/n) * sin(πj/n) * Σ(l=0 to n/2-1) [sin((2l+1)πj/n) / (2l+1)]
 
-where j = 0, 1, ..., n-1 indexes the latitude points from north to south pole.
+where j = 0, 1, ..., n-1 indexes the latitude points θ[j] = πj/n.
 
 Reference:
     Driscoll, J.R. and D.M. Healy, "Computing Fourier transforms and
@@ -128,8 +129,10 @@ Reference:
 
 Note:
     - n must be even for the DH quadrature to be exact
+    - The weights sum to 2 (matching ∫₀^π sin(θ)dθ = 2)
     - The first weight (north pole, j=0) is always zero
-    - The last weight (south pole, j=n-1) is also zero
+    - The last weight is also near zero
+    - Grid θ[j] = πj/n includes north pole but NOT south pole
 """
 function driscoll_healy_weights(n::Int; apply_4pi_normalization::Bool=false)
     # Validate input
@@ -139,8 +142,12 @@ function driscoll_healy_weights(n::Int; apply_4pi_normalization::Bool=false)
     # Allocate output array
     w = zeros(Float64, n)
 
-    # Normalization factor from DHaj formula
-    norm_factor = sqrt(8.0) / n
+    # Normalization factor from DHaj formula in SHTOOLS
+    # The raw DHaj formula: w[j] = (√8/n) * sin(πj/n) * Σ[sin((2l+1)πj/n) / (2l+1)]
+    # For proper integration of ∫₀^π f(θ) sin(θ) dθ ≈ Σ w[j] f(θ[j])
+    # we need weights to sum to 2 (since ∫₀^π sin(θ) dθ = 2)
+    # The raw formula gives sum ≈ √2, so we multiply by √2 to get sum = 2
+    norm_factor = sqrt(8.0) / n * sqrt(2.0)  # = 4/n
 
     # Compute weights for each latitude point
     for j in 0:(n-1)

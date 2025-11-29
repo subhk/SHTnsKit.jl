@@ -168,7 +168,7 @@ end
     println("Grid type: $(cfg_reg.grid_type)")
     println("phi_scale: $(cfg_reg.phi_scale)")
     println("nlat: $(cfg_reg.nlat), nlon: $(cfg_reg.nlon)")
-    println("Sum of weights: $(sum(cfg_reg.w)) (expected ≈ $(2*sqrt(2)) = $(round(2*sqrt(2), digits=6)))")
+    println("Sum of weights: $(sum(cfg_reg.w)) (expected 2.0 for ∫₀^π sin(θ)dθ = 2)")
     println("First 5 weights: $(cfg_reg.w[1:5])")
     println("Last 5 weights: $(cfg_reg.w[end-4:end])")
     println("First 5 θ points: $(cfg_reg.θ[1:5])")

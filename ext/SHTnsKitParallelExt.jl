@@ -26,8 +26,8 @@ using SHTnsKit                           # Core spherical harmonic functionality
 
 # ===== FFT PLAN CACHING =====
 # Optional plan caching to avoid repeated planning overhead in performance-critical code
-# Enable via: ENV["SHTNSKIT_CACHE_PENCILFFTS"] = "1"
-const _CACHE_PENCILFFTS = Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "0") == "1")
+# Enabled by default; disable with ENV["SHTNSKIT_CACHE_PENCILFFTS"] = "0"
+const _CACHE_PENCILFFTS = Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "1") == "1")
 
 # Thread-safe cache storage for FFT plans indexed by array characteristics
 const _pfft_cache = IdDict{Any,Any}()

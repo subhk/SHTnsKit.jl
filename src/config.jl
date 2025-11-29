@@ -100,18 +100,22 @@ end
                           nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
                           cs_phase::Bool=true, real_norm::Bool=false,
                           robert_form::Bool=false, include_poles::Bool=false,
-                          precompute_plm::Bool=true) -> SHTConfig
+                          precompute_plm::Bool=true, use_dh_weights::Bool=false) -> SHTConfig
 
 Create an equiangular (regular) grid configuration. Regular grids use simple
 `θ = (i+0.5)π/nlat` nodes by default; set `include_poles=true` to place nodes
 directly on the poles. By default associated Legendre tables are precomputed,
 which mirrors SHTns' regular-grid behaviour and improves performance.
+
+Set `use_dh_weights=true` to use Driscoll-Healy quadrature weights for exact
+integration when `include_poles=true` and `nlat=2*(lmax+1)`. This provides
+exact transforms up to degree lmax.
 """
 function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
                                nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
                                cs_phase::Bool=true, real_norm::Bool=false,
                                robert_form::Bool=false, include_poles::Bool=false,
-                               precompute_plm::Bool=true)
+                               precompute_plm::Bool=true, use_dh_weights::Bool=false)
     lmax ≥ 0 || throw(ArgumentError("lmax must be ≥ 0"))
     mmax ≥ 0 || throw(ArgumentError("mmax must be ≥ 0"))
     mmax ≤ lmax || throw(ArgumentError("mmax must be ≤ lmax"))
@@ -125,11 +129,27 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     w = zeros(Float64, nlat)
     x = zeros(Float64, nlat)
     if include_poles
-        for i in 0:(nlat-1)
-            θi = i * (π / (nlat - 1))
-            θ[i+1] = θi
-            w[i+1] = (π / (nlat - 1)) * sin(θi)
-            x[i+1] = cos(θi)
+        # Check if we should use DH weights
+        if use_dh_weights
+            # Validate DH requirements
+            iseven(nlat) || throw(ArgumentError("DH weights require even nlat"))
+            nlat == 2*(lmax + 1) || @warn "DH weights are exact when nlat=2*(lmax+1)=$(2*(lmax+1)), got nlat=$nlat"
+
+            # Use Driscoll-Healy quadrature weights
+            w = driscoll_healy_weights(nlat)
+            for i in 0:(nlat-1)
+                θi = i * (π / (nlat - 1))
+                θ[i+1] = θi
+                x[i+1] = cos(θi)
+            end
+        else
+            # Use simple trapezoidal rule
+            for i in 0:(nlat-1)
+                θi = i * (π / (nlat - 1))
+                θ[i+1] = θi
+                w[i+1] = (π / (nlat - 1)) * sin(θi)
+                x[i+1] = cos(θi)
+            end
         end
     else
         for i in 0:(nlat-1)

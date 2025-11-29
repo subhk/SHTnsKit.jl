@@ -109,3 +109,51 @@ function loggamma(x::Real)
     throw(ArgumentError("loggamma(::Real) is only defined for integers here; add SpecialFunctions for general inputs"))
 end
 
+"""
+    driscoll_healy_weights(n::Int) -> Vector{Float64}
+
+Compute Driscoll-Healy quadrature weights for n latitude points.
+
+The Driscoll-Healy quadrature provides an exact integration rule for spherical
+harmonics up to degree n/2-1 when using n equally-spaced latitude samples
+(including both poles). The weights are computed as:
+
+    w[j] = (√8/n) * sin(πj/n) * Σ(l=0 to n/2-1) [sin((2l+1)πj/n) / (2l+1)]
+
+where j = 0, 1, ..., n-1 indexes the latitude points from north to south pole.
+
+Reference:
+    Driscoll, J.R. and D.M. Healy, "Computing Fourier transforms and
+    convolutions on the 2-sphere", Adv. Appl. Math., 15, 202-250, 1994.
+
+Note:
+    - n must be even for the DH quadrature to be exact
+    - The first weight (north pole, j=0) is always zero
+    - The last weight (south pole, j=n-1) is also zero
+"""
+function driscoll_healy_weights(n::Int)
+    # Validate input
+    n >= 2 || throw(ArgumentError("n must be ≥ 2"))
+    iseven(n) || throw(ArgumentError("n must be even for Driscoll-Healy quadrature"))
+
+    # Allocate output array
+    w = zeros(Float64, n)
+
+    # Normalization factor
+    norm_factor = sqrt(8.0) / n
+
+    # Compute weights for each latitude point
+    for j in 0:(n-1)
+        # Compute the inner sum: Σ(l=0 to n/2-1) [sin((2l+1)πj/n) / (2l+1)]
+        sum1 = 0.0
+        for l in 0:(n÷2-1)
+            sum1 += sin((2*l + 1) * π * j / n) / (2*l + 1)
+        end
+
+        # Apply the full formula
+        w[j+1] = norm_factor * sin(π * j / n) * sum1
+    end
+
+    return w
+end
+

@@ -18,6 +18,7 @@ Notes:
   - Gauss: `nlat ≥ lmax+1`
   - Regular: `nlat ≥ lmax+2` (or `lmax+1` with `grid_type = :regular_poles`)
   - All: `nlon ≥ 2*mmax+1`
+- φ scaling defaults to `:dft` for Gauss grids and `:quad` for regular grids; override via `phi_scale` or `ENV["SHTNSKIT_PHI_SCALE"]`.
 - A legacy form `create_config(::Type{T}, lmax, nlat, mres; ...)` is also accepted; the type is ignored.
 
 **Example:**
@@ -45,7 +46,7 @@ nlat, nphi = cfg.nlat, cfg.nlon  # 34 × 65
 ```julia
 create_regular_config(lmax, nlat; mmax=lmax, mres=1, nlon=max(2*lmax+1,4),
                       norm=:orthonormal, cs_phase=true, real_norm=false,
-                      robert_form=false, include_poles=false,
+                      robert_form=false, include_poles=false, phi_scale=:quad,
                       precompute_plm=true) → SHTConfig
 ```
 Create configuration with a regular equiangular grid. Set `include_poles=true` to place nodes on the poles (otherwise midpoints are used). By default Legendre tables are precomputed for faster regular-grid transforms.

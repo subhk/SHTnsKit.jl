@@ -70,6 +70,9 @@ export nlm_calc, nlm_cplx_calc, LM_index, LiM_index, im_from_lm, LM_cplx_index, 
 export spat_cplx_to_SH, SH_to_spat_cplx, SH_to_point_cplx  # Complex number transforms
 export fft_phi_backend
 
+# ===== BUFFER HELPERS =====
+export scratch_fft, scratch_spatial
+
 # ===== VECTOR FIELD TRANSFORMS =====
 export spat_to_SHsphtor, SHsphtor_to_spat, SHsph_to_spat, SHtor_to_spat, SH_to_grad_spat
 export divergence_from_spheroidal, divergence_from_spheroidal!, spheroidal_from_divergence, spheroidal_from_divergence!

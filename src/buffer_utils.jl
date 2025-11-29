@@ -103,6 +103,22 @@ function create_zero_coefficients(cfg::SHTConfig, element_type::Type=ComplexF64)
 end
 
 """
+    scratch_spatial(cfg::SHTConfig, T::Type=Float64) -> Matrix{T}
+
+Allocate a spatial grid buffer of size `(nlat, nlon)`.
+"""
+scratch_spatial(cfg::SHTConfig, T::Type=Float64) = zeros(T, cfg.nlat, cfg.nlon)
+
+"""
+    scratch_fft(cfg::SHTConfig, T::Type=ComplexF64) -> Matrix{T}
+
+Allocate a complex buffer sized for φ-FFTs `(nlat, nlon)`. Reuse this across
+`analysis!`/`synthesis!` calls via the `fft_scratch` keyword to avoid per-call
+allocations.
+"""
+scratch_fft(cfg::SHTConfig, T::Type=ComplexF64) = zeros(T, cfg.nlat, cfg.nlon)
+
+"""
     validate_spectral_dimensions(array::AbstractMatrix, cfg::SHTConfig, name::String="array")
 
 Validate that a spectral coefficient array has the correct dimensions.

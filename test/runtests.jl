@@ -152,6 +152,34 @@ end
     @test isapprox(Vp_ml, Vp_ml_ref; rtol=1e-10, atol=1e-12)
 end
 
+@testset "Regular grid and shtns flags" begin
+    lmax = 8
+    nlat = 2 * lmax
+    nlon = 2 * (2 * lmax + 1)
+    cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true)
+    @test cfg_reg.grid_type == :regular
+    @test cfg_reg.use_plm_tables
+
+    rng = MersenneTwister(23)
+    alm = randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1)
+    alm[:, 1] .= real.(alm[:, 1])
+    f = synthesis(cfg_reg, alm; real_output=true)
+    alm_rt = analysis(cfg_reg, f)
+    @test maximum(abs.(alm_rt - alm)) < 1e-8
+
+    flags = SHTnsKit.SHT_REGULAR + SHTnsKit.SHT_SOUTH_POLE_FIRST
+    cfg_init = shtns_init(flags, lmax, lmax, 1, lmax, 2*lmax)
+    @test cfg_init.grid_type == :regular
+    @test cfg_init.nlon == max(2*lmax + 1, 4)
+    @test cfg_init.nlat >= lmax + 2
+    @test cfg_init.θ[1] > cfg_init.θ[end]
+
+    cfg_shrink = shtns_create_with_grid(cfg_init, lmax - 2, 0)
+    @test cfg_shrink.grid_type == cfg_init.grid_type
+    @test cfg_shrink.nlat == cfg_init.nlat
+    @test cfg_shrink.use_plm_tables == cfg_init.use_plm_tables
+end
+
 @testset "LM_cplx compatibility" begin
     lmax = 6
     cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)

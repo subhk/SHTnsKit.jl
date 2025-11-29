@@ -1468,7 +1468,7 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
             cfg = mgpu_config.base_config
             temp_cfg = SHTnsKit.SHTConfig(
                 lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=chunk_nlat, nlon=cfg.nlon,
+                nlat=chunk_nlat, nlon=cfg.nlon, grid_type=cfg.grid_type,
                 θ=cfg.θ[lat_indices], φ=cfg.φ, 
                 x=cfg.x[lat_indices], w=cfg.w[lat_indices],
                 wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
@@ -1493,7 +1493,7 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
             cfg = mgpu_config.base_config
             temp_cfg = SHTnsKit.SHTConfig(
                 lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=cfg.nlat, nlon=chunk_nlon,
+                nlat=cfg.nlat, nlon=chunk_nlon, grid_type=cfg.grid_type,
                 θ=cfg.θ, φ=cfg.φ[lon_indices],
                 x=cfg.x, w=cfg.w,
                 wlat=cfg.w, Nlm=cfg.Nlm, cphi=2π/chunk_nlon,
@@ -1561,7 +1561,7 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
             # Create config for this latitude band
             temp_cfg = SHTnsKit.SHTConfig(
                 lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=lat_count, nlon=cfg.nlon,
+                nlat=lat_count, nlon=cfg.nlon, grid_type=cfg.grid_type,
                 θ=cfg.θ[lat_indices], φ=cfg.φ,
                 x=cfg.x[lat_indices], w=cfg.w[lat_indices],
                 wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
@@ -1610,7 +1610,7 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
             # Create config for this longitude sector
             temp_cfg = SHTnsKit.SHTConfig(
                 lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=cfg.nlat, nlon=lon_count,
+                nlat=cfg.nlat, nlon=lon_count, grid_type=cfg.grid_type,
                 θ=cfg.θ, φ=cfg.φ[lon_indices],
                 x=cfg.x, w=cfg.w,
                 wlat=cfg.w, Nlm=cfg.Nlm, cphi=2π/lon_count,
@@ -1664,7 +1664,7 @@ function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=tr
             # Create temporary config for spectral chunk
             temp_cfg = SHTnsKit.SHTConfig(
                 lmax=cfg.lmax, mmax=m_end, mres=cfg.mres,
-                nlat=cfg.nlat, nlon=cfg.nlon,
+                nlat=cfg.nlat, nlon=cfg.nlon, grid_type=cfg.grid_type,
                 θ=cfg.θ, φ=cfg.φ,
                 x=cfg.x, w=cfg.w,
                 wlat=cfg.w, Nlm=cfg.Nlm, cphi=cfg.cphi,
@@ -1782,7 +1782,7 @@ function multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data;
             chunk_mgpu_config = MultiGPUConfig(
                 base_config=SHTnsKit.SHTConfig(
                     lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                    nlat=chunk_lat_size, nlon=cfg.nlon,
+                    nlat=chunk_lat_size, nlon=cfg.nlon, grid_type=cfg.grid_type,
                     θ=cfg.θ[lat_indices], φ=cfg.φ,
                     x=cfg.x[lat_indices], w=cfg.w[lat_indices],
                     wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
@@ -1862,7 +1862,7 @@ function multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs;
             chunk_mgpu_config = MultiGPUConfig(
                 base_config=SHTnsKit.SHTConfig(
                     lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                    nlat=chunk_lat_size, nlon=cfg.nlon,
+                    nlat=chunk_lat_size, nlon=cfg.nlon, grid_type=cfg.grid_type,
                     θ=cfg.θ[lat_indices], φ=cfg.φ,
                     x=cfg.x[lat_indices], w=cfg.w[lat_indices],
                     wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,

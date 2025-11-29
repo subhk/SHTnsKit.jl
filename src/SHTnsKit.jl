@@ -281,6 +281,7 @@ benchmark_turbo_vs_simd(::Any; kwargs...) = error("LoopVectorization extension n
 
 # ===== LOW-LEVEL SHTNS LIBRARY INTERFACE =====
 # Direct bindings to the underlying SHTns C library functions
+export SHT_GAUSS, SHT_AUTO, SHT_REGULAR, SHT_REG_FAST, SHT_QUICK_INIT, SHT_REGULAR_POLES, SHT_GAUSS_FLY, SHT_SOUTH_POLE_FIRST, SHT_NO_CS_PHASE, SHT_REAL_NORM
 export shtns_verbose, shtns_print_version, shtns_get_build_info           # Library information
 export shtns_init, shtns_create, shtns_set_grid, shtns_set_grid_auto, shtns_create_with_grid  # Initialization
 export shtns_use_threads, shtns_reset, shtns_destroy, shtns_unset_grid, shtns_robert_form     # Configuration

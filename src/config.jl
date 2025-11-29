@@ -177,7 +177,9 @@ function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
                        robert_form::Bool=false, grid_type::Symbol=:gauss,
                        include_poles::Bool=false, precompute_plm::Bool=grid_type != :gauss)
     # Make args robust to underspecified values from older docs/snippets
-    nlat_eff = max(nlat, lmax + (grid_type == :gauss ? 1 : 2))  # Regular grids benefit from a small oversampling
+    min_lat = grid_type == :gauss ? (lmax + 1) : (grid_type == :regular_poles ? (lmax + 1) : (lmax + 2))
+    include_poles_eff = include_poles || grid_type == :regular_poles
+    nlat_eff = max(nlat, min_lat)               # Regular grids benefit from a small oversampling
     nlon_eff = max(nlon, 2*mmax + 1)            # Azimuthal resolution requires ≥ 2*mmax+1
     if grid_type == :gauss
         return create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,
@@ -186,7 +188,7 @@ function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
     elseif grid_type == :regular || grid_type == :regular_poles
         return create_regular_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,
                                      norm=norm, cs_phase=cs_phase, real_norm=real_norm,
-                                     robert_form=robert_form, include_poles=include_poles,
+                                     robert_form=robert_form, include_poles=include_poles_eff,
                                      precompute_plm=precompute_plm)
     else
         throw(ArgumentError("unsupported grid_type=$(grid_type); choose :gauss or :regular"))

@@ -74,6 +74,9 @@ function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer,
     if (f & SHT_SOUTH_POLE_FIRST) != 0
         cfg.θ = reverse(cfg.θ); cfg.w = reverse(cfg.w); cfg.x = reverse(cfg.x); cfg.wlat = cfg.w
         cfg.ct = cos.(cfg.θ); cfg.st = sin.(cfg.θ); cfg.sintheta = cfg.st
+        if cfg.use_plm_tables
+            prepare_plm_tables!(cfg)
+        end
     end
     return cfg
 end

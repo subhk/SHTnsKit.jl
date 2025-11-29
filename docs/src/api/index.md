@@ -11,12 +11,13 @@ create_config(lmax; mmax=lmax, mres=1, nlat=lmax+2, nlon=max(2*lmax+1,4),
               norm=:orthonormal, cs_phase=true, real_norm=false, robert_form=false,
               grid_type=:gauss) → SHTConfig
 ```
-Create a configuration with specified parameters. Currently `grid_type = :gauss` is supported and forwards to `create_gauss_config`.
+Create a configuration with specified parameters. Supports Gauss–Legendre grids (`grid_type = :gauss`, default) and regular equiangular grids (`:regular` or `:regular_poles`), forwarding to the matching constructor.
 
 Notes:
 - Auto-corrects undersized grids to satisfy accuracy constraints:
-  - Ensures `nlat ≥ lmax+1` (Gauss–Legendre quadrature exactness)
-  - Ensures `nlon ≥ 2*mmax+1` (resolve azimuthal orders up to `mmax`)
+  - Gauss: `nlat ≥ lmax+1`
+  - Regular: `nlat ≥ lmax+2` (or `lmax+1` with `grid_type = :regular_poles`)
+  - All: `nlon ≥ 2*mmax+1`
 - A legacy form `create_config(::Type{T}, lmax, nlat, mres; ...)` is also accepted; the type is ignored.
 
 **Example:**
@@ -42,20 +43,17 @@ nlat, nphi = cfg.nlat, cfg.nlon  # 34 × 65
 ---
 
 ```julia
-create_regular_config(lmax, mmax) → SHTnsConfig
+create_regular_config(lmax, nlat; mmax=lmax, mres=1, nlon=max(2*lmax+1,4),
+                      norm=:orthonormal, cs_phase=true, real_norm=false,
+                      robert_form=false, include_poles=false,
+                      precompute_plm=true) → SHTConfig
 ```
-Create configuration with regular equiangular grid.
-
-**Arguments:**
-- `lmax::Int`: Maximum degree  
-- `mmax::Int`: Maximum order
-
-**Returns:** `SHTnsConfig` with regular grid setup
+Create configuration with a regular equiangular grid. Set `include_poles=true` to place nodes on the poles (otherwise midpoints are used). By default Legendre tables are precomputed for faster regular-grid transforms.
 
 **Example:**
 ```julia
-cfg = create_regular_config(32, 32)
-nlat, nphi = cfg.nlat, cfg.nlon  # 65 × 65
+cfg = create_regular_config(32, 36; nlon=65)
+nlat, nphi = cfg.nlat, cfg.nlon  # 36 × 65
 ```
 
 ---
@@ -65,35 +63,35 @@ nlat, nphi = cfg.nlat, cfg.nlon  # 65 × 65
 ### Configuration Queries
 
 ```julia
-get_lmax(cfg::SHTnsConfig) → Int
+get_lmax(cfg::SHTConfig) → Int
 ```
 Get maximum spherical harmonic degree.
 
 ---
 
 ```julia
-get_mmax(cfg::SHTnsConfig) → Int  
+get_mmax(cfg::SHTConfig) → Int  
 ```
 Get maximum spherical harmonic order.
 
 ---
 
 ```julia
-get_nlat(cfg::SHTnsConfig) → Int
+get_nlat(cfg::SHTConfig) → Int
 ```
 Get number of latitude points in spatial grid.
 
 ---
 
 ```julia
-get_nphi(cfg::SHTnsConfig) → Int
+get_nphi(cfg::SHTConfig) → Int
 ```
 Get number of longitude points in spatial grid.
 
 ---
 
 ```julia
-get_nlm(cfg::SHTnsConfig) → Int
+get_nlm(cfg::SHTConfig) → Int
 ```
 Get total number of (l,m) spectral coefficients.
 
@@ -102,27 +100,27 @@ For the real basis, coefficients are stored for m ≥ 0.
 ---
 
 ```julia
-lmidx(cfg::SHTnsConfig, l::Int, m::Int) → Int
+lmidx(cfg::SHTConfig, l::Int, m::Int) → Int
 ```
 Get linear index (1‑based) for spherical harmonic coefficient (l, m≥0).
 
 ### Grid Information
 
 ```julia
-get_theta(cfg::SHTnsConfig, i::Int) → Real
-get_phi(cfg::SHTnsConfig, j::Int) → Real
+get_theta(cfg::SHTConfig, i::Int) → Real
+get_phi(cfg::SHTConfig, j::Int) → Real
 ```
 Access single grid coordinates by index.
 
 ```julia
-SHTnsKit.create_coordinate_matrices(cfg::SHTnsConfig) → (θ::Matrix, φ::Matrix)
+SHTnsKit.create_coordinate_matrices(cfg::SHTConfig) → (θ::Matrix, φ::Matrix)
 ```
 Create colatitude and longitude matrices for the grid.
 
 ---
 
 ```julia
-get_gauss_weights(cfg::SHTnsConfig) → Vector{Float64}
+get_gauss_weights(cfg::SHTConfig) → Vector{Float64}
 ```
 Get Gaussian quadrature weights (for Gauss grids only).
 
@@ -131,7 +129,7 @@ Get Gaussian quadrature weights (for Gauss grids only).
 ### Configuration Cleanup
 
 ```julia
-destroy_config(cfg::SHTnsConfig) → Nothing
+destroy_config(cfg::SHTConfig) → Nothing
 ```
 Free memory associated with configuration. Always call after use.
 
@@ -147,7 +145,7 @@ destroy_config(cfg)
 ### Memory Allocation
 
 ```julia
-allocate_spectral(cfg::SHTnsConfig) → Vector{Float64}
+allocate_spectral(cfg::SHTConfig) → Vector{Float64}
 ```
 Allocate array for spectral coefficients.
 
@@ -156,7 +154,7 @@ Allocate array for spectral coefficients.
 ---
 
 ```julia
-allocate_spatial(cfg::SHTnsConfig) → Matrix{Float64}
+allocate_spatial(cfg::SHTConfig) → Matrix{Float64}
 ```
 Allocate array for spatial field values.
 
@@ -165,7 +163,7 @@ Allocate array for spatial field values.
 ### Forward Transform (Synthesis)
 
 ```julia
-synthesize(cfg::SHTnsConfig, sh::Vector) → Matrix{Float64}
+synthesize(cfg::SHTConfig, sh::Vector) → Matrix{Float64}
 ```
 Transform from spectral to spatial domain (spherical harmonic synthesis).
 
@@ -189,7 +187,7 @@ spatial = synthesis(cfg, sh)  # 17×33 matrix
 ---
 
 ```julia
-synthesize!(cfg::SHTnsConfig, sh::Vector, spatial::Matrix) → Nothing
+synthesize!(cfg::SHTConfig, sh::Vector, spatial::Matrix) → Nothing
 ```
 In-place synthesis (avoids allocation).
 
@@ -200,7 +198,7 @@ In-place synthesis (avoids allocation).
 ### Backward Transform (Analysis)
 
 ```julia
-analyze(cfg::SHTnsConfig, spatial::Matrix) → Vector{Float64}
+analyze(cfg::SHTConfig, spatial::Matrix) → Vector{Float64}
 ```
 Transform from spatial to spectral domain (spherical harmonic analysis).
 
@@ -224,7 +222,7 @@ sh = analysis(cfg, spatial)
 ---
 
 ```julia
-analyze!(cfg::SHTnsConfig, spatial::Matrix, sh::Vector) → Nothing
+analyze!(cfg::SHTConfig, spatial::Matrix, sh::Vector) → Nothing
 ```
 In-place analysis (avoids allocation).
 
@@ -237,21 +235,21 @@ In-place analysis (avoids allocation).
 ### Memory Allocation
 
 ```julia
-allocate_complex_spectral(cfg::SHTnsConfig) → Vector{ComplexF64}
+allocate_complex_spectral(cfg::SHTConfig) → Vector{ComplexF64}
 ```
 Allocate array for complex spectral coefficients.
 
 ---
 
 ```julia
-allocate_complex_spatial(cfg::SHTnsConfig) → Matrix{ComplexF64}
+allocate_complex_spatial(cfg::SHTConfig) → Matrix{ComplexF64}
 ```
 Allocate array for complex spatial field values.
 
 ### Complex Transforms
 
 ```julia
-synthesize_complex(cfg::SHTnsConfig, sh::Vector{ComplexF64}) → Matrix{ComplexF64}
+synthesize_complex(cfg::SHTConfig, sh::Vector{ComplexF64}) → Matrix{ComplexF64}
 ```
 Complex field synthesis.
 
@@ -265,7 +263,7 @@ spatial_complex = synthesize_complex(cfg, sh_complex)
 ---
 
 ```julia
-analyze_complex(cfg::SHTnsConfig, spatial::Matrix{ComplexF64}) → Vector{ComplexF64}
+analyze_complex(cfg::SHTConfig, spatial::Matrix{ComplexF64}) → Vector{ComplexF64}
 ```
 Complex field analysis.
 
@@ -278,7 +276,7 @@ Vector fields on the sphere are decomposed into **spheroidal** and **toroidal** 
 ### Vector Synthesis
 
 ```julia
-synthesize_vector(cfg::SHTnsConfig, S_lm::Vector, T_lm::Vector) → (Vθ::Matrix, Vφ::Matrix)
+synthesize_vector(cfg::SHTConfig, S_lm::Vector, T_lm::Vector) → (Vθ::Matrix, Vφ::Matrix)
 ```
 Synthesize vector field from spheroidal and toroidal coefficients.
 
@@ -306,7 +304,7 @@ Vθ, Vφ = synthesize_vector(cfg, S_lm, T_lm)
 ### Vector Analysis
 
 ```julia
-analyze_vector(cfg::SHTnsConfig, Vθ::Matrix, Vφ::Matrix) → (S_lm::Vector, T_lm::Vector)
+analyze_vector(cfg::SHTConfig, Vθ::Matrix, Vφ::Matrix) → (S_lm::Vector, T_lm::Vector)
 ```
 Analyze vector field into spheroidal and toroidal components.
 
@@ -321,28 +319,28 @@ Analyze vector field into spheroidal and toroidal components.
 ### Spatial Operators
 
 ```julia
-SHTnsKit.spatial_derivative_phi(cfg::SHTnsConfig, spatial::Matrix) → Matrix
+SHTnsKit.spatial_derivative_phi(cfg::SHTConfig, spatial::Matrix) → Matrix
 ```
 Exact φ‑derivative using FFT in longitude.
 
 ```julia
-SHTnsKit.spatial_divergence(cfg::SHTnsConfig, Vθ::Matrix, Vφ::Matrix) → Matrix
-SHTnsKit.spatial_vorticity(cfg::SHTnsConfig, Vθ::Matrix, Vφ::Matrix) → Matrix
+SHTnsKit.spatial_divergence(cfg::SHTConfig, Vθ::Matrix, Vφ::Matrix) → Matrix
+SHTnsKit.spatial_vorticity(cfg::SHTConfig, Vθ::Matrix, Vφ::Matrix) → Matrix
 ```
 Divergence and vertical vorticity of tangential vector fields on the unit sphere.
 
 ## Field Rotations
 
 ```julia
-rotate_real!(cfg::SHTnsConfig, real_coeffs; alpha=0.0, beta=0.0, gamma=0.0) → Vector
-rotate_complex!(cfg::SHTnsConfig, cplx_coeffs; alpha=0.0, beta=0.0, gamma=0.0) → Vector{Complex}
+rotate_real!(cfg::SHTConfig, real_coeffs; alpha=0.0, beta=0.0, gamma=0.0) → Vector
+rotate_complex!(cfg::SHTConfig, cplx_coeffs; alpha=0.0, beta=0.0, gamma=0.0) → Vector{Complex}
 ```
 Rotate spectral coefficients in‑place using ZYZ Euler angles. For real fields, use `rotate_real!` or convert with `real_to_complex_coeffs`/`complex_to_real_coeffs`.
 
 ## Power Spectrum Analysis
 
 ```julia
-power_spectrum(cfg::SHTnsConfig, sh::Vector) → Vector{Float64}
+power_spectrum(cfg::SHTConfig, sh::Vector) → Vector{Float64}
 ```
 Compute spherical harmonic power spectrum.
 
@@ -409,10 +407,10 @@ destroy_config(cfg)
 
 ## Helper Functions
 
-lm_from_index(cfg::SHTnsConfig, idx::Int) → (l::Int, m::Int)
+lm_from_index(cfg::SHTConfig, idx::Int) → (l::Int, m::Int)
 
 ---
 
-lmidx(cfg::SHTnsConfig, l::Int, m::Int) → Int
+lmidx(cfg::SHTConfig, l::Int, m::Int) → Int
 
 <!-- Automatic differentiation specifics are omitted; functions are pure Julia and generally AD-friendly. -->

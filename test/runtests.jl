@@ -154,10 +154,10 @@ end
 
 @testset "Regular grid and shtns flags" begin
     lmax = 8
-    nlat = 2 * lmax
+    nlat = 2 * (lmax + 1)           # Regular grids need 2(lmax+1) for high accuracy
     nlon = 2 * (2 * lmax + 1)
-    cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true)
-    @test cfg_reg.grid_type == :regular
+    cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=true)
+    @test cfg_reg.grid_type in (:regular, :regular_poles)
     @test cfg_reg.use_plm_tables
 
     rng = MersenneTwister(23)

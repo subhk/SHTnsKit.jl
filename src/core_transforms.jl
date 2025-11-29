@@ -22,6 +22,23 @@ function analysis(cfg::SHTConfig, f::AbstractMatrix; use_fused_loops::Bool=true)
     end
 end
 
+"""
+    analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; use_fused_loops=true)
+
+In-place forward transform. Writes coefficients into `alm_out` to avoid allocating
+the output matrix each call. `alm_out` must be size `(lmax+1, mmax+1)`.
+"""
+function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; use_fused_loops::Bool=true)
+    size(alm_out, 1) == cfg.lmax + 1 || throw(DimensionMismatch("alm_out first dim must be lmax+1=$(cfg.lmax+1)"))
+    size(alm_out, 2) == cfg.mmax + 1 || throw(DimensionMismatch("alm_out second dim must be mmax+1=$(cfg.mmax+1)"))
+    fill!(alm_out, zero(eltype(alm_out)))
+    if use_fused_loops
+        return analysis_fused!(alm_out, cfg, f)
+    else
+        return analysis_unfused!(alm_out, cfg, f)
+    end
+end
+
 function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
@@ -32,6 +49,47 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
     CT = eltype(Fφ)
     alm = Matrix{CT}(undef, lmax + 1, mmax + 1)
     fill!(alm, 0)
+    scaleφ = cfg.cphi
+
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+
+    @threads for m in 0:mmax
+        col = m + 1
+        P = thread_local_P[Threads.threadid()]
+        if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+            tbl = cfg.plm_tables[m+1]
+            @inbounds for i in 1:nlat
+                Fi = Fφ[i, col]
+                wi = cfg.w[i]
+                for l in m:lmax
+                    alm[l+1, col] += (wi * tbl[l+1, i]) * Fi
+                end
+            end
+        else
+            @inbounds for i in 1:nlat
+                x = cfg.x[i]
+                Plm_row!(P, x, lmax, m)
+                Fi = Fφ[i, col]
+                wi = cfg.w[i]
+                for l in m:lmax
+                    alm[l+1, col] += (wi * P[l+1]) * Fi
+                end
+            end
+        end
+        @inbounds for l in m:lmax
+            alm[l+1, col] *= cfg.Nlm[l+1, col] * scaleφ
+        end
+    end
+    return alm
+end
+
+function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix)
+    nlat, nlon = cfg.nlat, cfg.nlon
+    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
+    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
+
+    Fφ = fft_phi(complex.(f))
+    lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
 
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
@@ -109,6 +167,46 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix)
     return alm
 end
 
+function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix)
+    nlat, nlon = cfg.nlat, cfg.nlon
+    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
+    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
+
+    Fφ = fft_phi(complex.(f))
+    lmax, mmax = cfg.lmax, cfg.mmax
+    scaleφ = cfg.cphi
+
+    if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+        @threads for m in 0:mmax
+            col = m + 1
+            tbl = cfg.plm_tables[m+1]
+            @inbounds for i in 1:nlat
+                Fi = Fφ[i, col]
+                wi = cfg.w[i]
+                for l in m:lmax
+                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * tbl[l+1, i] * scaleφ) * Fi
+                end
+            end
+        end
+    else
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        @threads for m in 0:mmax
+            col = m + 1
+            P = thread_local_P[Threads.threadid()]
+            for i in 1:nlat
+                x = cfg.x[i]
+                Plm_row!(P, x, lmax, m)
+                Fi = Fφ[i, col]
+                wi = cfg.w[i]
+                @inbounds for l in m:lmax
+                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * P[l+1] * scaleφ) * Fi
+                end
+            end
+        end
+    end
+    return alm
+end
+
 """
     synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true) -> Matrix
 
@@ -121,6 +219,22 @@ function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, 
     else
         return synthesis_unfused(cfg, alm; real_output=real_output)
     end
+end
+
+"""
+    synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix;
+               real_output::Bool=true, use_fused_loops::Bool=true)
+
+In-place inverse transform. Writes the spatial field into `f_out` to reduce
+allocations. `f_out` must be `(nlat, nlon)` and real if `real_output=true`.
+"""
+function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true)
+    size(f_out, 1) == cfg.nlat || throw(DimensionMismatch("f_out first dim must be nlat=$(cfg.nlat)"))
+    size(f_out, 2) == cfg.nlon || throw(DimensionMismatch("f_out second dim must be nlon=$(cfg.nlon)"))
+    f_tmp = use_fused_loops ? synthesis_fused(cfg, alm; real_output=real_output) :
+                              synthesis_unfused(cfg, alm; real_output=real_output)
+    f_out .= f_tmp
+    return f_out
 end
 
 function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true)

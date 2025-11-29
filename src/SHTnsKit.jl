@@ -22,7 +22,8 @@ function phi_inv_scale(cfg::SHTConfig)
     elseif mode == "dft"
         return cfg.nlon
     else
-        return cfg.nlon
+        # Auto: Gauss grids keep the default DFT scaling; regular/equiangular use quadrature-consistent scaling
+        return cfg.grid_type == :gauss ? cfg.nlon : cfg.nlon / (2π)
     end
 end
 

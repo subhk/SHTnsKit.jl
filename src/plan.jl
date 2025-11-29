@@ -179,7 +179,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     size(Slm,1)==cfg.lmax+1 && size(Slm,2)==cfg.mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1)==cfg.lmax+1 && size(Tlm,2)==cfg.mmax+1 || throw(DimensionMismatch("Tlm dims"))
     lmax, mmax = cfg.lmax, cfg.mmax
-    inv_scaleφ = phi_inv_scale(cfg.nlon)
+        inv_scaleφ = phi_inv_scale(cfg)
     # Convert to internal normalization if needed
     Slm_int = Slm; Tlm_int = Tlm
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
@@ -360,7 +360,7 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     # Zero Fourier buffer
     fill!(plan.Fθk, 0)
     lmax, mmax = cfg.lmax, cfg.mmax
-    inv_scaleφ = phi_inv_scale(nlon)
+    inv_scaleφ = phi_inv_scale(cfg)
     # Stream over m, fill k-bins directly
     for m in 0:mmax
         col = m + 1

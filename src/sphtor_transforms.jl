@@ -48,7 +48,7 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     # Scale continuous Fourier coefficients to DFT bins for ifft (factor nlon or nlon/(2π))
-    inv_scaleφ = phi_inv_scale(nlon)
+    inv_scaleφ = phi_inv_scale(cfg)
 
     # Process each azimuthal mode m in parallel
     @threads for m in 0:mmax

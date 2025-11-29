@@ -132,7 +132,7 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
     CT = eltype(alm)
     Fφ = Matrix{CT}(undef, nlat, nlon)
     fill!(Fφ, 0)
-    inv_scaleφ = phi_inv_scale(nlon)
+    inv_scaleφ = phi_inv_scale(cfg)
 
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     @threads for m in 0:mmax
@@ -181,7 +181,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     CT = eltype(alm)
     Fφ = Matrix{CT}(undef, nlat, nlon)
     fill!(Fφ, 0)
-    inv_scaleφ = phi_inv_scale(nlon)
+    inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         @threads for m in 0:mmax

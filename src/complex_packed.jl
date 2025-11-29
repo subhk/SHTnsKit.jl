@@ -51,8 +51,8 @@ function SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
     lmax, mmax = cfg.lmax, cfg.mmax
     P = Vector{Float64}(undef, lmax + 1)
     G = Vector{CT}(undef, nlat)
-    # Scale continuous Fourier coefficients to DFT bins for ifft (factor nlon)
-    inv_scaleφ = phi_inv_scale(nlon)
+    # Scale continuous Fourier coefficients to DFT bins for ifft
+    inv_scaleφ = phi_inv_scale(cfg)
 
     for m in -mmax:mmax
         # build G_m(θ) = sum_l Nlm P_l^{|m|} alm(l,m)

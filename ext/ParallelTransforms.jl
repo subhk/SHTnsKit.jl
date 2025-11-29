@@ -809,7 +809,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
                 G[ii] = g
             end
         end
-        inv_scaleφ = SHTnsKit.phi_inv_scale(nlon)
+        inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
         for (ii,iθ) in enumerate(θloc)
             Fθk[iθ, col] = inv_scaleφ * G[ii]
         end
@@ -1058,7 +1058,7 @@ function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     dPdx = Vector{Float64}(undef, lmax + 1)
     Gθ = Vector{ComplexF64}(undef, length(θloc))
     Gφ = Vector{ComplexF64}(undef, length(θloc))
-    inv_scaleφ = SHTnsKit.phi_inv_scale(nlon)
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
 
     @inbounds for (jj, jm) in enumerate(mloc)
         mglob = gl_m[jj]

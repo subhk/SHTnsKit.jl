@@ -180,7 +180,7 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     li, mi = build_li_mi(lmax, mmax, mres)
     ct = cos.(θ); st = sin.(θ)
 
-    # Determine grid type based on configuration
+    # Determine grid type and phi_scale based on configuration
     grid_type = if use_dh_weights
         :driscoll_healy
     elseif include_poles
@@ -189,10 +189,13 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
         :regular
     end
 
+    # DH grids use DFT scaling like Gauss; regular grids use quadrature scaling
+    phi_scale = use_dh_weights ? :dft : :quad
+
     cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
                     θ, φ, x, w, wlat = w, Nlm,
                     cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                    ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form, phi_scale=:quad,
+                    ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form, phi_scale,
                     compute_device = :cpu, device_preference = [:cpu])
 
     if precompute_plm

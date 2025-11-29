@@ -159,6 +159,10 @@ end
     cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=true, use_dh_weights=true)
     @test cfg_reg.grid_type == :driscoll_healy
     @test cfg_reg.use_plm_tables
+    @test cfg_reg.phi_scale == :dft  # DH should use DFT scaling
+
+    # Debug: verify DH configuration
+    VERBOSE && @info "DH Config" grid_type=cfg_reg.grid_type phi_scale=cfg_reg.phi_scale sum_weights=sum(cfg_reg.w) first_weight=cfg_reg.w[1] last_weight=cfg_reg.w[end]
 
     rng = MersenneTwister(23)
     alm = randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1)
@@ -166,6 +170,7 @@ end
     f = synthesis(cfg_reg, alm; real_output=true)
     alm_rt = analysis(cfg_reg, f)
     alm_err = maximum(abs.(alm_rt - alm))
+    VERBOSE && @info "DH round-trip error" alm_err
     @test alm_err < 1e-6
 
     flags = SHTnsKit.SHT_REGULAR + SHTnsKit.SHT_SOUTH_POLE_FIRST

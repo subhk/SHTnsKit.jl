@@ -47,7 +47,7 @@ Base.@kwdef mutable struct SHTConfig
     cs_phase::Bool              # Condon-Shortley phase convention
     real_norm::Bool             # Real-valued normalization
     robert_form::Bool           # Robert form for spectral derivatives
-    phi_scale::Symbol = :auto    # :dft, :quad, or :auto (grid-driven)
+    phi_scale::Symbol = :dft     # :dft or :quad; set explicitly per grid
 
     # Performance optimization: precomputed Legendre polynomials
     use_plm_tables::Bool = false                              # Enable/disable table lookup

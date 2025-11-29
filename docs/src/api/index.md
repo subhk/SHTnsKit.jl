@@ -18,7 +18,7 @@ Notes:
   - Gauss: `nlat ≥ lmax+1`
   - Regular: `nlat ≥ lmax+2` (or `lmax+1` with `grid_type = :regular_poles`)
   - All: `nlon ≥ 2*mmax+1`
-- φ scaling defaults to `:dft` for Gauss grids and `:quad` for regular grids; override via `phi_scale` or `ENV["SHTNSKIT_PHI_SCALE"]`.
+- φ scaling defaults: Gauss grids use `phi_scale=:dft`, regular/Driscoll-Healy grids use `phi_scale=:quad`. Override per-config or via `ENV["SHTNSKIT_PHI_SCALE"]=dft|quad`.
 - A legacy form `create_config(::Type{T}, lmax, nlat, mres; ...)` is also accepted; the type is ignored.
 
 **Example:**

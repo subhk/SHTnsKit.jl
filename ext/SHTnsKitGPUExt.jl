@@ -1327,7 +1327,7 @@ function multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_
             cfg = mgpu_config.base_config
             temp_cfg = SHTnsKit.SHTConfig(
                 lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=chunk_nlat, nlon=cfg.nlon,
+                nlat=chunk_nlat, nlon=cfg.nlon, grid_type=cfg.grid_type,
                 θ=cfg.θ[lat_indices], φ=cfg.φ,
                 x=cfg.x[lat_indices], w=cfg.w[lat_indices],
                 wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
@@ -1399,7 +1399,7 @@ function multi_gpu_SHsphtor_to_spat(mgpu_config::MultiGPUConfig, sph_coeffs, tor
             # Create config for this latitude band
             temp_cfg = SHTnsKit.SHTConfig(
                 lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=lat_count, nlon=cfg.nlon,
+                nlat=lat_count, nlon=cfg.nlon, grid_type=cfg.grid_type,
                 θ=cfg.θ[lat_indices], φ=cfg.φ,
                 x=cfg.x[lat_indices], w=cfg.w[lat_indices],
                 wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,

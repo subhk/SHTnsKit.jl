@@ -137,15 +137,7 @@ let
             catch
                 PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
             end
-            fθφ = try
-                PencilArrays.zeros(Float64, pencil)
-            catch
-                try
-                    PencilArrays.zeros(pencil; eltype=Float64)
-                catch
-                    PencilArrays.PencilArray(undef, Float64, pencil) |> x -> (fill!(x, 0.0); x)
-                end
-            end
+            fθφ = PencilArrays.zeros(pencil; eltype=Float64)
             # Local fill (deterministic pattern)
             for (iθ, iφ) in Iterators.product(axes(fθφ,1), axes(fθφ,2))
                 fθφ[iθ, iφ] = sin(0.11*Int(iθ)) + cos(0.07*Int(iφ))

@@ -159,6 +159,13 @@ julia test_parallel.jl
 mpiexec -n 2 julia test_parallel.jl
 ```
 
+**Run the built-in parallel testset (includes PencilArrays/PencilFFTs):**
+```bash
+SHTNSKIT_RUN_MPI_TESTS=1 JULIA_NUM_THREADS=1 \
+    mpiexec -n 2 julia --project -e 'using Pkg; Pkg.test()'
+```
+This exercises distributed analysis/synthesis, vector/QST transforms, rotations, and diagnostics across ranks using PencilArrays and PencilFFTs.
+
 ## Advanced Configuration
 
 ### Environment Variables

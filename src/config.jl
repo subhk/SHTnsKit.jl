@@ -48,7 +48,6 @@ Base.@kwdef mutable struct SHTConfig
     real_norm::Bool             # Real-valued normalization
     robert_form::Bool           # Robert form for spectral derivatives
     phi_scale::Symbol = :auto    # :dft, :quad, or :auto (grid-driven)
-    phi_scale::Symbol = :auto    # :dft or :quad; :auto chooses by grid_type
 
     # Performance optimization: precomputed Legendre polynomials
     use_plm_tables::Bool = false                              # Enable/disable table lookup

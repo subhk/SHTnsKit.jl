@@ -25,20 +25,18 @@ include("config.jl")                         # Configuration and setup functions
 
 # Config-aware φ scaling (requires SHTConfig definition)
 function phi_inv_scale(cfg::SHTConfig)
-    mode = get(ENV, "SHTNSKIT_PHI_SCALE", "auto")
+    mode = get(ENV, "SHTNSKIT_PHI_SCALE", "")
     if mode == "quad"
         return cfg.nlon / (2π)
     elseif mode == "dft"
         return cfg.nlon
+    end
+    if cfg.phi_scale === :quad
+        return cfg.nlon / (2π)
+    elseif cfg.phi_scale === :dft
+        return cfg.nlon
     else
-        # Auto mode: choose scaling based on grid type
-        # - Gauss grids: use DFT scaling (nlon)
-        # - Driscoll-Healy and regular: use quadrature-consistent scaling (nlon/2π)
-        if cfg.grid_type == :gauss
-            return cfg.nlon
-        else
-            return cfg.nlon / (2π)
-        end
+        return cfg.grid_type == :gauss ? cfg.nlon : cfg.nlon / (2π)
     end
 end
 

@@ -45,7 +45,7 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
                 Fi = Fφ[i, col]
                 wi = cfg.w[i]
                 for l in m:lmax
-                    alm[l+1, col] += (wi * tbl[i, l+1]) * Fi
+                    alm[l+1, col] += (wi * tbl[l+1, i]) * Fi
                 end
             end
         else
@@ -86,7 +86,7 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix)
                 Fi = Fφ[i, col]
                 wi = cfg.w[i]
                 for l in m:lmax
-                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * tbl[i, l+1] * scaleφ) * Fi
+                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * tbl[l+1, i] * scaleφ) * Fi
                 end
             end
         end
@@ -143,7 +143,7 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
             for i in 1:nlat
                 acc = zero(CT)
                 for l in m:lmax
-                    acc += (cfg.Nlm[l+1, col] * tbl[i, l+1]) * alm[l+1, col]
+                    acc += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm[l+1, col]
                 end
                 Fφ[i, col] = inv_scaleφ * acc
             end
@@ -188,7 +188,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for i in 1:nlat, l in m:lmax
-                Fφ[i, col] += (cfg.Nlm[l+1, col] * tbl[i, l+1]) * alm[l+1, col]
+                Fφ[i, col] += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm[l+1, col]
             end
         end
     else

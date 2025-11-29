@@ -211,13 +211,14 @@ end
     synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true) -> Matrix
 
 Inverse transform back to a grid `(nlat, nlon)`. If `real_output=true`,
-Hermitian symmetry is enforced before IFFT.
+Hermitian symmetry is enforced before IFFT. Optional `fft_scratch` lets you
+reuse a preallocated `(nlat,nlon)` complex buffer for lower allocations.
 """
-function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true)
+function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     if use_fused_loops
-        return synthesis_fused(cfg, alm; real_output=real_output)
+        return synthesis_fused(cfg, alm; real_output=real_output, fft_scratch=fft_scratch)
     else
-        return synthesis_unfused(cfg, alm; real_output=real_output)
+        return synthesis_unfused(cfg, alm; real_output=real_output, fft_scratch=fft_scratch)
     end
 end
 
@@ -227,25 +228,40 @@ end
 
 In-place inverse transform. Writes the spatial field into `f_out` to reduce
 allocations. `f_out` must be `(nlat, nlon)` and real if `real_output=true`.
+You may pass a complex `fft_scratch` buffer of size `(nlat,nlon)` to reuse FFT
+workspace.
 """
-function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true)
+function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     size(f_out, 1) == cfg.nlat || throw(DimensionMismatch("f_out first dim must be nlat=$(cfg.nlat)"))
     size(f_out, 2) == cfg.nlon || throw(DimensionMismatch("f_out second dim must be nlon=$(cfg.nlon)"))
-    f_tmp = use_fused_loops ? synthesis_fused(cfg, alm; real_output=real_output) :
-                              synthesis_unfused(cfg, alm; real_output=real_output)
-    f_out .= f_tmp
+    Fφ = fft_scratch === nothing ? Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon) : fft_scratch
+    size(Fφ,1) == cfg.nlat && size(Fφ,2) == cfg.nlon || throw(DimensionMismatch("fft_scratch wrong size"))
+    fill!(Fφ, 0)
+    if use_fused_loops
+        synthesis_fused(cfg, alm; real_output=false, fft_scratch=Fφ)
+    else
+        synthesis_unfused(cfg, alm; real_output=false, fft_scratch=Fφ)
+    end
+    if real_output
+        @inbounds for j in 1:cfg.nlon, i in 1:cfg.nlat
+            f_out[i, j] = real(Fφ[i, j])
+        end
+    else
+        f_out .= Fφ
+    end
     return f_out
 end
 
-function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true)
+function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
 
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
-    Fφ = Matrix{CT}(undef, nlat, nlon)
-    fill!(Fφ, 0)
+    Fφ = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
+    size(Fφ,1) == nlat && size(Fφ,2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
+    fill!(Fφ, zero(CT))
     inv_scaleφ = phi_inv_scale(cfg)
 
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
@@ -282,19 +298,20 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
             end
         end
     end
-    f = ifft_phi(Fφ)
+    f = ifft_phi!(Fφ, Fφ)
     return real_output ? real.(f) : f
 end
 
-function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true)
+function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
 
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
-    Fφ = Matrix{CT}(undef, nlat, nlon)
-    fill!(Fφ, 0)
+    Fφ = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
+    size(Fφ,1) == nlat && size(Fφ,2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
+    fill!(Fφ, zero(CT))
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
@@ -333,6 +350,6 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
             end
         end
     end
-    f = ifft_phi(Fφ)
+    f = ifft_phi!(Fφ, Fφ)
     return real_output ? real.(f) : f
 end

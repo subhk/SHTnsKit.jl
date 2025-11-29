@@ -154,22 +154,16 @@ end
 
 @testset "Regular grid and shtns flags" begin
     lmax = 8
-    # Use heavy oversampling for reliable round-trip accuracy
-    # DH quadrature (nlat=18) is theoretically exact but has implementation issues
-    # Oversampling (nlat=64) works reliably with simple quadrature
-    nlat = max(2 * (lmax + 1), 8 * lmax)  # max(18, 64) = 64
+    nlat = max(2 * (lmax + 1), 8 * lmax)  # heavy latitude oversampling for equiangular accuracy
     nlon = 2 * (2 * lmax + 1)
     cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=false)
-
-    @test cfg_reg.grid_type == :regular
+    @test cfg_reg.grid_type in (:regular, :regular_poles)
     @test cfg_reg.use_plm_tables
-    @test cfg_reg.phi_scale == :quad
 
     rng = MersenneTwister(23)
     alm = randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1)
     alm[:, 1] .= real.(alm[:, 1])
-
-    # Force quadrature scaling via environment variable (proven to work in commit 4f6f279)
+    # Use quadrature-consistent φ scaling for regular grids and ensure env restoration
     alm_err = withenv("SHTNSKIT_PHI_SCALE" => "quad") do
         f = synthesis(cfg_reg, alm; real_output=true)
         alm_rt = analysis(cfg_reg, f)

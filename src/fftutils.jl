@@ -63,6 +63,36 @@ function _dft_phi(A::AbstractMatrix, dir::Int)
 end
 
 """
+    ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
+
+In-place inverse FFT into preallocated `dest` (complex). Writes the transform of
+`A` into `dest`, overwriting any existing data. Uses DFT fallback when FFTW is
+unavailable for the element type.
+"""
+function ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
+    size(dest) == size(A) || throw(DimensionMismatch("dest and A must have same size"))
+    @inbounds dest .= A
+    nlon = size(A, 2)
+    try
+        ifft!(dest, 2)
+        _FFT_BACKEND[] = :fftw
+        return dest
+    catch
+        @inbounds for i in 1:size(A,1)
+            for k in 0:(nlon-1)
+                s = zero(eltype(dest))
+                @simd for j in 0:(nlon-1)
+                    s += dest[i, j+1] * cis(_TWO_PI * k * j / nlon)
+                end
+                dest[i, k+1] = s / nlon
+            end
+        end
+        _FFT_BACKEND[] = :dft
+        return dest
+    end
+end
+
+"""
     fft_phi(A::AbstractMatrix)
 
 Forward FFT along the longitude dimension with automatic differentiation support.
@@ -93,6 +123,37 @@ function fft_phi(A::AbstractMatrix)
         local Y = _dft_phi(A, -1)  # Forward transform uses -1 direction
         _FFT_BACKEND[] = :dft
         return Y
+    end
+end
+
+"""
+    fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
+
+In-place forward FFT along longitude into a preallocated complex buffer `dest`
+of the same size as `A`. Reduces allocations compared to `fft_phi(complex.(A))`.
+Falls back to the pure-DFT path for unsupported element types.
+"""
+function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
+    size(dest) == size(A) || throw(DimensionMismatch("dest and A must have same size"))
+    @inbounds dest .= complex.(A)
+    try
+        fft!(dest, 2)
+        _FFT_BACKEND[] = :fftw
+        return dest
+    catch
+        # fallback to DFT computed into dest
+        nlat, nlon = size(A)
+        @inbounds for i in 1:nlat
+            for k in 0:(nlon-1)
+                s = zero(eltype(dest))
+                @simd for j in 0:(nlon-1)
+                    s += dest[i, j+1] * cis(-_TWO_PI * k * j / nlon)
+                end
+                dest[i, k+1] = s
+            end
+        end
+        _FFT_BACKEND[] = :dft
+        return dest
     end
 end
 

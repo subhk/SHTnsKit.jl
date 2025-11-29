@@ -14,11 +14,11 @@ by higher-level helpers when needed.
 Forward transform on Gauss–Legendre × equiangular grid.
 Returns coefficients `alm[l+1, m+1]` with orthonormal normalization.
 """
-function analysis(cfg::SHTConfig, f::AbstractMatrix; use_fused_loops::Bool=true)
+function analysis(cfg::SHTConfig, f::AbstractMatrix; use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     if use_fused_loops
-        return analysis_fused(cfg, f)
+        return analysis_fused(cfg, f; fft_scratch=fft_scratch)
     else
-        return analysis_unfused(cfg, f)
+        return analysis_unfused(cfg, f; fft_scratch=fft_scratch)
     end
 end
 
@@ -28,23 +28,23 @@ end
 In-place forward transform. Writes coefficients into `alm_out` to avoid allocating
 the output matrix each call. `alm_out` must be size `(lmax+1, mmax+1)`.
 """
-function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; use_fused_loops::Bool=true)
+function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     size(alm_out, 1) == cfg.lmax + 1 || throw(DimensionMismatch("alm_out first dim must be lmax+1=$(cfg.lmax+1)"))
     size(alm_out, 2) == cfg.mmax + 1 || throw(DimensionMismatch("alm_out second dim must be mmax+1=$(cfg.mmax+1)"))
     fill!(alm_out, zero(eltype(alm_out)))
     if use_fused_loops
-        return analysis_fused!(alm_out, cfg, f)
+        return analysis_fused!(alm_out, cfg, f; fft_scratch=fft_scratch)
     else
-        return analysis_unfused!(alm_out, cfg, f)
+        return analysis_unfused!(alm_out, cfg, f; fft_scratch=fft_scratch)
     end
 end
 
-function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
+function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
 
-    Fφ = fft_phi(complex.(f))
+    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
     lmax, mmax = cfg.lmax, cfg.mmax
     CT = eltype(Fφ)
     alm = Matrix{CT}(undef, lmax + 1, mmax + 1)
@@ -83,12 +83,12 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix)
     return alm
 end
 
-function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix)
+function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
 
-    Fφ = fft_phi(complex.(f))
+    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
 
@@ -124,12 +124,12 @@ function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatri
     return alm
 end
 
-function analysis_fused(cfg::SHTConfig, f::AbstractMatrix)
+function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
 
-    Fφ = fft_phi(complex.(f))
+    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
     lmax, mmax = cfg.lmax, cfg.mmax
     CT = eltype(Fφ)
     alm = Matrix{CT}(undef, lmax + 1, mmax + 1)
@@ -167,12 +167,12 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix)
     return alm
 end
 
-function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix)
+function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
 
-    Fφ = fft_phi(complex.(f))
+    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
 

@@ -422,7 +422,7 @@ function run_sim(lmax::Int, params::SWParams)
         nprocs = MPI.Comm_size(comm)
 
         nlat = lmax + 2
-        nlon = 2 * (2lmax + 1)
+        nlon = 2 * (2 * lmax + 1)  # factor 2 for better longitudinal resolution
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         enable_plm_tables!(cfg)
 

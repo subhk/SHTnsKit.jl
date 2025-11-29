@@ -107,9 +107,19 @@ Create an equiangular (regular) grid configuration. Regular grids use simple
 directly on the poles. By default associated Legendre tables are precomputed,
 which mirrors SHTns' regular-grid behaviour and improves performance.
 
-Set `use_dh_weights=true` to use Driscoll-Healy quadrature weights for exact
-integration when `include_poles=true` and `nlat=2*(lmax+1)`. This provides
-exact transforms up to degree lmax.
+# Driscoll-Healy Quadrature
+
+Set `use_dh_weights=true` to use Driscoll-Healy quadrature for exact spherical
+harmonic transforms. This requires:
+- `include_poles=true`
+- `nlat = 2*(lmax+1)` for exactness up to degree lmax
+- `nlat` must be even
+
+The DH grid uses θ = πj/n for j=0,...,n-1 (includes north pole, excludes south pole)
+and provides exact quadrature via specially computed weights.
+
+Reference: Driscoll & Healy (1994), "Computing Fourier transforms and convolutions
+on the 2-sphere", Adv. Appl. Math., 15, 202-250.
 """
 function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
                                nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,

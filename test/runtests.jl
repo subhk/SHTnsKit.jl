@@ -154,10 +154,10 @@ end
 
 @testset "Regular grid and shtns flags" begin
     lmax = 8
-    nlat = 2 * (lmax + 1)  # regular-poles grid; exact for DH with this size
+    nlat = 2 * (lmax + 1)  # Driscoll-Healy grid; exact for this size
     nlon = 2 * (2 * lmax + 1)
     cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=true, use_dh_weights=true)
-    @test cfg_reg.grid_type == :regular_poles
+    @test cfg_reg.grid_type == :driscoll_healy
     @test cfg_reg.use_plm_tables
 
     rng = MersenneTwister(23)

@@ -156,7 +156,7 @@ end
     lmax = 8
     nlat = 2 * (lmax + 1)  # regular-poles grid; exact for DH with this size
     nlon = 2 * (2 * lmax + 1)
-    cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=true)
+    cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=true, use_dh_weights=true)
     @test cfg_reg.grid_type == :regular_poles
     @test cfg_reg.use_plm_tables
 

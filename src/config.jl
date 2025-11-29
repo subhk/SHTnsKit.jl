@@ -47,6 +47,7 @@ Base.@kwdef mutable struct SHTConfig
     cs_phase::Bool              # Condon-Shortley phase convention
     real_norm::Bool             # Real-valued normalization
     robert_form::Bool           # Robert form for spectral derivatives
+    phi_scale::Symbol = :auto    # :dft, :quad, or :auto (grid-driven)
     phi_scale::Symbol = :auto    # :dft or :quad; :auto chooses by grid_type
 
     # Performance optimization: precomputed Legendre polynomials
@@ -92,7 +93,7 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
     # Construct and return the complete configuration
     return SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type=:gauss, θ, φ, x, w, wlat = w, Nlm,
                      cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                     ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form,
+                     ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form, phi_scale=:dft,
                      compute_device = :cpu, device_preference = [:cpu])
 end
 
@@ -192,7 +193,7 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
                     θ, φ, x, w, wlat = w, Nlm,
                     cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                    ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form,
+                    ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form, phi_scale=:quad,
                     compute_device = :cpu, device_preference = [:cpu])
 
     if precompute_plm

@@ -148,7 +148,8 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
             # Use Driscoll-Healy grid: θ = π*j/n for j=0,...,n-1
             # This includes north pole (j=0, θ=0) but not south pole (j=n would give θ=π)
             # The last point is at θ = π*(n-1)/n, just before the south pole
-            w = driscoll_healy_weights(nlat)
+            # Apply √(4π) normalization to match spherical harmonic conventions
+            w = driscoll_healy_weights(nlat, apply_4pi_normalization=true)
             for i in 0:(nlat-1)
                 θi = π * i / nlat
                 θ[i+1] = θi

@@ -131,7 +131,7 @@ Note:
     - The first weight (north pole, j=0) is always zero
     - The last weight (south pole, j=n-1) is also zero
 """
-function driscoll_healy_weights(n::Int)
+function driscoll_healy_weights(n::Int; apply_4pi_normalization::Bool=false)
     # Validate input
     n >= 2 || throw(ArgumentError("n must be ≥ 2"))
     iseven(n) || throw(ArgumentError("n must be even for Driscoll-Healy quadrature"))
@@ -139,7 +139,7 @@ function driscoll_healy_weights(n::Int)
     # Allocate output array
     w = zeros(Float64, n)
 
-    # Normalization factor
+    # Normalization factor from DHaj formula
     norm_factor = sqrt(8.0) / n
 
     # Compute weights for each latitude point
@@ -152,6 +152,12 @@ function driscoll_healy_weights(n::Int)
 
         # Apply the full formula
         w[j+1] = norm_factor * sin(π * j / n) * sum1
+    end
+
+    # SHTOOLS applies an additional √(4π) normalization for spherical harmonic conventions
+    # This may be needed depending on the spherical harmonic normalization used
+    if apply_4pi_normalization
+        w .*= sqrt(4.0 * π)
     end
 
     return w

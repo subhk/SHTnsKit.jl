@@ -35,9 +35,8 @@ function phi_inv_scale(cfg::SHTConfig)
     else
         # Auto mode: choose scaling based on grid type
         # - Gauss grids: use DFT scaling (nlon)
-        # - Driscoll-Healy: use DFT scaling (nlon) as DH uses FFT convention
-        # - Regular/equiangular: use quadrature-consistent scaling (nlon/2π)
-        if cfg.grid_type == :gauss || cfg.grid_type == :driscoll_healy
+        # - Driscoll-Healy and regular: use quadrature-consistent scaling (nlon/2π)
+        if cfg.grid_type == :gauss
             return cfg.nlon
         else
             return cfg.nlon / (2π)

@@ -9,7 +9,7 @@ Complete reference for all SHTnsKit.jl functions and types.
 ```julia
 create_config(lmax; mmax=lmax, mres=1, nlat=lmax+2, nlon=max(2*lmax+1,4),
               norm=:orthonormal, cs_phase=true, real_norm=false, robert_form=false,
-              grid_type=:gauss, phi_scale=:auto) → SHTConfig
+              grid_type=:gauss, phi_scale=:dft) → SHTConfig
 ```
 Create a configuration with specified parameters. Supports Gauss–Legendre grids (`grid_type = :gauss`, default) and regular equiangular grids (`:regular` or `:regular_poles`), forwarding to the matching constructor.
 

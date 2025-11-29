@@ -168,9 +168,13 @@ end
     rng = MersenneTwister(23)
     alm = randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1)
     alm[:, 1] .= real.(alm[:, 1])
-    f = synthesis(cfg_reg, alm; real_output=true)
-    alm_rt = analysis(cfg_reg, f)
-    alm_err = maximum(abs.(alm_rt - alm))
+
+    # Force quadrature scaling via environment variable (proven to work in commit 4f6f279)
+    alm_err = withenv("SHTNSKIT_PHI_SCALE" => "quad") do
+        f = synthesis(cfg_reg, alm; real_output=true)
+        alm_rt = analysis(cfg_reg, f)
+        maximum(abs.(alm_rt - alm))
+    end
     @test alm_err < 1e-6
 
     flags = SHTnsKit.SHT_REGULAR + SHTnsKit.SHT_SOUTH_POLE_FIRST

@@ -59,6 +59,34 @@ nlat, nphi = cfg.nlat, cfg.nlon  # 36 × 65
 
 ---
 
+### Buffer Helpers
+
+```julia
+scratch_spatial(cfg::SHTConfig, T::Type=Float64) -> Matrix{T}
+scratch_fft(cfg::SHTConfig, T::Type=ComplexF64) -> Matrix{T}
+```
+Allocate reusable spatial and complex FFT buffers sized to `cfg`. Pass `fft_scratch` to `analysis`/`synthesis` (and their `!` variants) to avoid per-call allocations.
+
+### In-place Usage
+
+- **Serial**: preallocate `alm`, `f_out`, and `fft_scratch` and call `analysis!` / `synthesis!`:
+  ```julia
+  fft_scratch = scratch_fft(cfg)
+  alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+  analysis!(cfg, alm, f; fft_scratch=fft_scratch)
+  f_out = scratch_spatial(cfg)
+  synthesis!(cfg, f_out, alm; fft_scratch=fft_scratch)
+  ```
+- **Distributed**: build plans once with `use_rfft=true` and (for vector/QST) `with_spatial_scratch=true` to reuse internal FFT buffers:
+  ```julia
+  aplan = DistAnalysisPlan(cfg, proto; use_rfft=true)
+  vplan = DistSphtorPlan(cfg, proto; use_rfft=true, with_spatial_scratch=true)
+  splan = DistPlan(cfg, proto; use_rfft=true)
+  dist_analysis!(aplan, Alm, fθφ)
+  dist_SHsphtor_to_spat!(vplan, Vt, Vp, S, T; real_output=true)
+  dist_synthesis!(splan, fθφ, Alm; real_output=true)
+  ```
+
 <!-- GPU configuration is not supported in this package -->
 
 ### Configuration Queries

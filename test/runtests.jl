@@ -163,8 +163,18 @@ end
     rng = MersenneTwister(23)
     alm = randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1)
     alm[:, 1] .= real.(alm[:, 1])
-    f = synthesis(cfg_reg, alm; real_output=true)
-    alm_rt = analysis(cfg_reg, f)
+    old_phi = get(ENV, "SHTNSKIT_PHI_SCALE", nothing)
+    ENV["SHTNSKIT_PHI_SCALE"] = "quad"  # use quadrature-consistent φ scaling for regular grids
+    try
+        f = synthesis(cfg_reg, alm; real_output=true)
+        alm_rt = analysis(cfg_reg, f)
+    finally
+        if old_phi === nothing
+            pop!(ENV, "SHTNSKIT_PHI_SCALE", nothing)
+        else
+            ENV["SHTNSKIT_PHI_SCALE"] = old_phi
+        end
+    end
     @test maximum(abs.(alm_rt - alm)) < 1e-6
 
     flags = SHTnsKit.SHT_REGULAR + SHTnsKit.SHT_SOUTH_POLE_FIRST

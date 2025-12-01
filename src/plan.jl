@@ -18,13 +18,13 @@ FFTs and real-optimized FFTs (RFFT) depending on the use case.
 
 struct SHTPlan
     cfg::SHTConfig                # Configuration parameters
-    P::Vector{Float64}           # Working array for Legendre polynomials P_l^m(x)
-    dPdx::Vector{Float64}        # Working array for derivatives dP_l^m/dx  
-    G::Vector{ComplexF64}        # Temporary array for latitudinal profiles
-    Fθk::Matrix{ComplexF64}      # Fourier coefficient matrix [latitude × longitude]
-    fft_plan::Any               # Pre-optimized forward FFT plan (or nothing for RFFT)
-    ifft_plan::Any              # Pre-optimized inverse FFT plan (or nothing for RFFT)  
-    use_rfft::Bool              # Flag: true = use real FFT optimization, false = complex FFT
+    P::Vector{Float64}            # Working array for Legendre polynomials P_l^m(x)
+    dPdx::Vector{Float64}         # Working array for derivatives dP_l^m/dx  
+    G::Vector{ComplexF64}         # Temporary array for latitudinal profiles
+    Fθk::Matrix{ComplexF64}       # Fourier coefficient matrix [latitude × longitude]
+    fft_plan::Any                 # Pre-optimized forward FFT plan (or nothing for RFFT)
+    ifft_plan::Any                # Pre-optimized inverse FFT plan (or nothing for RFFT)  
+    use_rfft::Bool                # Flag: true = use real FFT optimization, false = complex FFT
 end
 
 """
@@ -88,10 +88,12 @@ Uses a two-pass strategy over φ FFTs to avoid extra buffers.
 function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
+    
     size(Vt,1)==nlat && size(Vt,2)==nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1)==nlat && size(Vp,2)==nlon || throw(DimensionMismatch("Vp dims"))
     size(Slm_out,1)==cfg.lmax+1 && size(Slm_out,2)==cfg.mmax+1 || throw(DimensionMismatch("Slm_out dims"))
     size(Tlm_out,1)==cfg.lmax+1 && size(Tlm_out,2)==cfg.mmax+1 || throw(DimensionMismatch("Tlm_out dims"))
+    
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
     fill!(Slm_out, 0); fill!(Tlm_out, 0)
@@ -99,6 +101,7 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
     @inbounds for i in 1:nlat, j in 1:nlon
         plan.Fθk[i,j] = Vt[i,j]
     end
+    
     # Robert form: divide by sinθ before analysis
     if cfg.robert_form
         @inbounds for i in 1:nlat
@@ -108,7 +111,9 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             end
         end
     end
+    
     plan.fft_plan * plan.Fθk
+    
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
@@ -126,6 +131,7 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             end
         end
     end
+    
     # Second pass: FFT(Vp) -> add remaining contributions using Fφ
     @inbounds for i in 1:nlat, j in 1:nlon
         plan.Fθk[i,j] = Vp[i,j]
@@ -138,7 +144,9 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             end
         end
     end
+    
     plan.fft_plan * plan.Fθk
+    
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
@@ -156,6 +164,7 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             end
         end
     end
+    
     # Convert to cfg normalization if needed
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         tmpS = similar(Slm_out); tmpT = similar(Tlm_out)
@@ -174,12 +183,15 @@ In-place vector synthesis. Streams m→k without forming (θ×m) intermediates; 
 function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
+    
     size(Vt_out,1)==nlat && size(Vt_out,2)==nlon || throw(DimensionMismatch("Vt_out dims"))
     size(Vp_out,1)==nlat && size(Vp_out,2)==nlon || throw(DimensionMismatch("Vp_out dims"))
     size(Slm,1)==cfg.lmax+1 && size(Slm,2)==cfg.mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1)==cfg.lmax+1 && size(Tlm,2)==cfg.mmax+1 || throw(DimensionMismatch("Tlm dims"))
+    
     lmax, mmax = cfg.lmax, cfg.mmax
-        inv_scaleφ = phi_inv_scale(cfg)
+    inv_scaleφ = phi_inv_scale(cfg)
+    
     # Convert to internal normalization if needed
     Slm_int = Slm; Tlm_int = Tlm
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
@@ -188,6 +200,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
         convert_alm_norm!(tmpT, Tlm, cfg; to_internal=true)
         Slm_int = tmpS; Tlm_int = tmpT
     end
+    
     # Synthesize Vt: stream m→k then inverse FFT
     fill!(plan.Fθk, 0)
     for m in 0:mmax
@@ -204,9 +217,11 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             end
             plan.G[i] = g
         end
+        
         @inbounds for i in 1:nlat
             plan.Fθk[i, col] = inv_scaleφ * plan.G[i]
         end
+        
         if real_output && m > 0
             conj_index = nlon - m + 1
             @inbounds for i in 1:nlat
@@ -214,6 +229,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             end
         end
     end
+    
     if plan.use_rfft && real_output
         Vt_tmp = FFTW.irfft(plan.Fθk, nlon, 2)
         @inbounds for i in 1:nlat, j in 1:nlon
@@ -222,6 +238,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     else
         plan.ifft_plan * plan.Fθk
     end
+    
     if cfg.robert_form
         @inbounds for i in 1:nlat
             sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
@@ -230,6 +247,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             end
         end
     end
+    
     if real_output
         @inbounds for i in 1:nlat, j in 1:nlon
             Vt_out[i,j] = real(plan.Fθk[i,j])
@@ -239,6 +257,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             Vt_out[i,j] = plan.Fθk[i,j]
         end
     end
+    
     # Synthesize Vp similarly
     fill!(plan.Fθk, 0)
     for m in 0:mmax
@@ -265,6 +284,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             end
         end
     end
+    
     if plan.use_rfft && real_output
         Vt_tmp = FFTW.irfft(plan.Fθk, nlon, 2)
         @inbounds for i in 1:nlat, j in 1:nlon
@@ -273,6 +293,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     else
         plan.ifft_plan * plan.Fθk
     end
+    
     if cfg.robert_form
         @inbounds for i in 1:nlat
             sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
@@ -281,6 +302,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             end
         end
     end
+    
     if real_output
         @inbounds for i in 1:nlat, j in 1:nlon
             Vp_out[i,j] = real(plan.Fθk[i,j])
@@ -309,7 +331,9 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     @inbounds for i in 1:nlat, j in 1:nlon
         plan.Fθk[i,j] = f[i,j]
     end
+    
     plan.fft_plan * plan.Fθk  # execute planned FFT in-place
+    
     # Compute alm
     fill!(alm_out, 0)
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -328,6 +352,7 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
             alm_out[l+1, col] *= cfg.Nlm[l+1, col] * scaleφ
         end
     end
+    
     # Convert to cfg normalization if needed
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         tmp = similar(alm_out)
@@ -346,10 +371,12 @@ Streams m→k directly without building a (θ×m) intermediate.
 function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
+    
     size(f_out,1)==nlat || throw(DimensionMismatch("f_out first dim must be nlat"))
     size(f_out,2)==nlon || throw(DimensionMismatch("f_out second dim must be nlon"))
     size(alm,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
+    
     # Convert alm to internal normalization if needed
     alm_int = alm
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
@@ -357,10 +384,12 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         convert_alm_norm!(tmp, alm, cfg; to_internal=true)
         alm_int = tmp
     end
+    
     # Zero Fourier buffer
     fill!(plan.Fθk, 0)
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
+    
     # Stream over m, fill k-bins directly
     for m in 0:mmax
         col = m + 1
@@ -385,8 +414,10 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
             end
         end
     end
+    
     # Inverse FFT along φ in-place
     plan.ifft_plan * plan.Fθk
+    
     # Write result
     if real_output
         @inbounds for i in 1:nlat, j in 1:nlon

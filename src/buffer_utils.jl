@@ -163,7 +163,10 @@ end
 
 Validate dimensions for a pair of spectral arrays (commonly Slm, Tlm).
 """
-function validate_spectral_pair_dimensions(array1::AbstractMatrix, array2::AbstractMatrix, cfg::SHTConfig, names::Tuple{String,String}=("array1","array2"))
+function validate_spectral_pair_dimensions(array1::AbstractMatrix, 
+                                            array2::AbstractMatrix, 
+                                            cfg::SHTConfig, 
+                                            names::Tuple{String,String}=("array1","array2"))
     validate_spectral_dimensions(array1, cfg, names[1])
     validate_spectral_dimensions(array2, cfg, names[2])
     return array1, array2
@@ -174,7 +177,10 @@ end
 
 Validate dimensions for a pair of spatial arrays (commonly Vt, Vp).
 """
-function validate_spatial_pair_dimensions(array1::AbstractMatrix, array2::AbstractMatrix, cfg::SHTConfig, names::Tuple{String,String}=("array1","array2"))
+function validate_spatial_pair_dimensions(array1::AbstractMatrix, 
+                                            array2::AbstractMatrix, 
+                                            cfg::SHTConfig, 
+                                            names::Tuple{String,String}=("array1","array2"))
     validate_spatial_dimensions(array1, cfg, names[1])
     validate_spatial_dimensions(array2, cfg, names[2])
     return array1, array2

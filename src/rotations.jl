@@ -92,6 +92,7 @@ function shtns_rotation_set_angle_axis(r::SHTRotation, theta::Real, Vx::Real, Vy
     end
     kx, ky, kz = v ./ n
     c = cos(θ); s = sin(θ); t = 1 - c
+    
     # Rotation matrix R = c I + s [k]_x + t k k^T
     R11 = c + t*kx*kx
     R12 = t*kx*ky - s*kz
@@ -102,6 +103,7 @@ function shtns_rotation_set_angle_axis(r::SHTRotation, theta::Real, Vx::Real, Vy
     R31 = t*kz*kx - s*ky
     R32 = t*kz*ky + s*kx
     R33 = c + t*kz*kz
+    
     # Extract ZYZ Euler angles
     β = acos(clamp(R33, -1.0, 1.0))
     if abs(sin(β)) > 1e-12
@@ -239,6 +241,7 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
     expected = nlm_cplx_calc(r.lmax, r.mmax, mres)
     length(Zlm) == expected || throw(DimensionMismatch("LM_cplx size mismatch"))
     α, β, γ = r.α, r.β, r.γ
+    
     # Apply R = diag(e^{-i m α}) * d^l(β) * diag(e^{-i m γ}) for each l
     for l in 0:r.lmax
         mm = min(l, r.mmax)
@@ -282,6 +285,7 @@ function shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex
     length(Rlm) == expected || throw(DimensionMismatch("LM packed size mismatch"))
     # Build LM_cplx array Zlm from real-packed Qlm using Hermitian symmetry a_{-m} = (-1)^m conj(a_m)
     Z = Vector{ComplexF64}(undef, nlm_cplx_calc(r.lmax, r.mmax, 1))
+    
     # initialize zeros
     fill!(Z, 0.0 + 0.0im)
     for l in 0:r.lmax

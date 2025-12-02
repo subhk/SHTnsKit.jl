@@ -204,7 +204,10 @@ end
 
 Compute vector field kinetic energy from packed S and T coefficients.
 """
-function energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}, Tpacked::AbstractVector{<:Complex}; real_field::Bool=true)
+function energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}, 
+                            Tpacked::AbstractVector{<:Complex}; 
+                            real_field::Bool=true)
+
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
     wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
@@ -224,7 +227,11 @@ end
 
 Compute energy gradients for packed vector coefficients.
 """
-function grad_energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}, Tpacked::AbstractVector{<:Complex}; real_field::Bool=true)
+function grad_energy_vector_packed(cfg::SHTConfig, 
+                                Spacked::AbstractVector{<:Complex}, 
+                                Tpacked::AbstractVector{<:Complex}; 
+                                real_field::Bool=true)
+    
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
     wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)

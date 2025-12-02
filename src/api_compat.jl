@@ -56,6 +56,7 @@ function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer,
     f = Int(flags)
     lmax = Int(lmax); mmax = Int(mmax); mres = Int(mres)
     nlat = Int(nlat); nphi = Int(nphi)
+  
     grid_code = f % 256
     grid_sym = _grid_symbol(grid_code)
     min_lat = _min_nlat_for_grid(grid_code, lmax)
@@ -101,10 +102,12 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     min_lat = _min_nlat_for_grid(grid_type, cfg.lmax)
     nlat = max(Int(nlat), min_lat)
     nphi = max(Int(nphi), 2*cfg.mmax + 1, 4)
+  
     # Build grid
     θ = zeros(Float64, nlat); w = zeros(Float64, nlat)
     x = zeros(Float64, nlat)
     φ = (2π / nphi) .* collect(0:(nphi-1))
+  
     if grid_type == 0 || grid_type == 1 || grid_type == 6  # gauss, auto, gauss_fly
         x, w = gausslegendre(nlat)
         θ = acos.(x)
@@ -129,12 +132,17 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     if south_pole_first
         θ = reverse(θ); w = reverse(w); x = reverse(x)
     end
+  
     # Update cfg in-place
     cfg.nlat = nlat; cfg.nlon = nphi; cfg.grid_type = grid_sym
-    cfg.θ = θ; cfg.φ = φ; cfg.x = x; cfg.w = w; cfg.wlat = w
-    cfg.ct = cos.(θ); cfg.st = sin.(θ); cfg.sintheta = cfg.st
+    cfg.θ = θ; cfg.φ = φ; 
+    cfg.x = x; cfg.w = w; 
+    cfg.wlat = w
+    cfg.ct = cos.(θ); cfg.st = sin.(θ); 
+    cfg.sintheta = cfg.st
     cfg.nspat = nlat * nphi
     cfg.cphi = 2π / nphi
+  
     # Precompute Plm tables for regular grids (skip quick_init)
     if grid_type == SHT_REGULAR || grid_type == SHT_REG_FAST || grid_type == SHT_REGULAR_POLES
         prepare_plm_tables!(cfg)
@@ -159,7 +167,9 @@ end
 function shtns_create_with_grid(cfg::SHTConfig, mmax_new::Integer, nofft::Integer)
     mmax2 = Int(mmax_new)
     mmax2 ≤ cfg.mmax || throw(ArgumentError("mmax_new must be ≤ cfg.mmax"))
-    include_poles = cfg.grid_type === :regular_poles
+    
+  include_poles = cfg.grid_type === :regular_poles
+  
     return create_config(cfg.lmax; mmax=mmax2, mres=cfg.mres, nlat=cfg.nlat, nlon=cfg.nlon,
                          norm=cfg.norm, cs_phase=cfg.cs_phase, real_norm=cfg.real_norm,
                          robert_form=cfg.robert_form, grid_type=cfg.grid_type,
@@ -236,6 +246,7 @@ function legendre_sphPlm_array(cfg::SHTConfig, lmax::Integer, im::Integer, x::Re
     P = Vector{Float64}(undef, cfg.lmax + 1)
     Plm_row!(P, x, cfg.lmax, m)
     n = min(length(yl), lmax - m + 1)
+  
     @inbounds for (k, l) in enumerate(m:(m + n - 1))
         yl[k] = cfg.Nlm[l+1, m+1] * P[l+1]
     end
@@ -259,6 +270,7 @@ function legendre_sphPlm_deriv_array(cfg::SHTConfig, lmax::Integer, im::Integer,
     dPdx = Vector{Float64}(undef, cfg.lmax + 1)
     Plm_and_dPdx_row!(P, dPdx, x, cfg.lmax, m)
     n = min(length(yl), length(dyl), lmax - m + 1)
+  
     @inbounds for (k, l) in enumerate(m:(m + n - 1))
         N = cfg.Nlm[l+1, m+1]
         yl[k]  = N * P[l+1]

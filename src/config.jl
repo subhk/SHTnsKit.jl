@@ -189,8 +189,9 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
         :regular
     end
 
-    # DH grids use DFT scaling like Gauss; regular grids use quadrature scaling
-    phi_scale = use_dh_weights ? :dft : :quad
+    # All grids use DFT scaling (2π factor from spherical harmonic normalization)
+    # The 2π comes from ∫_0^{2π} exp(imφ) exp(-im'φ) dφ = 2π δ_mm'
+    phi_scale = :dft
 
     cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
                     θ, φ, x, w, wlat = w, Nlm,

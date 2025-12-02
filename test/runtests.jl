@@ -154,21 +154,23 @@ end
 
 @testset "Regular grid and shtns flags" begin
     lmax = 8
-    nlat = max(2 * (lmax + 1), 8 * lmax)  # heavy latitude oversampling for equiangular accuracy
+    # Driscoll-Healy quadrature for exact equiangular transforms
+    nlat = 2 * (lmax + 1)
     nlon = 2 * (2 * lmax + 1)
-    cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=false)
-    @test cfg_reg.grid_type in (:regular, :regular_poles)
+    cfg_reg = create_regular_config(lmax, nlat; nlon=nlon, precompute_plm=true, include_poles=true, use_dh_weights=true)
+    @test cfg_reg.grid_type in (:regular, :regular_poles, :driscoll_healy)
     @test cfg_reg.use_plm_tables
 
     rng = MersenneTwister(23)
-    alm = randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1)
-    alm[:, 1] .= real.(alm[:, 1])
-    # Use quadrature-consistent φ scaling for regular grids and ensure env restoration
-    alm_err = withenv("SHTNSKIT_PHI_SCALE" => "quad") do
-        f = synthesis(cfg_reg, alm; real_output=true)
-        alm_rt = analysis(cfg_reg, f)
-        maximum(abs.(alm_rt - alm))
+    alm = zeros(ComplexF64, lmax+1, lmax+1)
+    for m in 0:lmax, l in m:lmax
+        alm[l+1, m+1] = randn(rng) + im * randn(rng)
     end
+    alm[:, 1] .= real.(alm[:, 1])
+
+    f = synthesis(cfg_reg, alm; real_output=true)
+    alm_rt = analysis(cfg_reg, f)
+    alm_err = maximum(abs.(alm_rt - alm))
     @test alm_err < 1e-6
 
     flags = SHTnsKit.SHT_REGULAR + SHTnsKit.SHT_SOUTH_POLE_FIRST

@@ -263,8 +263,12 @@ function SHTnsKit.dist_SH_Yrotate_packed(cfg::SHTnsKit.SHTConfig,
     @inbounds for m in 0:mmax, l in m:lmax
         Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1]
     end
-    Alm_p = PencilArray(Alm)
-    R_p = allocate(Alm_p; dims=(:l,:m), eltype=ComplexF64)
+    # Create PencilArrays for the spectral coefficients
+    comm = MPI.COMM_WORLD
+    pen = Pencil((lmax+1, mmax+1), comm)
+    Alm_p = PencilArray{ComplexF64}(undef, pen)
+    copyto!(parent(Alm_p), Alm)
+    R_p = PencilArray{ComplexF64}(undef, pen)
     SHTnsKit.dist_SH_Yrotate(cfg, Alm_p, β, R_p)
     Rlm_mat = zeros(ComplexF64, lmax+1, mmax+1)
     lloc = axes(R_p, 1); mloc = axes(R_p, 2)
@@ -302,8 +306,12 @@ function SHTnsKit.dist_SH_Xrotate90_packed(cfg::SHTnsKit.SHTConfig,
     @inbounds for m in 0:mmax, l in m:lmax
         Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1]
     end
-    Alm_p = PencilArray(Alm)
-    R_p = allocate(Alm_p; dims=(:l,:m), eltype=ComplexF64)
+    # Create PencilArrays for the spectral coefficients
+    comm = MPI.COMM_WORLD
+    pen = Pencil((lmax+1, mmax+1), comm)
+    Alm_p = PencilArray{ComplexF64}(undef, pen)
+    copyto!(parent(Alm_p), Alm)
+    R_p = PencilArray{ComplexF64}(undef, pen)
     SHTnsKit.dist_SH_rotate_euler(cfg, Alm_p, π/2, π/2, -π/2, R_p)
     Rlm_mat = zeros(ComplexF64, lmax+1, mmax+1)
     lloc = axes(R_p, 1); mloc = axes(R_p, 2)

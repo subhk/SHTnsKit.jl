@@ -384,20 +384,34 @@ end
 
 Cache-optimized parallel analysis with loop fusion for maximum performance.
 Fuses FFT processing, Legendre integration, and normalization into optimized loops.
+
+Note: Currently redirects to dist_analysis_standard. Cache blocking is implemented there.
 """
 function dist_analysis_fused_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
+    # Redirect to standard implementation which has proper PencilArrays API usage
+    return dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
+end
+
+# Legacy implementation preserved for reference - uses incorrect transpose API
+function _dist_analysis_fused_cache_blocked_legacy(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
     comm = communicator(fθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
-    
-    # FUSED STEP 1+2: Combined FFT and transpose with storage optimization
-    if use_rfft && eltype(fθφ) <: Real
-        pfft = SHTnsKitParallelExt._get_or_plan(:rfft, fθφ)
-        Fθk = rfft(fθφ, pfft)
+    nlon = cfg.nlon
+
+    # Get local data and perform FFT (fixed implementation)
+    local_data = parent(fθφ)
+    nlat_local, nlon_local = size(local_data)
+    θ_globals = collect(globalindices(fθφ, 1))
+
+    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    if nlon_local == nlon
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
-        pfft = SHTnsKitParallelExt._get_or_plan(:fft, fθφ)
-        Fθk = fft(fθφ, pfft)
+        φ_globals = collect(globalindices(fθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
+        Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
-    Fθm = transpose(Fθk, (; dims=(1,2), names=(:θ,:m)))
     
     # Enhanced packed storage optimization for fused analysis
     storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
@@ -540,20 +554,34 @@ end
 
 Cache-optimized parallel analysis that processes data in cache-friendly blocks
 to minimize memory bandwidth and improve performance on NUMA systems.
+
+Note: Currently redirects to dist_analysis_standard. Cache blocking is implemented there.
 """
 function dist_analysis_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
+    # Redirect to standard implementation which has proper PencilArrays API usage
+    return dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
+end
+
+# Legacy implementation preserved for reference - uses incorrect transpose API
+function _dist_analysis_cache_blocked_legacy(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
     comm = communicator(fθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
-    
-    # Choose FFT path
-    if use_rfft && eltype(fθφ) <: Real
-        pfft = SHTnsKitParallelExt._get_or_plan(:rfft, fθφ)
-        Fθk = rfft(fθφ, pfft)
+    nlon = cfg.nlon
+
+    # Get local data and perform FFT (fixed implementation)
+    local_data = parent(fθφ)
+    nlat_local, nlon_local = size(local_data)
+    θ_globals = collect(globalindices(fθφ, 1))
+
+    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    if nlon_local == nlon
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
-        pfft = SHTnsKitParallelExt._get_or_plan(:fft, fθφ)
-        Fθk = fft(fθφ, pfft)
+        φ_globals = collect(globalindices(fθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
+        Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
-    Fθm = transpose(Fθk, (; dims=(1,2), names=(:θ,:m)))
     
     # Use packed storage for better memory efficiency
     if use_packed_storage
@@ -1113,18 +1141,11 @@ function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                     gθ += dθY * Sl + (0 + 1im) * mval * inv_sθ * Y * Tl
                     gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + (sθ * N * tbld[l+1, iglobθ]) * Tl
                 end
-                Gθ[ii] = gθ; Gφ[ii] = gφ
-            end
-        else
-            for (ii, iθ) in enumerate(θloc)
-                iglobθ = gl_θ[ii]
-                x = cfg.x[iglobθ]
-                sθ = sqrt(max(0.0, 1 - x*x))
-                inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+            else
+                # Fallback: compute Legendre polynomials and derivatives on-demand
                 SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
-                gθ = 0.0 + 0.0im
-                gφ = 0.0 + 0.0im
-                @inbounds for l in max(1,mval):lmax
+
+                @inbounds for l in max(1, mval):lmax
                     N = cfg.Nlm[l+1, col]
                     dθY = -sθ * N * dPdx[l+1]
                     Y = N * P[l+1]
@@ -1133,47 +1154,54 @@ function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                     gθ += dθY * Sl + (0 + 1im) * mval * inv_sθ * Y * Tl
                     gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + (sθ * N * dPdx[l+1]) * Tl
                 end
-                Gθ[ii] = gθ; Gφ[ii] = gφ
             end
-        end
-        # Place positive m Fourier modes
-        for (ii, iθ) in enumerate(θloc)
-            Fθk[iθ, col] = inv_scaleφ * Gθ[ii]
-            Fφk[iθ, col] = inv_scaleφ * Gφ[ii]
-        end
-        # Hermitian conjugate for negative m to ensure real output
-        if !use_r && real_output && mval > 0
-            conj_index = nlon - mval + 1
-            for (ii, iθ) in enumerate(θloc)
-                Fθk[iθ, conj_index] = conj(Fθk[iθ, col])
-                Fφk[iθ, conj_index] = conj(Fφk[iθ, col])
+
+            # Store Fourier coefficient
+            Fθm[ii, mval + 1] = inv_scaleφ * gθ
+            Fφm[ii, mval + 1] = inv_scaleφ * gφ
+
+            # Hermitian conjugate for negative m to ensure real output
+            if real_output && mval > 0
+                conj_index = nlon - mval + 1
+                Fθm[ii, conj_index] = conj(Fθm[ii, mval + 1])
+                Fφm[ii, conj_index] = conj(Fφm[ii, mval + 1])
             end
         end
     end
 
-    if use_r
-        pir = SHTnsKitParallelExt._get_or_plan(:irfft, Fθk)
-        Vtθφ = irfft(Fθk, pir)
-        Vpθφ = irfft(Fφk, pir)
-    else
-        pifft = SHTnsKitParallelExt._get_or_plan(:ifft, Fθk)
-        Vtθφ = ifft(Fθk, pifft)
-        Vpθφ = ifft(Fφk, pifft)
-    end
-    if real_output
-        Vtθφ = real.(Vtθφ)
-        Vpθφ = real.(Vpθφ)
-    end
+    # Perform inverse FFT along φ
+    Vtθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
+    Vpθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
+    SHTnsKitParallelExt.ifft_along_dim2!(Vtθφ_local, Fθm)
+    SHTnsKitParallelExt.ifft_along_dim2!(Vpθφ_local, Fφm)
+
+    # Apply Robert form scaling if enabled
     if cfg.robert_form
-        θloc2 = axes(Vtθφ, 1)
-        gl_θ2 = globalindices(Vtθφ, 1)
-        for (ii, iθ) in enumerate(θloc2)
-            x = cfg.x[gl_θ2[ii]]
-            sθ = sqrt(max(0.0, 1 - x*x))
-            Vtθφ[iθ, :] .*= sθ
-            Vpθφ[iθ, :] .*= sθ
+        @inbounds for (ii, iglobθ) in enumerate(θ_globals)
+            x = cfg.x[iglobθ]
+            sθ = sqrt(max(0.0, 1 - x * x))
+            for j in 1:nlon
+                Vtθφ_local[ii, j] *= sθ
+                Vpθφ_local[ii, j] *= sθ
+            end
         end
     end
+
+    # If φ is distributed, extract local portion
+    if φ_is_local
+        Vtθφ = real_output ? Vtθφ_local : Complex{Float64}.(Vtθφ_local)
+        Vpθφ = real_output ? Vpθφ_local : Complex{Float64}.(Vpθφ_local)
+    else
+        φ_globals = collect(globalindices(prototype_θφ, 2))
+        local_φ_range = first(φ_globals):last(φ_globals)
+        Vtθφ = Vtθφ_local[:, local_φ_range]
+        Vpθφ = Vpθφ_local[:, local_φ_range]
+        if !real_output
+            Vtθφ = Complex{Float64}.(Vtθφ)
+            Vpθφ = Complex{Float64}.(Vpθφ)
+        end
+    end
+
     return Vtθφ, Vpθφ
 end
 

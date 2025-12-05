@@ -3,18 +3,31 @@ API-compatibility layer that mirrors the C `shtns.h` surface in pure Julia.
 """
 
 # SHTns flag constants (mirror shtns.h)
-const SHT_GAUSS           = 0
-const SHT_AUTO            = 1
-const SHT_REGULAR         = 2
-const SHT_REG_FAST        = 3
-const SHT_QUICK_INIT      = 4
-const SHT_REGULAR_POLES   = 5
-const SHT_GAUSS_FLY       = 6
-const SHT_SOUTH_POLE_FIRST = 256*32
-const SHT_NO_CS_PHASE     = 256*4
-const SHT_REAL_NORM       = 256*8
-const SHT_ALLOW_PADDING   = 256*256
-const SHT_PHI_CONTIGUOUS  = 256*64
+# Grid type flags (low byte)
+const SHT_GAUSS           = 0       # Gauss-Legendre grid
+const SHT_AUTO            = 1       # Automatic grid selection (defaults to Gauss)
+const SHT_REGULAR         = 2       # Regular equiangular grid
+const SHT_REG_FAST        = 3       # Regular grid with fast initialization
+const SHT_QUICK_INIT      = 4       # Quick initialization (no precomputation)
+const SHT_REGULAR_POLES   = 5       # Regular grid including poles
+const SHT_GAUSS_FLY       = 6       # Gauss grid with on-the-fly Legendre computation
+const SHT_REG_DCT         = 3       # DCT-based regular grid (alias for SHT_REG_FAST)
+
+# Data layout flags
+const SHT_NATIVE_LAYOUT   = 0           # Native data layout (theta-contiguous)
+const SHT_THETA_CONTIGUOUS = 256        # Theta (latitude) values are contiguous in memory
+const SHT_PHI_CONTIGUOUS  = 256*2       # Phi (longitude) values are contiguous in memory
+
+# Option flags (can be OR'd with grid type)
+const SHT_NO_CS_PHASE     = 256*4       # Disable Condon-Shortley phase convention
+const SHT_REAL_NORM       = 256*8       # Use real normalization
+const SHT_SCALAR_ONLY     = 256*16      # Skip vector transform matrix computation
+const SHT_SOUTH_POLE_FIRST = 256*32     # South pole first latitude ordering
+const SHT_LOAD_SAVE_CFG   = 256*64      # Enable configuration caching (load/save)
+const SHT_ALLOW_GPU       = 256*128     # Allow GPU acceleration
+const SHT_ALLOW_PADDING   = 256*256     # Allow memory padding for cache optimization
+const SHT_ROBERT_FORM     = 256*512     # Use Robert form for vector transforms
+const SHT_FP32            = 256*1024    # Use single precision (Float32)
 
 _grid_symbol(code::Int) = code == SHT_GAUSS ? :gauss :
                           code == SHT_AUTO ? :gauss :
@@ -412,4 +425,196 @@ shtns_profiling(::SHTConfig, on::Integer) = nothing
 """shtns_profiling_read_time(cfg, t1::Ref, t2::Ref) -> Float64"""
 function shtns_profiling_read_time(::SHTConfig, t1::Ref{Float64}, t2::Ref{Float64})
     t1[] = 0.0; t2[] = 0.0; return 0.0
+end
+
+# ============================================================================
+# CONVENIENCE MACROS/FUNCTIONS (mirror SHTns C macros)
+# ============================================================================
+
+"""
+    PHI_DEG(cfg::SHTConfig, ip::Integer) -> Float64
+
+Return the longitude angle (in degrees) for grid index ip (0-based).
+Equivalent to the PHI_DEG macro in SHTns C library.
+"""
+PHI_DEG(cfg::SHTConfig, ip::Integer) = 360.0 * ip / cfg.nlon
+
+"""
+    PHI_RAD(cfg::SHTConfig, ip::Integer) -> Float64
+
+Return the longitude angle (in radians) for grid index ip (0-based).
+Equivalent to the PHI_RAD macro in SHTns C library.
+"""
+PHI_RAD(cfg::SHTConfig, ip::Integer) = 2π * ip / cfg.nlon
+
+"""
+    THETA_DEG(cfg::SHTConfig, ilat::Integer) -> Float64
+
+Return the colatitude angle (in degrees) for latitude index ilat (1-based Julia indexing).
+"""
+THETA_DEG(cfg::SHTConfig, ilat::Integer) = rad2deg(cfg.θ[ilat])
+
+"""
+    THETA_RAD(cfg::SHTConfig, ilat::Integer) -> Float64
+
+Return the colatitude angle (in radians) for latitude index ilat (1-based Julia indexing).
+"""
+THETA_RAD(cfg::SHTConfig, ilat::Integer) = cfg.θ[ilat]
+
+"""
+    NSPAT_ALLOC(cfg::SHTConfig) -> Int
+
+Return the number of spatial elements to allocate, accounting for any padding.
+Equivalent to the NSPAT_ALLOC macro in SHTns C library.
+"""
+function NSPAT_ALLOC(cfg::SHTConfig)
+    if cfg.allow_padding && cfg.spat_dist > 0
+        return cfg.spat_dist
+    else
+        return cfg.nspat
+    end
+end
+
+"""
+    NLM_ALLOC(cfg::SHTConfig) -> Int
+
+Return the number of spectral coefficients to allocate.
+"""
+NLM_ALLOC(cfg::SHTConfig) = cfg.nlm
+
+# ============================================================================
+# CONFIGURATION SAVE/LOAD (SHT_LOAD_SAVE_CFG support)
+# ============================================================================
+
+"""
+    save_config(cfg::SHTConfig, filename::String)
+
+Save SHTConfig to a file for later reuse. This implements the SHT_LOAD_SAVE_CFG
+functionality from SHTns.
+
+Note: Precomputed Legendre tables are NOT saved (they can be regenerated).
+"""
+function save_config(cfg::SHTConfig, filename::String)
+    open(filename, "w") do io
+        # Write header
+        println(io, "# SHTnsKit Configuration File")
+        println(io, "# Version 1.0")
+        println(io, "")
+
+        # Write core parameters
+        println(io, "lmax = $(cfg.lmax)")
+        println(io, "mmax = $(cfg.mmax)")
+        println(io, "mres = $(cfg.mres)")
+        println(io, "nlat = $(cfg.nlat)")
+        println(io, "nlon = $(cfg.nlon)")
+        println(io, "grid_type = $(cfg.grid_type)")
+
+        # Write normalization options
+        println(io, "norm = $(cfg.norm)")
+        println(io, "cs_phase = $(cfg.cs_phase)")
+        println(io, "real_norm = $(cfg.real_norm)")
+        println(io, "robert_form = $(cfg.robert_form)")
+
+        # Write data ordering
+        println(io, "south_pole_first = $(cfg.south_pole_first)")
+
+        # Write padding options
+        println(io, "allow_padding = $(cfg.allow_padding)")
+        println(io, "nlat_padded = $(cfg.nlat_padded)")
+
+        # Write batch options
+        println(io, "howmany = $(cfg.howmany)")
+        println(io, "spec_dist = $(cfg.spec_dist)")
+
+        # Write computation mode
+        println(io, "on_the_fly = $(cfg.on_the_fly)")
+        println(io, "use_plm_tables = $(cfg.use_plm_tables)")
+    end
+    return nothing
+end
+
+"""
+    load_config(filename::String) -> SHTConfig
+
+Load SHTConfig from a file saved by `save_config`.
+
+Note: Legendre tables will be regenerated if `use_plm_tables` was true.
+"""
+function load_config(filename::String)
+    params = Dict{String, Any}()
+
+    open(filename, "r") do io
+        for line in eachline(io)
+            line = strip(line)
+            startswith(line, "#") && continue
+            isempty(line) && continue
+
+            if contains(line, "=")
+                key, val = split(line, "=", limit=2)
+                key = strip(key)
+                val = strip(val)
+
+                # Parse value based on expected type
+                if key in ("lmax", "mmax", "mres", "nlat", "nlon", "nlat_padded", "howmany", "spec_dist")
+                    params[key] = parse(Int, val)
+                elseif key in ("cs_phase", "real_norm", "robert_form", "south_pole_first", "allow_padding", "on_the_fly", "use_plm_tables")
+                    params[key] = parse(Bool, val)
+                elseif key in ("grid_type", "norm")
+                    params[key] = Symbol(val)
+                end
+            end
+        end
+    end
+
+    # Create base configuration
+    grid_type = get(params, :grid_type, :gauss)
+    if grid_type == :gauss
+        cfg = create_gauss_config(
+            params["lmax"], params["nlat"];
+            mmax=params["mmax"], mres=params["mres"], nlon=params["nlon"],
+            norm=get(params, :norm, :orthonormal),
+            cs_phase=get(params, "cs_phase", true),
+            real_norm=get(params, "real_norm", false),
+            robert_form=get(params, "robert_form", false)
+        )
+    else
+        include_poles = grid_type == :regular_poles
+        cfg = create_regular_config(
+            params["lmax"], params["nlat"];
+            mmax=params["mmax"], mres=params["mres"], nlon=params["nlon"],
+            norm=get(params, :norm, :orthonormal),
+            cs_phase=get(params, "cs_phase", true),
+            real_norm=get(params, "real_norm", false),
+            robert_form=get(params, "robert_form", false),
+            include_poles=include_poles
+        )
+    end
+
+    # Apply options
+    if get(params, "south_pole_first", false)
+        set_south_pole_first!(cfg)
+    end
+
+    if get(params, "allow_padding", false)
+        set_allow_padding!(cfg)
+        if haskey(params, "nlat_padded") && params["nlat_padded"] > 0
+            cfg.nlat_padded = params["nlat_padded"]
+        end
+    end
+
+    if get(params, "on_the_fly", false)
+        set_on_the_fly!(cfg)
+    elseif get(params, "use_plm_tables", false)
+        set_use_tables!(cfg)
+    end
+
+    # Restore batch settings
+    if haskey(params, "howmany")
+        cfg.howmany = params["howmany"]
+    end
+    if haskey(params, "spec_dist")
+        cfg.spec_dist = params["spec_dist"]
+    end
+
+    return cfg
 end

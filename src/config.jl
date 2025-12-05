@@ -62,6 +62,9 @@ Base.@kwdef mutable struct SHTConfig
     # Batch transform configuration (for processing multiple fields simultaneously)
     howmany::Int = 1                                          # Number of fields to process in batch
     spec_dist::Int = 0                                        # Distance between spectral arrays (0 = contiguous)
+
+    # Data ordering configuration
+    south_pole_first::Bool = false                            # If true, latitude data starts at south pole (θ=π) instead of north pole (θ=0)
 end
 
 """
@@ -224,6 +227,134 @@ end
 Estimate memory usage for Legendre tables based on configuration.
 """
 estimate_table_memory(cfg::SHTConfig) = estimate_table_memory(cfg.lmax, cfg.mmax, cfg.nlat)
+
+# ============================================================================
+# SOUTH POLE FIRST MODE FUNCTIONS
+# ============================================================================
+
+"""
+    set_south_pole_first!(cfg::SHTConfig)
+
+Enable south-pole-first latitude ordering. In this mode, latitude data starts
+at the south pole (θ=π) instead of the default north pole (θ=0).
+
+This reverses the internal grid arrays (θ, x, w, ct, st) and recalculates
+any precomputed Legendre tables if necessary. This matches the `SHT_SOUTH_POLE_FIRST`
+flag behavior in the SHTns C library.
+
+# Example
+```julia
+cfg = create_gauss_config(32, 34)
+set_south_pole_first!(cfg)  # Data now starts at south pole
+```
+
+See also: [`set_north_pole_first!`](@ref), [`is_south_pole_first`](@ref)
+"""
+function set_south_pole_first!(cfg::SHTConfig)
+    if cfg.south_pole_first
+        return cfg  # Already in south-pole-first mode
+    end
+
+    # Reverse latitude-dependent arrays
+    cfg.θ = reverse(cfg.θ)
+    cfg.w = reverse(cfg.w)
+    cfg.x = reverse(cfg.x)
+    cfg.wlat = cfg.w  # wlat is an alias for w
+    cfg.ct = cos.(cfg.θ)
+    cfg.st = sin.(cfg.θ)
+    cfg.sintheta = cfg.st
+
+    # Mark as south-pole-first
+    cfg.south_pole_first = true
+
+    # Recompute Legendre tables if they were precomputed
+    if cfg.use_plm_tables && !isempty(cfg.plm_tables)
+        prepare_plm_tables!(cfg)
+    end
+
+    return cfg
+end
+
+"""
+    set_north_pole_first!(cfg::SHTConfig)
+
+Enable north-pole-first latitude ordering (the default). In this mode, latitude
+data starts at the north pole (θ=0).
+
+This reverses the internal grid arrays if the configuration was previously in
+south-pole-first mode, and recalculates any precomputed Legendre tables.
+
+# Example
+```julia
+cfg = create_gauss_config(32, 34)
+set_south_pole_first!(cfg)  # Data starts at south pole
+set_north_pole_first!(cfg)  # Back to default (north pole first)
+```
+
+See also: [`set_south_pole_first!`](@ref), [`is_south_pole_first`](@ref)
+"""
+function set_north_pole_first!(cfg::SHTConfig)
+    if !cfg.south_pole_first
+        return cfg  # Already in north-pole-first mode
+    end
+
+    # Reverse latitude-dependent arrays back to north-pole-first
+    cfg.θ = reverse(cfg.θ)
+    cfg.w = reverse(cfg.w)
+    cfg.x = reverse(cfg.x)
+    cfg.wlat = cfg.w
+    cfg.ct = cos.(cfg.θ)
+    cfg.st = sin.(cfg.θ)
+    cfg.sintheta = cfg.st
+
+    # Mark as north-pole-first
+    cfg.south_pole_first = false
+
+    # Recompute Legendre tables if they were precomputed
+    if cfg.use_plm_tables && !isempty(cfg.plm_tables)
+        prepare_plm_tables!(cfg)
+    end
+
+    return cfg
+end
+
+"""
+    is_south_pole_first(cfg::SHTConfig) -> Bool
+
+Check if the configuration uses south-pole-first latitude ordering.
+
+Returns `true` if latitude data starts at the south pole (θ=π),
+`false` if it starts at the north pole (θ=0, the default).
+"""
+is_south_pole_first(cfg::SHTConfig) = cfg.south_pole_first
+
+"""
+    create_gauss_config_spf(lmax::Int, nlat::Int; kwargs...) -> SHTConfig
+
+Create a Gauss-Legendre configuration with south-pole-first latitude ordering.
+
+This is equivalent to calling `create_gauss_config` followed by `set_south_pole_first!`.
+All keyword arguments are passed to `create_gauss_config`.
+
+# Example
+```julia
+# Create a south-pole-first configuration
+cfg = create_gauss_config_spf(32, 34)
+is_south_pole_first(cfg)  # true
+```
+
+See also: [`create_gauss_config`](@ref), [`set_south_pole_first!`](@ref)
+"""
+function create_gauss_config_spf(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
+                                  nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                                  cs_phase::Bool=true, real_norm::Bool=false,
+                                  robert_form::Bool=false)
+    cfg = create_gauss_config(lmax, nlat; mmax=mmax, mres=mres, nlon=nlon,
+                              norm=norm, cs_phase=cs_phase, real_norm=real_norm,
+                              robert_form=robert_form)
+    set_south_pole_first!(cfg)
+    return cfg
+end
 
 """
     create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,

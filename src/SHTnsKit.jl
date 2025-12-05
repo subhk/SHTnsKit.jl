@@ -62,6 +62,8 @@ include("device_utils.jl")                    # GPU device utilities and managem
 export SHTConfig, create_gauss_config, create_regular_config, create_config, destroy_config  # Configuration management
 export create_gauss_fly_config, set_on_the_fly!, set_use_tables!, is_on_the_fly  # On-the-fly mode
 export estimate_table_memory                                          # Memory estimation
+export set_south_pole_first!, set_north_pole_first!, is_south_pole_first  # South pole first mode
+export create_gauss_config_spf                                        # South pole first config creation
 export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_config  # GPU device management
 export select_compute_device, device_transfer_arrays                  # Device utilities
 

@@ -97,11 +97,7 @@ function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer,
     end
 
     if (f & SHT_SOUTH_POLE_FIRST) != 0
-        cfg.θ = reverse(cfg.θ); cfg.w = reverse(cfg.w); cfg.x = reverse(cfg.x); cfg.wlat = cfg.w
-        cfg.ct = cos.(cfg.θ); cfg.st = sin.(cfg.θ); cfg.sintheta = cfg.st
-        if cfg.use_plm_tables
-            prepare_plm_tables!(cfg)
-        end
+        set_south_pole_first!(cfg)
     end
     return cfg
 end
@@ -153,9 +149,7 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
         x, w = gausslegendre(nlat)
         θ = acos.(x)
     end
-    if south_pole_first
-        θ = reverse(θ); w = reverse(w); x = reverse(x)
-    end
+    # Note: south_pole_first will be applied after updating cfg
   
     # Update cfg in-place
     cfg.nlat = nlat; cfg.nlon = nphi; cfg.grid_type = grid_sym
@@ -167,6 +161,9 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     cfg.nspat = nlat * nphi
     cfg.cphi = 2π / nphi
   
+    # Reset south_pole_first before reconfiguring
+    cfg.south_pole_first = false
+
     # Precompute Plm tables for regular grids (skip quick_init)
     if grid_type == SHT_REGULAR || grid_type == SHT_REG_FAST || grid_type == SHT_REGULAR_POLES
         prepare_plm_tables!(cfg)
@@ -174,6 +171,11 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
         cfg.use_plm_tables = false
         cfg.plm_tables = Matrix{Float64}[]
         cfg.dplm_tables = Matrix{Float64}[]
+    end
+
+    # Apply south_pole_first if requested
+    if south_pole_first
+        set_south_pole_first!(cfg)
     end
     return 0
 end

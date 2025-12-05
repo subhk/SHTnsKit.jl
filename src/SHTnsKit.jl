@@ -64,6 +64,10 @@ export create_gauss_fly_config, set_on_the_fly!, set_use_tables!, is_on_the_fly 
 export estimate_table_memory                                          # Memory estimation
 export set_south_pole_first!, set_north_pole_first!, is_south_pole_first  # South pole first mode
 export create_gauss_config_spf                                        # South pole first config creation
+export set_allow_padding!, disable_padding!, is_padding_enabled       # Memory padding control
+export get_nlat_padded, get_spat_dist, compute_optimal_padding        # Padding queries
+export allocate_padded_spatial, allocate_padded_spatial_batch         # Padded array allocation
+export copy_to_padded!, copy_from_padded!, estimate_padding_overhead  # Padding utilities
 export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_config  # GPU device management
 export select_compute_device, device_transfer_arrays                  # Device utilities
 
@@ -314,7 +318,8 @@ benchmark_turbo_vs_simd(::Any; kwargs...) = error("LoopVectorization extension n
 
 # ===== LOW-LEVEL SHTNS LIBRARY INTERFACE =====
 # Direct bindings to the underlying SHTns C library functions
-export SHT_GAUSS, SHT_AUTO, SHT_REGULAR, SHT_REG_FAST, SHT_QUICK_INIT, SHT_REGULAR_POLES, SHT_GAUSS_FLY, SHT_SOUTH_POLE_FIRST, SHT_NO_CS_PHASE, SHT_REAL_NORM
+export SHT_GAUSS, SHT_AUTO, SHT_REGULAR, SHT_REG_FAST, SHT_QUICK_INIT, SHT_REGULAR_POLES, SHT_GAUSS_FLY
+export SHT_SOUTH_POLE_FIRST, SHT_NO_CS_PHASE, SHT_REAL_NORM, SHT_ALLOW_PADDING, SHT_PHI_CONTIGUOUS
 export shtns_verbose, shtns_print_version, shtns_get_build_info           # Library information
 export shtns_init, shtns_create, shtns_set_grid, shtns_set_grid_auto, shtns_create_with_grid  # Initialization
 export shtns_use_threads, shtns_reset, shtns_destroy, shtns_unset_grid, shtns_robert_form     # Configuration

@@ -71,6 +71,7 @@ Additional flags (can be OR'd):
 - `SHT_SOUTH_POLE_FIRST` (256*32): Reverse latitude order
 - `SHT_NO_CS_PHASE` (256*4): Disable Condon-Shortley phase
 - `SHT_REAL_NORM` (256*8): Use real normalization
+- `SHT_ALLOW_PADDING` (256*256): Allow memory padding for cache optimization
 """
 function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer, nlat::Integer, nphi::Integer)
     f = Int(flags)
@@ -101,6 +102,11 @@ function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer,
     if (f & SHT_SOUTH_POLE_FIRST) != 0
         set_south_pole_first!(cfg)
     end
+
+    if (f & SHT_ALLOW_PADDING) != 0
+        set_allow_padding!(cfg)
+    end
+
     return cfg
 end
 
@@ -119,7 +125,8 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     # Parse flags: low byte = grid type, higher bytes carry options
     f = Int(flags)
     grid_type = f % 256
-    south_pole_first = (f & (256*32)) != 0
+    south_pole_first = (f & SHT_SOUTH_POLE_FIRST) != 0
+    allow_padding = (f & SHT_ALLOW_PADDING) != 0
     grid_sym = _grid_symbol(grid_type)
     min_lat = _min_nlat_for_grid(grid_type, cfg.lmax)
     nlat = max(Int(nlat), min_lat)
@@ -179,6 +186,14 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     if south_pole_first
         set_south_pole_first!(cfg)
     end
+
+    # Apply padding if requested
+    if allow_padding
+        set_allow_padding!(cfg)
+    else
+        disable_padding!(cfg)
+    end
+
     return 0
 end
 

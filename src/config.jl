@@ -51,12 +51,16 @@ Base.@kwdef mutable struct SHTConfig
 
     # Performance optimization: precomputed Legendre polynomials
     use_plm_tables::Bool = false                              # Enable/disable table lookup
-    
+
     # GPU Computing support
     compute_device::Symbol = :cpu                             # Computing device: :cpu, :cuda, :amdgpu
     device_preference::Vector{Symbol} = [:cpu]               # Preferred device order
     plm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]   # P_l^m values: [m+1][l+1, lat_idx]
     dplm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]  # dP_l^m/dx values: [m+1][l+1, lat_idx]
+
+    # Batch transform configuration (for processing multiple fields simultaneously)
+    howmany::Int = 1                                          # Number of fields to process in batch
+    spec_dist::Int = 0                                        # Distance between spectral arrays (0 = contiguous)
 end
 
 """

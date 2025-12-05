@@ -152,6 +152,77 @@ function estimate_memory_savings(lmax::Int, mmax::Int)
     return dense_bytes, packed_bytes, savings_pct
 end
 
+# ===== MPI DATA REDISTRIBUTION HELPERS =====
+
+"""
+    _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
+
+Gather data distributed along φ dimension, then perform FFT along φ.
+Returns Fθm matrix with FFT coefficients for the local θ rows.
+"""
+function _gather_and_fft_phi(local_data::AbstractMatrix, θ_range::AbstractRange,
+                              φ_range::AbstractRange, nlon::Int, comm)
+    nlat_local = length(θ_range)
+    nlon_local = length(φ_range)
+
+    # Get process info
+    nprocs = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+
+    # Gather local data counts and displacements for each θ row
+    # Each row needs to gather nlon elements from all processes
+    row_gathered = Matrix{Float64}(undef, nlat_local, nlon)
+    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+
+    for i in 1:nlat_local
+        # Get local row
+        local_row = Vector{Float64}(collect(local_data[i, :]))
+
+        # Gather row sizes from all processes
+        local_count = nlon_local
+        counts = Vector{Int32}(undef, nprocs)
+        MPI.Allgather!(Ref(Int32(local_count)), UnsafeBuffer(counts), comm)
+
+        # Compute displacements
+        displs = Vector{Int32}(undef, nprocs)
+        displs[1] = 0
+        for p in 2:nprocs
+            displs[p] = displs[p-1] + counts[p-1]
+        end
+
+        # Gather the full row
+        gathered_row = Vector{Float64}(undef, nlon)
+        MPI.Allgatherv!(local_row, VBuffer(gathered_row, counts, displs), comm)
+        row_gathered[i, :] = gathered_row
+    end
+
+    # Now perform FFT along each row
+    SHTnsKitParallelExt.fft_along_dim2!(Fθm, row_gathered)
+
+    return Fθm
+end
+
+"""
+    _scatter_from_fft_phi(Fθm, θ_range, φ_range, nlon, comm)
+
+Perform IFFT along φ and scatter the result back to distributed layout.
+Returns local data matrix for the process's portion of the grid.
+"""
+function _scatter_from_fft_phi(Fθm::AbstractMatrix{<:Complex}, θ_range::AbstractRange,
+                                φ_range::AbstractRange, nlon::Int, comm)
+    nlat_local = length(θ_range)
+    nlon_local = length(φ_range)
+
+    # Perform IFFT on each row
+    spatial_full = Matrix{Float64}(undef, nlat_local, nlon)
+    SHTnsKitParallelExt.ifft_along_dim2!(spatial_full, Fθm)
+
+    # Extract local portion
+    local_data = spatial_full[:, φ_range]
+
+    return local_data
+end
+
 function SHTnsKit.dist_analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false, use_cache_blocking::Bool=true, use_loop_fusion::Bool=true)
     if use_loop_fusion && use_cache_blocking
         return dist_analysis_fused_cache_blocked(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
@@ -166,33 +237,36 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     comm = communicator(fθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
+    nlat = cfg.nlat
 
     # Get local data from PencilArray
     local_data = parent(fθφ)
     nlat_local, nlon_local = size(local_data)
 
     # Get global index ranges for this process's local data
-    θ_range = range_local(fθφ, 1)  # Global theta indices owned by this process
-    φ_range = range_local(fθφ, 2)  # Global phi indices owned by this process
+    # Use globalindices from the PencilArray (not the FFT result matrix)
+    θ_globals = collect(globalindices(fθφ, 1))  # Global theta indices owned by this process
+    nθ_local = length(θ_globals)
 
     # Perform 1D FFT along longitude (φ) dimension on local data
-    # Note: For SHT, we need full FFT along φ, so we need all φ points on each process
-    # If data is distributed along φ, we need to gather it first
-    if length(φ_range) == nlon
+    # After FFT, we have Fθm with shape (nlat_local, nlon)
+    # where dimension 1 corresponds to the same global θ indices as the input
+    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+
+    if nlon_local == nlon
         # Data is distributed along θ only - can do FFT directly
-        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         # Data is distributed along φ - need MPI Allgather along φ first
-        # Gather all φ data for each θ row this process owns
+        φ_globals = collect(globalindices(fθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
         Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
+
     # Packed mapping info if needed
     storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
-    
-    # Enhanced packed storage for optimal memory efficiency
-    storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
-    
+
     if use_packed_storage
         # Directly accumulate into packed storage to reduce memory and avoid packing
         Alm_local = zeros(ComplexF64, storage_info.nlm_packed)
@@ -205,66 +279,49 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
         Alm_local = zeros(ComplexF64, lmax+1, mmax+1)   # Dense storage
         temp_dense = Alm_local
     end
-    θrange = axes(Fθm, 1); mrange = axes(Fθm, 2)
+
     # Enhanced plm_tables integration with validation and optimization
     use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
-    
+
     # Validate plm_tables structure for better error messages
     if use_tbl
-        expected_size = (mmax + 1, lmax + 1, cfg.nlat)
         if length(cfg.plm_tables) != mmax + 1
             @warn "plm_tables length mismatch: expected $(mmax + 1), got $(length(cfg.plm_tables)). Falling back to on-demand computation."
             use_tbl = false
         else
             # Validate first table structure
             first_table = cfg.plm_tables[1]
-            if size(first_table, 2) != cfg.nlat
-                @warn "plm_tables latitude dimension mismatch: expected $(cfg.nlat), got $(size(first_table, 2)). Falling back to on-demand computation."
+            if size(first_table, 2) != nlat
+                @warn "plm_tables latitude dimension mismatch: expected $(nlat), got $(size(first_table, 2)). Falling back to on-demand computation."
                 use_tbl = false
             end
         end
     end
-    
+
     P = Vector{Float64}(undef, lmax + 1)  # Fallback buffer when tables not available
-    
-    # Enhanced pre-computed index maps for maximum performance
-    θ_globals = collect(globalindices(Fθm, 1))
-    m_globals = collect(globalindices(Fθm, 2))
-    
-    # Pre-compute commonly needed derived indices to avoid repeated calculations
-    nθ_local = length(θ_globals)
-    nm_local = length(m_globals)
-    
-    # Pre-compute valid (m, col) pairs to avoid runtime checks
-    valid_m_info = Tuple{Int, Int, Int}[]  # (jj, mval, col) for valid m values
-    for (jj, m) in enumerate(mrange)
-        mglob = m_globals[jj]
-        mval = mglob - 1
-        if mval <= mmax
-            col = mval + 1
-            push!(valid_m_info, (jj, mval, col))
-        end
-    end
-    
-    # Pre-cache Gauss-Legendre weights to avoid repeated cfg.w[iglob] lookups
+
+    # Pre-cache Gauss-Legendre weights for local θ indices
     weights_cache = Vector{Float64}(undef, nθ_local)
     for (ii, iglob) in enumerate(θ_globals)
         weights_cache[ii] = cfg.w[iglob]
     end
-    
+
     # Pre-cache table views for hot loops to avoid repeated array indexing
     cached_table_views = use_tbl ? Dict{Int, SubArray}() : Dict{Int, SubArray}()
-    
-    # Optimized loop using pre-computed valid m info and cached weights
-    for (jj, mval, col) in valid_m_info
-        m = mrange[jj]  # Get local m index
-        for (ii, iθ) in enumerate(θrange)
-            iglob = θ_globals[ii]  # Get global latitude index
-            Fi = Fθm[iθ, m]        # Local Fourier coefficient
-            wi = weights_cache[ii]    # Use pre-cached weight
+
+    # Main analysis loop: for each m mode (Fourier coefficient index)
+    for mval in 0:mmax
+        col = mval + 1  # Column index in dense storage (1-based)
+        m_fft = mval + 1  # FFT result index (1-based, corresponds to m=0,1,2,...)
+
+        # Loop over local θ indices
+        for (ii, iglob) in enumerate(θ_globals)
+            Fi = Fθm[ii, m_fft]  # Fourier coefficient at this (θ, m)
+            wi = weights_cache[ii]
+
             if use_tbl
                 # Use cached table view for better memory access patterns
-                cache_key = col * 1000000 + iglob  # Unique key for (col, iglob) pair
+                cache_key = col * 1000000 + iglob
                 if haskey(cached_table_views, cache_key)
                     tblcol = cached_table_views[cache_key]
                 else
@@ -282,21 +339,17 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
                     end
                 end
             else
-                # Fallback: compute Legendre polynomials on-demand with better error handling
-                try
-                    SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
-                    if use_packed_storage
-                        @inbounds @simd for l in mval:lmax
-                            lm = storage_info.lm_to_packed[l+1, col]
-                            Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * P[l+1]) * Fi
-                        end
-                    else
-                        @inbounds @simd for l in mval:lmax
-                            temp_dense[l+1, col] += wi * P[l+1] * Fi
-                        end
+                # Fallback: compute Legendre polynomials on-demand
+                SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
+                if use_packed_storage
+                    @inbounds @simd for l in mval:lmax
+                        lm = storage_info.lm_to_packed[l+1, col]
+                        Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * P[l+1]) * Fi
                     end
-                catch e
-                    error("Failed to compute Legendre polynomials at latitude index $iglob: $e")
+                else
+                    @inbounds @simd for l in mval:lmax
+                        temp_dense[l+1, col] += wi * P[l+1] * Fi
+                    end
                 end
             end
         end
@@ -771,90 +824,87 @@ end
 
 function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
-    # Allocate Fourier pencil: complex full or rFFT half-spectrum using a zero rFFT to get correct shape
-    use_r = use_rfft && real_output && (eltype(prototype_θφ) <: Real)
-    if use_r
-        Zθφ = similar(prototype_θφ)
-        fill!(Zθφ, zero(eltype(Zθφ)))
-        pr = SHTnsKitParallelExt._get_or_plan(:rfft, Zθφ)
-        Fθk = rfft(Zθφ, pr)
-        fill!(Fθk, 0)
-    else
-        Fθk = allocate(prototype_θφ; dims=(:θ,:k), eltype=ComplexF64)
-        fill!(Fθk, 0)
-    end
-    θloc = axes(Fθk, 1); kloc = axes(Fθk, 2)
-    mloc = axes(allocate(prototype_θφ; dims=(:θ,:m), eltype=ComplexF64), 2)
     nlon = cfg.nlon
+    nlat = cfg.nlat
+
+    # Get the local portion info from the prototype
+    θ_globals = collect(globalindices(prototype_θφ, 1))  # Global θ indices this process owns
+    nθ_local = length(θ_globals)
+    nlon_local = size(parent(prototype_θφ), 2)
+
+    # Check if φ is fully local or distributed
+    φ_is_local = (nlon_local == nlon)
+
+    # Allocate Fourier coefficient matrix (local θ × full m)
+    Fθm = zeros(ComplexF64, nθ_local, nlon)
+
     P = Vector{Float64}(undef, lmax + 1)
-    G = Vector{ComplexF64}(undef, length(θloc))
-    
-    # Pre-compute global index maps for performance
-    temp_m_pencil = allocate(prototype_θφ; dims=(:θ,:m), eltype=ComplexF64)
-    m_globals = collect(globalindices(temp_m_pencil, 2))
-    θ_globals = collect(globalindices(Fθk, 1))
-    
-    for (jj, jm) in enumerate(mloc)
-        mglob = m_globals[jj]
-        mval = mglob - 1
-        (mval <= mmax) || continue
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+
+    # Synthesis: for each m mode, compute Legendre series
+    for mval in 0:mmax
         col = mval + 1
-        if cfg.use_plm_tables && !isempty(cfg.plm_tables)
-            tbl = cfg.plm_tables[col]
-            for (ii,iθ) in enumerate(θloc)
+
+        # Compute synthesized values for each local θ
+        for (ii, iglob) in enumerate(θ_globals)
+            # Get Legendre polynomials at this latitude
+            if cfg.use_plm_tables && !isempty(cfg.plm_tables)
+                tbl = cfg.plm_tables[col]
                 g = 0.0 + 0.0im
-                iglobθ = θ_globals[ii]
-                # This is a REDUCTION - multiple l accumulate into same g variable
                 @inbounds @simd for l in mval:lmax
-                    g += (cfg.Nlm[l+1, col] * tbl[l+1, iglobθ]) * Alm[l+1, col]
+                    g += (cfg.Nlm[l+1, col] * tbl[l+1, iglob]) * Alm[l+1, col]
                 end
-                G[ii] = g
-            end
-        else
-            for (ii,iθ) in enumerate(θloc)
-                iglobθ = θ_globals[ii]
-                SHTnsKit.Plm_row!(P, cfg.x[iglobθ], lmax, mval)
+            else
+                SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
                 g = 0.0 + 0.0im
-                # This is a REDUCTION - multiple l accumulate into same g variable
                 @inbounds @simd for l in mval:lmax
                     g += (cfg.Nlm[l+1, col] * P[l+1]) * Alm[l+1, col]
                 end
-                G[ii] = g
             end
-        end
-        inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-        for (ii,iθ) in enumerate(θloc)
-            Fθk[iθ, col] = inv_scaleφ * G[ii]
-        end
-        if !use_r && real_output && mval > 0
-            conj_index = nlon - mval + 1
-            for (ii,iθ) in enumerate(θloc)
-                Fθk[iθ, conj_index] = conj(Fθk[iθ, col])
+
+            # Store in Fourier coefficient array
+            Fθm[ii, mval + 1] = inv_scaleφ * g
+
+            # For real output, set conjugate at m > 0
+            if real_output && mval > 0
+                conj_index = nlon - mval + 1
+                Fθm[ii, conj_index] = conj(Fθm[ii, mval + 1])
             end
         end
     end
-    if use_r
-        pir = SHTnsKitParallelExt._get_or_plan(:irfft, Fθk)
-        fθφ = irfft(Fθk, pir)
-    else
-        pifft = plan_fft(Fθk; dims=2)
-        fθφ = ifft(Fθk, pifft)
-    end
-    
-    # Apply Robert form scaling if enabled (missing from original implementation)
+
+    # Perform inverse FFT along φ (dimension 2)
+    fθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
+    SHTnsKitParallelExt.ifft_along_dim2!(fθφ_local, Fθm)
+
+    # Apply Robert form scaling if enabled
     if cfg.robert_form
-        θloc_out = axes(fθφ, 1)
-        gl_θ_out = collect(globalindices(fθφ, 1))
-        @inbounds for (ii, iθ) in enumerate(θloc_out)
-            x = cfg.x[gl_θ_out[ii]]
+        @inbounds for (ii, iglob) in enumerate(θ_globals)
+            x = cfg.x[iglob]
             sθ = sqrt(max(0.0, 1 - x*x))
             if sθ > 0
-                fθφ[iθ, :] .*= sθ
+                for j in 1:nlon
+                    fθφ_local[ii, j] *= sθ
+                end
             end
         end
     end
-    
-    return real_output ? real.(fθφ) : fθφ
+
+    # If φ is distributed, we need to scatter results back
+    if φ_is_local
+        # Data is distributed along θ only - return local matrix wrapped properly
+        result = real_output ? fθφ_local : Complex{Float64}.(fθφ_local)
+    else
+        # φ is distributed - extract local portion
+        φ_globals = collect(globalindices(prototype_θφ, 2))
+        local_φ_range = first(φ_globals):last(φ_globals)
+        result = fθφ_local[:, local_φ_range]
+        if !real_output
+            result = Complex{Float64}.(result)
+        end
+    end
+
+    return result
 end
 
 function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
@@ -873,38 +923,45 @@ end
 function SHTnsKit.dist_spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false)
     comm = communicator(Vtθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
-    # Choose FFT path per input eltype
-    if use_rfft && eltype(Vtθφ) <: Real && eltype(Vpθφ) <: Real
-        pfft = SHTnsKitParallelExt._get_or_plan(:rfft, Vtθφ)
-        Ftθk = rfft(Vtθφ, pfft)
-        Fpθk = rfft(Vpθφ, pfft)
+    nlon = cfg.nlon
+    nlat = cfg.nlat
+
+    # Get local data from PencilArrays
+    local_Vt = parent(Vtθφ)
+    local_Vp = parent(Vpθφ)
+    nlat_local, nlon_local = size(local_Vt)
+
+    # Get global index ranges for this process's local data
+    θ_globals = collect(globalindices(Vtθφ, 1))  # Global θ indices
+    nθ_local = length(θ_globals)
+
+    # Perform 1D FFT along φ (longitude) dimension
+    Ftθm = Matrix{ComplexF64}(undef, nθ_local, nlon)
+    Fpθm = Matrix{ComplexF64}(undef, nθ_local, nlon)
+
+    if nlon_local == nlon
+        # Data is distributed along θ only - can do FFT directly
+        SHTnsKitParallelExt.fft_along_dim2!(Ftθm, local_Vt)
+        SHTnsKitParallelExt.fft_along_dim2!(Fpθm, local_Vp)
     else
-        pfft = SHTnsKitParallelExt._get_or_plan(:fft, Vtθφ)
-        Ftθk = fft(Vtθφ, pfft)
-        Fpθk = fft(Vpθφ, pfft)
+        # Data is distributed along φ - need MPI Allgather along φ first
+        φ_globals = collect(globalindices(Vtθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
+        Ftθm = _gather_and_fft_phi(local_Vt, θ_range, φ_range, nlon, comm)
+        Fpθm = _gather_and_fft_phi(local_Vp, θ_range, φ_range, nlon, comm)
     end
-    Ftθm = transpose(Ftθk, (; dims=(1,2), names=(:θ,:m)))
-    Fpθm = transpose(Fpθk, (; dims=(1,2), names=(:θ,:m)))
 
     Slm_local = zeros(ComplexF64, lmax+1, mmax+1)
     Tlm_local = zeros(ComplexF64, lmax+1, mmax+1)
 
-    θrange = axes(Ftθm, 1); mrange = axes(Ftθm, 2)
-    # Enhanced pre-computed index maps for vector transforms
-    gl_θ = collect(globalindices(Ftθm, 1))
-    gl_m = collect(globalindices(Ftθm, 2))
-    
-    # Pre-compute commonly needed arrays to avoid repeated calculations
-    nθ_local = length(gl_θ)
-    nm_local = length(gl_m)
-    
-    # Pre-cache sine/cosine values and weights for all local latitudes
+    # Pre-cache values for all local latitudes
     x_cache = Vector{Float64}(undef, nθ_local)
     sθ_cache = Vector{Float64}(undef, nθ_local)
     inv_sθ_cache = Vector{Float64}(undef, nθ_local)
     weights_cache = Vector{Float64}(undef, nθ_local)
-    
-    for (ii, iglobθ) in enumerate(gl_θ)
+
+    for (ii, iglobθ) in enumerate(θ_globals)
         x = cfg.x[iglobθ]
         sθ = sqrt(max(0.0, 1 - x*x))
         x_cache[ii] = x
@@ -912,102 +969,67 @@ function SHTnsKit.dist_spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilA
         inv_sθ_cache[ii] = sθ == 0 ? 0.0 : 1.0 / sθ
         weights_cache[ii] = cfg.w[iglobθ]
     end
-    
-    # Pre-compute valid (m, col) pairs to avoid runtime validation
-    valid_m_info = Tuple{Int, Int, Int}[]  # (jj, mval, col)
-    for (jj, jm) in enumerate(mrange)
-        mglob = gl_m[jj]
-        mval = mglob - 1
-        if mval <= mmax
-            col = mval + 1
-            push!(valid_m_info, (jj, mval, col))
-        end
-    end
 
     # Enhanced plm_tables integration for vector spherical harmonic transforms
     use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables) && !isempty(cfg.dplm_tables)
-    
+
     # Validate both plm_tables and dplm_tables structure
     if use_tbl
         if length(cfg.plm_tables) != mmax + 1 || length(cfg.dplm_tables) != mmax + 1
-            @warn "Vector transform table length mismatch: plm_tables=$(length(cfg.plm_tables)), dplm_tables=$(length(cfg.dplm_tables)), expected $(mmax + 1). Falling back to on-demand computation."
+            @warn "Vector transform table length mismatch. Falling back to on-demand computation."
             use_tbl = false
-        else
-            # Validate table structures match
-            if size(cfg.plm_tables[1]) != size(cfg.dplm_tables[1])
-                @warn "Vector transform table size mismatch: plm_tables size $(size(cfg.plm_tables[1])) != dplm_tables size $(size(cfg.dplm_tables[1])). Falling back to on-demand computation."
-                use_tbl = false
-            end
         end
     end
-    
+
     P = Vector{Float64}(undef, lmax + 1)     # Fallback buffers
     dPdx = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
-    
-    # Pre-cache table pairs for vector transforms to minimize array indexing overhead
-    cached_table_pairs = use_tbl ? Dict{Tuple{Int,Int}, Tuple{SubArray,SubArray}}() : Dict{Tuple{Int,Int}, Tuple{SubArray,SubArray}}()
 
-    # Optimized vector transform loop using pre-computed values
-    @inbounds for (jj, mval, col) in valid_m_info
-        jm = mrange[jj]  # Get local m index
-        for (ii, iθ) in enumerate(θrange)
-            # Use pre-cached values instead of repeated calculations
+    # Main vector analysis loop
+    for mval in 0:mmax
+        col = mval + 1
+        m_fft = mval + 1  # FFT index for this m mode
+
+        for (ii, iglobθ) in enumerate(θ_globals)
+            # Use pre-cached values
             x = x_cache[ii]
             sθ = sθ_cache[ii]
             inv_sθ = inv_sθ_cache[ii]
             wi = weights_cache[ii]
-            
-            # Get vector components
-            Fθ_i = Ftθm[iθ, jm]
-            Fφ_i = Fpθm[iθ, jm]
-            
+
+            # Get vector components from FFT results
+            Fθ_i = Ftθm[ii, m_fft]
+            Fφ_i = Fpθm[ii, m_fft]
+
             # Apply Robert form scaling if enabled
             if cfg.robert_form && sθ > 0
                 Fθ_i /= sθ
                 Fφ_i /= sθ
             end
+
             if use_tbl
-                # Use cached table pairs for optimal memory access patterns
-                cache_key = (col, iglobθ)
-                if haskey(cached_table_pairs, cache_key)
-                    tblP, tbld = cached_table_pairs[cache_key]
-                else
-                    tblP_full = cfg.plm_tables[col]
-                    tbld_full = cfg.dplm_tables[col]
-                    # Create views for this specific latitude point
-                    tblP = view(tblP_full, :, iglobθ)
-                    tbld = view(tbld_full, :, iglobθ)
-                    # Cache if we have room (prevent unbounded growth)
-                    if length(cached_table_pairs) < 5000
-                        cached_table_pairs[cache_key] = (tblP, tbld)
-                    end
-                end
-                
-                # CANNOT use @simd ivdep - accumulating into same Slm_local/Tlm_local[l+1,col] across iterations
-                @inbounds @simd for l in max(1,mval):lmax
+                tblP = cfg.plm_tables[col]
+                tbld = cfg.dplm_tables[col]
+
+                @inbounds for l in max(1, mval):lmax
                     N = cfg.Nlm[l+1, col]
-                    dθY = -sθ * N * tbld[l+1]
-                    Y = N * tblP[l+1]
-                    coeff = wi * scaleφ / (l*(l+1))
+                    dθY = -sθ * N * tbld[l+1, iglobθ]
+                    Y = N * tblP[l+1, iglobθ]
+                    coeff = wi * scaleφ / (l * (l + 1))
                     Slm_local[l+1, col] += coeff * (Fθ_i * dθY - (0 + 1im) * mval * inv_sθ * Y * Fφ_i)
-                    Tlm_local[l+1, col] += coeff * ((0 + 1im) * mval * inv_sθ * Y * Fθ_i + Fφ_i * (+sθ * N * tbld[l+1]))
+                    Tlm_local[l+1, col] += coeff * ((0 + 1im) * mval * inv_sθ * Y * Fθ_i + Fφ_i * (+sθ * N * tbld[l+1, iglobθ]))
                 end
             else
-                # Fallback with improved error handling
-                try
-                    SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
-                    # CANNOT use @simd ivdep - accumulating into same Slm_local/Tlm_local[l+1,col] across iterations
-                    @inbounds @simd for l in max(1,mval):lmax
-                        N = cfg.Nlm[l+1, col]
-                        dθY = -sθ * N * dPdx[l+1]
-                        Y = N * P[l+1]
-                        coeff = wi * scaleφ / (l*(l+1))
-                        Slm_local[l+1, col] += coeff * (Fθ_i * dθY - (0 + 1im) * mval * inv_sθ * Y * Fφ_i)
-                        Tlm_local[l+1, col] += coeff * ((0 + 1im) * mval * inv_sθ * Y * Fθ_i + Fφ_i * (+sθ * N * dPdx[l+1]))
-                    end
-                catch e
-                    error("Failed to compute vector Legendre polynomials at latitude $iglobθ: $e")
+                # Fallback: compute Legendre polynomials and derivatives on-demand
+                SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
+
+                @inbounds for l in max(1, mval):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = -sθ * N * dPdx[l+1]
+                    Y = N * P[l+1]
+                    coeff = wi * scaleφ / (l * (l + 1))
+                    Slm_local[l+1, col] += coeff * (Fθ_i * dθY - (0 + 1im) * mval * inv_sθ * Y * Fφ_i)
+                    Tlm_local[l+1, col] += coeff * ((0 + 1im) * mval * inv_sθ * Y * Fθ_i + Fφ_i * (+sθ * N * dPdx[l+1]))
                 end
             end
         end
@@ -1036,58 +1058,53 @@ end
 # Distributed vector synthesis (spheroidal/toroidal) from dense spectra
 function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
-    size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
-    size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
+    nlon = cfg.nlon
+    nlat = cfg.nlat
+
+    size(Slm, 1) == lmax + 1 && size(Slm, 2) == mmax + 1 || throw(DimensionMismatch("Slm dims"))
+    size(Tlm, 1) == lmax + 1 && size(Tlm, 2) == mmax + 1 || throw(DimensionMismatch("Tlm dims"))
 
     # Convert incoming coefficients to internal normalization if needed
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm); T2 = similar(Tlm)
-        SHTnsKit.convert_alm_norm!(S2, Slm, cfg; to_internal=true)
-        SHTnsKit.convert_alm_norm!(T2, Tlm, cfg; to_internal=true)
-        Slm = S2; Tlm = T2
+        S2 = similar(Slm)
+        T2 = similar(Tlm)
+        SHTnsKit.convert_alm_norm!(S2, Slm, cfg; to_internal = true)
+        SHTnsKit.convert_alm_norm!(T2, Tlm, cfg; to_internal = true)
+        Slm = S2
+        Tlm = T2
     end
 
-    use_r = use_rfft && real_output && (eltype(prototype_θφ) <: Real)
-    if use_r
-        Zθφ = similar(prototype_θφ)
-        fill!(Zθφ, zero(eltype(Zθφ)))
-        pr = SHTnsKitParallelExt._get_or_plan(:rfft, Zθφ)
-        Fθk = rfft(Zθφ, pr)
-        Fφk = rfft(Zθφ, pr)
-        fill!(Fθk, 0); fill!(Fφk, 0)
-    else
-        Fθk = allocate(prototype_θφ; dims=(:θ,:k), eltype=ComplexF64)
-        Fφk = allocate(prototype_θφ; dims=(:θ,:k), eltype=ComplexF64)
-        fill!(Fθk, 0); fill!(Fφk, 0)
-    end
+    # Get the local portion info from the prototype
+    θ_globals = collect(globalindices(prototype_θφ, 1))  # Global θ indices this process owns
+    nθ_local = length(θ_globals)
+    nlon_local = size(parent(prototype_θφ), 2)
+    φ_is_local = (nlon_local == nlon)
 
-    θloc = axes(Fθk, 1)
-    mloc = axes(allocate(prototype_θφ; dims=(:θ,:m), eltype=ComplexF64), 2)
-    gl_θ = globalindices(Fθk, 1)
-    gl_m = globalindices(allocate(prototype_θφ; dims=(:θ,:m), eltype=ComplexF64), 2)
+    # Allocate Fourier coefficient matrices
+    Fθm = zeros(ComplexF64, nθ_local, nlon)
+    Fφm = zeros(ComplexF64, nθ_local, nlon)
 
-    nlon = cfg.nlon
     P = Vector{Float64}(undef, lmax + 1)
     dPdx = Vector{Float64}(undef, lmax + 1)
-    Gθ = Vector{ComplexF64}(undef, length(θloc))
-    Gφ = Vector{ComplexF64}(undef, length(θloc))
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
 
-    @inbounds for (jj, jm) in enumerate(mloc)
-        mglob = gl_m[jj]
-        mval = mglob - 1
-        (mval <= mmax) || continue
+    # Synthesis loop
+    for mval in 0:mmax
         col = mval + 1
-        if cfg.use_plm_tables && !isempty(cfg.plm_tables) && !isempty(cfg.dplm_tables)
-            tblP = cfg.plm_tables[col]; tbld = cfg.dplm_tables[col]
-            for (ii, iθ) in enumerate(θloc)
-                iglobθ = gl_θ[ii]
-                x = cfg.x[iglobθ]
-                sθ = sqrt(max(0.0, 1 - x*x))
-                inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
-                gθ = 0.0 + 0.0im
-                gφ = 0.0 + 0.0im
-                @inbounds for l in max(1,mval):lmax
+
+        for (ii, iglobθ) in enumerate(θ_globals)
+            x = cfg.x[iglobθ]
+            sθ = sqrt(max(0.0, 1 - x * x))
+            inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+
+            gθ = 0.0 + 0.0im
+            gφ = 0.0 + 0.0im
+
+            if cfg.use_plm_tables && !isempty(cfg.plm_tables) && !isempty(cfg.dplm_tables)
+                tblP = cfg.plm_tables[col]
+                tbld = cfg.dplm_tables[col]
+
+                @inbounds for l in max(1, mval):lmax
                     N = cfg.Nlm[l+1, col]
                     dθY = -sθ * N * tbld[l+1, iglobθ]
                     Y = N * tblP[l+1, iglobθ]

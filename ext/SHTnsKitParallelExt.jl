@@ -319,29 +319,50 @@ function communicator(A)
           * "This may indicate an incompatible PencilArrays version.")
 end
 
-# Allocate PencilArray with robust version detection
-function allocate(args...; kwargs...)
-    # Attempt direct call and fall back only on MethodError originating from allocate
-    try
-        return PencilArrays.allocate(args...; kwargs...)
-    catch err
-        if !(err isa MethodError && err.f === PencilArrays.allocate)
-            rethrow(err)
-        end
-    end
+# Allocate PencilArray - simplified API for SHTnsKit needs
+"""
+    allocate(prototype::PencilArray; eltype=eltype(prototype)) -> PencilArray
 
-    nargs = length(args)
-    if nargs >= 2
-        T, pencil = args[1], args[2]
-        if isa(pencil, PencilArrays.Pencil)
-            kw = Dict{Symbol,Any}(kwargs)
-            kw[:eltype] = get(kw, :eltype, T)
-            return PencilArrays.zeros(pencil; (;kw...)...)
-        end
-    end
+Allocate a new PencilArray with the same decomposition as the prototype.
+The optional `eltype` parameter allows changing the element type.
 
-    error("Unable to allocate PencilArray with provided arguments. " *
-          "This may indicate an incompatible PencilArrays version or API change.")
+Note: The `dims` keyword from legacy API is ignored - decomposition is inherited from prototype.
+"""
+function allocate(prototype::PencilArray; dims=nothing, eltype::Type{T}=eltype(prototype)) where T
+    # Get the pencil configuration from the prototype
+    pen = pencil(prototype)
+    # Allocate a new PencilArray with the same configuration
+    return PencilArray{T}(undef, pen)
+end
+
+"""
+    allocate(T::Type, pen::Pencil) -> PencilArray
+
+Allocate a new PencilArray with the specified type and pencil configuration.
+"""
+function allocate(::Type{T}, pen::Pencil) where T
+    return PencilArray{T}(undef, pen)
+end
+
+"""
+    allocate_like(prototype::PencilArray, ::Type{T}=eltype(prototype)) -> PencilArray
+
+Create a new PencilArray with the same shape and decomposition as prototype but potentially different type.
+"""
+function allocate_like(prototype::PencilArray, ::Type{T}=eltype(prototype)) where T
+    pen = pencil(prototype)
+    return PencilArray{T}(undef, pen)
+end
+
+"""
+    zeros_like(prototype::PencilArray, ::Type{T}=eltype(prototype)) -> PencilArray
+
+Create a zero-initialized PencilArray with the same shape and decomposition.
+"""
+function zeros_like(prototype::PencilArray, ::Type{T}=eltype(prototype)) where T
+    arr = allocate_like(prototype, T)
+    fill!(parent(arr), zero(T))
+    return arr
 end
 
 # Get global indices with robust fallback patterns

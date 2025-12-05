@@ -165,15 +165,28 @@ end
 function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
     comm = communicator(fθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
-    # Choose FFT path
-    if use_rfft && eltype(fθφ) <: Real
-        pfft = SHTnsKitParallelExt._get_or_plan(:rfft, fθφ)
-        Fθk = rfft(fθφ, pfft)
+    nlon = cfg.nlon
+
+    # Get local data from PencilArray
+    local_data = parent(fθφ)
+    nlat_local, nlon_local = size(local_data)
+
+    # Get global index ranges for this process's local data
+    θ_range = range_local(fθφ, 1)  # Global theta indices owned by this process
+    φ_range = range_local(fθφ, 2)  # Global phi indices owned by this process
+
+    # Perform 1D FFT along longitude (φ) dimension on local data
+    # Note: For SHT, we need full FFT along φ, so we need all φ points on each process
+    # If data is distributed along φ, we need to gather it first
+    if length(φ_range) == nlon
+        # Data is distributed along θ only - can do FFT directly
+        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
-        pfft = SHTnsKitParallelExt._get_or_plan(:fft, fθφ)
-        Fθk = fft(fθφ, pfft)
+        # Data is distributed along φ - need MPI Allgather along φ first
+        # Gather all φ data for each θ row this process owns
+        Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
-    Fθm = transpose(Fθk, (; dims=(1,2), names=(:θ,:m)))
     # Packed mapping info if needed
     storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
     

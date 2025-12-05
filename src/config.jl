@@ -65,6 +65,11 @@ Base.@kwdef mutable struct SHTConfig
 
     # Data ordering configuration
     south_pole_first::Bool = false                            # If true, latitude data starts at south pole (θ=π) instead of north pole (θ=0)
+
+    # Memory padding configuration (for cache optimization)
+    allow_padding::Bool = false                               # If true, arrays may have padding for cache optimization
+    nlat_padded::Int = 0                                      # Padded nlat value (stride between phi values), 0 means no padding (use nlat)
+    spat_dist::Int = 0                                        # Distance between spatial arrays in batch mode (0 = contiguous)
 end
 
 """
@@ -354,6 +359,246 @@ function create_gauss_config_spf(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int
                               robert_form=robert_form)
     set_south_pole_first!(cfg)
     return cfg
+end
+
+# ============================================================================
+# MEMORY PADDING FUNCTIONS
+# ============================================================================
+
+"""
+    compute_optimal_padding(nlat::Int, nlon::Int; sizeof_real::Int=8) -> Int
+
+Compute the optimal padding to add between latitude lines to avoid cache bank conflicts.
+This mimics the SHTns C library's padding strategy.
+
+# Arguments
+- `nlat`: Number of latitude points
+- `nlon`: Number of longitude points (phi)
+- `sizeof_real`: Size of real number in bytes (default 8 for Float64)
+
+# Returns
+The number of extra elements to add per latitude line (padding amount).
+
+# Details
+The padding strategy aims to:
+1. Align memory on 32-byte or 64-byte boundaries
+2. Avoid 8KB cache bank conflicts
+3. Avoid L2 cache bank/channel conflicts (especially important for AMD GPUs)
+
+This is most beneficial for:
+- Large transforms where cache effects matter
+- Multi-threaded transforms
+- GPU computing
+"""
+function compute_optimal_padding(nlat::Int, nlon::Int; sizeof_real::Int=8)
+    if nlon <= 1
+        return 0  # No padding needed for 1D or scalar
+    end
+
+    stride_bytes = nlat * sizeof_real
+    pad_bytes = 0
+
+    # Base case: add 8 elements padding minimum
+    pad_bytes = 8 * sizeof_real
+
+    # Ensure 32-byte alignment
+    if stride_bytes % 32 != 0
+        pad_bytes = 32 - (stride_bytes % 32)
+    end
+
+    # Avoid multiples of 8KB (cache bank conflicts)
+    if (stride_bytes + pad_bytes) % 8192 == 0
+        pad_bytes += 64
+    end
+
+    # Check if full data fits in L2 cache (~8MB typical)
+    total_size = nlon * (stride_bytes + pad_bytes)
+    if total_size < 8192 * 1024  # Fits in L2
+        # Use 64-byte alignment for better cache line utilization
+        if stride_bytes % 64 != 0
+            pad_bytes = 64 - (stride_bytes % 64)
+        end
+        # Avoid L2 cache bank conflicts (128-byte alignment issues)
+        if (stride_bytes + pad_bytes) % 128 == 0
+            pad_bytes += 64
+        end
+    else
+        # For larger data, use 32-byte alignment
+        if (stride_bytes + pad_bytes) % 128 == 0
+            pad_bytes += 32
+        end
+    end
+
+    # Convert to number of elements
+    return div(pad_bytes, sizeof_real)
+end
+
+"""
+    set_allow_padding!(cfg::SHTConfig; auto_compute::Bool=true)
+
+Enable memory padding for cache optimization. When enabled, spatial arrays
+can have extra padding between latitude lines to avoid cache bank conflicts.
+
+This can improve performance by 1-50% depending on the problem size and hardware,
+especially for multi-threaded and GPU transforms.
+
+# Arguments
+- `cfg`: SHTConfig to modify
+- `auto_compute`: If true, automatically compute optimal padding. If false,
+  you must set `cfg.nlat_padded` manually.
+
+# Example
+```julia
+cfg = create_gauss_config(64, 66)
+set_allow_padding!(cfg)
+println("Padded nlat: \$(cfg.nlat_padded)")  # May be > 66
+```
+
+See also: [`disable_padding!`](@ref), [`is_padding_enabled`](@ref), [`get_nlat_padded`](@ref)
+"""
+function set_allow_padding!(cfg::SHTConfig; auto_compute::Bool=true)
+    cfg.allow_padding = true
+
+    if auto_compute
+        pad = compute_optimal_padding(cfg.nlat, cfg.nlon)
+        cfg.nlat_padded = cfg.nlat + pad
+    elseif cfg.nlat_padded == 0
+        cfg.nlat_padded = cfg.nlat
+    end
+
+    # Compute spatial distance for batch transforms
+    cfg.spat_dist = cfg.nlat_padded * cfg.nlon
+
+    return cfg
+end
+
+"""
+    disable_padding!(cfg::SHTConfig)
+
+Disable memory padding. Spatial arrays will use contiguous memory without
+extra padding between latitude lines.
+
+See also: [`set_allow_padding!`](@ref), [`is_padding_enabled`](@ref)
+"""
+function disable_padding!(cfg::SHTConfig)
+    cfg.allow_padding = false
+    cfg.nlat_padded = 0
+    cfg.spat_dist = 0
+    return cfg
+end
+
+"""
+    is_padding_enabled(cfg::SHTConfig) -> Bool
+
+Check if memory padding is enabled for the configuration.
+"""
+is_padding_enabled(cfg::SHTConfig) = cfg.allow_padding
+
+"""
+    get_nlat_padded(cfg::SHTConfig) -> Int
+
+Get the padded latitude dimension. Returns `cfg.nlat` if padding is disabled,
+or `cfg.nlat_padded` if padding is enabled.
+
+This is the stride between successive phi (longitude) values in padded spatial arrays.
+"""
+function get_nlat_padded(cfg::SHTConfig)
+    if cfg.allow_padding && cfg.nlat_padded > 0
+        return cfg.nlat_padded
+    else
+        return cfg.nlat
+    end
+end
+
+"""
+    get_spat_dist(cfg::SHTConfig) -> Int
+
+Get the distance between spatial arrays in batch mode. Returns `cfg.nspat` if
+padding is disabled, or the padded spatial distance if enabled.
+"""
+function get_spat_dist(cfg::SHTConfig)
+    if cfg.allow_padding && cfg.spat_dist > 0
+        return cfg.spat_dist
+    else
+        return cfg.nspat
+    end
+end
+
+"""
+    allocate_padded_spatial(cfg::SHTConfig, T::Type=Float64) -> Array{T}
+
+Allocate a spatial array with proper padding if enabled.
+
+Returns a 2D array of size (nlat_padded, nlon) where nlat_padded >= nlat.
+The first nlat rows contain the actual data; remaining rows are padding.
+
+# Example
+```julia
+cfg = create_gauss_config(64, 66)
+set_allow_padding!(cfg)
+field = allocate_padded_spatial(cfg)
+# field has size (nlat_padded, nlon), use field[1:cfg.nlat, :] for data
+```
+"""
+function allocate_padded_spatial(cfg::SHTConfig, T::Type=Float64)
+    nlat_p = get_nlat_padded(cfg)
+    return zeros(T, nlat_p, cfg.nlon)
+end
+
+"""
+    allocate_padded_spatial_batch(cfg::SHTConfig, nfields::Int, T::Type=Float64) -> Array{T}
+
+Allocate spatial arrays for batch transforms with proper padding if enabled.
+
+Returns a 3D array of size (nlat_padded, nlon, nfields).
+"""
+function allocate_padded_spatial_batch(cfg::SHTConfig, nfields::Int, T::Type=Float64)
+    nlat_p = get_nlat_padded(cfg)
+    return zeros(T, nlat_p, cfg.nlon, nfields)
+end
+
+"""
+    copy_to_padded!(dest::AbstractMatrix, src::AbstractMatrix, cfg::SHTConfig)
+
+Copy data from a contiguous spatial array to a padded spatial array.
+"""
+function copy_to_padded!(dest::AbstractMatrix, src::AbstractMatrix, cfg::SHTConfig)
+    @assert size(src, 1) == cfg.nlat
+    @assert size(src, 2) == cfg.nlon
+    @assert size(dest, 1) >= cfg.nlat
+    @assert size(dest, 2) == cfg.nlon
+
+    dest[1:cfg.nlat, :] .= src
+    return dest
+end
+
+"""
+    copy_from_padded!(dest::AbstractMatrix, src::AbstractMatrix, cfg::SHTConfig)
+
+Copy data from a padded spatial array to a contiguous spatial array.
+"""
+function copy_from_padded!(dest::AbstractMatrix, src::AbstractMatrix, cfg::SHTConfig)
+    @assert size(dest, 1) == cfg.nlat
+    @assert size(dest, 2) == cfg.nlon
+    @assert size(src, 1) >= cfg.nlat
+    @assert size(src, 2) == cfg.nlon
+
+    dest .= src[1:cfg.nlat, :]
+    return dest
+end
+
+"""
+    estimate_padding_overhead(cfg::SHTConfig) -> Float64
+
+Estimate the memory overhead from padding as a percentage.
+
+Returns 0.0 if padding is disabled.
+"""
+function estimate_padding_overhead(cfg::SHTConfig)
+    if !cfg.allow_padding || cfg.nlat_padded <= cfg.nlat
+        return 0.0
+    end
+    return 100.0 * (cfg.nlat_padded - cfg.nlat) / cfg.nlat
 end
 
 """

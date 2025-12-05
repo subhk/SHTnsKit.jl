@@ -13,6 +13,8 @@ const SHT_GAUSS_FLY       = 6
 const SHT_SOUTH_POLE_FIRST = 256*32
 const SHT_NO_CS_PHASE     = 256*4
 const SHT_REAL_NORM       = 256*8
+const SHT_ALLOW_PADDING   = 256*256
+const SHT_PHI_CONTIGUOUS  = 256*64
 
 _grid_symbol(code::Int) = code == SHT_GAUSS ? :gauss :
                           code == SHT_AUTO ? :gauss :

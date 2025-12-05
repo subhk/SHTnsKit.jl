@@ -731,22 +731,36 @@ end
 
 Optimized analysis using pre-allocated scratch buffers from the plan.
 Eliminates all temporary allocations by reusing plan-based buffers.
+
+Note: Currently redirects to dist_analysis_standard for correct PencilArrays API usage.
 """
 function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
+    # Redirect to standard implementation which has proper PencilArrays API usage
+    return dist_analysis_standard(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft, use_packed_storage=plan.use_packed_storage)
+end
+
+# Legacy implementation preserved for reference
+function _dist_analysis_with_scratch_buffers_legacy(plan::DistAnalysisPlan, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
     comm = communicator(fθφ)
     cfg = plan.cfg
     lmax, mmax = cfg.lmax, cfg.mmax
+    nlon = cfg.nlon
     scratch = plan.spatial_scratch
-    
-    # Choose FFT path using existing infrastructure
-    if plan.use_rfft && eltype(fθφ) <: Real
-        pfft = SHTnsKitParallelExt._get_or_plan(:rfft, fθφ)
-        Fθk = rfft(fθφ, pfft)
+
+    # Get local data and perform FFT (fixed implementation)
+    local_data = parent(fθφ)
+    nlat_local, nlon_local = size(local_data)
+    θ_globals = collect(globalindices(fθφ, 1))
+
+    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    if nlon_local == nlon
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
-        pfft = SHTnsKitParallelExt._get_or_plan(:fft, fθφ)
-        Fθk = fft(fθφ, pfft)
+        φ_globals = collect(globalindices(fθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
+        Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
-    Fθm = transpose(Fθk, (; dims=(1,2), names=(:θ,:m)))
     
     # If using packed storage, accumulate directly into packed coefficients
     use_packed = plan.use_packed_storage

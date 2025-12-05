@@ -51,12 +51,30 @@ function shtns_get_build_info()
     return "SHTnsKit.jl: pure Julia SHT; orthonormal normalization; Gauss grid"
 end
 
-"""shtns_init(flags, lmax, mmax, mres, nlat, nphi) -> SHTConfig"""
+"""
+    shtns_init(flags, lmax, mmax, mres, nlat, nphi) -> SHTConfig
+
+Initialize SHTns-compatible configuration with specified grid type and parameters.
+
+# Flags
+- `SHT_GAUSS` (0): Gauss-Legendre grid
+- `SHT_AUTO` (1): Automatic (currently same as Gauss)
+- `SHT_REGULAR` (2): Regular equispaced grid
+- `SHT_REG_FAST` (3): Regular grid with fast initialization
+- `SHT_QUICK_INIT` (4): Quick initialization (no table precomputation)
+- `SHT_REGULAR_POLES` (5): Regular grid including poles
+- `SHT_GAUSS_FLY` (6): Gauss grid with on-the-fly Legendre computation
+
+Additional flags (can be OR'd):
+- `SHT_SOUTH_POLE_FIRST` (256*32): Reverse latitude order
+- `SHT_NO_CS_PHASE` (256*4): Disable Condon-Shortley phase
+- `SHT_REAL_NORM` (256*8): Use real normalization
+"""
 function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer, nlat::Integer, nphi::Integer)
     f = Int(flags)
     lmax = Int(lmax); mmax = Int(mmax); mres = Int(mres)
     nlat = Int(nlat); nphi = Int(nphi)
-  
+
     grid_code = f % 256
     grid_sym = _grid_symbol(grid_code)
     min_lat = _min_nlat_for_grid(grid_code, lmax)
@@ -64,9 +82,15 @@ function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer,
     nphi_eff = max(nphi, 2*mmax + 1, 4)
     include_poles = grid_sym == :regular_poles
     precompute_plm = !(grid_code == SHT_QUICK_INIT || grid_code == SHT_GAUSS_FLY)
+    use_on_the_fly = (grid_code == SHT_GAUSS_FLY)
 
     cfg = if grid_sym == :gauss
-        create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff)
+        if use_on_the_fly
+            # Use on-the-fly mode for SHT_GAUSS_FLY
+            create_gauss_fly_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff)
+        else
+            create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff)
+        end
     else
         create_regular_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff,
                               include_poles=include_poles, precompute_plm=precompute_plm)

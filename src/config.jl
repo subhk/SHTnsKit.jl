@@ -49,8 +49,9 @@ Base.@kwdef mutable struct SHTConfig
     robert_form::Bool           # Robert form for spectral derivatives
     phi_scale::Symbol = :auto    # :dft, :quad, or :auto (grid-driven)
 
-    # Performance optimization: precomputed Legendre polynomials
+    # Performance optimization: Legendre polynomial computation mode
     use_plm_tables::Bool = false                              # Enable/disable table lookup
+    on_the_fly::Bool = false                                  # Force on-the-fly computation (never use tables)
 
     # GPU Computing support
     compute_device::Symbol = :cpu                             # Computing device: :cpu, :cuda, :amdgpu
@@ -99,6 +100,130 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
                      ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form, phi_scale=:dft,
                      compute_device = :cpu, device_preference = [:cpu])
 end
+
+"""
+    create_gauss_fly_config(lmax::Int, nlat::Int; kwargs...) -> SHTConfig
+
+Create a Gauss–Legendre configuration with on-the-fly Legendre polynomial computation.
+
+This mode computes Legendre polynomials during each transform instead of using
+precomputed tables. Benefits:
+- **Lower memory usage**: No storage for P_l^m tables (saves O(lmax² × nlat) memory)
+- **Better for large lmax**: When lmax is large, tables become memory-intensive
+- **Good cache behavior**: On modern CPUs, on-the-fly computation can be faster
+  due to better cache utilization
+
+Trade-offs:
+- May be slower for repeated transforms with small lmax
+- No speedup from table precomputation
+
+This mirrors the `sht_gauss_fly` mode in SHTns C library.
+
+# Arguments
+Same as `create_gauss_config`.
+
+# Example
+```julia
+# For large lmax, on-the-fly mode saves significant memory
+cfg = create_gauss_fly_config(1024, 1026)
+
+# Performs transform computing Legendre polynomials on-the-fly
+alm = analysis(cfg, field)
+```
+
+See also: [`create_gauss_config`](@ref), [`set_on_the_fly!`](@ref), [`set_use_tables!`](@ref)
+"""
+function create_gauss_fly_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
+                                  nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                                  cs_phase::Bool=true, real_norm::Bool=false,
+                                  robert_form::Bool=false)
+    # Create base Gauss config
+    cfg = create_gauss_config(lmax, nlat; mmax=mmax, mres=mres, nlon=nlon,
+                              norm=norm, cs_phase=cs_phase, real_norm=real_norm,
+                              robert_form=robert_form)
+
+    # Force on-the-fly mode
+    cfg.on_the_fly = true
+    cfg.use_plm_tables = false
+    cfg.plm_tables = Matrix{Float64}[]
+    cfg.dplm_tables = Matrix{Float64}[]
+
+    return cfg
+end
+
+"""
+    set_on_the_fly!(cfg::SHTConfig)
+
+Enable on-the-fly Legendre polynomial computation mode. This disables precomputed
+tables and computes P_l^m(x) during each transform.
+
+Benefits:
+- Lower memory usage (no table storage)
+- Better for large lmax values
+- Can be faster on modern CPUs due to cache effects
+
+See also: [`set_use_tables!`](@ref), [`create_gauss_fly_config`](@ref)
+"""
+function set_on_the_fly!(cfg::SHTConfig)
+    cfg.on_the_fly = true
+    cfg.use_plm_tables = false
+    cfg.plm_tables = Matrix{Float64}[]
+    cfg.dplm_tables = Matrix{Float64}[]
+    return cfg
+end
+
+"""
+    set_use_tables!(cfg::SHTConfig)
+
+Enable precomputed Legendre polynomial tables. This precomputes P_l^m(x_i) for
+all grid points and stores them for reuse.
+
+Benefits:
+- Faster for repeated transforms with same grid
+- No redundant computation of Legendre polynomials
+
+Trade-offs:
+- Higher memory usage: O(lmax × mmax × nlat)
+- Initial table computation overhead
+
+See also: [`set_on_the_fly!`](@ref), [`prepare_plm_tables!`](@ref)
+"""
+function set_use_tables!(cfg::SHTConfig)
+    cfg.on_the_fly = false
+    if !cfg.use_plm_tables || isempty(cfg.plm_tables)
+        prepare_plm_tables!(cfg)
+    end
+    return cfg
+end
+
+"""
+    is_on_the_fly(cfg::SHTConfig) -> Bool
+
+Check if configuration is set to on-the-fly Legendre computation mode.
+"""
+is_on_the_fly(cfg::SHTConfig) = cfg.on_the_fly || !cfg.use_plm_tables
+
+"""
+    estimate_table_memory(lmax::Int, mmax::Int, nlat::Int) -> Int
+
+Estimate memory usage (in bytes) for precomputed Legendre polynomial tables.
+
+Returns the approximate memory needed for both P_l^m and dP_l^m/dx tables.
+"""
+function estimate_table_memory(lmax::Int, mmax::Int, nlat::Int)
+    # Each table has (lmax+1) × nlat Float64 values per m
+    # We have (mmax+1) such tables, for both P and dP
+    bytes_per_table = (lmax + 1) * nlat * sizeof(Float64)
+    num_tables = (mmax + 1) * 2  # P and dP tables
+    return bytes_per_table * num_tables
+end
+
+"""
+    estimate_table_memory(cfg::SHTConfig) -> Int
+
+Estimate memory usage for Legendre tables based on configuration.
+"""
+estimate_table_memory(cfg::SHTConfig) = estimate_table_memory(cfg.lmax, cfg.mmax, cfg.nlat)
 
 """
     create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,

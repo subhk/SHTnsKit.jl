@@ -54,6 +54,7 @@ include("energy_diagnostics.jl")              # Energy calculations and gradient
 include("spectral_diagnostics.jl")            # Spectral analysis and spectrum functions
 include("vorticity_diagnostics.jl")           # Vorticity and enstrophy calculations
 include("api_compat.jl")                      # API compatibility layer
+include("batch_transforms.jl")                # Batch (multi-field) transforms
 include("parallel_dense.jl")                  # Parallel dense matrix operations
 include("device_utils.jl")                    # GPU device utilities and management
 
@@ -65,6 +66,13 @@ export select_compute_device, device_transfer_arrays                  # Device u
 # ===== BASIC TRANSFORMS =====
 export analysis, synthesis                              # Basic forward/backward transforms
 export SHTPlan, analysis!, synthesis!                  # Planned (optimized) transforms
+
+# ===== BATCH TRANSFORMS =====
+export set_batch_size!, get_batch_size, reset_batch_size!  # Batch configuration
+export analysis_batch, analysis_batch!                  # Batch scalar analysis
+export synthesis_batch, synthesis_batch!                # Batch scalar synthesis
+export spat_to_SHsphtor_batch, SHsphtor_to_spat_batch  # Batch vector transforms
+export spat_to_SHqst_batch, SHqst_to_spat_batch        # Batch 3D vector transforms
 
 # ===== SPATIAL ↔ SPHERICAL HARMONIC TRANSFORMS =====
 export spat_to_SHsphtor!, SHsphtor_to_spat!            # In-place spheroidal/toroidal transforms

@@ -286,9 +286,36 @@ function shtns_malloc(bytes::Integer)
 end
 """shtns_free(::Any)""" shtns_free(::Any) = nothing
 
-"""shtns_set_many(cfg::SHTConfig, howmany::Integer, spec_dist::Integer) -> Int"""
-function shtns_set_many(::SHTConfig, howmany::Integer, ::Integer)
-    return max(1, Int(howmany))
+"""
+    shtns_set_many(cfg::SHTConfig, howmany::Integer, spec_dist::Integer) -> Int
+
+Configure batch processing for multiple fields. This enables efficient processing
+of multiple scalar or vector fields simultaneously by sharing precomputed
+Legendre polynomials and FFT plans.
+
+# Arguments
+- `cfg`: SHTConfig to configure
+- `howmany`: Number of fields to process in each batch (≥1)
+- `spec_dist`: Distance between spectral coefficient arrays in memory.
+               If 0, arrays are assumed contiguous.
+
+# Returns
+- The configured batch size (always ≥1)
+
+# Example
+```julia
+cfg = shtns_init(SHT_GAUSS, 32, 32, 1, 34, 65)
+shtns_set_many(cfg, 4, 0)  # Process 4 fields at once
+
+# Use batch transforms
+fields = rand(cfg.nlat, cfg.nlon, 4)
+alms = analysis_batch(cfg, fields)
+```
+
+See also: [`analysis_batch`](@ref), [`synthesis_batch`](@ref), [`set_batch_size!`](@ref)
+"""
+function shtns_set_many(cfg::SHTConfig, howmany::Integer, spec_dist::Integer)
+    return set_batch_size!(cfg, max(1, Int(howmany)); spec_dist=max(0, Int(spec_dist)))
 end
 
 # Remaining unimplemented APIs

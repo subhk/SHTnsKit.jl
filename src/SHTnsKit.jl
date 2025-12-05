@@ -318,13 +318,41 @@ benchmark_turbo_vs_simd(::Any; kwargs...) = error("LoopVectorization extension n
 
 # ===== LOW-LEVEL SHTNS LIBRARY INTERFACE =====
 # Direct bindings to the underlying SHTns C library functions
+
+# Grid type flags
 export SHT_GAUSS, SHT_AUTO, SHT_REGULAR, SHT_REG_FAST, SHT_QUICK_INIT, SHT_REGULAR_POLES, SHT_GAUSS_FLY
-export SHT_SOUTH_POLE_FIRST, SHT_NO_CS_PHASE, SHT_REAL_NORM, SHT_ALLOW_PADDING, SHT_PHI_CONTIGUOUS
-export shtns_verbose, shtns_print_version, shtns_get_build_info           # Library information
-export shtns_init, shtns_create, shtns_set_grid, shtns_set_grid_auto, shtns_create_with_grid  # Initialization
-export shtns_use_threads, shtns_reset, shtns_destroy, shtns_unset_grid, shtns_robert_form     # Configuration
-export sh00_1, sh10_ct, sh11_st, shlm_e1, shtns_gauss_wts               # Spherical harmonic values and weights
-export shtns_print_cfg, legendre_sphPlm_array, legendre_sphPlm_deriv_array  # Debugging and Legendre functions
-export shtns_malloc, shtns_free, shtns_set_many                          # Memory management
+export SHT_REG_DCT                                                        # DCT-based regular grid
+
+# Data layout flags
+export SHT_NATIVE_LAYOUT, SHT_THETA_CONTIGUOUS, SHT_PHI_CONTIGUOUS        # Data layout control
+
+# Option flags
+export SHT_NO_CS_PHASE, SHT_REAL_NORM, SHT_SCALAR_ONLY                    # Normalization options
+export SHT_SOUTH_POLE_FIRST, SHT_ALLOW_PADDING                            # Grid ordering and padding
+export SHT_LOAD_SAVE_CFG, SHT_ALLOW_GPU                                   # Config caching and GPU
+export SHT_ROBERT_FORM, SHT_FP32                                          # Transform options
+
+# Library information
+export shtns_verbose, shtns_print_version, shtns_get_build_info
+
+# Initialization and configuration
+export shtns_init, shtns_create, shtns_set_grid, shtns_set_grid_auto, shtns_create_with_grid
+export shtns_use_threads, shtns_reset, shtns_destroy, shtns_unset_grid, shtns_robert_form
+
+# Spherical harmonic values and weights
+export sh00_1, sh10_ct, sh11_st, shlm_e1, shtns_gauss_wts
+
+# Debugging and Legendre functions
+export shtns_print_cfg, legendre_sphPlm_array, legendre_sphPlm_deriv_array
+
+# Memory management
+export shtns_malloc, shtns_free, shtns_set_many
+
+# Helper macros (grid coordinate utilities)
+export PHI_DEG, PHI_RAD, THETA_DEG, THETA_RAD                             # Coordinate conversions
+export NSPAT_ALLOC, NLM_ALLOC                                             # Allocation size helpers
+
+# Configuration persistence
+export save_config, load_config                                           # Config save/load
 
 end # module SHTnsKit

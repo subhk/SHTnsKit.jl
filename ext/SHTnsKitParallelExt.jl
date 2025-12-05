@@ -20,8 +20,11 @@ using Base.Threads                       # Threads.@threads and locks/macros
 import MPI                               # Bring MPI module into scope for MPI.* calls
 using MPI: Allreduce, Allreduce!, Allgather, Allgatherv, Comm_size, COMM_WORLD
 import PencilArrays                      # Bring PencilArrays module for qualified calls
-using PencilArrays: Pencil, PencilArray  # Distributed array framework
+using PencilArrays: Pencil, PencilArray, ManyPencilArray  # Distributed array framework
+import PencilArrays: pencil, range_local, size_local, size_global, topology, parent
 using PencilFFTs                         # Distributed FFTs
+using PencilFFTs: Transforms, PencilFFTPlan, allocate_input, allocate_output
+using FFTW                               # For 1D FFTs on local arrays
 using SHTnsKit                           # Core spherical harmonic functionality
 
 # ===== FFT PLAN CACHING =====
@@ -385,70 +388,166 @@ function globalindices(A, dim)
 end
 
 # ===== DISTRIBUTED FFT WRAPPERS =====
-# Robust wrapper functions for PencilFFTs with version compatibility
-# Uses method existence checks for maximum reliability
+# Use FFTW for 1D FFTs along the longitude dimension (not PencilFFTs which is for multi-D)
+# PencilArrays provides the distributed array framework, FFTW provides the FFTs
 
-# Plan forward FFT with robust API detection
-function plan_fft(A; dims=:)
-    if hasmethod(PencilFFTs.plan_fft, (typeof(A),))
-        return PencilFFTs.plan_fft(A; dims=dims)
-    else
-        error("PencilFFTs.plan_fft not available for array type $(typeof(A))")
+# Cache for FFTW 1D plans
+const _fftw_plan_cache = Dict{Tuple{Symbol, Int, DataType}, Any}()
+const _fftw_cache_lock = Threads.ReentrantLock()
+
+"""
+    get_fftw_plan(kind, n, T) -> plan
+
+Get or create a cached FFTW plan for 1D transforms.
+"""
+function get_fftw_plan(kind::Symbol, n::Int, ::Type{T}) where T
+    key = (kind, n, T)
+    lock(_fftw_cache_lock) do
+        if haskey(_fftw_plan_cache, key)
+            return _fftw_plan_cache[key]
+        end
+
+        # Create sample array for planning
+        if kind == :fft
+            sample = zeros(Complex{real(T)}, n)
+            plan = FFTW.plan_fft(sample)
+        elseif kind == :ifft
+            sample = zeros(Complex{real(T)}, n)
+            plan = FFTW.plan_ifft(sample)
+        elseif kind == :rfft
+            sample = zeros(real(T), n)
+            plan = FFTW.plan_rfft(sample)
+        elseif kind == :irfft
+            # For irfft, input size is n÷2+1
+            sample = zeros(Complex{real(T)}, n ÷ 2 + 1)
+            plan = FFTW.plan_irfft(sample, n)
+        else
+            error("Unknown FFT kind: $kind")
+        end
+
+        _fftw_plan_cache[key] = plan
+        return plan
     end
 end
 
-# Execute forward FFT
-function fft(A, p)
-    if hasmethod(PencilFFTs.fft, (typeof(A), typeof(p)))
-        return PencilFFTs.fft(A, p)
-    else
-        error("PencilFFTs.fft not available for arguments $(typeof(A)), $(typeof(p))")
+"""
+    fft_along_dim2!(output, input)
+
+Perform forward FFT along dimension 2 (longitude) for each row.
+Works on the local data of a PencilArray.
+"""
+function fft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{T2}) where {T<:AbstractFloat, T2}
+    nlat, nlon = size(input)
+    @inbounds for i in 1:nlat
+        row_in = view(input, i, :)
+        row_out = view(output, i, :)
+        FFTW.fft!(row_out .= Complex{T}.(row_in))
     end
+    return output
 end
 
-# Execute inverse FFT
-function ifft(A, p)
-    if hasmethod(PencilFFTs.ifft, (typeof(A), typeof(p)))
-        return PencilFFTs.ifft(A, p)
-    else
-        error("PencilFFTs.ifft not available for arguments $(typeof(A)), $(typeof(p))")
+function fft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{Complex{T}}) where {T<:AbstractFloat}
+    nlat, nlon = size(input)
+    @inbounds for i in 1:nlat
+        row_in = view(input, i, :)
+        row_out = view(output, i, :)
+        copyto!(row_out, row_in)
+        FFTW.fft!(row_out)
     end
+    return output
 end
 
-# Plan real-to-complex FFT with error handling
-function plan_rfft(A; dims=:)
-    if hasmethod(PencilFFTs.plan_rfft, (typeof(A),))
-        return PencilFFTs.plan_rfft(A; dims=dims)
-    else
-        return nothing  # Graceful fallback for unsupported operations
+"""
+    ifft_along_dim2!(output, input)
+
+Perform inverse FFT along dimension 2 (longitude) for each row.
+"""
+function ifft_along_dim2!(output::AbstractMatrix{T}, input::AbstractMatrix{Complex{T2}}) where {T<:AbstractFloat, T2<:AbstractFloat}
+    nlat, nlon = size(input)
+    temp = Vector{Complex{T2}}(undef, nlon)
+    @inbounds for i in 1:nlat
+        copyto!(temp, view(input, i, :))
+        FFTW.ifft!(temp)
+        for j in 1:nlon
+            output[i, j] = real(temp[j])
+        end
     end
+    return output
 end
 
-# Plan complex-to-real inverse FFT
-function plan_irfft(A; dims=:)
-    if hasmethod(PencilFFTs.plan_irfft, (typeof(A),))
-        return PencilFFTs.plan_irfft(A; dims=dims)
-    else
-        return nothing  # Graceful fallback for unsupported operations
+function ifft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{Complex{T}}) where {T<:AbstractFloat}
+    nlat, nlon = size(input)
+    @inbounds for i in 1:nlat
+        row_out = view(output, i, :)
+        copyto!(row_out, view(input, i, :))
+        FFTW.ifft!(row_out)
     end
+    return output
 end
 
-# Execute real-to-complex FFT
-function rfft(A, p)
-    if hasmethod(PencilFFTs.rfft, (typeof(A), typeof(p)))
-        return PencilFFTs.rfft(A, p)
-    else
-        error("PencilFFTs.rfft not available for arguments $(typeof(A)), $(typeof(p))")
-    end
+# Legacy API wrappers for backward compatibility (used by existing code)
+function plan_fft(A::PencilArray; dims=:)
+    # Return a placeholder that indicates we'll use FFTW on local data
+    return (kind=:fft, local_size=size(parent(A)))
 end
 
-# Execute complex-to-real inverse FFT
-function irfft(A, p)
-    if hasmethod(PencilFFTs.irfft, (typeof(A), typeof(p)))
-        return PencilFFTs.irfft(A, p)
-    else
-        error("PencilFFTs.irfft not available for arguments $(typeof(A)), $(typeof(p))")
+function plan_ifft(A::PencilArray; dims=:)
+    return (kind=:ifft, local_size=size(parent(A)))
+end
+
+function fft(A::PencilArray, p)
+    local_data = parent(A)
+    nlat, nlon = size(local_data)
+    output = similar(local_data, Complex{Float64})
+    fft_along_dim2!(output, local_data)
+    return output
+end
+
+function ifft(A::PencilArray, p)
+    local_data = parent(A)
+    nlat, nlon = size(local_data)
+    output = similar(local_data)
+    ifft_along_dim2!(output, local_data)
+    return output
+end
+
+# RFFT/IRFFT variants
+function plan_rfft(A::PencilArray; dims=:)
+    return (kind=:rfft, local_size=size(parent(A)))
+end
+
+function plan_irfft(A::PencilArray; dims=:)
+    return (kind=:irfft, local_size=size(parent(A)))
+end
+
+function rfft(A::PencilArray, p)
+    local_data = parent(A)
+    nlat, nlon = size(local_data)
+    nk = nlon ÷ 2 + 1
+    output = Matrix{ComplexF64}(undef, nlat, nk)
+    @inbounds for i in 1:nlat
+        row = Vector{Float64}(collect(view(local_data, i, :)))
+        fft_result = FFTW.rfft(row)
+        for j in 1:nk
+            output[i, j] = fft_result[j]
+        end
     end
+    return output
+end
+
+function irfft(A::AbstractMatrix{<:Complex}, p)
+    nlat, nk = size(A)
+    # Assume original nlon was 2*(nk-1) for even-length arrays
+    nlon = 2 * (nk - 1)
+    output = Matrix{Float64}(undef, nlat, nlon)
+    @inbounds for i in 1:nlat
+        row = Vector{ComplexF64}(collect(view(A, i, :)))
+        ifft_result = FFTW.irfft(row, nlon)
+        for j in 1:nlon
+            output[i, j] = ifft_result[j]
+        end
+    end
+    return output
 end
 
 

@@ -35,7 +35,7 @@ function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:
         mval = gl_m[jj] - 1
         mval > mmax && continue
         col_local = Array(view(Alm_pencil, :, jm))
-        Allgatherv(col_local, col_full, counts, displs, comm)
+        Allgatherv!(col_local, VBuffer(col_full, counts), comm)
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             idx = SHTnsKit.LM_index(lmax, cfg.mres, lval, mval)

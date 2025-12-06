@@ -51,7 +51,7 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
     for (ii, il) in enumerate(lloc)
         lval = gl_l[ii] - 1
         a_local = Array(view(Alm_pencil, il, :))
-        Allgatherv(a_local, a_full, counts_m, displs_m, comm)
+        Allgatherv!(a_local, VBuffer(a_full, counts_m), comm)
         mm = min(lval, mmax)
         n2 = 2*lval + 1
         b = Vector{ComplexF64}(undef, n2); fill!(b, 0.0 + 0.0im)
@@ -130,8 +130,8 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
         total = sum(counts)
         m_all = Vector{Int}(undef, total)
         a_all = Vector{ComplexF64}(undef, total)
-        Allgatherv(msel_val, m_all, counts, displs, comm)
-        Allgatherv(a_loc, a_all, counts, displs, comm)
+        Allgatherv!(msel_val, VBuffer(m_all, counts), comm)
+        Allgatherv!(a_loc, VBuffer(a_all, counts), comm)
         # Reconstruct a_full[0:mm]
         a_full = zeros(ComplexF64, mm + 1)
         for k in 1:total

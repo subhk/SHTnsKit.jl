@@ -69,8 +69,10 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
                     Y = N * tblP[l+1, i]
                     Sl = Slm_int[l+1, col]
                     Tl = Tlm_int[l+1, col]
-                    gθ += dθY * Sl + (0 + 1im) * m * inv_sθ * Y * Tl
-                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + (sθ * N * tbld[l+1, i]) * Tl
+                    # Vθ = ∂S/∂θ - (im/sinθ) * T
+                    gθ += dθY * Sl - (0 + 1im) * m * inv_sθ * Y * Tl
+                    # Vφ = (im/sinθ) * S + ∂T/∂θ
+                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + dθY * Tl
                 end
             else
                 P = thread_local_P[Threads.threadid()]
@@ -82,8 +84,10 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
                     Y = N * P[l+1]
                     Sl = Slm_int[l+1, col]
                     Tl = Tlm_int[l+1, col]
-                    gθ += dθY * Sl + (0 + 1im) * m * inv_sθ * Y * Tl
-                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + (sθ * N * dPdx[l+1]) * Tl
+                    # Vθ = ∂S/∂θ - (im/sinθ) * T
+                    gθ += dθY * Sl - (0 + 1im) * m * inv_sθ * Y * Tl
+                    # Vφ = (im/sinθ) * S + ∂T/∂θ
+                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + dθY * Tl
                 end
             end
             Fθ[i, col] = inv_scaleφ * gθ
@@ -177,8 +181,9 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
                     Y = N * tblP[l+1, i]
                     coeff = wi * scaleφ / (l * (l + 1))
                     term = (0 + 1im) * m * inv_sθ * Y
-                    Sacc[l+1] += coeff * (Fθ * dθY - term * Fφ)
-                    Tacc[l+1] += coeff * (term * Fθ - dθY * Fφ)
+                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
+                    Sacc[l+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
+                    Tacc[l+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
                 end
             else
                 P = thread_local_P[tid]
@@ -190,8 +195,9 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
                     Y = N * P[l+1]
                     coeff = wi * scaleφ / (l * (l + 1))
                     term = (0 + 1im) * m * inv_sθ * Y
-                    Sacc[l+1] += coeff * (Fθ * dθY - term * Fφ)
-                    Tacc[l+1] += coeff * (term * Fθ - dθY * Fφ)
+                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
+                    Sacc[l+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
+                    Tacc[l+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
                 end
             end
         end

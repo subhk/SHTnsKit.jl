@@ -18,7 +18,7 @@ Key capabilities:
 
 using Base.Threads                       # Threads.@threads and locks/macros
 import MPI                               # Bring MPI module into scope for MPI.* calls
-using MPI: Allreduce, Allreduce!, Allgather, Allgatherv, Comm_size, COMM_WORLD
+using MPI: Allreduce, Allreduce!, Allgather, Allgatherv!, VBuffer, Comm_size, COMM_WORLD
 import PencilArrays                      # Bring PencilArrays module for qualified calls
 using PencilArrays: Pencil, PencilArray, ManyPencilArray  # Distributed array framework
 import PencilArrays: pencil, range_local, size_local, size_global, topology, parent
@@ -256,26 +256,33 @@ end
 # Diagnostic function to detect PencilArrays version and capabilities
 function _detect_pencilarray_version()
     version_info = Dict{Symbol, Any}()
-    
+
+    # Check for v0.19+ API (uses get_comm, range_local)
+    version_info[:has_get_comm] = isdefined(PencilArrays, :get_comm)
+    version_info[:has_range_local] = isdefined(PencilArrays, :range_local)
+    version_info[:has_size_local] = isdefined(PencilArrays, :size_local)
+
     # Check for modern API (v0.17+)
-    version_info[:has_communicator] = hasmethod(PencilArrays.communicator, Tuple{Any})
-    version_info[:has_allocate] = hasmethod(PencilArrays.allocate, Tuple{Any, Any})
-    version_info[:has_globalindices] = hasmethod(PencilArrays.globalindices, Tuple{Any, Any})
-    
-    # Check for legacy API patterns  
+    version_info[:has_communicator] = isdefined(PencilArrays, :communicator)
+    version_info[:has_allocate] = isdefined(PencilArrays, :allocate)
+    version_info[:has_globalindices] = isdefined(PencilArrays, :globalindices)
+
+    # Check for legacy API patterns
     version_info[:has_comm] = isdefined(PencilArrays, :comm)
     version_info[:has_global_indices] = isdefined(PencilArrays, :global_indices)
     version_info[:has_pencilarray_constructor] = isdefined(PencilArrays, :PencilArray)
-    
+
     # Try to determine approximate version based on API availability
-    if version_info[:has_communicator] && version_info[:has_allocate] && version_info[:has_globalindices]
+    if version_info[:has_get_comm] && version_info[:has_range_local]
+        version_info[:estimated_version] = "v0.19+"
+    elseif version_info[:has_communicator] && version_info[:has_allocate] && version_info[:has_globalindices]
         version_info[:estimated_version] = "v0.17+"
     elseif version_info[:has_comm] || version_info[:has_global_indices]
         version_info[:estimated_version] = "v0.15-v0.16"
     else
         version_info[:estimated_version] = "unknown/very_old"
     end
-    
+
     return version_info
 end
 
@@ -290,31 +297,45 @@ end
 
 # Get MPI communicator from PencilArray with robust fallback chain
 function communicator(A)
+    # PencilArrays v0.19+ uses get_comm
+    if hasmethod(PencilArrays.get_comm, (typeof(A),))
+        return PencilArrays.get_comm(A)
+    end
+
     # Modern PencilArrays API (v0.17+)
-    if hasmethod(PencilArrays.communicator, (typeof(A),))
+    if isdefined(PencilArrays, :communicator) && hasmethod(PencilArrays.communicator, (typeof(A),))
         return PencilArrays.communicator(A)
     end
-    
+
     # Legacy API patterns (v0.15-v0.16)
-    if hasmethod(PencilArrays.comm, (typeof(A),))
+    if isdefined(PencilArrays, :comm) && hasmethod(PencilArrays.comm, (typeof(A),))
         return PencilArrays.comm(A)
     end
-    
+
+    # Try get_comm on the pencil object
+    try
+        pen = pencil(A)
+        if hasmethod(PencilArrays.get_comm, (typeof(pen),))
+            return PencilArrays.get_comm(pen)
+        end
+    catch
+    end
+
     # Direct field access fallback (very old versions)
     try
         return A.pencil.comm
     catch
         # Last resort: try global communicator access patterns
         if hasfield(typeof(A), :pencil)
-            pencil = getfield(A, :pencil)
-            if hasfield(typeof(pencil), :comm)
-                return getfield(pencil, :comm)
-            elseif hasfield(typeof(pencil), :communicator)
-                return getfield(pencil, :communicator)
+            p = getfield(A, :pencil)
+            if hasfield(typeof(p), :comm)
+                return getfield(p, :comm)
+            elseif hasfield(typeof(p), :communicator)
+                return getfield(p, :communicator)
             end
         end
     end
-    
+
     error("Unable to extract MPI communicator from PencilArray. "
           * "This may indicate an incompatible PencilArrays version.")
 end
@@ -367,28 +388,38 @@ end
 
 # Get global indices with robust fallback patterns
 function globalindices(A, dim)
+    # PencilArrays v0.19+ uses range_local on the pencil
+    try
+        pen = pencil(A)
+        ranges = PencilArrays.range_local(pen)
+        if dim <= length(ranges)
+            return ranges[dim]
+        end
+    catch
+    end
+
     # Modern PencilArrays API (v0.17+)
-    if hasmethod(PencilArrays.globalindices, (typeof(A), typeof(dim)))
+    if isdefined(PencilArrays, :globalindices) && hasmethod(PencilArrays.globalindices, (typeof(A), typeof(dim)))
         return PencilArrays.globalindices(A, dim)
     end
-    
+
     # Legacy API patterns (v0.15-v0.16)
-    if hasmethod(PencilArrays.global_indices, (typeof(A), typeof(dim)))
+    if isdefined(PencilArrays, :global_indices) && hasmethod(PencilArrays.global_indices, (typeof(A), typeof(dim)))
         return PencilArrays.global_indices(A, dim)
     end
-    
+
     # Direct field access patterns
     try
         return A.pencil.axes[dim]
     catch
         # Alternative field access patterns
         try
-            pencil = getfield(A, :pencil)
-            if hasfield(typeof(pencil), :axes)
-                axes = getfield(pencil, :axes)
-                return axes[dim]
-            elseif hasfield(typeof(pencil), :global_axes)
-                global_axes = getfield(pencil, :global_axes)
+            p = getfield(A, :pencil)
+            if hasfield(typeof(p), :axes)
+                ax = getfield(p, :axes)
+                return ax[dim]
+            elseif hasfield(typeof(p), :global_axes)
+                global_axes = getfield(p, :global_axes)
                 return global_axes[dim]
             end
         catch
@@ -403,7 +434,7 @@ function globalindices(A, dim)
             end
         end
     end
-    
+
     error("Unable to get global indices for dimension $dim from PencilArray. "
           * "This may indicate an incompatible PencilArrays version.")
 end
@@ -707,9 +738,9 @@ function sparse_spectral_reduce!(local_data::AbstractVector{T}, comm) where {T}
         end
     end
 
-    # Exchange indices and values
-    Allgatherv(idx_send, idx_recv, counts, displs, comm)
-    Allgatherv(val_send, val_recv, counts, displs, comm)
+    # Exchange indices and values using MPI.jl v0.20+ API
+    Allgatherv!(idx_send, VBuffer(idx_recv, counts), comm)
+    Allgatherv!(val_send, VBuffer(val_recv, counts), comm)
 
     # Accumulate into the full dense vector
     fill!(local_data, zero(T))

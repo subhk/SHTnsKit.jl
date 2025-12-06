@@ -294,7 +294,12 @@ dist_SH_Zrotate_packed(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel e
 dist_SH_Yrotate_packed(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_SH_Yrotate90_packed(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_SH_Xrotate90_packed(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
-
+dist_spatial_divergence(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_spatial_vorticity(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_scalar_laplacian(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_scalar_laplacian!(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_apply_laplacian!(::SHTConfig, ::Any) = error("Parallel extension not loaded")
+dist_SH_mul_mx!(::SHTConfig, ::Any, ::Any, ::Any) = error("Parallel extension not loaded")
 
 # ===== PARALLEL ROTATION FUNCTIONS =====
 # Parallel rotations fallbacks (PencilArray-based)

@@ -1058,8 +1058,10 @@ function SHTnsKit.dist_spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilA
                     dθY = -sθ * N * tbld[l+1, iglobθ]
                     Y = N * tblP[l+1, iglobθ]
                     coeff = wi * scaleφ / (l * (l + 1))
-                    Slm_local[l+1, col] += coeff * (Fθ_i * dθY - (0 + 1im) * mval * inv_sθ * Y * Fφ_i)
-                    Tlm_local[l+1, col] += coeff * ((0 + 1im) * mval * inv_sθ * Y * Fθ_i + Fφ_i * (+sθ * N * tbld[l+1, iglobθ]))
+                    term = (0 + 1im) * mval * inv_sθ * Y
+                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
+                    Slm_local[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
+                    Tlm_local[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
                 end
             else
                 # Fallback: compute Legendre polynomials and derivatives on-demand
@@ -1070,8 +1072,10 @@ function SHTnsKit.dist_spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilA
                     dθY = -sθ * N * dPdx[l+1]
                     Y = N * P[l+1]
                     coeff = wi * scaleφ / (l * (l + 1))
-                    Slm_local[l+1, col] += coeff * (Fθ_i * dθY - (0 + 1im) * mval * inv_sθ * Y * Fφ_i)
-                    Tlm_local[l+1, col] += coeff * ((0 + 1im) * mval * inv_sθ * Y * Fθ_i + Fφ_i * (+sθ * N * dPdx[l+1]))
+                    term = (0 + 1im) * mval * inv_sθ * Y
+                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
+                    Slm_local[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
+                    Tlm_local[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
                 end
             end
         end
@@ -1152,8 +1156,10 @@ function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                     Y = N * tblP[l+1, iglobθ]
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
-                    gθ += dθY * Sl + (0 + 1im) * mval * inv_sθ * Y * Tl
-                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + (sθ * N * tbld[l+1, iglobθ]) * Tl
+                    # Vθ = ∂S/∂θ - (im/sinθ) * T
+                    gθ += dθY * Sl - (0 + 1im) * mval * inv_sθ * Y * Tl
+                    # Vφ = (im/sinθ) * S + ∂T/∂θ
+                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
                 end
             else
                 # Fallback: compute Legendre polynomials and derivatives on-demand
@@ -1165,8 +1171,10 @@ function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                     Y = N * P[l+1]
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
-                    gθ += dθY * Sl + (0 + 1im) * mval * inv_sθ * Y * Tl
-                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + (sθ * N * dPdx[l+1]) * Tl
+                    # Vθ = ∂S/∂θ - (im/sinθ) * T
+                    gθ += dθY * Sl - (0 + 1im) * mval * inv_sθ * Y * Tl
+                    # Vφ = (im/sinθ) * S + ∂T/∂θ
+                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
                 end
             end
 

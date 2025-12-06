@@ -13,6 +13,19 @@ SHTnsKit.jl supports multiple levels of performance optimization:
 
 ## System Requirements
 
+### Package Version Compatibility
+
+SHTnsKit.jl's distributed extension requires specific minimum versions due to API changes:
+
+| Package | Minimum Version | Notes |
+|---------|----------------|-------|
+| **MPI.jl** | v0.20+ | Uses `Allgatherv!` with `VBuffer` API |
+| **PencilArrays.jl** | v0.19+ | Uses `range_local`, `size_local`, `get_comm` API |
+| **PencilFFTs.jl** | v0.15+ | Compatible distributed FFT support |
+| **Julia** | 1.9+ | 1.11+ recommended for best performance |
+
+**Important**: Older versions of PencilArrays (< v0.19) used different APIs (`communicator`, `globalindices`) that are no longer supported.
+
 ### Minimum Requirements
 - **Operating System**: Linux, macOS, or Windows with WSL
 - **Julia**: Version 1.9+ (1.11+ recommended)
@@ -355,6 +368,48 @@ WARNING: A process refused to die!
 # Use proper MPI cleanup
 export OMPI_MCA_orte_tmpdir_base=/tmp
 mpiexec --mca orte_base_help_aggregate 0 -n 4 julia script.jl
+```
+
+**4. PencilArrays API errors (version mismatch):**
+```
+ERROR: MethodError: no method matching communicator(::Pencil{...})
+ERROR: MethodError: no method matching globalindices(::PencilArray{...})
+```
+
+**Cause:** You have an older version of PencilArrays (< v0.19) that uses different API names.
+
+**Solution:**
+```julia
+# Update to PencilArrays v0.19+
+using Pkg
+Pkg.update("PencilArrays")
+Pkg.update("PencilFFTs")
+
+# Verify version
+Pkg.status("PencilArrays")  # Should show v0.19+
+```
+
+The new PencilArrays v0.19+ API uses:
+- `get_comm(pen)` instead of `communicator(pen)`
+- `range_local(pen)` instead of `globalindices(arr, dim)`
+- `size_local(pen)` instead of other size functions
+
+**5. Precompilation cache conflicts with MPI:**
+```
+ERROR: Permission denied @ mkdir_pid_file
+ERROR: InexactError: ... (random memory errors)
+```
+
+**Cause:** Multiple MPI processes trying to write to the same precompilation cache simultaneously.
+
+**Solution:**
+```bash
+# Use a fresh depot for MPI runs
+JULIA_DEPOT_PATH=/tmp/fresh_depot:$HOME/.julia mpiexec -n 4 julia script.jl
+
+# Or precompile in serial first
+julia --project -e 'using SHTnsKit, MPI, PencilArrays, PencilFFTs'
+mpiexec -n 4 julia --project script.jl
 ```
 
 ### Performance Issues

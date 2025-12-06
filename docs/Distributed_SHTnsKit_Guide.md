@@ -35,6 +35,14 @@ Key concepts
 
 ## 2. Installation and Requirements
 
+### Version Compatibility
+
+SHTnsKit.jl's distributed extension is tested with the following package versions:
+- **MPI.jl**: v0.20+ (uses the new `Allgatherv!` with `VBuffer` API)
+- **PencilArrays.jl**: v0.19+ (uses `range_local`, `size_local`, `get_comm` API)
+- **PencilFFTs.jl**: v0.15+
+- **Julia**: 1.9+ (1.11+ recommended)
+
 ```julia
 using Pkg
 Pkg.add(["SHTnsKit", "MPI", "PencilArrays", "PencilFFTs"])  # optional: "LoopVectorization"
@@ -68,12 +76,18 @@ nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Spatial grid on a Pencil communicator
-P = Pencil((:θ, :φ), (nlat, nlon); comm=MPI.COMM_WORLD)
-fθφ = PencilArrays.zeros(P; eltype=Float64)
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ_local = zeros(Float64, PencilArrays.size_local(pen)...)
+fθφ = PencilArray(pen, fθφ_local)
 
-# Fill local block
-for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-    fθφ[iθ, iφ] = sin(0.2*(iθ+1)) + cos(0.1*(iφ+1))
+# Fill local block using range_local for global-to-local index mapping
+ranges = PencilArrays.range_local(pen)
+θ_range, φ_range = ranges[1], ranges[2]
+
+for (i_local, i_global) in enumerate(θ_range)
+    for (j_local, j_global) in enumerate(φ_range)
+        fθφ[i_local, j_local] = sin(0.2*i_global) + cos(0.1*j_global)
+    end
 end
 ```
 
@@ -237,13 +251,13 @@ Both use the distributed transform paths internally and return gradients in the 
 
 Code structure (distributed extension)
 - `ext/SHTnsKitParallelExt.jl`: loads the distributed pieces
-  - `ext/parallel_transforms.jl`: scalar/vector/QST distributed transforms, roundtrips
-  - `ext/parallel_ops_pencil.jl`: spectral operators on PencilArrays
-  - `ext/parallel_rotations_pencil.jl`: rotations (Z, Y, Euler, packed wrappers)
-  - `ext/parallel_diagnostics.jl`: MPI-reduced energies/spectra
-  - `ext/parallel_plans.jl`: minimal plan structs
-  - `ext/parallel_dispatch.jl`: routes PencilArray inputs to distributed paths
-  - `ext/parallel_local.jl`: local/point evals and packed conversions
+  - `ext/ParallelTransforms.jl`: scalar/vector/QST distributed transforms, roundtrips
+  - `ext/ParallelOpsPencil.jl`: spectral operators on PencilArrays
+  - `ext/ParallelRotationsPencil.jl`: rotations (Z, Y, Euler, packed wrappers)
+  - `ext/ParallelDiagnostics.jl`: MPI-reduced energies/spectra
+  - `ext/ParallelPlans.jl`: minimal plan structs
+  - `ext/ParallelDispatch.jl`: routes PencilArray inputs to distributed paths
+  - `ext/ParallelLocal.jl`: local/point evals and packed conversions
 
 Adding a new distributed transform
 1) Define the PencilArray version in `parallel_transforms.jl` using:

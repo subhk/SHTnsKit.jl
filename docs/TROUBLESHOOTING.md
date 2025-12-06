@@ -95,6 +95,83 @@ end
   t1 = get_theta(cfg, 1); p1 = get_phi(cfg, 1)
   ```
 
+## MPI and Distributed Computing Issues
+
+### Package Version Requirements
+
+SHTnsKit.jl's distributed extension requires:
+- **MPI.jl**: v0.20+ (uses `Allgatherv!` with `VBuffer` API)
+- **PencilArrays.jl**: v0.19+ (uses `range_local`, `size_local`, `get_comm` API)
+- **PencilFFTs.jl**: v0.15+
+
+Check your versions:
+```julia
+using Pkg
+Pkg.status(["MPI", "PencilArrays", "PencilFFTs"])
+```
+
+### Common MPI Errors
+
+- `MethodError: no method matching communicator(::Pencil{...})`
+  - **Cause**: PencilArrays < v0.19 used different API
+  - **Fix**: Update PencilArrays: `Pkg.update("PencilArrays")`
+  - The new API uses `get_comm(pen)` instead of `communicator(pen)`
+
+- `MethodError: no method matching globalindices(::PencilArray{...})`
+  - **Cause**: Old PencilArrays API
+  - **Fix**: Use `range_local(pen)` instead of `globalindices(arr, dim)`
+
+- `Permission denied @ mkdir_pid_file` or random `InexactError`
+  - **Cause**: Multiple MPI processes competing for precompilation cache
+  - **Fix**: Use a fresh depot or precompile in serial first:
+    ```bash
+    # Option 1: Fresh depot
+    JULIA_DEPOT_PATH=/tmp/fresh_depot:$HOME/.julia mpiexec -n 4 julia script.jl
+
+    # Option 2: Precompile first in serial
+    julia --project -e 'using SHTnsKit, MPI, PencilArrays, PencilFFTs'
+    mpiexec -n 4 julia --project script.jl
+    ```
+
+### Distributed Transform Usage
+
+Correct pattern for PencilArrays v0.19+:
+```julia
+using MPI, PencilArrays, SHTnsKit
+
+MPI.Init()
+cfg = create_gauss_config(32, 48; nlon=96)
+
+# Create Pencil and PencilArray
+pen = Pencil((cfg.nlat, cfg.nlon), MPI.COMM_WORLD)
+fθφ_local = zeros(Float64, PencilArrays.size_local(pen)...)
+fθφ = PencilArray(pen, fθφ_local)
+
+# Get local ranges for global-to-local mapping
+ranges = PencilArrays.range_local(pen)
+θ_range, φ_range = ranges[1], ranges[2]
+
+# Fill local data using enumerated ranges
+for (i_local, i_global) in enumerate(θ_range)
+    for (j_local, j_global) in enumerate(φ_range)
+        fθφ[i_local, j_local] = sin(cfg.θ[i_global]) * cos(cfg.φ[j_global])
+    end
+end
+
+# Distributed transforms
+Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft=true)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true, use_rfft=true)
+
+MPI.Finalize()
+```
+
+### Running MPI Tests
+
+```bash
+# Run the built-in MPI test suite
+JULIA_DEPOT_PATH=/tmp/test_depot:$HOME/.julia mpiexec -n 2 julia --project test/test_mpi_pencil.jl
+```
+
 ## Profiling and Benchmarking
 
 - Quick timing

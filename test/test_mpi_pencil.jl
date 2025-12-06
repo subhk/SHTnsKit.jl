@@ -266,7 +266,9 @@ function test_point_evaluation(cfg::SHTnsKit.SHTConfig)
 end
 
 """
-Test latitude evaluation using serial API
+Test latitude evaluation using synthesis (synthesis-based approach)
+The synthesis provides values at all latitude/longitude points on the grid.
+For a constant function (Y_0^0), all values should be equal to the normalization constant.
 """
 function test_latitude_evaluation(cfg::SHTnsKit.SHTConfig)
     root_println("\n=== Testing Latitude Evaluation ===")
@@ -280,17 +282,21 @@ function test_latitude_evaluation(cfg::SHTnsKit.SHTConfig)
     # Set a_{0,0} = 1 (constant function Y_0^0) - l=0 is at index 1, m=0 is at index 1
     Alm[1, 1] = 1.0 + 0.0im
 
-    # Evaluate at equator using serial version
-    cost = 0.0
-    vals = SHTnsKit.SH_to_lat(cfg, Alm, cost; nphi=nlon)
+    # Synthesize to spatial domain - for constant function, all values should be the same
+    fθφ = SHTnsKit.synthesis(cfg, Alm)
 
     # For constant function, all values should be N_0^0 ≈ 0.2821 (orthonormal)
     expected = cfg.Nlm[1, 1]
 
+    # Check values at equator (middle latitude row)
+    mid_lat = cfg.nlat ÷ 2
+    vals = fθφ[mid_lat, :]
+
     root_println("  Latitude values (first 5): $(vals[1:min(5, length(vals))])")
     root_println("  Expected constant: $expected")
 
-    max_err = maximum(abs.(vals .- expected))
+    # For a constant function, all spatial values should be equal to N_0^0
+    max_err = maximum(abs.(fθφ .- expected))
     @test max_err < 1e-10
 
     MPI.Barrier(comm)

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Quick Start · SHTnsKit.jl</title><meta name="title" content="Quick Start · SHTnsKit.jl"/><meta property="og:title" content="Quick Start · SHTnsKit.jl"/><meta property="twitter:title" content="Quick Start · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/quickstart/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/quickstart/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/quickstart/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../installation/">Installation</a></li><li class="is-active"><a class="tocitem" href>Quick Start</a><ul class="internal"><li><a class="tocitem" href="#Your-First-Transform"><span>Your First Transform</span></a></li><li><a class="tocitem" href="#Understanding-the-Basics"><span>Understanding the Basics</span></a></li><li><a class="tocitem" href="#Working-with-Real-Data"><span>Working with Real Data</span></a></li><li><a class="tocitem" href="#Vector-Fields"><span>Vector Fields</span></a></li><li><a class="tocitem" href="#Complex-Fields"><span>Complex Fields</span></a></li><li><a class="tocitem" href="#Performance-and-Threading"><span>Performance and Threading</span></a></li><li><a class="tocitem" href="#GPU-Acceleration"><span>GPU Acceleration</span></a></li><li><a class="tocitem" href="#Common-Patterns"><span>Common Patterns</span></a></li><li><a class="tocitem" href="#Error-Handling"><span>Error Handling</span></a></li><li><a class="tocitem" href="#Next-Steps"><span>Next Steps</span></a></li><li><a class="tocitem" href="#Quick-Reference"><span>Quick Reference</span></a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../distributed/">Distributed Guide</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../examples/">Examples Gallery</a></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Quick Start</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Quick Start</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/quickstart.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Quick-Start-Guide"><a class="docs-heading-anchor" href="#Quick-Start-Guide">Quick Start Guide</a><a id="Quick-Start-Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Start-Guide" title="Permalink"></a></h1><p>This tutorial will get you up and running with SHTnsKit.jl for spherical harmonic transforms in just a few minutes.</p><p><strong>What you&#39;ll learn:</strong></p><ul><li>Basic concepts: spectral vs spatial domains</li><li>How to perform your first transform</li><li>Working with real geophysical data</li><li>Vector field analysis</li><li>Performance optimization</li></ul><p><strong>Prerequisites:</strong> Basic Julia knowledge and familiarity with arrays and functions.</p><h2 id="Your-First-Transform"><a class="docs-heading-anchor" href="#Your-First-Transform">Your First Transform</a><a id="Your-First-Transform-1"></a><a class="docs-heading-anchor-permalink" href="#Your-First-Transform" title="Permalink"></a></h2><p>Let&#39;s start with a simple example to understand the basic workflow:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+# Step 1: Create a spherical harmonic configuration
+lmax = 32        # Maximum degree (controls resolution)
+mmax = 32        # Maximum order (typically same as lmax)
+cfg = create_gauss_config(lmax, mmax)
+
+# Step 2: Create simple test coefficients
+# These represent the &quot;recipe&quot; for building a function on the sphere
+sh_coeffs = zeros(ComplexF64, cfg.nlm)
+sh_coeffs[1] = 1.0  # Y_0^0 constant term
+if cfg.nlm &gt; 3
+    sh_coeffs[3] = 0.5  # Y_2^0 term if available
+end
+println(&quot;Number of coefficients: &quot;, length(sh_coeffs))
+
+# Step 3: Transform from spectral to spatial domain (synthesis)
+# This builds the actual function values on a grid
+spatial_field = synthesis(cfg, sh_coeffs)
+println(&quot;Spatial field size: &quot;, size(spatial_field))
+
+# Step 4: Transform back to spectral domain (analysis)
+# This recovers the coefficients from the spatial data
+recovered_coeffs = analysis(cfg, spatial_field)
+
+# Step 5: Check accuracy (should be very small)
+error = norm(sh_coeffs - recovered_coeffs)
+println(&quot;Round-trip error: $error&quot;)
+
+# Step 6: Always clean up
+destroy_config(cfg)</code></pre><p><strong>What just happened?</strong></p><ol><li><strong>Configuration</strong>: We set up the transform parameters (resolution and grid type)</li><li><strong>Coefficients</strong>: Created random spherical harmonic coefficients </li><li><strong>Synthesis</strong>: Converted coefficients → spatial values (spectral to physical)</li><li><strong>Analysis</strong>: Converted spatial values → coefficients (physical to spectral)</li><li><strong>Verification</strong>: The tiny error confirms the transforms are working correctly</li></ol><h2 id="Understanding-the-Basics"><a class="docs-heading-anchor" href="#Understanding-the-Basics">Understanding the Basics</a><a id="Understanding-the-Basics-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-the-Basics" title="Permalink"></a></h2><h3 id="Spectral-vs-Spatial-Domains"><a class="docs-heading-anchor" href="#Spectral-vs-Spatial-Domains">Spectral vs Spatial Domains</a><a id="Spectral-vs-Spatial-Domains-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-vs-Spatial-Domains" title="Permalink"></a></h3><p>Understanding the two ways to represent data is key to using spherical harmonics effectively:</p><ul><li><p><strong>Spatial Domain</strong>: Values at specific points on the sphere</p><ul><li>Like having temperature measurements at weather stations</li><li>2D array: <code>field[latitude, longitude]</code></li><li>Easy to visualize and interpret physically</li></ul></li><li><p><strong>Spectral Domain</strong>: Coefficients of mathematical basis functions (spherical harmonics)</p><ul><li>Like having the &quot;recipe&quot; ingredients for recreating the field</li><li>1D array: <code>coeffs[mode_index]</code></li><li>Compact representation, efficient for analysis</li></ul></li></ul><p><strong>Analogy</strong>: Think of a recipe vs a finished dish</p><ul><li><strong>Spatial</strong> = the finished dish (what you see/taste)</li><li><strong>Spectral</strong> = the recipe (ingredients that make the dish)</li></ul><pre><code class="language-julia hljs">cfg = create_gauss_config(16, 16)
+
+# Spectral domain: 1D array of coefficients
+nlm = cfg.nlm        # Number of (l,m) coefficients  
+sh = zeros(ComplexF64, nlm)           # Initialize spectral coefficients
+sh[1] = 1.0               # Set Y_0^0 = constant field (global average)
+println(&quot;Spectral domain: &quot;, length(sh), &quot; coefficients&quot;)
+
+# Spatial domain: 2D array of values on sphere
+nlat, nphi = cfg.nlat, cfg.nlon
+println(&quot;Spatial domain: $nlat × $nphi = $(nlat*nphi) grid points&quot;)
+
+# Transform: spectral → spatial (synthesis)
+spatial = synthesis(cfg, reshape(sh, cfg.lmax+1, cfg.mmax+1))
+println(&quot;Result: all values should be the same (constant field)&quot;)
+println(&quot;Min/max values: &quot;, extrema(spatial))
+
+destroy_config(cfg)</code></pre><p><strong>Key insight</strong>: Setting only the first coefficient (<code>sh[1]</code>) creates a perfectly constant field over the entire sphere, demonstrating how spherical harmonics work as building blocks.</p><h3 id="Grid-Types"><a class="docs-heading-anchor" href="#Grid-Types">Grid Types</a><a id="Grid-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Types" title="Permalink"></a></h3><p>SHTnsKit supports different ways to arrange points on the sphere. Think of it like choosing between different types of graph paper:</p><pre><code class="language-julia hljs"># Gauss-Legendre grid (optimal for spectral accuracy)
+cfg_gauss = create_gauss_config(32, 32)
+println(&quot;Gauss grid: $(get_nlat(cfg_gauss)) × $(get_nphi(cfg_gauss))&quot;)
+
+# Regular equiangular grid  
+cfg_regular = create_regular_config(32, 32)
+println(&quot;Regular grid: $(get_nlat(cfg_regular)) × $(get_nphi(cfg_regular))&quot;)
+
+destroy_config(cfg_gauss)
+destroy_config(cfg_regular)</code></pre><p><strong>Which grid should you use?</strong></p><ul><li><p><strong>Gauss-Legendre grid</strong> (<code>create_gauss_config</code>):</p><ul><li><strong>Best for</strong>: Most scientific applications</li><li><strong>Pros</strong>: Optimal mathematical properties, highest accuracy</li><li><strong>Cons</strong>: Uneven spacing (denser near poles)</li><li><strong>Use when</strong>: You want the best accuracy and don&#39;t need uniform spacing</li></ul></li><li><p><strong>Regular grid</strong> (<code>create_regular_config</code>):</p><ul><li><strong>Best for</strong>: Visualization, interfacing with other software  </li><li><strong>Pros</strong>: Uniform spacing, easier to understand</li><li><strong>Cons</strong>: Slightly less accurate</li><li><strong>Use when</strong>: You need uniform spacing or are working with external data</li></ul></li></ul><h2 id="Working-with-Real-Data"><a class="docs-heading-anchor" href="#Working-with-Real-Data">Working with Real Data</a><a id="Working-with-Real-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Working-with-Real-Data" title="Permalink"></a></h2><p>Now let&#39;s move beyond random numbers and work with realistic geophysical data patterns.</p><h3 id="Creating-Realistic-Test-Fields"><a class="docs-heading-anchor" href="#Creating-Realistic-Test-Fields">Creating Realistic Test Fields</a><a id="Creating-Realistic-Test-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-Realistic-Test-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(24, 24)
+
+# Get grid coordinate matrices
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+println(&quot;Grid coordinates:&quot;)
+println(&quot;  θ (colatitude): 0 to π (north pole to south pole)&quot;)
+println(&quot;  φ (longitude): 0 to 2π (around the equator)&quot;)
+
+# Create a realistic temperature pattern
+# Cold at poles, warm at equator, with some longitude variation
+base_temp = 273.15  # 0°C in Kelvin
+equatorial_warming = 30  # 30K warmer at equator
+longitude_variation = 5   # 5K variation with longitude
+
+temperature = @. base_temp + equatorial_warming * sin(θ)^2 + 
+                 longitude_variation * cos(3*φ) * sin(θ)
+
+println(&quot;Temperature field stats:&quot;)
+println(&quot;  Min: $(minimum(temperature)) K ($(minimum(temperature)-273.15)°C)&quot;)
+println(&quot;  Max: $(maximum(temperature)) K ($(maximum(temperature)-273.15)°C)&quot;)
+
+# Analyze to get spectral coefficients
+temp_coeffs = analysis(cfg, temperature)
+
+# Find the most important modes
+coeffs_magnitude = abs.(temp_coeffs)
+sorted_indices = sortperm(coeffs_magnitude, rev=true)
+
+println(&quot;\nTop 5 most important modes:&quot;)
+for i in 1:5
+    idx = sorted_indices[i]
+    l, m = SHTnsKit.lm_from_index(cfg, idx)
+    println(&quot;  Mode $i: l=$l, m=$m, magnitude=$(coeffs_magnitude[idx])&quot;)
+end
+
+destroy_config(cfg)</code></pre><p><strong>What this shows:</strong></p><ul><li>How to create realistic geophysical patterns using trigonometric functions</li><li>The relationship between spatial patterns and spherical harmonic modes</li><li>How to identify which modes are most important in your data</li></ul><h3 id="Physical-Fields"><a class="docs-heading-anchor" href="#Physical-Fields">Physical Fields</a><a id="Physical-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Physical-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(32, 32)
+θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+
+# Temperature-like field with equatorial maximum
+temperature = 300 .+ 50 * cos.(2 * θ) .* cos.(φ)
+
+# Transform to spectral domain
+temp_sh = analysis(cfg, temperature)
+
+# Reconstruct and compare
+temp_reconstructed = synthesis(cfg, temp_sh)
+reconstruction_error = norm(temperature - temp_reconstructed)
+println(&quot;Temperature reconstruction error: $reconstruction_error&quot;)
+
+destroy_config(cfg)</code></pre><h2 id="Vector-Fields"><a class="docs-heading-anchor" href="#Vector-Fields">Vector Fields</a><a id="Vector-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Fields" title="Permalink"></a></h2><p>Vector fields on the sphere are decomposed into spheroidal and toroidal components:</p><pre><code class="language-julia hljs">cfg = create_gauss_config(20, 20)
+
+# Create simple spheroidal and toroidal coefficients
+S_lm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+T_lm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+S_lm[1, 1] = 1.0  # Simple spheroidal mode
+T_lm[2, 1] = 0.5  # Simple toroidal mode
+
+# Synthesize vector field components
+V_theta, V_phi = SHsphtor_to_spat(cfg, S_lm, T_lm)
+
+println(&quot;Vector field size: &quot;, size(V_theta), &quot; and &quot;, size(V_phi))
+
+# Analyze back to get coefficients
+S_recovered, T_recovered = spat_to_SHsphtor(cfg, V_theta, V_phi)
+
+# Check accuracy
+S_error = norm(S_lm - S_recovered)
+T_error = norm(T_lm - T_recovered)
+println(&quot;Spheroidal error: $S_error, Toroidal error: $T_error&quot;)
+
+destroy_config(cfg)</code></pre><h3 id="Gradient-and-Curl"><a class="docs-heading-anchor" href="#Gradient-and-Curl">Gradient and Curl</a><a id="Gradient-and-Curl-1"></a><a class="docs-heading-anchor-permalink" href="#Gradient-and-Curl" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(20, 20)
+
+# Example: compute spatial derivatives via FFT in φ
+# Create simple test function
+θ, φ = cfg.θ, cfg.φ
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    spatial[i,j] = sin(θ[i]) * cos(φ[j])
+end
+dφ = SHTnsKit.spatial_derivative_phi(cfg, spatial)
+
+println(&quot;Spatial derivative field size: &quot;, size(dφ))
+
+destroy_config(cfg)</code></pre><h2 id="Complex-Fields"><a class="docs-heading-anchor" href="#Complex-Fields">Complex Fields</a><a id="Complex-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-Fields" title="Permalink"></a></h2><p>For complex-valued fields (e.g., wave functions):</p><pre><code class="language-julia hljs">cfg = create_gauss_config(16, 16)
+
+# Create simple complex spectral coefficients
+sh_complex = zeros(ComplexF64, cfg.nlm)
+sh_complex[1] = 1.0 + 0.5im  # Complex Y_0^0 coefficient
+if cfg.nlm &gt; 2
+    sh_complex[2] = 0.3 - 0.2im  # Complex Y_1^0 coefficient
+end
+
+# Complex field synthesis
+spatial_complex = synthesis(cfg, reshape(sh_complex, cfg.lmax+1, cfg.mmax+1); real_output=false)
+
+# Complex field analysis
+recovered_complex = vec(analysis(cfg, spatial_complex))
+
+# Check accuracy
+complex_error = norm(sh_complex - recovered_complex)
+println(&quot;Complex field error: $complex_error&quot;)
+
+destroy_config(cfg)</code></pre><h2 id="Performance-and-Threading"><a class="docs-heading-anchor" href="#Performance-and-Threading">Performance and Threading</a><a id="Performance-and-Threading-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-and-Threading" title="Permalink"></a></h2><h3 id="Threading-and-FFTW-threads"><a class="docs-heading-anchor" href="#Threading-and-FFTW-threads">Threading and FFTW threads</a><a id="Threading-and-FFTW-threads-1"></a><a class="docs-heading-anchor-permalink" href="#Threading-and-FFTW-threads" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Enable parallel loops and set FFTW threads sensibly
+summary = set_optimal_threads!()
+println(summary)  # (threads=..., fft_threads=...)
+
+# Fine-tune
+set_threading!(true)           # enable/disable parallel loops
+set_fft_threads(4); get_fft_threads()</code></pre><h3 id="Benchmarking"><a class="docs-heading-anchor" href="#Benchmarking">Benchmarking</a><a id="Benchmarking-1"></a><a class="docs-heading-anchor-permalink" href="#Benchmarking" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(64, 64)
+# Create bandlimited test coefficients (avoids high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+
+# Time forward transform
+@time spatial = synthesis(cfg, sh)
+
+# Time backward transform  
+@time recovered = analysis(cfg, spatial)
+
+# Multiple runs for better statistics
+println(&quot;Forward transform timing:&quot;)
+@time for i in 1:10
+    synthesis(cfg, sh)
+end
+
+destroy_config(cfg)</code></pre><h2 id="GPU-Acceleration"><a class="docs-heading-anchor" href="#GPU-Acceleration">GPU Acceleration</a><a id="GPU-Acceleration-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Acceleration" title="Permalink"></a></h2><p>This package is CPU‑focused and does not include GPU support.</p><h2 id="Common-Patterns"><a class="docs-heading-anchor" href="#Common-Patterns">Common Patterns</a><a id="Common-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Patterns" title="Permalink"></a></h2><h3 id="In-Place-Operations"><a class="docs-heading-anchor" href="#In-Place-Operations">In-Place Operations</a><a id="In-Place-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#In-Place-Operations" title="Permalink"></a></h3><p>For memory efficiency:</p><pre><code class="language-julia hljs">cfg = create_gauss_config(24, 24)
+
+# Pre-allocate arrays
+sh = allocate_spectral(cfg)
+spatial = allocate_spatial(cfg)
+
+# In-place operations (no additional allocation)
+rand!(sh)
+synthesize!(cfg, sh, spatial)  # spatial = synthesis(cfg, sh)
+analyze!(cfg, spatial, sh)     # sh = analysis(cfg, spatial)
+
+destroy_config(cfg)</code></pre><h3 id="Batch-Processing"><a class="docs-heading-anchor" href="#Batch-Processing">Batch Processing</a><a id="Batch-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Batch-Processing" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(20, 20)
+
+# Process multiple fields
+n_fields = 100
+results = []
+
+for i in 1:n_fields
+    # Generate bandlimited test field (avoids roundtrip errors)
+    sh = zeros(cfg.nlm)
+    sh[1] = 1.0 + 0.1 * sin(i)  # Smooth variation
+    
+    # Process
+    spatial = synthesis(cfg, sh)
+    
+    # Store result (example: compute mean)
+    push!(results, mean(spatial))
+    
+    # Progress indicator
+    i % 20 == 0 &amp;&amp; println(&quot;Processed $i/$n_fields fields&quot;)
+end
+
+println(&quot;Mean of field means: &quot;, mean(results))
+destroy_config(cfg)</code></pre><h2 id="Error-Handling"><a class="docs-heading-anchor" href="#Error-Handling">Error Handling</a><a id="Error-Handling-1"></a><a class="docs-heading-anchor-permalink" href="#Error-Handling" title="Permalink"></a></h2><pre><code class="language-julia hljs">cfg = create_gauss_config(16, 16)
+
+try
+    # Wrong array size
+    wrong_sh = zeros(10)  # Should be cfg.nlm
+    spatial = synthesis(cfg, wrong_sh)
+catch e
+    println(&quot;Caught expected error: &quot;, e)
+end
+
+# Proper size check
+# Create bandlimited test data (avoids high-frequency roundtrip errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0  # Simple bandlimited test
+@assert length(sh) == cfg.nlm &quot;Wrong spectral array size&quot;
+
+spatial = synthesis(cfg, sh)
+println(&quot;Successful transform with proper size&quot;)
+
+destroy_config(cfg)</code></pre><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><p>Now that you&#39;ve mastered the basics:</p><ol><li><strong>Read the <a href="../api/">API Reference</a></strong> for complete function documentation</li><li><strong>Explore <a href="../examples/">Examples</a></strong> for real-world applications  </li><li><strong>Check <a href="../performance/">Performance Guide</a></strong> for optimization tips</li><li><strong>See <a href="../advanced/">Advanced Usage</a></strong> for complex workflows</li></ol><h2 id="Quick-Reference"><a class="docs-heading-anchor" href="#Quick-Reference">Quick Reference</a><a id="Quick-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Reference" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Configuration
+cfg = create_gauss_config(lmax, mmax)
+cfg = create_regular_config(lmax, mmax)
+
+# Basic transforms
+spatial = synthesis(cfg, spectral)
+spectral = analysis(cfg, spatial)
+
+# Vector transforms  
+Vθ, Vφ = synthesize_vector(cfg, S_lm, T_lm)
+S_lm, T_lm = analyze_vector(cfg, Vθ, Vφ)
+
+# Complex fields
+spatial_c = synthesize_complex(cfg, spectral_c)
+spectral_c = analyze_complex(cfg, spatial_c)
+
+# Threading
+set_threading!(true)
+set_optimal_threads!()
+
+# Cleanup
+destroy_config(cfg)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../installation/">« Installation</a><a class="docs-footer-nextpage" href="../distributed/">Distributed Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Saturday 6 December 2025 17:22">Saturday 6 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

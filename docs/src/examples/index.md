@@ -106,36 +106,38 @@ destroy_config(cfg)
 
 ```julia
 using SHTnsKit
-using Plots
 
-cfg = create_gauss_config(32, 32)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+lmax = 32
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
 # Create a field with multiple scales (like weather patterns)
-field = @. (2*sin(2*θ)*cos(φ) +        # Large scale (continental)
-           0.5*sin(6*θ)*cos(3*φ) +     # Medium scale (regional)  
-           0.1*sin(12*θ)*cos(6*φ))     # Small scale (local)
+field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    field[i,j] = 2*sin(2*θ)*cos(φ) +      # Large scale
+                 0.5*sin(6*θ)*cos(3*φ) +   # Medium scale
+                 0.1*sin(12*θ)*cos(6*φ)    # Small scale
+end
 
 println("Created multi-scale field with 3 different spatial scales")
 
 # Transform to spectral domain
-coeffs = analysis(cfg, field)
+Alm = analysis(cfg, field)
 
-# Compute power spectrum (energy at each degree l)
-power = power_spectrum(cfg, coeffs)
+# Compute power spectrum using energy_scalar_l_spectrum
+power = energy_scalar_l_spectrum(cfg, Alm)
 
 # Find which scales dominate
 max_power_degree = argmax(power[2:end])  # Skip l=0 (global mean)
 println("Peak energy at degree l = $max_power_degree")
 println("This corresponds to ~$(360/max_power_degree)° wavelength")
 
-# Plot the power spectrum
-plot(0:length(power)-1, power, 
-     xlabel="Spherical Harmonic Degree l", 
-     ylabel="Power",
-     title="Energy vs Spatial Scale",
-     linewidth=2, marker=:circle)
-plot!(yscale=:log10)  # Log scale often reveals more details
+# Print first few power values
+println("Power spectrum (first 10 degrees):")
+for l in 0:min(9, length(power)-1)
+    println("  l=$l: $(power[l+1])")
+end
 
 destroy_config(cfg)
 ```
@@ -144,7 +146,7 @@ destroy_config(cfg)
 - How to create multi-scale patterns
 - Power spectrum analysis shows energy distribution
 - Relationship between degree l and spatial wavelength
-- Using log scales for visualization
+- Use `energy_scalar_l_spectrum` for power spectrum analysis
 
 **Physical meaning:** In meteorology, this tells you whether your weather system is dominated by large-scale patterns (like jet streams) or small-scale features (like thunderstorms).
 
@@ -158,28 +160,33 @@ Ready to tackle more complex problems? These examples introduce vector fields, r
 
 ```julia
 using SHTnsKit
+using LinearAlgebra
 
-cfg = create_gauss_config(64, 64)
+lmax = 64
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
 # Create a realistic atmospheric flow pattern
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-nlat, nphi = size(θ)
+u = zeros(cfg.nlat, cfg.nlon)  # Zonal wind (east-west)
+v = zeros(cfg.nlat, cfg.nlon)  # Meridional wind (north-south)
 
-# Jet stream pattern with vortices
-u = @. 20 * sin(2θ) * (1 + 0.4 * cos(4φ))  # Zonal wind
-v = @. 5 * cos(3θ) * sin(2φ)                # Meridional wind
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    u[i,j] = 20 * sin(2θ) * (1 + 0.4 * cos(4φ))  # Jet stream
+    v[i,j] = 5 * cos(3θ) * sin(2φ)                # Meridional flow
+end
 
-S_lm, T_lm = analyze_vector(cfg, u, v)
+# Decompose into spheroidal (divergent) and toroidal (rotational)
+Slm, Tlm = spat_to_SHsphtor(cfg, u, v)
 
-# Spatial divergence and vorticity
-divergence = SHTnsKit.spatial_divergence(cfg, u, v)
-vorticity  = SHTnsKit.spatial_vorticity(cfg, u, v)
-
-println("Max vorticity: ", maximum(abs.(vorticity)))
-println("Max divergence: ", maximum(abs.(divergence)))
+# Analyze energy distribution
+spheroidal_energy = sum(abs2, Slm)
+toroidal_energy = sum(abs2, Tlm)
+println("Spheroidal (divergent) energy: $spheroidal_energy")
+println("Toroidal (rotational) energy: $toroidal_energy")
 
 # Reconstruct original velocity
-u_recon, v_recon = synthesize_vector(cfg, S_lm, T_lm)
+u_recon, v_recon = SHsphtor_to_spat(cfg, Slm, Tlm)
 velocity_error = norm(u - u_recon) + norm(v - v_recon)
 println("Velocity reconstruction error: $velocity_error")
 
@@ -192,11 +199,16 @@ destroy_config(cfg)
 using SHTnsKit
 using LinearAlgebra
 
-cfg = create_gauss_config(48, 48)
+lmax = 48
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
 # Create vorticity field (e.g., from observations)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-vorticity = @. exp(-((θ - π/2)^2 + (φ - π)^2) / 0.5^2) * sin(4φ)
+vorticity = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    vorticity[i,j] = exp(-((θ - π/2)^2 + (φ - π)^2) / 0.5^2) * sin(4φ)
+end
 
 # Transform vorticity to spectral domain
 ζ_lm = analysis(cfg, vorticity)
@@ -204,22 +216,25 @@ vorticity = @. exp(-((θ - π/2)^2 + (φ - π)^2) / 0.5^2) * sin(4φ)
 # Solve ∇²ψ = ζ for stream function ψ
 # In spectral domain: -l(l+1) ψ_lm = ζ_lm
 ψ_lm = similar(ζ_lm)
-for i in 1:cfg.nlm
-    l, m = lm_from_index(cfg, i)
-    if l > 0
-        ψ_lm[i] = -ζ_lm[i] / (l * (l + 1))
-    else
-        ψ_lm[i] = 0.0  # l=0 mode: constant not uniquely determined
+for l in 0:cfg.lmax
+    for m in 0:min(l, cfg.mmax)
+        if l > 0
+            ψ_lm[l+1, m+1] = -ζ_lm[l+1, m+1] / (l * (l + 1))
+        else
+            ψ_lm[l+1, m+1] = 0.0  # l=0 mode: constant not uniquely determined
+        end
     end
 end
 
-u_stream, v_stream = synthesize_vector(cfg, zero(ψ_lm), ψ_lm)
+# Get velocity from stream function (toroidal component only)
+Slm_zero = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+u_stream, v_stream = SHsphtor_to_spat(cfg, Slm_zero, ψ_lm)
 
 # Convert stream function to spatial domain
-stream_function = synthesize(cfg, ψ_lm)
+stream_function = synthesis(cfg, ψ_lm)
 
 println("Stream function range: ", extrema(stream_function))
-println("Max velocity from stream: ", maximum(sqrt.(u_stream.^2 + v_stream.^2)))
+println("Max velocity from stream: ", maximum(sqrt.(u_stream.^2 .+ v_stream.^2)))
 
 destroy_config(cfg)
 ```
@@ -231,33 +246,36 @@ destroy_config(cfg)
 ```julia
 using SHTnsKit
 
-cfg = create_gauss_config(72, 72)  # High resolution for Earth
-
-# Simulate Earth's gravitational field coefficients
-# (In practice, these would come from satellite measurements)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+lmax = 72
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create realistic gravity anomalies
 # J₂ (Earth's oblate shape) + smaller harmonics
-gravity_field = @. -9.81 * (1 + 0.001082 * (1.5 * cos(θ)^2 - 0.5) + 
-                           0.0001 * sin(3θ) * cos(2φ))
+gravity_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    gravity_field[i,j] = -9.81 * (1 + 0.001082 * (1.5 * cos(θ)^2 - 0.5) +
+                                  0.0001 * sin(3θ) * cos(2φ))
+end
 
 # Analyze gravity field
 g_lm = analysis(cfg, gravity_field)
 
-# Extract major components
-J2_coeff = g_lm[lmidx(cfg, 2, 0)]  # J₂ term
+# Extract J₂ coefficient (l=2, m=0)
+J2_coeff = g_lm[3, 1]  # Index is (l+1, m+1)
 println("J₂ coefficient: $J2_coeff")
 
 # Compute power spectrum
-power = power_spectrum(cfg, g_lm)
+power = energy_scalar_l_spectrum(cfg, g_lm)
 
-# Plot power vs degree
-using Plots
-plot(0:length(power)-1, log10.(power), 
-     xlabel="Spherical Harmonic Degree l", 
-     ylabel="log₁₀(Power)",
-     title="Gravity Field Power Spectrum")
+# Display power vs degree
+println("Gravity Field Power Spectrum (first 10 degrees):")
+for l in 0:min(9, length(power)-1)
+    println("  l=$l: $(power[l+1])")
+end
 
 destroy_config(cfg)
 ```
@@ -266,33 +284,42 @@ destroy_config(cfg)
 
 ```julia
 using SHTnsKit
+using LinearAlgebra
 
-cfg = create_gauss_config(48, 48)
+lmax = 48
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Simulate magnetic field measurements (3 components)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-
 # Dipole + quadrupole + small-scale fields
-Br = @. 30000 * cos(θ) * (1 + 0.1 * cos(2θ) * sin(φ))  # Radial
-Bθ = @. 15000 * sin(θ) * (1 - 0.05 * sin(3φ))          # Colatitude  
-Bφ = @. 5000 * sin(θ) * cos(θ) * cos(2φ)                # Azimuthal
+Br = zeros(cfg.nlat, cfg.nlon)
+Bθ = zeros(cfg.nlat, cfg.nlon)
+Bφ = zeros(cfg.nlat, cfg.nlon)
 
-# Magnetic field is potential: B = -∇V
-# So horizontal components relate to potential derivatives
-# This is a simplified analysis - real magnetic modeling is more complex
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    Br[i,j] = 30000 * cos(θ) * (1 + 0.1 * cos(2θ) * sin(φ))   # Radial
+    Bθ[i,j] = 15000 * sin(θ) * (1 - 0.05 * sin(3φ))           # Colatitude
+    Bφ[i,j] = 5000 * sin(θ) * cos(θ) * cos(2φ)                # Azimuthal
+end
 
-# Analyze radial component (related to potential)
-V_lm = analysis(cfg, -Br / 30000)  # Normalized
+# Analyze radial component to get spherical harmonic coefficients
+Br_lm = analysis(cfg, Br / 30000)  # Normalized
 
-# Compute horizontal components from potential (spheroidal only)
-Bθ_computed, Bφ_computed = synthesize_vector(cfg, V_lm, zeros(V_lm))
+# Decompose horizontal field into spheroidal/toroidal components
+Slm, Tlm = spat_to_SHsphtor(cfg, Bθ / 15000, Bφ / 5000)
+
+# Reconstruct horizontal field from spheroidal/toroidal coefficients
+Bθ_computed, Bφ_computed = SHsphtor_to_spat(cfg, Slm, Tlm)
 
 # Compare with input
 θ_error = norm(Bθ/15000 - Bθ_computed) / norm(Bθ/15000)
 φ_error = norm(Bφ/5000 - Bφ_computed) / norm(Bφ/5000)
 
-println("Magnetic field modeling errors:")
-println("θ component: $θ_error")  
+println("Magnetic field modeling roundtrip errors:")
+println("θ component: $θ_error")
 println("φ component: $φ_error")
 
 destroy_config(cfg)
@@ -306,20 +333,25 @@ destroy_config(cfg)
 using SHTnsKit
 using Statistics
 
-cfg = create_gauss_config(64, 64)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Simulate monthly temperature anomalies
 n_months = 120  # 10 years
 anomalies = []
 
 for month in 1:n_months
-    # Seasonal cycle + trend + random variations
-    seasonal = @. 5 * cos(2π * month / 12) * cos(θ)
-    trend = @. 0.01 * month * ones(size(θ))
-    random = @. 2 * randn(size(θ)...) * exp(-3 * (θ - π/2)^2)
-    
-    temp_anomaly = seasonal + trend + random
+    temp_anomaly = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat, j in 1:cfg.nlon
+        θ = cfg.θ[i]
+        # Seasonal cycle + trend + random variations
+        seasonal = 5 * cos(2π * month / 12) * cos(θ)
+        trend = 0.01 * month
+        random = 2 * randn() * exp(-3 * (θ - π/2)^2)
+        temp_anomaly[i,j] = seasonal + trend + random
+    end
     push!(anomalies, temp_anomaly)
 end
 
@@ -331,7 +363,7 @@ for anomaly in anomalies
 end
 
 # Compute time-averaged power spectrum
-avg_power = mean([power_spectrum(cfg, spectrum) for spectrum in monthly_spectra])
+avg_power = mean([energy_scalar_l_spectrum(cfg, spectrum) for spectrum in monthly_spectra])
 
 # Find dominant modes
 max_power_idx = argmax(avg_power[2:end]) + 1  # Skip l=0
@@ -339,11 +371,8 @@ println("Dominant mode: l = $(max_power_idx-1)")
 println("Power: $(avg_power[max_power_idx])")
 
 # Trend analysis - extract l=0,m=0 component (global mean)
-global_means = [spectrum[1] for spectrum in monthly_spectra]
-using Plots
-plot(1:n_months, global_means, 
-     xlabel="Month", ylabel="Global Mean Anomaly",
-     title="Global Temperature Trend")
+global_means = [real(spectrum[1,1]) for spectrum in monthly_spectra]
+println("Global mean trend: $(global_means[1]) → $(global_means[end])")
 
 destroy_config(cfg)
 ```
@@ -353,15 +382,22 @@ destroy_config(cfg)
 ```julia
 using SHTnsKit
 
-cfg = create_gauss_config(32, 32)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Seasonal precipitation patterns
 # Summer: ITCZ near equator, winter: shifted south
-precip_summer = @. max(0, 10 * exp(-5 * (θ - π/2)^2) * 
-                      (1 + 0.3 * cos(2φ)))
-precip_winter = @. max(0, 8 * exp(-5 * (θ - π/2 - 0.2)^2) * 
-                      (1 + 0.2 * cos(3φ)))
+precip_summer = zeros(cfg.nlat, cfg.nlon)
+precip_winter = zeros(cfg.nlat, cfg.nlon)
+
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    precip_summer[i,j] = max(0, 10 * exp(-5 * (θ - π/2)^2) * (1 + 0.3 * cos(2φ)))
+    precip_winter[i,j] = max(0, 8 * exp(-5 * (θ - π/2 - 0.2)^2) * (1 + 0.2 * cos(3φ)))
+end
 
 # Transform to spectral domain
 P_summer_lm = analysis(cfg, precip_summer)
@@ -369,10 +405,10 @@ P_winter_lm = analysis(cfg, precip_winter)
 
 # Compute seasonal difference
 seasonal_diff_lm = P_summer_lm - P_winter_lm
-seasonal_diff = synthesize(cfg, seasonal_diff_lm)
+seasonal_diff = synthesis(cfg, seasonal_diff_lm)
 
 # Power spectrum of seasonal difference
-diff_power = power_spectrum(cfg, seasonal_diff_lm)
+diff_power = energy_scalar_l_spectrum(cfg, seasonal_diff_lm)
 
 println("Seasonal precipitation analysis:")
 println("Summer total: ", sum(precip_summer))

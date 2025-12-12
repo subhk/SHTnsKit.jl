@@ -797,19 +797,37 @@ end
 ```julia
 using SHTnsKit
 
-cfg = create_gauss_config(32, 32)
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create field in one coordinate system
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-original_field = @. sin(3θ) * cos(2φ)
+original_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    original_field[i,j] = sin(3θ) * cos(2φ)
+end
 
-# Rotate coordinates (simulate different observation viewpoint)
-α, β, γ = π/4, π/6, π/8  # Euler angles
-
+# Transform to spectral domain
 f_lm = analysis(cfg, original_field)
+
+# Rotate using Euler angles (ZYZ convention)
+α, β, γ = π/4, π/6, π/8
 f_rot = copy(f_lm)
 rotate_real!(cfg, f_rot; alpha=α, beta=β, gamma=γ)
-rotated_field = synthesize(cfg, f_rot)
+
+# Transform back to spatial domain
+rotated_field = synthesis(cfg, f_rot)
+
+println("Original field range: ", extrema(original_field))
+println("Rotated field range: ", extrema(rotated_field))
+
+# Verify rotation preserves power
+orig_power = sum(abs2, f_lm)
+rot_power = sum(abs2, f_rot)
+println("Power preserved: ", isapprox(orig_power, rot_power, rtol=1e-10))
 
 destroy_config(cfg)
 ```

@@ -174,21 +174,15 @@ function _gather_and_fft_phi(local_data::AbstractMatrix, θ_range::AbstractRange
     row_gathered = Matrix{Float64}(undef, nlat_local, nlon)
     Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
 
+    # Gather row sizes from all processes (only need to do this once)
+    counts = MPI.Allgather(Int32(nlon_local), comm)
+
+    # Compute displacements
+    displs = cumsum([Int32(0); counts[1:end-1]])
+
     for i in 1:nlat_local
         # Get local row
         local_row = Vector{Float64}(collect(local_data[i, :]))
-
-        # Gather row sizes from all processes
-        local_count = nlon_local
-        counts = Vector{Int32}(undef, nprocs)
-        MPI.Allgather!(Ref(Int32(local_count)), UnsafeBuffer(counts), comm)
-
-        # Compute displacements
-        displs = Vector{Int32}(undef, nprocs)
-        displs[1] = 0
-        for p in 2:nprocs
-            displs[p] = displs[p-1] + counts[p-1]
-        end
 
         # Gather the full row
         gathered_row = Vector{Float64}(undef, nlon)

@@ -18,27 +18,30 @@ using BenchmarkTools
 
 function benchmark_transforms(lmax_values)
     results = []
-    
+
     for lmax in lmax_values
-        cfg = create_gauss_config(lmax, lmax)
-        # Create bandlimited test coefficients (prevents high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-        
-        # Benchmark forward transform
-        forward_time = @belapsed synthesize($cfg, $sh)
-        
-        # Benchmark backward transform
-        spatial = synthesis(cfg, sh)
-        backward_time = @belapsed analyze($cfg, $spatial)
-        
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        # Create bandlimited test data
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for i in 1:cfg.nlat
+            x = cfg.x[i]
+            spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0
+        end
+
+        # Benchmark forward transform (synthesis)
+        Alm = analysis(cfg, spatial)
+        forward_time = @belapsed synthesis($cfg, $Alm)
+
+        # Benchmark backward transform (analysis)
+        backward_time = @belapsed analysis($cfg, $spatial)
+
         push!(results, (lmax=lmax, forward=forward_time, backward=backward_time))
         destroy_config(cfg)
     end
-    
+
     return results
 end
 
@@ -58,37 +61,53 @@ end
 For large problems, MPI parallelization provides significant speedup:
 
 ```julia
-using SHTnsKit, MPI, PencilArrays, PencilFFTs
-
+using MPI
 MPI.Init()
-cfg = create_gauss_config(30, 24; mres=64, nlon=96)
-pcfg = create_parallel_config(cfg, MPI.COMM_WORLD)
 
+using SHTnsKit, PencilArrays, PencilFFTs
+
+# Configuration
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Benchmark distributed transforms
 function benchmark_parallel_performance()
-    sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-    result = similar(sh_coeffs)
-    
-    # Benchmark parallel Laplacian
-    time_parallel = @elapsed begin
+    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+
+    # Warm up
+    Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+
+    # Benchmark
+    time_analysis = @elapsed begin
         for i in 1:50
-            parallel_apply_operator(pcfg, :laplacian, sh_coeffs, result)
+            SHTnsKit.dist_analysis(cfg, fθφ)
         end
     end
-    
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
-    size = MPI.Comm_size(MPI.COMM_WORLD)
-    
+
     if rank == 0
-        println("Parallel performance ($size processes): $(time_parallel/50)s per operation")
-        
-        # Get performance model
-        perf_model = parallel_performance_model(cfg, size)
-        println("Expected speedup: $(perf_model.speedup)x")
-        println("Parallel efficiency: $(perf_model.efficiency*100)%")
+        println("Parallel performance ($nprocs processes):")
+        println("  Analysis: $(time_analysis/50*1000) ms per transform")
     end
 end
 
 benchmark_parallel_performance()
+destroy_config(cfg)
 MPI.Finalize()
 ```
 
@@ -109,38 +128,39 @@ SHTnsKit uses Julia `Threads.@threads` and FFTW's internal threads. Configure th
 
 ```julia
 using SHTnsKit
+using FFTW
 
 # Check system capabilities
 println("System threads: ", Sys.CPU_THREADS)
-summary = set_optimal_threads!()
-println("Thread config: ", summary)
+println("Julia threads: ", Threads.nthreads())
 
-# Manual thread control
+# Manual FFTW thread control
 function benchmark_threading(lmax=64)
-    cfg = create_gauss_config(lmax, lmax)
-    # Create bandlimited test coefficients (prevents high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-    
-    thread_counts = [1, 2, 4, 8, min(16, Sys.CPU_THREADS)]
-    
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+    # Create bandlimited test data
+    spatial = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat
+        x = cfg.x[i]
+        spatial[i, :] .= (3*x^2 - 1)/2
+    end
+
+    thread_counts = [1, 2, 4, min(8, Sys.CPU_THREADS)]
+    times = Float64[]
+
     for nthreads in thread_counts
-        # Control FFTW threads for azimuthal FFTs
-        set_fft_threads(nthreads)
+        FFTW.set_num_threads(nthreads)
         time = @elapsed begin
             for i in 1:10
-                synthesis(cfg, sh)
+                analysis(cfg, spatial)
             end
         end
-        
-        speedup = (thread_counts[1] > 0) ? 
-                  time / benchmark_threading_baseline : 1.0
-        println("$nthreads threads: $(time/10)s per transform")
+        push!(times, time)
+        println("$nthreads FFTW threads: $(time/10*1000) ms per transform")
     end
-    
+
     destroy_config(cfg)
 end
 

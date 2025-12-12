@@ -1,3 +1,70 @@
+#=
+================================================================================
+config.jl - SHTConfig Structure and Configuration Functions
+================================================================================
+
+This file defines the core SHTConfig struct that holds all parameters and
+precomputed data for spherical harmonic transforms. Understanding this struct
+is essential for debugging and optimizing SHT computations.
+
+KEY CONCEPTS
+------------
+1. Grid Setup:
+   - nlat: Number of Gauss-Legendre points in latitude (θ direction)
+   - nlon: Number of equispaced points in longitude (φ direction)
+   - x[i] = cos(θ[i]): Gauss-Legendre nodes, ordered from +1 (north) to -1 (south)
+   - w[i]: Gauss-Legendre weights, sum(w) ≈ 2.0
+
+2. Spectral Setup:
+   - lmax: Maximum degree l (total wavenumber), determines angular resolution
+   - mmax: Maximum order m (azimuthal wavenumber), usually equals lmax
+   - mres: M-resolution (usually 1), allows skipping m values
+
+3. Accuracy Requirements:
+   - nlat ≥ lmax + 1: Required for exact Gauss-Legendre integration
+   - nlon ≥ 2*mmax + 1: Required for Nyquist sampling of m modes
+
+4. Normalization:
+   - Nlm[l+1, m+1]: Normalization factor for Y_l^m
+   - cphi = 2π/nlon: Longitude spacing factor for FFT
+
+COMMON DEBUGGING CHECKS
+-----------------------
+```julia
+# Verify Gauss weights sum correctly
+@assert abs(sum(cfg.w) - 2.0) < 1e-10 "Gauss weights should sum to 2"
+
+# Check grid ordering (north to south by default)
+@assert cfg.x[1] > cfg.x[end] "x should decrease (north to south)"
+@assert cfg.x[1] ≈ cos(cfg.θ[1]) "x = cos(θ)"
+
+# Verify dimensions match
+@assert size(cfg.Nlm) == (cfg.lmax+1, cfg.mmax+1)
+@assert length(cfg.x) == cfg.nlat
+@assert length(cfg.φ) == cfg.nlon
+```
+
+PERFORMANCE MODES
+-----------------
+1. On-the-fly (cfg.on_the_fly = true):
+   - Computes Legendre polynomials during each transform
+   - Lower memory usage, slightly slower
+   - Good for large lmax or memory-constrained systems
+
+2. Table lookup (cfg.use_plm_tables = true):
+   - Precomputes all P_l^m values in cfg.plm_tables
+   - Higher memory usage, faster transforms
+   - Good for repeated transforms at same configuration
+
+CREATING CONFIGURATIONS
+----------------------
+- create_gauss_config(lmax, nlat): Standard Gauss-Legendre grid
+- create_regular_config(lmax, nlat): Equispaced latitude grid
+- create_gauss_config_spf(lmax, nlat): South-pole-first ordering
+
+================================================================================
+=#
+
 """
 Configuration for Spherical Harmonic Transforms.
 

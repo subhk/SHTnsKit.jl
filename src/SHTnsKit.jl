@@ -1,7 +1,118 @@
+#=
+================================================================================
+SHTnsKit.jl - Fast Spherical Harmonic Transforms for Julia
+================================================================================
 
-# Julia package for fast spherical harmonic transforms using the SHTns library
-# SHTns (Spherical Harmonic Transform numerical software) provides efficient 
-# computation of Spherical Harmonic Transforms for scientific computing applications
+A high-performance Julia package for computing Spherical Harmonic Transforms (SHT),
+essential for applications in climate modeling, geophysics, astrophysics, and
+computational physics on spherical domains.
+
+WHAT ARE SPHERICAL HARMONICS?
+-----------------------------
+Spherical harmonics Y_l^m(θ,φ) are orthogonal basis functions on the sphere,
+analogous to Fourier series on a circle. Any square-integrable function on
+the sphere can be expanded as:
+
+    f(θ,φ) = Σ_{l=0}^{lmax} Σ_{m=-l}^{l} a_lm * Y_l^m(θ,φ)
+
+where:
+- l is the degree (total wavenumber), l ≥ 0
+- m is the order (azimuthal wavenumber), |m| ≤ l
+- a_lm are the spherical harmonic coefficients
+- θ is colatitude (0 at north pole, π at south pole)
+- φ is longitude (0 to 2π)
+
+KEY TRANSFORMS
+--------------
+- Analysis:  f(θ,φ) → a_lm   (spatial to spectral)
+- Synthesis: a_lm → f(θ,φ)   (spectral to spatial)
+
+The transforms use:
+1. FFT along longitude (φ) for the azimuthal expansion
+2. Legendre transform along latitude (θ) using Gauss-Legendre quadrature
+
+PACKAGE STRUCTURE
+-----------------
+Core files:
+- SHTnsKit.jl        : Main module, exports, and file includes
+- config.jl          : SHTConfig struct and configuration functions
+- legendre.jl        : Legendre polynomial computation (Plm_row!, etc.)
+- core_transforms.jl : Basic analysis/synthesis implementations
+- plan.jl            : SHTPlan for optimized repeated transforms
+
+Vector transforms:
+- sphtor_transforms.jl : Spheroidal/toroidal (2D) vector field transforms
+- qst_transforms.jl    : QST (3D) vector field transforms
+
+Utilities:
+- gausslegendre.jl   : Gauss-Legendre quadrature points and weights
+- normalization.jl   : Spherical harmonic normalization conventions
+- fftutils.jl        : FFT wrappers and utilities
+- rotations.jl       : Rotation of spherical harmonic coefficients
+
+Diagnostics:
+- energy_diagnostics.jl    : Energy calculations and gradients
+- spectral_diagnostics.jl  : Power spectrum analysis
+- vorticity_diagnostics.jl : Vorticity and enstrophy
+
+Extensions (loaded conditionally):
+- ext/SHTnsKitParallelExt.jl : MPI-distributed transforms (requires MPI.jl, PencilArrays.jl)
+- ext/SHTnsKitLoopVecExt.jl  : LoopVectorization optimizations
+
+QUICK START
+-----------
+```julia
+using SHTnsKit
+
+# Create configuration for lmax=64 with 96 Gauss points
+cfg = create_gauss_config(64, 96)
+
+# Create test data on the grid
+f = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = acos(cfg.x[i])
+    φ = 2π * (j-1) / cfg.nlon
+    f[i,j] = cos(θ)  # Y_1^0 pattern
+end
+
+# Transform to spectral space
+alm = analysis(cfg, f)
+
+# Transform back to spatial space
+f_reconstructed = synthesis(cfg, alm)
+
+# Check roundtrip error
+println("Max error: ", maximum(abs, f - f_reconstructed))
+```
+
+NORMALIZATION CONVENTIONS
+-------------------------
+Default: Orthonormal with Condon-Shortley phase
+- cfg.norm = :orthonormal (default), :fourpi, :schmidt
+- cfg.cs_phase = true (default) includes (-1)^m factor
+
+COEFFICIENT STORAGE
+-------------------
+Dense format: Matrix of size (lmax+1, mmax+1)
+- alm[l+1, m+1] for l ≥ m ≥ 0
+- Only non-negative m stored (negative m via conjugate symmetry for real fields)
+
+ENVIRONMENT VARIABLES
+--------------------
+- SHTNSKIT_PHI_SCALE: "dft" or "quad" for φ scaling convention
+- SHTNSKIT_VERBOSE_STORAGE: "1" to print storage optimization info
+- SHTNSKIT_CACHE_PENCILFFTS: "0" to disable FFT plan caching (parallel ext)
+
+DEBUGGING TIPS
+--------------
+1. Check Gauss weights: sum(cfg.w) ≈ 2.0
+2. Check grid points: cfg.x contains cos(θ) values, cfg.x[1] ≈ 1 (north pole vicinity)
+3. Roundtrip test: f ≈ synthesis(cfg, analysis(cfg, f)) within machine precision
+4. Coefficient check: alm[1,1] is the l=0,m=0 (mean) coefficient
+
+================================================================================
+=#
+
 module SHTnsKit
 
 # Import required standard libraries

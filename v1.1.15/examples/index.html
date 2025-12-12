@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples Gallery · SHTnsKit.jl</title><meta name="title" content="Examples Gallery · SHTnsKit.jl"/><meta property="og:title" content="Examples Gallery · SHTnsKit.jl"/><meta property="twitter:title" content="Examples Gallery · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../distributed/">Distributed Guide</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li class="is-active"><a class="tocitem" href>Examples Gallery</a><ul class="internal"><li><a class="tocitem" href="#Beginner-Examples"><span>Beginner Examples</span></a></li><li><a class="tocitem" href="#Intermediate-Examples"><span>Intermediate Examples</span></a></li><li><a class="tocitem" href="#Parallel-Computing-Examples"><span>Parallel Computing Examples</span></a></li><li><a class="tocitem" href="#Advanced-Applications"><span>Advanced Applications</span></a></li><li><a class="tocitem" href="#High-Performance-Examples"><span>High-Performance Examples</span></a></li><li><a class="tocitem" href="#Validation-and-Testing-Examples"><span>Validation and Testing Examples</span></a></li></ul></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Examples Gallery</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples Gallery</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/examples/index.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples-Gallery"><a class="docs-heading-anchor" href="#Examples-Gallery">Examples Gallery</a><a id="Examples-Gallery-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-Gallery" title="Permalink"></a></h1><p>Real-world examples and tutorials demonstrating SHTnsKit.jl capabilities, organized by difficulty level.</p><p><strong>How to use this guide:</strong></p><ul><li><strong>Beginner</strong>: Start here if you&#39;re new to spherical harmonics</li><li><strong>Intermediate</strong>: For users comfortable with basic transforms</li><li><strong>Advanced</strong>: Complex workflows and specialized applications</li></ul><p><strong>Learning path:</strong> Work through the examples in order for the best learning experience.</p><h2 id="Beginner-Examples"><a class="docs-heading-anchor" href="#Beginner-Examples">Beginner Examples</a><a id="Beginner-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Beginner-Examples" title="Permalink"></a></h2><p>Start here if you&#39;re new to spherical harmonics. These examples teach fundamental concepts with simple, well-explained code.</p><h3 id="Example-1:-Your-First-Transform"><a class="docs-heading-anchor" href="#Example-1:-Your-First-Transform">Example 1: Your First Transform</a><a id="Example-1:-Your-First-Transform-1"></a><a class="docs-heading-anchor-permalink" href="#Example-1:-Your-First-Transform" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn the basic workflow of spherical harmonic transforms</p><pre><code class="language-julia hljs">using SHTnsKit
+
+# Step 1: Create a configuration (like setting up your workspace)
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+println(&quot;Created configuration for degree up to $lmax&quot;)
+
+# Step 2: Create a simple temperature pattern
+# Simple pattern: warm equator, cold poles (Y_2^0 harmonic)
+temperature = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]  # cos(θ) at this latitude
+    temperature[i, :] .= 273.15 + 30 * (1 - x^2)  # Warmer at equator
+end
+
+println(&quot;Temperature range: $(extrema(temperature)) K&quot;)
+
+# Step 3: Transform to spherical harmonic coefficients (analysis)
+Alm = analysis(cfg, temperature)
+println(&quot;Coefficient matrix size: $(size(Alm))&quot;)
+
+# Step 4: Find the most important coefficient (skip l=0 global mean)
+max_val, max_idx = findmax(abs.(Alm[2:end, :]))
+println(&quot;Largest non-constant mode magnitude: $max_val&quot;)
+
+# Step 5: Reconstruct the original field (synthesis)
+T_reconstructed = synthesis(cfg, Alm)
+error = maximum(abs.(temperature - T_reconstructed))
+println(&quot;Reconstruction error: $error (should be tiny!)&quot;)
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts learned:</strong></p><ul><li>Configuration setup (<code>create_gauss_config</code>)</li><li>Creating realistic data patterns</li><li>Analysis: spatial → spectral (<code>analysis</code>)</li><li>Synthesis: spectral → spatial (<code>synthesis</code>)</li><li>Understanding (l,m) mode indices</li></ul><h3 id="Example-2:-Pure-Spherical-Harmonic-Patterns"><a class="docs-heading-anchor" href="#Example-2:-Pure-Spherical-Harmonic-Patterns">Example 2: Pure Spherical Harmonic Patterns</a><a id="Example-2:-Pure-Spherical-Harmonic-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Example-2:-Pure-Spherical-Harmonic-Patterns" title="Permalink"></a></h3><p><strong>Goal:</strong> Understand how individual spherical harmonic modes look</p><pre><code class="language-julia hljs">using SHTnsKit
+
+lmax = 32
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
+# Create pure Y_2^0 spherical harmonic (zonal mode)
+# Coefficients are stored as (lmax+1) × (mmax+1) matrix
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[3, 1] = 1.0  # l=2, m=0 (index is l+1 for row, m+1 for column)
+println(&quot;Creating Y₂⁰ pattern (zonal, m=0)&quot;)
+
+# Synthesize to spatial domain
+Y20_pattern = synthesis(cfg, Alm)
+
+# This creates a pattern that varies only with latitude
+println(&quot;Pattern statistics:&quot;)
+println(&quot;  Min value: $(minimum(Y20_pattern))&quot;)
+println(&quot;  Max value: $(maximum(Y20_pattern))&quot;)
+println(&quot;  At north pole: $(Y20_pattern[1,1])&quot;)
+println(&quot;  At equator: $(Y20_pattern[div(cfg.nlat,2),1])&quot;)
+
+# The Y_2^0 pattern = (3cos²θ - 1)/2
+# Positive at poles, negative at equator
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts learned:</strong></p><ul><li>How to create pure spherical harmonic patterns</li><li>Understanding zonal (m=0) vs sectoral (m≠0) modes</li><li>The relationship between (l,m) indices and spatial patterns</li><li>Coefficient indexing: <code>Alm[l+1, m+1]</code></li></ul><p><strong>Try this:</strong> Change to <code>Alm[3, 3] = 1.0</code> (l=2, m=2) to see a sectoral pattern!</p><h3 id="Example-3:-Understanding-Power-Spectra"><a class="docs-heading-anchor" href="#Example-3:-Understanding-Power-Spectra">Example 3: Understanding Power Spectra</a><a id="Example-3:-Understanding-Power-Spectra-1"></a><a class="docs-heading-anchor-permalink" href="#Example-3:-Understanding-Power-Spectra" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn how energy is distributed across different spatial scales</p><pre><code class="language-julia hljs">using SHTnsKit
+
+lmax = 32
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
+# Create a field with multiple scales (like weather patterns)
+field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    field[i,j] = 2*sin(2*θ)*cos(φ) +      # Large scale
+                 0.5*sin(6*θ)*cos(3*φ) +   # Medium scale
+                 0.1*sin(12*θ)*cos(6*φ)    # Small scale
+end
+
+println(&quot;Created multi-scale field with 3 different spatial scales&quot;)
+
+# Transform to spectral domain
+Alm = analysis(cfg, field)
+
+# Compute power spectrum using energy_scalar_l_spectrum
+power = energy_scalar_l_spectrum(cfg, Alm)
+
+# Find which scales dominate
+max_power_degree = argmax(power[2:end])  # Skip l=0 (global mean)
+println(&quot;Peak energy at degree l = $max_power_degree&quot;)
+println(&quot;This corresponds to ~$(360/max_power_degree)° wavelength&quot;)
+
+# Print first few power values
+println(&quot;Power spectrum (first 10 degrees):&quot;)
+for l in 0:min(9, length(power)-1)
+    println(&quot;  l=$l: $(power[l+1])&quot;)
+end
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts learned:</strong></p><ul><li>How to create multi-scale patterns</li><li>Power spectrum analysis shows energy distribution</li><li>Relationship between degree l and spatial wavelength</li><li>Use <code>energy_scalar_l_spectrum</code> for power spectrum analysis</li></ul><p><strong>Physical meaning:</strong> In meteorology, this tells you whether your weather system is dominated by large-scale patterns (like jet streams) or small-scale features (like thunderstorms).</p><h2 id="Intermediate-Examples"><a class="docs-heading-anchor" href="#Intermediate-Examples">Intermediate Examples</a><a id="Intermediate-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Intermediate-Examples" title="Permalink"></a></h2><p>Ready to tackle more complex problems? These examples introduce vector fields, real-world data patterns, and scientific applications.</p><h3 id="Vector-Field-Decomposition"><a class="docs-heading-anchor" href="#Vector-Field-Decomposition">Vector Field Decomposition</a><a id="Vector-Field-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Field-Decomposition" title="Permalink"></a></h3><h3 id="Vorticity-Divergence-Decomposition"><a class="docs-heading-anchor" href="#Vorticity-Divergence-Decomposition">Vorticity-Divergence Decomposition</a><a id="Vorticity-Divergence-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Vorticity-Divergence-Decomposition" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using LinearAlgebra
+
+lmax = 64
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
+# Create a realistic atmospheric flow pattern
+u = zeros(cfg.nlat, cfg.nlon)  # Zonal wind (east-west)
+v = zeros(cfg.nlat, cfg.nlon)  # Meridional wind (north-south)
+
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    u[i,j] = 20 * sin(2θ) * (1 + 0.4 * cos(4φ))  # Jet stream
+    v[i,j] = 5 * cos(3θ) * sin(2φ)                # Meridional flow
+end
+
+# Decompose into spheroidal (divergent) and toroidal (rotational)
+Slm, Tlm = spat_to_SHsphtor(cfg, u, v)
+
+# Analyze energy distribution
+spheroidal_energy = sum(abs2, Slm)
+toroidal_energy = sum(abs2, Tlm)
+println(&quot;Spheroidal (divergent) energy: $spheroidal_energy&quot;)
+println(&quot;Toroidal (rotational) energy: $toroidal_energy&quot;)
+
+# Reconstruct original velocity
+u_recon, v_recon = SHsphtor_to_spat(cfg, Slm, Tlm)
+velocity_error = norm(u - u_recon) + norm(v - v_recon)
+println(&quot;Velocity reconstruction error: $velocity_error&quot;)
+
+destroy_config(cfg)</code></pre><h3 id="Stream-Function-from-Vorticity"><a class="docs-heading-anchor" href="#Stream-Function-from-Vorticity">Stream Function from Vorticity</a><a id="Stream-Function-from-Vorticity-1"></a><a class="docs-heading-anchor-permalink" href="#Stream-Function-from-Vorticity" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using LinearAlgebra
+
+lmax = 48
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
+# Create vorticity field (e.g., from observations)
+vorticity = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    vorticity[i,j] = exp(-((θ - π/2)^2 + (φ - π)^2) / 0.5^2) * sin(4φ)
+end
+
+# Transform vorticity to spectral domain
+ζ_lm = analysis(cfg, vorticity)
+
+# Solve ∇²ψ = ζ for stream function ψ
+# In spectral domain: -l(l+1) ψ_lm = ζ_lm
+ψ_lm = similar(ζ_lm)
+for l in 0:cfg.lmax
+    for m in 0:min(l, cfg.mmax)
+        if l &gt; 0
+            ψ_lm[l+1, m+1] = -ζ_lm[l+1, m+1] / (l * (l + 1))
+        else
+            ψ_lm[l+1, m+1] = 0.0  # l=0 mode: constant not uniquely determined
+        end
+    end
+end
+
+# Get velocity from stream function (toroidal component only)
+Slm_zero = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+u_stream, v_stream = SHsphtor_to_spat(cfg, Slm_zero, ψ_lm)
+
+# Convert stream function to spatial domain
+stream_function = synthesis(cfg, ψ_lm)
+
+println(&quot;Stream function range: &quot;, extrema(stream_function))
+println(&quot;Max velocity from stream: &quot;, maximum(sqrt.(u_stream.^2 .+ v_stream.^2)))
+
+destroy_config(cfg)</code></pre><h2 id="Parallel-Computing-Examples"><a class="docs-heading-anchor" href="#Parallel-Computing-Examples">Parallel Computing Examples</a><a id="Parallel-Computing-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Computing-Examples" title="Permalink"></a></h2><h3 id="MPI-Distributed-Computing"><a class="docs-heading-anchor" href="#MPI-Distributed-Computing">MPI Distributed Computing</a><a id="MPI-Distributed-Computing-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Distributed-Computing" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn how to use MPI for large-scale parallel spherical harmonic computations</p><pre><code class="language-julia hljs"># Save as parallel_example.jl and run with: mpiexec -n 4 julia parallel_example.jl
+using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nprocs = MPI.Comm_size(comm)
+
+if rank == 0
+    println(&quot;Running SHTnsKit parallel example with $nprocs processes&quot;)
+end
+
+# Create configuration (same on all processes)
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+if rank == 0
+    println(&quot;Problem size: $(cfg.nlm) spectral coefficients&quot;)
+    println(&quot;Grid: $(cfg.nlat) × $(cfg.nlon) spatial points&quot;)
+end
+
+# Create distributed array using PencilArrays
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data (Y_2^0 pattern)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Benchmark parallel transforms
+MPI.Barrier(comm)
+start_time = MPI.Wtime()
+
+n_iter = 50
+for i in 1:n_iter
+    Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+    fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+end
+
+MPI.Barrier(comm)
+end_time = MPI.Wtime()
+
+if rank == 0
+    avg_time = (end_time - start_time) / n_iter
+    println(&quot;Parallel roundtrip: $(avg_time*1000) ms per iteration&quot;)
+end
+
+# Verify accuracy
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+max_err = maximum(abs.(parent(fθφ_recovered) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, comm)
+
+if rank == 0
+    println(&quot;Roundtrip error: $global_max_err&quot;)
+    println(global_max_err &lt; 1e-10 ? &quot;SUCCESS!&quot; : &quot;FAILED&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><p><strong>Key concepts:</strong></p><ul><li>MPI initialization and communicator setup</li><li>PencilArrays for domain decomposition</li><li>Distributed transforms with <code>dist_analysis</code> and <code>dist_synthesis</code></li><li>Error verification across MPI ranks</li></ul><h3 id="Run-Example-Scripts"><a class="docs-heading-anchor" href="#Run-Example-Scripts">Run Example Scripts</a><a id="Run-Example-Scripts-1"></a><a class="docs-heading-anchor-permalink" href="#Run-Example-Scripts" title="Permalink"></a></h3><pre><code class="language-bash hljs"># Per-rank SHT scalar roundtrip (safe PencilArrays allocation)
+mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl
+
+# Distributed FFT roundtrip along φ using PencilFFTs
+mpiexec -n 2 julia --project=. examples/parallel_fft_roundtrip.jl</code></pre><h3 id="Single-Node-Performance-Example"><a class="docs-heading-anchor" href="#Single-Node-Performance-Example">Single-Node Performance Example</a><a id="Single-Node-Performance-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Node-Performance-Example" title="Permalink"></a></h3><p><strong>Goal:</strong> Benchmark and optimize single-node performance</p><pre><code class="language-julia hljs">using SHTnsKit, BenchmarkTools
+
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+println(&quot;Single-Node Performance Benchmark&quot;)
+println(&quot;=&quot;^40)
+println(&quot;Grid size: $(cfg.nlat) × $(cfg.nlon)&quot;)
+println(&quot;Spectral coefficients: $(cfg.nlm)&quot;)
+
+# Create test data
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    spatial[i,j] = sin(2θ) * cos(φ) + 0.5 * sin(4θ) * cos(3φ)
+end
+
+# Benchmark analysis (spatial → spectral)
+analysis_time = @belapsed analysis($cfg, $spatial)
+println(&quot;Analysis time: $(analysis_time*1000) ms&quot;)
+
+Alm = analysis(cfg, spatial)
+
+# Benchmark synthesis (spectral → spatial)
+synthesis_time = @belapsed synthesis($cfg, $Alm)
+println(&quot;Synthesis time: $(synthesis_time*1000) ms&quot;)
+
+# Benchmark roundtrip
+roundtrip_time = @belapsed begin
+    alm = analysis($cfg, $spatial)
+    synthesis($cfg, alm)
+end
+println(&quot;Roundtrip time: $(roundtrip_time*1000) ms&quot;)
+
+# Verify accuracy
+recovered = synthesis(cfg, Alm)
+max_error = maximum(abs.(spatial - recovered))
+println(&quot;Roundtrip error: $max_error&quot;)
+
+# Threading info
+println(&quot;\nThreading configuration:&quot;)
+println(&quot;  Julia threads: $(Threads.nthreads())&quot;)
+
+destroy_config(cfg)</code></pre><p><strong>Key concepts:</strong></p><ul><li>Performance benchmarking with BenchmarkTools</li><li>Forward and inverse transform timing</li><li>Accuracy verification</li></ul><h3 id="Parallel-Vector-Transform-Example"><a class="docs-heading-anchor" href="#Parallel-Vector-Transform-Example">Parallel Vector Transform Example</a><a id="Parallel-Vector-Transform-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Vector-Transform-Example" title="Permalink"></a></h3><p><strong>Goal:</strong> Perform distributed vector field transforms</p><pre><code class="language-julia hljs"># Save as parallel_vector.jl, run with: mpiexec -n 4 julia parallel_vector.jl
+using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nprocs = MPI.Comm_size(comm)
+
+# Create configuration
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+if rank == 0
+    println(&quot;Parallel Vector Transform Example&quot;)
+    println(&quot;Problem: $(cfg.nlm) coefficients, $(cfg.nlat)×$(cfg.nlon) grid&quot;)
+    println(&quot;MPI processes: $nprocs&quot;)
+end
+
+# Create distributed arrays for velocity field
+pen = Pencil((nlat, nlon), comm)
+Vθ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+Vφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test vector field (solid body rotation)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    θ = cfg.θ[i_global]
+    for (j_local, j_global) in enumerate(ranges[2])
+        φ = cfg.φ[j_global]
+        Vθ[i_local, j_local] = cos(θ) * sin(φ)
+        Vφ[i_local, j_local] = cos(φ)
+    end
+end
+
+# Benchmark distributed vector transforms
+MPI.Barrier(comm)
+start_time = MPI.Wtime()
+
+n_iter = 20
+for i in 1:n_iter
+    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
+    Vθ_out, Vφ_out = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+end
+
+MPI.Barrier(comm)
+end_time = MPI.Wtime()
+
+if rank == 0
+    avg_time = (end_time - start_time) / n_iter
+    println(&quot;Vector roundtrip: $(avg_time*1000) ms per iteration&quot;)
+end
+
+# Verify accuracy
+Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
+Vθ_rec, Vφ_rec = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+
+θ_err = maximum(abs.(parent(Vθ_rec) .- parent(Vθ)))
+φ_err = maximum(abs.(parent(Vφ_rec) .- parent(Vφ)))
+global_θ_err = MPI.Allreduce(θ_err, MPI.MAX, comm)
+global_φ_err = MPI.Allreduce(φ_err, MPI.MAX, comm)
+
+if rank == 0
+    println(&quot;Vθ roundtrip error: $global_θ_err&quot;)
+    println(&quot;Vφ roundtrip error: $global_φ_err&quot;)
+    println((global_θ_err &lt; 1e-10 &amp;&amp; global_φ_err &lt; 1e-10) ? &quot;SUCCESS!&quot; : &quot;FAILED&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><h3 id="Scaling-Test-Example"><a class="docs-heading-anchor" href="#Scaling-Test-Example">Scaling Test Example</a><a id="Scaling-Test-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Scaling-Test-Example" title="Permalink"></a></h3><p><strong>Goal:</strong> Test parallel scaling with different process counts</p><pre><code class="language-julia hljs"># Save as scaling_test.jl, run with: mpiexec -n 4 julia scaling_test.jl
+using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nprocs = MPI.Comm_size(comm)
+
+if rank == 0
+    println(&quot;Parallel Scaling Test&quot;)
+    println(&quot;MPI processes: $nprocs&quot;)
+end
+
+# Test different problem sizes
+for lmax in [32, 64, 128]
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+    # Create distributed array
+    pen = Pencil((nlat, nlon), comm)
+    fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+    # Fill with test data
+    ranges = PencilArrays.range_local(pen)
+    for (i_local, i_global) in enumerate(ranges[1])
+        x = cfg.x[i_global]
+        for j in 1:length(ranges[2])
+            fθφ[i_local, j] = (3*x^2 - 1)/2
+        end
+    end
+
+    # Warmup
+    for _ in 1:5
+        Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+        SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+    end
+
+    # Benchmark
+    MPI.Barrier(comm)
+    start_time = MPI.Wtime()
+
+    n_iter = 50
+    for _ in 1:n_iter
+        Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+        SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+    end
+
+    MPI.Barrier(comm)
+    end_time = MPI.Wtime()
+
+    if rank == 0
+        avg_time = (end_time - start_time) / n_iter * 1000
+        println(&quot;lmax=$lmax: $(round(avg_time, digits=2)) ms/roundtrip&quot;)
+    end
+
+    destroy_config(cfg)
+end
+
+MPI.Finalize()</code></pre><p><strong>Key concepts:</strong></p><ul><li>Testing performance across problem sizes</li><li>Proper warmup before timing</li><li>Parallel synchronization for accurate timing</li></ul><h2 id="Advanced-Applications"><a class="docs-heading-anchor" href="#Advanced-Applications">Advanced Applications</a><a id="Advanced-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Applications" title="Permalink"></a></h2><h3 id="Multiscale-Analysis"><a class="docs-heading-anchor" href="#Multiscale-Analysis">Multiscale Analysis</a><a id="Multiscale-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Multiscale-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+# Create different resolution configurations
+lmax_values = [16, 32, 64, 128]
+cfgs = []
+for lmax in lmax_values
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    push!(cfgs, create_gauss_config(lmax, nlat; nlon=nlon))
+end
+
+# Use highest resolution for reference field
+cfg_hi = cfgs[end]
+
+# Create test field with multiple scales at highest resolution
+field = zeros(cfg_hi.nlat, cfg_hi.nlon)
+for i in 1:cfg_hi.nlat, j in 1:cfg_hi.nlon
+    θ = cfg_hi.θ[i]
+    φ = cfg_hi.φ[j]
+    field[i,j] = sin(2θ) * cos(φ) +           # Large scale
+                 0.3 * sin(8θ) * cos(4φ) +     # Medium scale
+                 0.1 * sin(16θ) * cos(8φ)      # Small scale
+end
+
+# Analyze at different resolutions
+powers = []
+for cfg in cfgs
+    # Create field at this resolution
+    field_i = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat, j in 1:cfg.nlon
+        θ = cfg.θ[i]
+        φ = cfg.φ[j]
+        field_i[i,j] = sin(2θ) * cos(φ) +
+                       0.3 * sin(8θ) * cos(4φ) +
+                       0.1 * sin(16θ) * cos(8φ)
+    end
+
+    # Analyze and compute power spectrum
+    f_lm = analysis(cfg, field_i)
+    power_i = energy_scalar_l_spectrum(cfg, f_lm)
+    push!(powers, power_i)
+
+    println(&quot;Resolution lmax=$(cfg.lmax): $(length(power_i)) modes&quot;)
+end
+
+# Compare power spectra at common degrees
+println(&quot;\nPower at l=2 (large scale):&quot;)
+for (i, cfg) in enumerate(cfgs)
+    println(&quot;  lmax=$(cfg.lmax): $(powers[i][3])&quot;)
+end
+
+# Cleanup
+for cfg in cfgs
+    destroy_config(cfg)
+end</code></pre><h3 id="Field-Rotation-and-Coordinate-Transformations"><a class="docs-heading-anchor" href="#Field-Rotation-and-Coordinate-Transformations">Field Rotation and Coordinate Transformations</a><a id="Field-Rotation-and-Coordinate-Transformations-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Rotation-and-Coordinate-Transformations" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create field in one coordinate system
+original_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    original_field[i,j] = sin(3θ) * cos(2φ)
+end
+
+# Transform to spectral domain
+f_lm = analysis(cfg, original_field)
+
+# Rotate using Euler angles (ZYZ convention)
+α, β, γ = π/4, π/6, π/8
+f_rot = copy(f_lm)
+rotate_real!(cfg, f_rot; alpha=α, beta=β, gamma=γ)
+
+# Transform back to spatial domain
+rotated_field = synthesis(cfg, f_rot)
+
+println(&quot;Original field range: &quot;, extrema(original_field))
+println(&quot;Rotated field range: &quot;, extrema(rotated_field))
+
+# Verify rotation preserves power
+orig_power = sum(abs2, f_lm)
+rot_power = sum(abs2, f_rot)
+println(&quot;Power preserved: &quot;, isapprox(orig_power, rot_power, rtol=1e-10))
+
+destroy_config(cfg)</code></pre><h2 id="High-Performance-Examples"><a class="docs-heading-anchor" href="#High-Performance-Examples">High-Performance Examples</a><a id="High-Performance-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#High-Performance-Examples" title="Permalink"></a></h2><h3 id="Multi-threaded-Batch-Processing"><a class="docs-heading-anchor" href="#Multi-threaded-Batch-Processing">Multi-threaded Batch Processing</a><a id="Multi-threaded-Batch-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-threaded-Batch-Processing" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using Base.Threads
+using Statistics
+
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Large batch of fields to process
+n_batch = 100
+# Create bandlimited test fields (smooth functions prevent errors)
+input_fields = []
+for i in 1:n_batch
+    field = zeros(cfg.nlat, cfg.nlon)
+    for j in 1:cfg.nlat, k in 1:cfg.nlon
+        θ = cfg.θ[j]
+        φ = cfg.φ[k]
+        field[j,k] = 1.0 + 0.3 * sin(2θ) * cos(φ) * (1 + 0.1*sin(i))
+    end
+    push!(input_fields, field)
+end
+
+# Process with threading
+println(&quot;Processing $n_batch fields with $(nthreads()) Julia threads...&quot;)
+results = Vector{Float64}(undef, n_batch)
+
+@time @threads for i in 1:n_batch
+    # Each thread gets its own work
+    field = input_fields[i]
+
+    # Transform and compute power spectrum
+    sh = analysis(cfg, field)
+    power = energy_scalar_l_spectrum(cfg, sh)
+
+    # Store result (total energy)
+    results[i] = sum(power)
+end
+
+println(&quot;Mean energy per field: &quot;, mean(results))
+println(&quot;Energy std dev: &quot;, std(results))
+
+destroy_config(cfg)</code></pre><h2 id="Validation-and-Testing-Examples"><a class="docs-heading-anchor" href="#Validation-and-Testing-Examples">Validation and Testing Examples</a><a id="Validation-and-Testing-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-and-Testing-Examples" title="Permalink"></a></h2><h3 id="Analytical-Test-Cases"><a class="docs-heading-anchor" href="#Analytical-Test-Cases">Analytical Test Cases</a><a id="Analytical-Test-Cases-1"></a><a class="docs-heading-anchor-permalink" href="#Analytical-Test-Cases" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+lmax = 24
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Test pure spherical harmonics Y_l^m
+# For simplicity, test real zonal harmonics (m=0)
+test_cases = [
+    (l=0, m=0, desc=&quot;Y₀⁰ (constant)&quot;),
+    (l=1, m=0, desc=&quot;Y₁⁰ (dipole)&quot;),
+    (l=2, m=0, desc=&quot;Y₂⁰ (quadrupole)&quot;),
+]
+
+println(&quot;Analytical validation tests:&quot;)
+for case in test_cases
+    # Create spectral coefficients with single mode
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm[case.l+1, case.m+1] = 1.0
+
+    # Synthesize to spatial domain
+    spatial = synthesis(cfg, Alm)
+
+    # Analyze back to spectral
+    recovered = analysis(cfg, spatial)
+
+    # Check coefficient at expected location
+    coeff_val = recovered[case.l+1, case.m+1]
+
+    # Find largest coefficient magnitude
+    max_val, max_idx = findmax(abs.(recovered))
+
+    println(&quot;Test: $(case.desc)&quot;)
+    println(&quot;  Expected: l=$(case.l), m=$(case.m)&quot;)
+    println(&quot;  Recovered coefficient: $coeff_val&quot;)
+    println(&quot;  Max magnitude at: $(Tuple(max_idx)) = $max_val&quot;)
+
+    # Check if roundtrip preserves the mode
+    is_correct = max_idx == CartesianIndex(case.l+1, case.m+1)
+    println(&quot;  Result: &quot;, is_correct ? &quot;PASS&quot; : &quot;FAIL&quot;)
+    println()
+end
+
+destroy_config(cfg)</code></pre><h3 id="Numerical-Accuracy-Tests"><a class="docs-heading-anchor" href="#Numerical-Accuracy-Tests">Numerical Accuracy Tests</a><a id="Numerical-Accuracy-Tests-1"></a><a class="docs-heading-anchor-permalink" href="#Numerical-Accuracy-Tests" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+using LinearAlgebra
+
+# Test different resolutions
+resolutions = [16, 32, 64]
+
+println(&quot;Accuracy vs Resolution Test:&quot;)
+println(&quot;=&quot; ^ 40)
+
+for lmax in resolutions
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+    # Create bandlimited test coefficients (prevents roundtrip errors)
+    Alm_original = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm_original[1, 1] = 1.0  # l=0, m=0
+    Alm_original[3, 1] = 0.5  # l=2, m=0
+    if cfg.lmax &gt;= 4
+        Alm_original[5, 1] = 0.2  # l=4, m=0
+    end
+
+    # Round-trip transform
+    spatial = synthesis(cfg, Alm_original)
+    Alm_recovered = analysis(cfg, spatial)
+
+    # Measure error
+    error = norm(Alm_original - Alm_recovered) / norm(Alm_original)
+
+    println(&quot;lmax=$lmax: relative error = $(round(error, sigdigits=3))&quot;)
+
+    destroy_config(cfg)
+end
+
+# Test with complex pattern (non-zonal modes)
+println(&quot;\nNon-zonal mode test:&quot;)
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+Alm_original = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm_original[3, 3] = 1.0 + 0.5im  # l=2, m=2
+
+spatial = synthesis(cfg, Alm_original)
+Alm_recovered = analysis(cfg, spatial)
+
+error = norm(Alm_original - Alm_recovered) / norm(Alm_original)
+println(&quot;l=2, m=2 roundtrip error: $(round(error, sigdigits=3))&quot;)
+
+destroy_config(cfg)</code></pre><p>These examples demonstrate the full range of SHTnsKit.jl capabilities from basic transforms to advanced scientific applications. Each example can serve as a starting point for your specific research needs.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><a class="docs-footer-nextpage" href="../performance/">Performance Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 22:51">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

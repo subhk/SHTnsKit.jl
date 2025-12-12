@@ -52,32 +52,53 @@ size = Comm_size(comm)
 println(&quot;Hello from process $rank of $size&quot;)
 
 MPI.Finalize()</code></pre><pre><code class="language-bash hljs"># Run with multiple processes
-mpiexec -n 4 julia test_mpi.jl</code></pre><p><strong>Test SHTnsKit parallel functionality:</strong></p><pre><code class="language-julia hljs"># Save as test_parallel.jl
-using SHTnsKit
+mpiexec -n 4 julia test_mpi.jl</code></pre><p><strong>Test SHTnsKit parallel functionality:</strong></p><p>Save as <code>test_parallel.jl</code>:</p><pre><code class="language-julia hljs">using MPI
+MPI.Init()
 
-# Test that packages load correctly
-try
-    using MPI, PencilArrays, PencilFFTs, LoopVectorization
-    println(&quot;All parallel packages loaded successfully&quot;)
-    
-    # Test configuration
-    cfg = create_gauss_config(16, 12; mres=36, nlon=48)
-    
-    # Test serial fallback
-    auto_cfg = auto_parallel_config(cfg)
-    println(&quot;Auto configuration successful&quot;)
-    
-    # Test performance recommendations
-    optimal_procs = optimal_process_count(cfg)
-    println(&quot;Optimal process count: $optimal_procs&quot;)
-    
-catch e
-    println(&quot;ERROR: $e&quot;)
-end</code></pre><pre><code class="language-bash hljs"># Test serial mode
-julia test_parallel.jl
+using SHTnsKit, PencilArrays, PencilFFTs
 
-# Test parallel mode
-mpiexec -n 2 julia test_parallel.jl</code></pre><p><strong>Run the built-in parallel testset (includes PencilArrays/PencilFFTs):</strong></p><pre><code class="language-bash hljs">SHTNSKIT_RUN_MPI_TESTS=1 JULIA_NUM_THREADS=1 \
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+
+if rank == 0
+    println(&quot;Testing with $nprocs MPI processes&quot;)
+end
+
+# Create configuration
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data (Y_2^0)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Test distributed transforms
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+# Verify accuracy
+max_err = maximum(abs.(parent(fθφ_out) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, MPI.COMM_WORLD)
+
+if rank == 0
+    println(&quot;Roundtrip error: $global_max_err&quot;)
+    println(global_max_err &lt; 1e-10 ? &quot;SUCCESS!&quot; : &quot;FAILED&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><pre><code class="language-bash hljs"># Test parallel mode
+mpiexec -n 2 julia --project test_parallel.jl</code></pre><p><strong>Run the built-in parallel testset (includes PencilArrays/PencilFFTs):</strong></p><pre><code class="language-bash hljs">SHTNSKIT_RUN_MPI_TESTS=1 JULIA_NUM_THREADS=1 \
     mpiexec -n 2 julia --project -e &#39;using Pkg; Pkg.test()&#39;</code></pre><p>This exercises distributed analysis/synthesis, vector/QST transforms, rotations, and diagnostics across ranks using PencilArrays and PencilFFTs.</p><h2 id="Advanced-Configuration"><a class="docs-heading-anchor" href="#Advanced-Configuration">Advanced Configuration</a><a id="Advanced-Configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Configuration" title="Permalink"></a></h2><h3 id="Environment-Variables"><a class="docs-heading-anchor" href="#Environment-Variables">Environment Variables</a><a id="Environment-Variables-1"></a><a class="docs-heading-anchor-permalink" href="#Environment-Variables" title="Permalink"></a></h3><p><strong>MPI tuning:</strong></p><pre><code class="language-bash hljs"># Reduce MPI warnings
 export OMPI_MCA_mpi_warn_on_fork=0
 
@@ -188,92 +209,72 @@ JULIA_DEPOT_PATH=/tmp/fresh_depot:$HOME/.julia mpiexec -n 4 julia script.jl
 
 # Or precompile in serial first
 julia --project -e &#39;using SHTnsKit, MPI, PencilArrays, PencilFFTs&#39;
-mpiexec -n 4 julia --project script.jl</code></pre><h3 id="Performance-Issues"><a class="docs-heading-anchor" href="#Performance-Issues">Performance Issues</a><a id="Performance-Issues-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Issues" title="Permalink"></a></h3><p><strong>Slow initialization:</strong></p><ul><li>Precompile packages: <code>julia -e &#39;using SHTnsKit, MPI, PencilArrays, PencilFFTs&#39;</code></li><li>Use system image: <code>julia --sysimage=shtns_parallel.so script.jl</code></li></ul><p><strong>Poor scaling:</strong></p><ul><li>Check network bandwidth: <code>iperf3</code> between nodes</li><li>Verify process binding: <code>numactl --show</code></li><li>Monitor MPI communication: <code>mpiP</code> profiling</li></ul><p><strong>Memory errors:</strong></p><ul><li>Increase system limits: <code>ulimit -v unlimited</code></li><li>Use memory-efficient transforms: <code>memory_efficient_parallel_transform!()</code></li><li>Process data in chunks for very large problems</li></ul><h2 id="Validation-and-Testing"><a class="docs-heading-anchor" href="#Validation-and-Testing">Validation and Testing</a><a id="Validation-and-Testing-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-and-Testing" title="Permalink"></a></h2><h3 id="Comprehensive-Test-Script"><a class="docs-heading-anchor" href="#Comprehensive-Test-Script">Comprehensive Test Script</a><a id="Comprehensive-Test-Script-1"></a><a class="docs-heading-anchor-permalink" href="#Comprehensive-Test-Script" title="Permalink"></a></h3><pre><code class="language-julia hljs"># test_complete_setup.jl
-using Test
+mpiexec -n 4 julia --project script.jl</code></pre><h3 id="Performance-Issues"><a class="docs-heading-anchor" href="#Performance-Issues">Performance Issues</a><a id="Performance-Issues-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Issues" title="Permalink"></a></h3><p><strong>Slow initialization:</strong></p><ul><li>Precompile packages: <code>julia -e &#39;using SHTnsKit, MPI, PencilArrays, PencilFFTs&#39;</code></li><li>Use system image: <code>julia --sysimage=shtns_parallel.so script.jl</code></li></ul><p><strong>Poor scaling:</strong></p><ul><li>Check network bandwidth: <code>iperf3</code> between nodes</li><li>Verify process binding: <code>numactl --show</code></li><li>Monitor MPI communication: <code>mpiP</code> profiling</li></ul><p><strong>Memory errors:</strong></p><ul><li>Increase system limits: <code>ulimit -v unlimited</code></li><li>Use memory-efficient transforms: <code>memory_efficient_parallel_transform!()</code></li><li>Process data in chunks for very large problems</li></ul><h2 id="Validation-and-Testing"><a class="docs-heading-anchor" href="#Validation-and-Testing">Validation and Testing</a><a id="Validation-and-Testing-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-and-Testing" title="Permalink"></a></h2><h3 id="Comprehensive-Test-Script"><a class="docs-heading-anchor" href="#Comprehensive-Test-Script">Comprehensive Test Script</a><a id="Comprehensive-Test-Script-1"></a><a class="docs-heading-anchor-permalink" href="#Comprehensive-Test-Script" title="Permalink"></a></h3><p>Save as <code>test_complete_setup.jl</code>:</p><pre><code class="language-julia hljs">using Test
 using SHTnsKit
+using LinearAlgebra
 
-@testset &quot;Complete Parallel Setup&quot; begin
+@testset &quot;Complete Setup Verification&quot; begin
     # Test basic functionality
-    cfg = create_gauss_config(12, 10; mres=26, nlon=32)
+    lmax = 16
+    cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
     @test cfg.nlm &gt; 0
-    
+
     # Test parallel packages availability
     @testset &quot;Package Loading&quot; begin
         @test_nowarn using MPI
-        @test_nowarn using PencilArrays  
+        @test_nowarn using PencilArrays
         @test_nowarn using PencilFFTs
-        @test_nowarn using LoopVectorization
     end
-    
-    # Test parallel functionality
-    @testset &quot;Parallel Functions&quot; begin
-        # Should work without MPI.Init()
-        @test optimal_process_count(cfg) &gt;= 1
-        
-        model = parallel_performance_model(cfg, 4)
-        @test model.speedup &gt; 0
-        @test 0 &lt; model.efficiency &lt;= 1
-    end
-    
-    # Test SIMD optimizations
-    @testset &quot;SIMD Functionality&quot; begin
-        if isdefined(Main, :LoopVectorization)
-            sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-            
-            # Should not error
-            @test_nowarn turbo_apply_laplacian!(cfg, copy(sh_coeffs))
-            
-            # Should give same results as regular version
-            result1 = copy(sh_coeffs)
-            result2 = copy(sh_coeffs)
-            
-            apply_laplacian!(cfg, result1)
-            turbo_apply_laplacian!(cfg, result2)
-            
-            @test maximum(abs.(result1 - result2)) &lt; 1e-14
+
+    # Test basic transforms
+    @testset &quot;Transform Accuracy&quot; begin
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for i in 1:cfg.nlat
+            x = cfg.x[i]
+            spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0
         end
+
+        Alm = analysis(cfg, spatial)
+        recovered = synthesis(cfg, Alm)
+        @test norm(spatial - recovered) &lt; 1e-12
     end
+
+    destroy_config(cfg)
 end
 
 println(&quot;All tests passed!&quot;)</code></pre><pre><code class="language-bash hljs"># Run validation
-julia test_complete_setup.jl
-
-# Run with MPI
-mpiexec -n 2 julia test_complete_setup.jl</code></pre><h3 id="Performance-Benchmarking"><a class="docs-heading-anchor" href="#Performance-Benchmarking">Performance Benchmarking</a><a id="Performance-Benchmarking-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Benchmarking" title="Permalink"></a></h3><pre><code class="language-julia hljs"># benchmark_setup.jl
+julia --project test_complete_setup.jl</code></pre><h3 id="Performance-Benchmarking"><a class="docs-heading-anchor" href="#Performance-Benchmarking">Performance Benchmarking</a><a id="Performance-Benchmarking-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Benchmarking" title="Permalink"></a></h3><pre><code class="language-julia hljs"># benchmark_setup.jl
 using SHTnsKit, BenchmarkTools
 
 function run_benchmarks()
     println(&quot;SHTnsKit.jl Performance Benchmark&quot;)
     println(&quot;=&quot; ^ 50)
-    
+
     # Test different problem sizes
     for lmax in [16, 32, 64]
-        cfg = create_gauss_config(lmax, lmax)
-        sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-        
-        println(&quot;\nlmax = $lmax ($(cfg.nlm) coefficients)&quot;)
-        
-        # Serial transform
-        t_serial = @belapsed synthesize($cfg, $sh_coeffs)
-        println(&quot;  Serial transform: $(t_serial*1000:.2f) ms&quot;)
-        
-        # Optimal process count
-        opt_procs = optimal_process_count(cfg)
-        println(&quot;  Recommended processes: $opt_procs&quot;)
-        
-        # Performance model
-        model = parallel_performance_model(cfg, opt_procs)
-        println(&quot;  Expected parallel speedup: $(model.speedup:.2f)x&quot;)
-        println(&quot;  Expected efficiency: $(model.efficiency*100:.1f)%&quot;)
-        
-        # SIMD comparison (if available)
-        try
-            results = benchmark_turbo_vs_simd(cfg)
-            println(&quot;  SIMD speedup: $(results.speedup:.2f)x&quot;)
-        catch
-            println(&quot;  SIMD: Not available (install LoopVectorization.jl)&quot;)
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        # Create test data
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for i in 1:cfg.nlat
+            x = cfg.x[i]
+            spatial[i, :] .= (3*x^2 - 1)/2
         end
+
+        println(&quot;\nlmax = $lmax ($(cfg.nlm) coefficients, $(nlat)×$(nlon) grid)&quot;)
+
+        # Serial transform benchmarks
+        t_analysis = @belapsed analysis($cfg, $spatial)
+        Alm = analysis(cfg, spatial)
+        t_synthesis = @belapsed synthesis($cfg, $Alm)
+
+        println(&quot;  Analysis: $(t_analysis*1000) ms&quot;)
+        println(&quot;  Synthesis: $(t_synthesis*1000) ms&quot;)
+
+        destroy_config(cfg)
     end
 end
 
-run_benchmarks()</code></pre><p>Your parallel SHTnsKit.jl installation is now complete and optimized for high-performance computing!</p></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 16:08">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+run_benchmarks()</code></pre><p>Your parallel SHTnsKit.jl installation is now complete and optimized for high-performance computing!</p></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 16:12">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

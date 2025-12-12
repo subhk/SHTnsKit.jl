@@ -13,11 +13,11 @@ create_regular_config
 destroy_config
 ```
 
-### Configuration Queries
+### Index Utilities
 
 ```@docs
-lmidx
 nlm_calc
+LM_index
 ```
 
 ## Scalar Field Transforms
@@ -91,9 +91,6 @@ enstrophy
 
 ```@docs
 shtns_use_threads
-set_fft_threads
-get_fft_threads
-set_optimal_threads!
 ```
 
 ## Buffer Helpers
@@ -107,10 +104,12 @@ scratch_fft
 
 When using MPI with PencilArrays, the following functions are available via the parallel extension:
 
-```@docs
-dist_analysis
-dist_synthesis
-```
+- `dist_analysis(cfg, fθφ)` - Distributed spatial to spectral transform
+- `dist_synthesis(cfg, Alm; prototype_θφ, real_output)` - Distributed spectral to spatial transform
+- `dist_spat_to_SHsphtor(cfg, Vθ, Vφ)` - Distributed vector analysis
+- `dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ)` - Distributed vector synthesis
+
+See the [Distributed Guide](../distributed.md) for detailed usage.
 
 ## Gradient and Differential Operators
 

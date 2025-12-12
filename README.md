@@ -206,42 +206,6 @@ allocs = @allocated analysis(cfg, f)
 println("Analysis allocations: $allocs bytes")
 ```
 
-## Parallel Computing Guide
-
-### Running Examples
-
-```bash
-# Parallel scalar roundtrip (2 processes)
-mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl
-
-# Include vector field roundtrip
-# (Use in-place plans; add spatial scratch to avoid allocs on real outputs)
-mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl --vector
-
-# Include 3D (Q,S,T) roundtrip
-mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl --qst
-
-# Ensure required optional packages are available (first time)
-julia --project=. -e 'using Pkg; Pkg.add(["MPI","PencilArrays","PencilFFTs"])'
- 
-# Distributed FFT roundtrip (2 processes)
-mpiexec -n 2 julia --project=. examples/parallel_fft_roundtrip.jl
-```
-
-Spectral operator demo (cosθ application in spectral space):
-
-```bash
-mpiexec -n 2 julia --project=. examples/operator_parallel.jl           # dense
-mpiexec -n 2 julia --project=. examples/operator_parallel.jl --halo    # per-m Allgatherv halo
-
-Y-rotation demo (per-l Allgatherv over m):
-
-```bash
-mpiexec -n 2 julia --project=. examples/rotate_y_parallel.jl
-```
-
-```
-
 
 ### Automatic Differentiation
 

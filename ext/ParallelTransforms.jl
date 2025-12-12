@@ -477,23 +477,27 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
         Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
 
-    # Packed mapping info if needed
+    # ===== STEP 4: Allocate output coefficient storage =====
+    # Choose between dense (lmax+1 × mmax+1 matrix) or packed (vector with only l≥m)
     storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
 
     if use_packed_storage
-        # Directly accumulate into packed storage to reduce memory and avoid packing
+        # Packed storage: only store coefficients where l ≥ m (~50% memory savings)
         Alm_local = zeros(ComplexF64, storage_info.nlm_packed)
-        temp_dense = nothing
+        temp_dense = nothing  # NOTE: This creates Union type - handled by function barrier
         if get(ENV, "SHTNSKIT_VERBOSE_STORAGE", "0") == "1"
             dense_bytes, packed_bytes, savings = estimate_memory_savings(lmax, mmax)
             @info "Using packed storage: $(round(savings, digits=1))% memory reduction ($(packed_bytes ÷ 1024) KB vs $(dense_bytes ÷ 1024) KB)"
         end
     else
-        Alm_local = zeros(ComplexF64, lmax+1, mmax+1)   # Dense storage
-        temp_dense = Alm_local
+        # Dense storage: full (lmax+1) × (mmax+1) matrix (simpler, faster for small problems)
+        Alm_local = zeros(ComplexF64, lmax+1, mmax+1)
+        temp_dense = Alm_local  # Alias - same memory
     end
 
-    # Enhanced plm_tables integration with validation and optimization
+    # ===== Validate and configure Legendre polynomial source =====
+    # plm_tables: precomputed P_l^m(cos θ) for all l, m, θ - faster but uses more memory
+    # On-demand: compute P_l^m using recurrence relations - slower but no extra memory
     use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
 
     # Validate plm_tables structure for better error messages
@@ -502,7 +506,6 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
             @warn "plm_tables length mismatch: expected $(mmax + 1), got $(length(cfg.plm_tables)). Falling back to on-demand computation."
             use_tbl = false
         else
-            # Validate first table structure
             first_table = cfg.plm_tables[1]
             if size(first_table, 2) != nlat
                 @warn "plm_tables latitude dimension mismatch: expected $(nlat), got $(size(first_table, 2)). Falling back to on-demand computation."
@@ -511,22 +514,30 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
         end
     end
 
-    P = Vector{Float64}(undef, lmax + 1)  # Fallback buffer when tables not available
+    # Buffer for Legendre polynomials when computing on-demand
+    P = Vector{Float64}(undef, lmax + 1)
 
-    # Pre-cache Gauss-Legendre weights for local θ indices
+    # ===== Pre-cache values for type-stable inner loop =====
+    # Caching these values outside the loop is critical for performance:
+    # 1. Avoids repeated field access to cfg struct (which can cause allocations)
+    # 2. Enables the function barrier to receive concrete-typed Vector arguments
+
+    # Gauss-Legendre quadrature weights: w[θ] for integration over latitude
     weights_cache = Vector{Float64}(undef, nθ_local)
     for (ii, iglob) in enumerate(θ_globals)
         weights_cache[ii] = cfg.w[iglob]
     end
 
-    # Pre-cache x values for type-stable inner loop (avoids cfg.x[iglob] allocation)
+    # cos(θ) values needed for Legendre polynomial computation
     x_cache = Vector{Float64}(undef, nθ_local)
     for (ii, iglob) in enumerate(θ_globals)
         x_cache[ii] = cfg.x[iglob]
     end
 
-    # Main analysis loop using function barrier for type stability (eliminates ~33MB allocations)
-    # Packed storage is not supported with function barrier optimization - fall back to inline loop
+    # ===== STEP 4: Main Legendre integration loop =====
+    # This is the computational core: integrate F(θ,m) * P_l^m(cos θ) * w(θ) for all l,m
+    # Uses function barriers for type stability (eliminates ~33MB allocations!)
+    # See _analysis_loop_no_tables! and _analysis_loop_with_tables! for details
     if use_packed_storage
         # Original inline loop for packed storage (not the hot path)
         for mval in 0:mmax
@@ -558,9 +569,13 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
         _analysis_loop_no_tables!(temp_dense, P, Fθm, weights_cache, x_cache, θ_globals, lmax, mmax)
     end
     
-    # Handle MPI reduction based on storage type with optimized communication
-    # Only reduce if θ is actually distributed across processes
-    # When φ is distributed but θ is not, all ranks compute identical results after gathering φ
+    # ===== STEP 5: MPI reduction to combine partial results =====
+    # Each rank has computed partial sums over its local θ indices
+    # Need to sum across all ranks to get final coefficients
+    #
+    # IMPORTANT: Only reduce if θ is actually distributed!
+    # - If θ is distributed: each rank has different θ points → need Allreduce
+    # - If only φ is distributed: all ranks have same θ points after gather → skip reduction
     θ_is_distributed = (nθ_local < nlat)
 
     if θ_is_distributed

@@ -168,9 +168,9 @@ destroy_config(cfg)
 
 ### Spectral Derivative Operations
 
-SHTnsKit provides spectral methods for computing derivatives, which are more accurate than finite differences.
+SHTnsKit provides spectral methods for computing derivatives, which are more accurate than finite differences. All operations support MPI parallelization with PencilArrays.
 
-#### Gradient Computation
+#### Serial Gradient Computation
 
 ```julia
 using SHTnsKit
@@ -203,7 +203,54 @@ println("  (1/sinθ)∂f/∂φ range: ", extrema(∂f_∂φ_over_sinθ))
 destroy_config(cfg)
 ```
 
-#### Laplacian in Spectral Space
+#### MPI-Parallel Gradient Computation
+
+```julia
+using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+
+# Setup configuration
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array using PencilArrays
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill local portion with test pattern
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    θ = cfg.θ[i_global]
+    for (j_local, j_global) in enumerate(ranges[2])
+        φ = cfg.φ[j_global]
+        fθφ[i_local, j_local] = sin(θ) * cos(θ) * cos(φ)
+    end
+end
+
+# Distributed analysis: spatial → spectral
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+
+# Compute gradient using distributed synthesis with spheroidal transform
+# Gradient = (∂f/∂θ, (1/sinθ)∂f/∂φ) via spheroidal synthesis
+Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)  # Zero toroidal component
+∂f_∂θ, ∂f_∂φ_over_sinθ = SHTnsKit.dist_SHsphtor_to_spat(cfg, Alm, Tlm; prototype_θφ=fθφ)
+
+if rank == 0
+    println("Distributed gradient computed successfully")
+end
+
+destroy_config(cfg)
+MPI.Finalize()
+```
+
+#### Serial Laplacian
 
 The Laplacian has a simple form in spectral space: `∇²f_lm = -l(l+1) f_lm`
 
@@ -215,11 +262,11 @@ nlat = lmax + 2
 nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-# Create test field
+# Create test field (Y_2^0)
 test_field = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat, j in 1:cfg.nlon
+for i in 1:cfg.nlat
     x = cfg.x[i]  # cos(θ)
-    test_field[i,j] = (3*x^2 - 1)/2  # Y_2^0
+    test_field[i, :] .= (3*x^2 - 1)/2
 end
 
 # Transform to spectral
@@ -237,17 +284,52 @@ end
 laplacian_field = synthesis(cfg, Laplacian_Alm)
 
 # For Y_2^0, the Laplacian should be -2(2+1) = -6 times the original
-println("Laplacian computed spectrally")
-println("Original field range: ", extrema(test_field))
-println("Laplacian field range: ", extrema(laplacian_field))
 println("Ratio (should be ≈ -6): ", laplacian_field[cfg.nlat÷2, 1] / test_field[cfg.nlat÷2, 1])
 
 destroy_config(cfg)
 ```
 
-#### Divergence and Vorticity
+#### MPI-Parallel Laplacian
 
-For vector fields decomposed into spheroidal (S) and toroidal (T) components:
+```julia
+using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with Y_2^0 pattern
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j_local in 1:length(ranges[2])
+        fθφ[i_local, j_local] = (3*x^2 - 1)/2
+    end
+end
+
+# Compute distributed Laplacian (uses spectral method internally)
+laplacian_fθφ = SHTnsKit.dist_scalar_laplacian(cfg, fθφ; prototype_θφ=fθφ)
+
+if rank == 0
+    println("Distributed Laplacian computed")
+end
+
+destroy_config(cfg)
+MPI.Finalize()
+```
+
+#### Serial Divergence and Vorticity
 
 ```julia
 using SHTnsKit
@@ -270,18 +352,68 @@ end
 # Decompose into spheroidal/toroidal
 Slm, Tlm = spat_to_SHsphtor(cfg, Vθ, Vφ)
 
-# Compute divergence from spheroidal component
-# div(V) = ∇·V is related to S_lm by -l(l+1) factor
+# Compute divergence and vorticity
 div_field = divergence_from_spheroidal(cfg, Slm)
-
-# Compute vorticity from toroidal component
-# ζ = k·(∇×V) is related to T_lm
 vort_field = vorticity_from_toroidal(cfg, Tlm)
 
 println("Divergence range: ", extrema(div_field))
 println("Vorticity range: ", extrema(vort_field))
 
 destroy_config(cfg)
+```
+
+#### MPI-Parallel Divergence and Vorticity
+
+```julia
+using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed velocity field components
+pen = Pencil((nlat, nlon), comm)
+Vtθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+Vpθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test velocity field
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    θ = cfg.θ[i_global]
+    for (j_local, j_global) in enumerate(ranges[2])
+        φ = cfg.φ[j_global]
+        Vtθφ[i_local, j_local] = cos(θ) * sin(φ)
+        Vpθφ[i_local, j_local] = cos(φ)
+    end
+end
+
+# Compute distributed divergence directly
+div_field = SHTnsKit.dist_spatial_divergence(cfg, Vtθφ, Vpθφ; prototype_θφ=Vtθφ)
+
+# Compute distributed vorticity directly
+vort_field = SHTnsKit.dist_spatial_vorticity(cfg, Vtθφ, Vpθφ; prototype_θφ=Vtθφ)
+
+if rank == 0
+    println("Distributed divergence and vorticity computed")
+end
+
+destroy_config(cfg)
+MPI.Finalize()
+```
+
+#### Running MPI Examples
+
+Save as `gradient_mpi.jl` and run with:
+
+```bash
+mpiexec -n 4 julia --project gradient_mpi.jl
 ```
 
 ## Multi-Field Processing Patterns

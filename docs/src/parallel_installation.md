@@ -139,37 +139,60 @@ mpiexec -n 4 julia test_mpi.jl
 ```
 
 **Test SHTnsKit parallel functionality:**
-```julia
-# Save as test_parallel.jl
-using SHTnsKit
 
-# Test that packages load correctly
-try
-    using MPI, PencilArrays, PencilFFTs, LoopVectorization
-    println("All parallel packages loaded successfully")
-    
-    # Test configuration
-    cfg = create_gauss_config(16, 12; mres=36, nlon=48)
-    
-    # Test serial fallback
-    auto_cfg = auto_parallel_config(cfg)
-    println("Auto configuration successful")
-    
-    # Test performance recommendations
-    optimal_procs = optimal_process_count(cfg)
-    println("Optimal process count: $optimal_procs")
-    
-catch e
-    println("ERROR: $e")
+Save as `test_parallel.jl`:
+```julia
+using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+
+if rank == 0
+    println("Testing with $nprocs MPI processes")
 end
+
+# Create configuration
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data (Y_2^0)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Test distributed transforms
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+# Verify accuracy
+max_err = maximum(abs.(parent(fθφ_out) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, MPI.COMM_WORLD)
+
+if rank == 0
+    println("Roundtrip error: $global_max_err")
+    println(global_max_err < 1e-10 ? "SUCCESS!" : "FAILED")
+end
+
+destroy_config(cfg)
+MPI.Finalize()
 ```
 
 ```bash
-# Test serial mode
-julia test_parallel.jl
-
 # Test parallel mode
-mpiexec -n 2 julia test_parallel.jl
+mpiexec -n 2 julia --project test_parallel.jl
 ```
 
 **Run the built-in parallel testset (includes PencilArrays/PencilFFTs):**
@@ -432,52 +455,39 @@ mpiexec -n 4 julia --project script.jl
 
 ### Comprehensive Test Script
 
+Save as `test_complete_setup.jl`:
 ```julia
-# test_complete_setup.jl
 using Test
 using SHTnsKit
+using LinearAlgebra
 
-@testset "Complete Parallel Setup" begin
+@testset "Complete Setup Verification" begin
     # Test basic functionality
-    cfg = create_gauss_config(12, 10; mres=26, nlon=32)
+    lmax = 16
+    cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
     @test cfg.nlm > 0
-    
+
     # Test parallel packages availability
     @testset "Package Loading" begin
         @test_nowarn using MPI
-        @test_nowarn using PencilArrays  
+        @test_nowarn using PencilArrays
         @test_nowarn using PencilFFTs
-        @test_nowarn using LoopVectorization
     end
-    
-    # Test parallel functionality
-    @testset "Parallel Functions" begin
-        # Should work without MPI.Init()
-        @test optimal_process_count(cfg) >= 1
-        
-        model = parallel_performance_model(cfg, 4)
-        @test model.speedup > 0
-        @test 0 < model.efficiency <= 1
-    end
-    
-    # Test SIMD optimizations
-    @testset "SIMD Functionality" begin
-        if isdefined(Main, :LoopVectorization)
-            sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-            
-            # Should not error
-            @test_nowarn turbo_apply_laplacian!(cfg, copy(sh_coeffs))
-            
-            # Should give same results as regular version
-            result1 = copy(sh_coeffs)
-            result2 = copy(sh_coeffs)
-            
-            apply_laplacian!(cfg, result1)
-            turbo_apply_laplacian!(cfg, result2)
-            
-            @test maximum(abs.(result1 - result2)) < 1e-14
+
+    # Test basic transforms
+    @testset "Transform Accuracy" begin
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for i in 1:cfg.nlat
+            x = cfg.x[i]
+            spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0
         end
+
+        Alm = analysis(cfg, spatial)
+        recovered = synthesis(cfg, Alm)
+        @test norm(spatial - recovered) < 1e-12
     end
+
+    destroy_config(cfg)
 end
 
 println("All tests passed!")
@@ -485,10 +495,7 @@ println("All tests passed!")
 
 ```bash
 # Run validation
-julia test_complete_setup.jl
-
-# Run with MPI
-mpiexec -n 2 julia test_complete_setup.jl
+julia --project test_complete_setup.jl
 ```
 
 ### Performance Benchmarking
@@ -500,34 +507,31 @@ using SHTnsKit, BenchmarkTools
 function run_benchmarks()
     println("SHTnsKit.jl Performance Benchmark")
     println("=" ^ 50)
-    
+
     # Test different problem sizes
     for lmax in [16, 32, 64]
-        cfg = create_gauss_config(lmax, lmax)
-        sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-        
-        println("\nlmax = $lmax ($(cfg.nlm) coefficients)")
-        
-        # Serial transform
-        t_serial = @belapsed synthesize($cfg, $sh_coeffs)
-        println("  Serial transform: $(t_serial*1000:.2f) ms")
-        
-        # Optimal process count
-        opt_procs = optimal_process_count(cfg)
-        println("  Recommended processes: $opt_procs")
-        
-        # Performance model
-        model = parallel_performance_model(cfg, opt_procs)
-        println("  Expected parallel speedup: $(model.speedup:.2f)x")
-        println("  Expected efficiency: $(model.efficiency*100:.1f)%")
-        
-        # SIMD comparison (if available)
-        try
-            results = benchmark_turbo_vs_simd(cfg)
-            println("  SIMD speedup: $(results.speedup:.2f)x")
-        catch
-            println("  SIMD: Not available (install LoopVectorization.jl)")
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        # Create test data
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for i in 1:cfg.nlat
+            x = cfg.x[i]
+            spatial[i, :] .= (3*x^2 - 1)/2
         end
+
+        println("\nlmax = $lmax ($(cfg.nlm) coefficients, $(nlat)×$(nlon) grid)")
+
+        # Serial transform benchmarks
+        t_analysis = @belapsed analysis($cfg, $spatial)
+        Alm = analysis(cfg, spatial)
+        t_synthesis = @belapsed synthesis($cfg, $Alm)
+
+        println("  Analysis: $(t_analysis*1000) ms")
+        println("  Synthesis: $(t_synthesis*1000) ms")
+
+        destroy_config(cfg)
     end
 end
 

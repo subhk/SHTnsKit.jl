@@ -839,19 +839,23 @@ destroy_config(cfg)
 ```julia
 using SHTnsKit
 using Base.Threads
+using Statistics
 
-cfg = create_gauss_config(64, 64)
-set_optimal_threads!()
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Large batch of fields to process
-n_batch = 1000
+n_batch = 100
 # Create bandlimited test fields (smooth functions prevent errors)
 input_fields = []
 for i in 1:n_batch
-    θ, φ = cfg.θ, cfg.φ
     field = zeros(cfg.nlat, cfg.nlon)
     for j in 1:cfg.nlat, k in 1:cfg.nlon
-        field[j,k] = 1.0 + 0.3 * sin(2*θ[j]) * cos(φ[k]) * (1 + 0.1*sin(i))
+        θ = cfg.θ[j]
+        φ = cfg.φ[k]
+        field[j,k] = 1.0 + 0.3 * sin(2θ) * cos(φ) * (1 + 0.1*sin(i))
     end
     push!(input_fields, field)
 end
@@ -863,13 +867,13 @@ results = Vector{Float64}(undef, n_batch)
 @time @threads for i in 1:n_batch
     # Each thread gets its own work
     field = input_fields[i]
-    
-    # Transform and compute some property
+
+    # Transform and compute power spectrum
     sh = analysis(cfg, field)
-    power = power_spectrum(cfg, sh)
-    
-    # Store result
-    results[i] = sum(power)  # Total energy
+    power = energy_scalar_l_spectrum(cfg, sh)
+
+    # Store result (total energy)
+    results[i] = sum(power)
 end
 
 println("Mean energy per field: ", mean(results))
@@ -885,42 +889,46 @@ destroy_config(cfg)
 ```julia
 using SHTnsKit
 
-cfg = create_gauss_config(24, 24)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+lmax = 24
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-# Test Case 1: Pure spherical harmonics
+# Test pure spherical harmonics Y_l^m
+# For simplicity, test real zonal harmonics (m=0)
 test_cases = [
-    (l=0, m=0, Y=(θ,φ) -> 1/sqrt(4π)),
-    (l=1, m=-1, Y=(θ,φ) -> sqrt(3/(8π)) * sin.(θ) .* sin.(φ)),  
-    (l=1, m=0, Y=(θ,φ) -> sqrt(3/(4π)) * cos.(θ)),
-    (l=1, m=1, Y=(θ,φ) -> -sqrt(3/(8π)) * sin.(θ) .* cos.(φ)),
-    (l=2, m=0, Y=(θ,φ) -> sqrt(5/(16π)) * (3*cos.(θ).^2 .- 1))
+    (l=0, m=0, desc="Y₀⁰ (constant)"),
+    (l=1, m=0, desc="Y₁⁰ (dipole)"),
+    (l=2, m=0, desc="Y₂⁰ (quadrupole)"),
 ]
 
 println("Analytical validation tests:")
-for (i, case) in enumerate(test_cases)
-    # Create analytical field
-    Y_analytical = case.Y(θ, φ)
-    
-    # Transform to spectral
-    sh = analysis(cfg, Y_analytical)
-    
-    # Check that only the correct coefficient is non-zero
-expected_idx = lmidx(cfg, case.l, case.m)
-    
-    # Find largest coefficient
-    max_idx = argmax(abs.(sh))
-    max_val = sh[max_idx]
-    
-    println("Test $i: l=$(case.l), m=$(case.m)")
-    println("  Expected index: $expected_idx, Found: $max_idx")
-    println("  Coefficient value: $max_val")
-    
-    if max_idx == expected_idx
-        println("   PASS")
-    else
-        println("  FAIL")
-    end
+for case in test_cases
+    # Create spectral coefficients with single mode
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm[case.l+1, case.m+1] = 1.0
+
+    # Synthesize to spatial domain
+    spatial = synthesis(cfg, Alm)
+
+    # Analyze back to spectral
+    recovered = analysis(cfg, spatial)
+
+    # Check coefficient at expected location
+    coeff_val = recovered[case.l+1, case.m+1]
+
+    # Find largest coefficient magnitude
+    max_val, max_idx = findmax(abs.(recovered))
+
+    println("Test: $(case.desc)")
+    println("  Expected: l=$(case.l), m=$(case.m)")
+    println("  Recovered coefficient: $coeff_val")
+    println("  Max magnitude at: $(Tuple(max_idx)) = $max_val")
+
+    # Check if roundtrip preserves the mode
+    is_correct = max_idx == CartesianIndex(case.l+1, case.m+1)
+    println("  Result: ", is_correct ? "PASS" : "FAIL")
+    println()
 end
 
 destroy_config(cfg)
@@ -930,40 +938,56 @@ destroy_config(cfg)
 
 ```julia
 using SHTnsKit
+using LinearAlgebra
 
-# Test different resolutions and grid types
+# Test different resolutions
 resolutions = [16, 32, 64]
-grid_types = [:gauss, :regular]
 
 println("Accuracy vs Resolution Test:")
-for grid_type in grid_types
-    println("\n$grid_type Grid:")
-    
-    for lmax in resolutions
-        cfg = grid_type == :gauss ? 
-              create_gauss_config(lmax, lmax) : 
-              create_regular_config(lmax, lmax)
-        
-        # Random test field
-        # Create bandlimited test coefficients (prevents roundtrip errors)
-sh_original = zeros(cfg.nlm)
-sh_original[1] = 1.0
-if cfg.nlm > 10
-    sh_original[2:min(10, cfg.nlm)] .= 0.1 * rand(min(9, cfg.nlm-1))
-end
-        
-        # Round-trip transform
-        spatial = synthesize(cfg, sh_original)
-        sh_recovered = analysis(cfg, spatial)
-        
-        # Measure error
-        error = norm(sh_original - sh_recovered) / norm(sh_original)
-        
-        println("  lmax=$lmax: error = $error")
-        
-        destroy_config(cfg)
+println("=" ^ 40)
+
+for lmax in resolutions
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+    # Create bandlimited test coefficients (prevents roundtrip errors)
+    Alm_original = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm_original[1, 1] = 1.0  # l=0, m=0
+    Alm_original[3, 1] = 0.5  # l=2, m=0
+    if cfg.lmax >= 4
+        Alm_original[5, 1] = 0.2  # l=4, m=0
     end
+
+    # Round-trip transform
+    spatial = synthesis(cfg, Alm_original)
+    Alm_recovered = analysis(cfg, spatial)
+
+    # Measure error
+    error = norm(Alm_original - Alm_recovered) / norm(Alm_original)
+
+    println("lmax=$lmax: relative error = $(round(error, sigdigits=3))")
+
+    destroy_config(cfg)
 end
+
+# Test with complex pattern (non-zonal modes)
+println("\nNon-zonal mode test:")
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+Alm_original = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm_original[3, 3] = 1.0 + 0.5im  # l=2, m=2
+
+spatial = synthesis(cfg, Alm_original)
+Alm_recovered = analysis(cfg, spatial)
+
+error = norm(Alm_original - Alm_recovered) / norm(Alm_original)
+println("l=2, m=2 roundtrip error: $(round(error, sigdigits=3))")
+
+destroy_config(cfg)
 ```
 
 These examples demonstrate the full range of SHTnsKit.jl capabilities from basic transforms to advanced scientific applications. Each example can serve as a starting point for your specific research needs.

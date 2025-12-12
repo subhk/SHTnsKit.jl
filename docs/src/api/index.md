@@ -10,31 +10,14 @@ Complete reference for all SHTnsKit.jl functions and types.
 create_config
 create_gauss_config
 create_regular_config
+destroy_config
 ```
 
 ### Configuration Queries
 
 ```@docs
-get_lmax
-get_mmax
-get_nlat
-get_nphi
-get_nlm
 lmidx
-```
-
-### Grid Information
-
-```@docs
-get_theta
-get_phi
-get_gauss_weights
-```
-
-### Configuration Cleanup
-
-```@docs
-destroy_config
+nlm_calc
 ```
 
 ## Scalar Field Transforms
@@ -78,18 +61,20 @@ SHsphtor_to_spat
 spat_to_SHsphtor
 ```
 
-## QST Transforms
+## QST Transforms (3D Vector Fields)
 
 ```@docs
 SHqst_to_spat
 spat_to_SHqst
 ```
 
-## Field Rotations
+## Rotations
 
 ```@docs
-rotate_real!
-rotate_complex!
+SH_Zrotate
+SH_Yrotate
+SH_Yrotate90
+SH_Xrotate90
 ```
 
 ## Energy/Power Spectrum Analysis
@@ -97,13 +82,15 @@ rotate_complex!
 ```@docs
 energy_scalar_l_spectrum
 energy_vector_l_spectrum
+energy_scalar
+energy_vector
+enstrophy
 ```
 
 ## Threading Control
 
 ```@docs
-set_threading!
-get_threading
+shtns_use_threads
 set_fft_threads
 get_fft_threads
 set_optimal_threads!
@@ -118,19 +105,74 @@ scratch_fft
 
 ## Distributed Transforms (MPI)
 
-When using MPI with PencilArrays:
+When using MPI with PencilArrays, the following functions are available via the parallel extension:
 
 ```@docs
-SHTnsKit.dist_analysis
-SHTnsKit.dist_synthesis
-SHTnsKit.dist_spat_to_SHsphtor
-SHTnsKit.dist_SHsphtor_to_spat
+dist_analysis
+dist_synthesis
 ```
 
-## Helper Functions
+## Gradient and Differential Operators
 
 ```@docs
-lm_from_index
+SH_to_grad_spat
+divergence_from_spheroidal
+vorticity_from_toroidal
+```
+
+## Usage Examples
+
+### Basic Transform
+
+```julia
+using SHTnsKit
+
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create test pattern
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]
+    spatial[i, :] .= (3*x^2 - 1)/2
+end
+
+# Transform roundtrip
+Alm = analysis(cfg, spatial)
+recovered = synthesis(cfg, Alm)
+
+destroy_config(cfg)
+```
+
+### Vector Field Transform
+
+```julia
+using SHTnsKit
+
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create velocity field
+Vθ = zeros(cfg.nlat, cfg.nlon)
+Vφ = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    Vθ[i,j] = cos(θ) * sin(φ)
+    Vφ[i,j] = cos(φ)
+end
+
+# Decompose into spheroidal/toroidal
+Slm, Tlm = spat_to_SHsphtor(cfg, Vθ, Vφ)
+
+# Reconstruct
+Vθ_rec, Vφ_rec = SHsphtor_to_spat(cfg, Slm, Tlm)
+
+destroy_config(cfg)
 ```
 
 ## Error Handling

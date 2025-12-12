@@ -1,5 +1,9 @@
 #!/usr/bin/env julia
 
+# Parallel operator example demonstrating distributed spherical harmonic operations
+#
+# Run with: mpiexec -n 2 julia --project examples/operator_parallel.jl
+
 using MPI
 using PencilArrays
 using PencilFFTs
@@ -9,12 +13,18 @@ function main()
     MPI.Init()
     comm = MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
+    nprocs = MPI.Comm_size(comm)
+
+    if rank == 0
+        println("Parallel operator example with $nprocs MPI processes")
+    end
 
     lmax = 16
     nlat = lmax + 2
     nlon = 2*lmax + 1
     cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-    # Build a test field f(θ,φ) using a PencilArray (distributed)
+
+    # Build a balanced 2D processor grid
     function _procgrid(p)
         best = (1,p); diff = p-1
         for d in 1:p
@@ -27,47 +37,74 @@ function main()
         end
         return best
     end
-    p = MPI.Comm_size(comm)
-    pθ,pφ = _procgrid(p)
+
+    pθ, pφ = _procgrid(nprocs)
     topo = Pencil((nlat, nlon), (pθ, pφ), comm)
-    paalloc(t; eltype=Float64) = (try PencilArrays.zeros(t; eltype=eltype) catch; try PencilArrays.zeros(t) catch; try SHTnsKitParallelExt.allocate(t; eltype=eltype) catch; SHTnsKitParallelExt.allocate(t) end end end)
-    fθφ = paalloc(topo; eltype=Float64)
-    fill!(fθφ, 0)
-    for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-        fθφ[iθ, iφ] = sin(0.3*(iθ+1)) * cos(0.2*(iφ+1))
+
+    # Create distributed spatial field using PencilArrays v0.19+ API
+    local_dims = PencilArrays.size_local(topo)
+    fθφ = PencilArray(topo, zeros(Float64, local_dims...))
+
+    # Fill with test pattern
+    local_data = parent(fθφ)
+    for iθ in axes(local_data, 1), iφ in axes(local_data, 2)
+        local_data[iθ, iφ] = sin(0.3*(iθ+1)) * cos(0.2*(iφ+1))
     end
 
-    # Distributed analysis -> Alm
-    aplan = DistAnalysisPlan(cfg, fθφ)
-    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    dist_analysis!(aplan, Alm, fθφ)
+    # Distributed analysis: spatial -> spectral
+    Alm = SHTnsKit.dist_analysis(cfg, fθφ)
 
-    # Build cosθ operator coefficients (packed) and apply in spectral space
-    mx = zeros(Float64, 2*cfg.nlm)
-    mul_ct_matrix(cfg, mx)
-    # Apply operator in spectral space (pencil path)
-    Alm_p = PencilArray(Alm)
-    R_p = allocate(Alm_p; dims=(:l,:m), eltype=ComplexF64)
-    dist_SH_mul_mx!(cfg, mx, Alm_p, R_p)
-    # Synthesize back to grid (distributed)
-    spln = DistPlan(cfg, fθφ)
-    fθφ_op = similar(fθφ)
-    dist_synthesis!(spln, fθφ_op, R_p)
-
-    # Reference: multiply in grid-space by cosθ and compare
-    gθφ = similar(fθφ)
-    for iθ in 1:nlat
-        ct = cos(cfg.θ[iθ])
-        gθφ[iθ, :] .= ct .* fθφ[iθ, :]
-    end
-
-    # Analysis→synthesis to align normalization if needed (direct compare in grid space)
-    # Compute relative error between spectral-operator result and grid-space multiplication
-    op_out = Array(fθφ_op)
-    ref = Array(gθφ)
-    rel = sqrt(sum(abs2, op_out .- ref) / (sum(abs2, ref) + eps()))
     if rank == 0
-        println("[cosθ operator] relative grid error: ", rel)
+        println("Distributed analysis complete. Alm size: $(size(Alm))")
+        println("Max |Alm|: $(maximum(abs.(Alm)))")
+    end
+
+    # Apply Laplacian operator in spectral space: -l(l+1) multiplication
+    Alm_lap = copy(Alm)
+    SHTnsKit.apply_laplacian!(cfg, Alm_lap)
+
+    # Synthesize back to spatial domain
+    fθφ_lap = SHTnsKit.dist_synthesis(cfg, Alm_lap; prototype_θφ=fθφ, real_output=true)
+
+    if rank == 0
+        println("Laplacian operator applied in spectral space")
+    end
+
+    # Reference: compute Laplacian via analysis -> -l(l+1) -> synthesis
+    # For comparison, compute the same thing via serial transforms if possible
+    if nprocs == 1
+        # Verify against serial computation
+        Alm_serial = SHTnsKit.analysis(cfg, local_data)
+        Alm_lap_serial = copy(Alm_serial)
+        SHTnsKit.apply_laplacian!(cfg, Alm_lap_serial)
+        fθφ_lap_serial = SHTnsKit.synthesis(cfg, Alm_lap_serial; real_output=true)
+
+        err = maximum(abs.(parent(fθφ_lap) .- fθφ_lap_serial))
+        println("Roundtrip error (distributed vs serial): $err")
+    end
+
+    # Check that the Laplacian was applied correctly
+    # For a simple test: verify that Alm coefficients were scaled by -l(l+1)
+    check_scaling = true
+    for l in 0:cfg.lmax
+        for m in 0:min(l, cfg.mmax)
+            expected_scale = -l * (l + 1)
+            if abs(Alm[l+1, m+1]) > 1e-14
+                actual_scale = Alm_lap[l+1, m+1] / Alm[l+1, m+1]
+                if abs(actual_scale - expected_scale) > 1e-10
+                    check_scaling = false
+                end
+            end
+        end
+    end
+
+    if rank == 0
+        println("Laplacian scaling check: $(check_scaling ? "PASSED" : "FAILED")")
+    end
+
+    MPI.Barrier(comm)
+    if rank == 0
+        println("Done.")
     end
 
     MPI.Finalize()

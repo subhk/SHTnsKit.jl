@@ -146,36 +146,6 @@ destroy_config(cfg)
 MPI.Finalize()
 ```
 
-<!-- ### High-Performance SIMD
-
-```julia
-using SHTnsKit
-using LoopVectorization
-using Printf
-
-# Use larger problem size where SIMD benefits outweigh overhead
-cfg = create_gauss_config(64, 66; nlon=129)
-
-# Test turbo-optimized Laplacian operation
-sh_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-for l in 0:min(cfg.lmax, 20), m in 0:min(l, cfg.mmax)
-    sh_coeffs[l+1, m+1] = (0.1 + 0.05im) * exp(-0.05*l)
-end
-
-println("Testing SIMD-optimized operations...")
-sh_copy = copy(sh_coeffs)
-turbo_apply_laplacian!(cfg, sh_copy)
-println(" Turbo Laplacian completed")
-
-# Benchmark analysis/synthesis transforms
-results = benchmark_turbo_vs_simd(cfg)
-@printf("Analysis speedup: %.2fx\n", results.analysis_speedup)
-@printf("Synthesis speedup: %.2fx\n", results.synthesis_speedup)
-
-destroy_config(cfg)
-
-``` -->
-
 ## Performance Optimization
 
 ### Threading Configuration
@@ -236,13 +206,6 @@ allocs = @allocated analysis(cfg, f)
 println("Analysis allocations: $allocs bytes")
 ```
 
-<!-- ### Performance Tips
-
-- use_rfft (distributed plans): Enable real-to-complex transforms in `DistAnalysisPlan` and `DistSphtorPlan` to cut (θ,k) memory and speed real-output paths. Falls back to complex FFTs if not available.
-- with_spatial_scratch (distributed vector/QST): Set to `true` to keep a single complex (θ,φ) buffer inside the plan and avoid per-call allocations for iFFT when outputs are real.
-- Plan reuse: Build plans once per problem size and reuse across calls to avoid planner churn and allocations.
-- Tables vs on-the-fly Plm: Precompute with `enable_plm_tables!(cfg)` to reduce CPU if your grid is fixed; results are identical to on-the-fly recurrence. -->
-
 ## Parallel Computing Guide
 
 ### Running Examples
@@ -279,28 +242,6 @@ mpiexec -n 2 julia --project=. examples/rotate_y_parallel.jl
 
 ```
 
-<!-- Enable rfft in distributed plans (when supported):
-
-```julia
-using SHTnsKit, MPI, PencilArrays, PencilFFTs
-MPI.Init()
-cfg = create_gauss_config(16, 18; nlon=33)
-
-# Let SHTnsKit suggest a balanced θ/φ pencil layout
-pθ, pφ = suggest_pencil_grid(MPI.COMM_WORLD, cfg.nlat, cfg.nlon; allow_one_dim=false)
-Pθφ = PencilArrays.Pencil((:θ,:φ), (cfg.nlat, cfg.nlon); comm=MPI.COMM_WORLD)
-# (Pass `procgrid=(pθ,pφ)` or similar keyword if your PencilArrays version supports it.)
-
-# Scalar analysis with rfft
-aplan = DistAnalysisPlan(cfg, PencilArrays.zeros(Pθφ; eltype=Float64); use_rfft=true)
-
-# Vector transforms with rfft + optional spatial scratch to avoid iFFT allocs for real outputs
-vplan = DistSphtorPlan(cfg, PencilArrays.zeros(Pθφ; eltype=Float64); use_rfft=true, with_spatial_scratch=true)
-
-# Cache PencilFFT plans across calls once warm-up completes
-enable_fft_plan_cache!()
-MPI.Finalize()
-``` -->
 
 ### Automatic Differentiation
 
@@ -326,15 +267,6 @@ destroy_config(cfg)
 
 Supported functions include all core transforms, vector operations, spectral analysis, and differential operators.
 
-<!-- ### Allocation Benchmarks
-
-```bash
-# Serial and (if available) MPI allocation benchmarks
-julia --project=. examples/alloc_benchmark.jl 16
-mpiexec -n 2 julia --project=. examples/alloc_benchmark.jl 16
-
-Tip: To avoid allocations for real-output distributed synthesis, construct plans with `with_spatial_scratch=true`, which keeps a single complex (θ,φ) scratch buffer inside the plan. This modest, fixed footprint removes per-call allocations for iFFT writes when outputs are real.
-``` -->
 
 ##  Contributing
 

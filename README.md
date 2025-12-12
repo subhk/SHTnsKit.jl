@@ -236,12 +236,12 @@ allocs = @allocated analysis(cfg, f)
 println("Analysis allocations: $allocs bytes")
 ```
 
-### Performance Tips
+<!-- ### Performance Tips
 
 - use_rfft (distributed plans): Enable real-to-complex transforms in `DistAnalysisPlan` and `DistSphtorPlan` to cut (θ,k) memory and speed real-output paths. Falls back to complex FFTs if not available.
 - with_spatial_scratch (distributed vector/QST): Set to `true` to keep a single complex (θ,φ) buffer inside the plan and avoid per-call allocations for iFFT when outputs are real.
 - Plan reuse: Build plans once per problem size and reuse across calls to avoid planner churn and allocations.
-- Tables vs on-the-fly Plm: Precompute with `enable_plm_tables!(cfg)` to reduce CPU if your grid is fixed; results are identical to on-the-fly recurrence.
+- Tables vs on-the-fly Plm: Precompute with `enable_plm_tables!(cfg)` to reduce CPU if your grid is fixed; results are identical to on-the-fly recurrence. -->
 
 ## Parallel Computing Guide
 

@@ -1,3 +1,103 @@
+#=
+================================================================================
+core_transforms.jl - Core Spherical Harmonic Transform Implementations
+================================================================================
+
+This file implements the fundamental forward (analysis) and backward (synthesis)
+transforms between 2D spatial grids and spherical harmonic coefficients.
+
+TRANSFORM OVERVIEW
+------------------
+Analysis (spatial → spectral):
+    a_lm = ∫∫ f(θ,φ) Y_l^m*(θ,φ) sin(θ) dθ dφ
+
+    Implementation:
+    1. FFT along φ: f(θ,φ) → F_m(θ) for each m = 0..mmax
+    2. Legendre integration: a_lm = Σ_θ w(θ) * F_m(θ) * P_l^m(cos θ) * N_lm
+
+Synthesis (spectral → spatial):
+    f(θ,φ) = Σ_l Σ_m a_lm Y_l^m(θ,φ)
+
+    Implementation:
+    1. Legendre summation: F_m(θ) = Σ_l a_lm * P_l^m(cos θ) * N_lm
+    2. Inverse FFT along φ: F_m(θ) → f(θ,φ)
+
+KEY FUNCTIONS
+-------------
+- analysis(cfg, f)       : Forward transform, allocates output
+- analysis!(cfg, alm, f) : Forward transform, in-place output
+- synthesis(cfg, alm)    : Backward transform, allocates output
+- synthesis!(cfg, f, alm): Backward transform, in-place output
+
+IMPLEMENTATION VARIANTS
+-----------------------
+1. Fused loops (default, use_fused_loops=true):
+   - Combines operations to improve cache utilization
+   - Better for larger problems
+
+2. Unfused loops (use_fused_loops=false):
+   - Separate loops for each operation
+   - May be better for debugging or small problems
+
+3. Table-based (cfg.use_plm_tables=true):
+   - Uses precomputed Legendre polynomial tables
+   - Faster but requires more memory
+
+4. On-the-fly (cfg.on_the_fly=true):
+   - Computes Legendre polynomials during transform
+   - Lower memory, slightly slower
+
+MULTITHREADING
+--------------
+- Transforms parallelize over m (azimuthal order)
+- Each thread has its own Legendre polynomial buffer
+- Use `Threads.nthreads()` to check available threads
+
+NUMERICAL PRECISION
+-------------------
+- Roundtrip error: f ≈ synthesis(cfg, analysis(cfg, f))
+- Expected: O(ε) where ε is machine epsilon (~1e-15 for Float64)
+- Larger errors may indicate: insufficient nlat, nlon, or numerical instability
+
+DEBUGGING CHECKLIST
+-------------------
+1. Dimension checks:
+   - f must be (nlat, nlon)
+   - alm must be (lmax+1, mmax+1)
+
+2. Coefficient interpretation:
+   - alm[1,1] = a_{0,0}: mean value (monopole)
+   - alm[2,1] = a_{1,0}: north-south gradient
+   - alm[2,2] = a_{1,1}: east-west gradient
+
+3. Common issues:
+   - Wrong grid size → DimensionMismatch error
+   - alm not zeroed → accumulation of old values
+   - Missing normalization → wrong magnitudes
+
+EXAMPLE USAGE
+-------------
+```julia
+cfg = create_gauss_config(32, 48)
+
+# Create test field (Y_2^0 pattern)
+f = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    f[i, :] .= 0.5 * (3*cfg.x[i]^2 - 1)  # P_2^0(x)
+end
+
+# Transform to spectral
+alm = analysis(cfg, f)
+@assert abs(alm[3,1]) > 0.1  # a_{2,0} should be non-zero
+
+# Transform back
+f2 = synthesis(cfg, alm)
+@assert maximum(abs, f - f2) < 1e-12
+```
+
+================================================================================
+=#
+
 """
 Core Spherical Harmonic Transforms
 

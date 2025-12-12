@@ -61,7 +61,7 @@ function main()
 
     # Apply Laplacian operator in spectral space: -l(l+1) multiplication
     Alm_lap = copy(Alm)
-    SHTnsKit.apply_laplacian!(cfg, Alm_lap)
+    SHTnsKit.dist_apply_laplacian!(cfg, Alm_lap)
 
     # Synthesize back to spatial domain
     fθφ_lap = SHTnsKit.dist_synthesis(cfg, Alm_lap; prototype_θφ=fθφ, real_output=true)
@@ -76,7 +76,7 @@ function main()
         # Verify against serial computation
         Alm_serial = SHTnsKit.analysis(cfg, local_data)
         Alm_lap_serial = copy(Alm_serial)
-        SHTnsKit.apply_laplacian!(cfg, Alm_lap_serial)
+        SHTnsKit.dist_apply_laplacian!(cfg, Alm_lap_serial)
         fθφ_lap_serial = SHTnsKit.synthesis(cfg, Alm_lap_serial; real_output=true)
 
         err = maximum(abs.(parent(fθφ_lap) .- fθφ_lap_serial))

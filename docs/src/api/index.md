@@ -192,72 +192,73 @@ Allocate array for spatial field values.
 ### Forward Transform (Synthesis)
 
 ```julia
-synthesize(cfg::SHTConfig, sh::Vector) → Matrix{Float64}
+synthesis(cfg::SHTConfig, Alm::Matrix{ComplexF64}; real_output=true) → Matrix
 ```
 Transform from spectral to spatial domain (spherical harmonic synthesis).
 
 **Arguments:**
-- `sh::Vector{Float64}`: Spectral coefficients of length `cfg.nlm`
+- `Alm::Matrix{ComplexF64}`: Spectral coefficients of size `(lmax+1, mmax+1)`
+- `real_output::Bool`: If true (default), returns real-valued spatial field
 
-**Returns:** Spatial field matrix `(nlat × nphi)`
+**Returns:** Spatial field matrix `(nlat × nlon)`
 
 **Example:**
 ```julia
-cfg = create_gauss_config(16, 16)
-# Create bandlimited test coefficients (avoids high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-spatial = synthesis(cfg, sh)  # 17×33 matrix
+cfg = create_gauss_config(16, 18; nlon=33)
+# Create bandlimited test coefficients
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[1, 1] = 1.0  # Y_0^0 constant term
+Alm[3, 1] = 0.5  # Y_2^0 term
+spatial = synthesis(cfg, Alm)  # 18×33 matrix
+destroy_config(cfg)
 ```
 
 ---
 
 ```julia
-synthesize!(cfg::SHTConfig, sh::Vector, spatial::Matrix) → Nothing
+synthesis!(cfg::SHTConfig, f_out::Matrix, Alm::Matrix; real_output=true) → Nothing
 ```
 In-place synthesis (avoids allocation).
 
 **Arguments:**
-- `sh::Vector{Float64}`: Input spectral coefficients
-- `spatial::Matrix{Float64}`: Output spatial field (modified)
+- `f_out::Matrix`: Output spatial field (modified)
+- `Alm::Matrix{ComplexF64}`: Input spectral coefficients
 
 ### Backward Transform (Analysis)
 
 ```julia
-analyze(cfg::SHTConfig, spatial::Matrix) → Vector{Float64}
+analysis(cfg::SHTConfig, f::Matrix) → Matrix{ComplexF64}
 ```
 Transform from spatial to spectral domain (spherical harmonic analysis).
 
 **Arguments:**
-- `spatial::Matrix{Float64}`: Spatial field `(nlat × nphi)`
+- `f::Matrix{Float64}`: Spatial field `(nlat × nlon)`
 
-**Returns:** Spectral coefficients vector of length `cfg.nlm`
+**Returns:** Spectral coefficients matrix of size `(lmax+1, mmax+1)`
 
 **Example:**
 ```julia
-cfg = create_gauss_config(16, 16)
+cfg = create_gauss_config(16, 18; nlon=33)
 # Create bandlimited spatial field (smooth test function)
 θ, φ = cfg.θ, cfg.φ
 spatial = zeros(cfg.nlat, cfg.nlon)
 for i in 1:cfg.nlat, j in 1:cfg.nlon
     spatial[i,j] = 1.0 + 0.5 * cos(θ[i]) + 0.3 * sin(θ[i]) * cos(φ[j])
 end
-sh = analysis(cfg, spatial)
+Alm = analysis(cfg, spatial)
+destroy_config(cfg)
 ```
 
 ---
 
 ```julia
-analyze!(cfg::SHTConfig, spatial::Matrix, sh::Vector) → Nothing
+analysis!(cfg::SHTConfig, Alm::Matrix, f::Matrix) → Nothing
 ```
 In-place analysis (avoids allocation).
 
 **Arguments:**
-- `spatial::Matrix{Float64}`: Input spatial field
-- `sh::Vector{Float64}`: Output spectral coefficients (modified)
+- `Alm::Matrix{ComplexF64}`: Output spectral coefficients (modified)
+- `f::Matrix{Float64}`: Input spatial field
 
 ## Complex Field Transforms
 
@@ -278,23 +279,25 @@ Allocate array for complex spatial field values.
 ### Complex Transforms
 
 ```julia
-synthesize_complex(cfg::SHTConfig, sh::Vector{ComplexF64}) → Matrix{ComplexF64}
+SH_to_spat_cplx(cfg::SHTConfig, Alm::Matrix{ComplexF64}) → Matrix{ComplexF64}
 ```
-Complex field synthesis.
+Complex field synthesis (spectral to spatial for complex-valued fields).
 
 **Example:**
 ```julia
-cfg = create_gauss_config(16, 16)
-sh_complex = rand(ComplexF64, cfg.nlm)
-spatial_complex = synthesize_complex(cfg, sh_complex)
+cfg = create_gauss_config(16, 18; nlon=33)
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[1, 1] = 1.0 + 0.5im
+spatial_complex = SH_to_spat_cplx(cfg, Alm)
+destroy_config(cfg)
 ```
 
 ---
 
 ```julia
-analyze_complex(cfg::SHTConfig, spatial::Matrix{ComplexF64}) → Vector{ComplexF64}
+spat_cplx_to_SH(cfg::SHTConfig, f::Matrix{ComplexF64}) → Matrix{ComplexF64}
 ```
-Complex field analysis.
+Complex field analysis (spatial to spectral for complex-valued fields).
 
 ## Vector Field Transforms  
 
@@ -305,45 +308,44 @@ Vector fields on the sphere are decomposed into **spheroidal** and **toroidal** 
 ### Vector Synthesis
 
 ```julia
-synthesize_vector(cfg::SHTConfig, S_lm::Vector, T_lm::Vector) → (Vθ::Matrix, Vφ::Matrix)
+SHsphtor_to_spat(cfg::SHTConfig, Slm::Matrix{ComplexF64}, Tlm::Matrix{ComplexF64}) → (Vθ::Matrix, Vφ::Matrix)
 ```
 Synthesize vector field from spheroidal and toroidal coefficients.
 
 **Arguments:**
-- `S_lm::Vector{Float64}`: Spheroidal (poloidal) coefficients
-- `T_lm::Vector{Float64}`: Toroidal coefficients
+- `Slm::Matrix{ComplexF64}`: Spheroidal coefficients `(lmax+1, mmax+1)`
+- `Tlm::Matrix{ComplexF64}`: Toroidal coefficients `(lmax+1, mmax+1)`
 
 **Returns:**
-- `Vθ::Matrix{Float64}`: Colatitude component
-- `Vφ::Matrix{Float64}`: Longitude component
+- `Vθ::Matrix{Float64}`: Colatitude (θ) component
+- `Vφ::Matrix{Float64}`: Longitude (φ) component
 
 **Example:**
 ```julia
-cfg = create_gauss_config(20, 20)
-# Create bandlimited vector field coefficients
-S_lm = zeros(cfg.nlm)  # Spheroidal
-T_lm = zeros(cfg.nlm)  # Toroidal
-S_lm[1] = 1.0  # Basic spheroidal mode
-if cfg.nlm > 3
-    T_lm[3] = 0.5  # Basic toroidal mode
-end
-Vθ, Vφ = synthesize_vector(cfg, S_lm, T_lm)
+cfg = create_gauss_config(20, 22; nlon=41)
+# Create vector field coefficients
+Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Slm[2, 1] = 1.0  # l=1, m=0 spheroidal mode
+Tlm[3, 2] = 0.5  # l=2, m=1 toroidal mode
+Vθ, Vφ = SHsphtor_to_spat(cfg, Slm, Tlm)
+destroy_config(cfg)
 ```
 
 ### Vector Analysis
 
 ```julia
-analyze_vector(cfg::SHTConfig, Vθ::Matrix, Vφ::Matrix) → (S_lm::Vector, T_lm::Vector)
+spat_to_SHsphtor(cfg::SHTConfig, Vθ::Matrix, Vφ::Matrix) → (Slm::Matrix, Tlm::Matrix)
 ```
 Analyze vector field into spheroidal and toroidal components.
 
 **Arguments:**
-- `Vθ::Matrix{Float64}`: Colatitude component
-- `Vφ::Matrix{Float64}`: Longitude component
+- `Vθ::Matrix{Float64}`: Colatitude (θ) component
+- `Vφ::Matrix{Float64}`: Longitude (φ) component
 
 **Returns:**
-- `S_lm::Vector{Float64}`: Spheroidal coefficients
-- `T_lm::Vector{Float64}`: Toroidal coefficients
+- `Slm::Matrix{ComplexF64}`: Spheroidal coefficients
+- `Tlm::Matrix{ComplexF64}`: Toroidal coefficients
 
 ### Spatial Operators
 

@@ -406,20 +406,20 @@ Now that you've mastered the basics:
 
 ```julia
 # Configuration
-cfg = create_gauss_config(lmax, mmax)
-cfg = create_regular_config(lmax, mmax)
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+cfg = create_regular_config(lmax, nlat; nlon=nlon)
 
 # Basic transforms
 spatial = synthesis(cfg, spectral)
 spectral = analysis(cfg, spatial)
 
-# Vector transforms  
-Vθ, Vφ = synthesize_vector(cfg, S_lm, T_lm)
-S_lm, T_lm = analyze_vector(cfg, Vθ, Vφ)
+# Vector transforms (spheroidal/toroidal decomposition)
+Vθ, Vφ = SHsphtor_to_spat(cfg, S_lm, T_lm)
+S_lm, T_lm = spat_to_SHsphtor(cfg, Vθ, Vφ)
 
 # Complex fields
-spatial_c = synthesize_complex(cfg, spectral_c)
-spectral_c = analyze_complex(cfg, spatial_c)
+spatial_c = SH_to_spat_cplx(cfg, spectral_c)
+spectral_c = spat_cplx_to_SH(cfg, spatial_c)
 
 # Threading
 set_threading!(true)

@@ -31,26 +31,58 @@ SHTnsKit.jl is a high-performance native Julia implementation of spherical harmo
 
 ## Quick Start
 
-### Serial Usage
+### Hello World Example
 ```julia
 using SHTnsKit
 
-# Create spherical harmonic configuration
-lmax = 32
-cfg = create_gauss_config(lmax, lmax)
+# Step 1: Create a configuration for spherical harmonics
+lmax = 16                              # Maximum degree (controls resolution)
+nlat = lmax + 2                        # Number of latitude points
+nlon = 2*lmax + 1                      # Number of longitude points
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-# Generate bandlimited test data (avoids high-frequency errors)
-sh_coeffs = zeros(cfg.nlm)
-sh_coeffs[1] = 1.0  # Y_0^0 constant term
-if cfg.nlm > 3
-    sh_coeffs[3] = 0.5  # Y_1^0 term
+# Step 2: Create a simple test pattern on the sphere
+# This is Y_2^0 = (3cos²θ - 1)/2, the "peanut" shape
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]  # cos(θ) at this latitude
+    spatial[i, :] .= (3*x^2 - 1)/2
 end
 
+# Step 3: Transform to spectral coefficients (analysis)
+Alm = analysis(cfg, spatial)
+
+# Step 4: Transform back to spatial domain (synthesis)
+recovered = synthesis(cfg, Alm)
+
+# Step 5: Verify roundtrip accuracy
+max_error = maximum(abs.(spatial - recovered))
+println("Roundtrip error: $max_error")  # Should be ~1e-14
+
+# Step 6: Always clean up when done
+destroy_config(cfg)
+```
+
+### Serial Usage (More Complete Example)
+```julia
+using SHTnsKit
+
+# Create configuration
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create spectral coefficients directly
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[1, 1] = 1.0      # Y_0^0: constant term (global mean)
+Alm[3, 1] = 0.5      # Y_2^0: latitude variation
+
 # Forward transform: spectral → spatial
-spatial_field = synthesis(cfg, sh_coeffs)
+spatial_field = synthesis(cfg, Alm)
 
 # Backward transform: spatial → spectral
-recovered_coeffs = analysis(cfg, spatial_field)
+recovered_Alm = analysis(cfg, spatial_field)
 
 # Clean up
 destroy_config(cfg)
@@ -61,14 +93,31 @@ destroy_config(cfg)
 using SHTnsKit, MPI, PencilArrays, PencilFFTs
 
 MPI.Init()
-cfg = create_gauss_config(20, 16; mres=48, nlon=64)
-pcfg = create_parallel_config(cfg, COMM_WORLD)
 
-# Parallel operations
-sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-result = similar(sh_coeffs)
-parallel_apply_operator(pcfg, :laplacian, sh_coeffs, result)
+# Create configuration
+lmax, nlat, nlon = 32, 34, 65
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
+# Create distributed spatial array using PencilArrays
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill local data (each rank handles its portion)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]  # cos(θ)
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = x  # Y_1^0 pattern
+    end
+end
+
+# Distributed analysis (spatial → spectral)
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+
+# Distributed synthesis (spectral → spatial)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+destroy_config(cfg)
 MPI.Finalize()
 ```
 

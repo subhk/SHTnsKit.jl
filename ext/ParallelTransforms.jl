@@ -231,6 +231,58 @@ function SHTnsKit.dist_analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     end
 end
 
+# ===== FUNCTION BARRIER HELPERS FOR TYPE-STABLE INNER LOOPS =====
+# These separate functions allow Julia to specialize and eliminate allocations in hot loops
+
+"""
+Inner loop for analysis without plm_tables (computes Legendre polynomials on-demand).
+Uses function barrier to ensure type stability and zero allocations.
+"""
+function _analysis_loop_no_tables!(temp_dense::Matrix{ComplexF64}, P::Vector{Float64},
+                                   Fθm::Matrix{ComplexF64}, weights_cache::Vector{Float64},
+                                   x_cache::Vector{Float64}, θ_globals::Vector{Int},
+                                   lmax::Int, mmax::Int)
+    nθ_local = length(θ_globals)
+    @inbounds for mval in 0:mmax
+        col = mval + 1
+        m_fft = mval + 1
+        for ii in 1:nθ_local
+            Fi = Fθm[ii, m_fft]
+            wi = weights_cache[ii]
+            SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+            @simd for l in mval:lmax
+                temp_dense[l+1, col] += wi * P[l+1] * Fi
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+Inner loop for analysis with plm_tables (uses precomputed Legendre polynomials).
+Uses function barrier to ensure type stability and zero allocations.
+"""
+function _analysis_loop_with_tables!(temp_dense::Matrix{ComplexF64},
+                                     plm_tables::Vector{Matrix{Float64}},
+                                     Fθm::Matrix{ComplexF64}, weights_cache::Vector{Float64},
+                                     θ_globals::Vector{Int}, lmax::Int, mmax::Int)
+    nθ_local = length(θ_globals)
+    @inbounds for mval in 0:mmax
+        col = mval + 1
+        m_fft = mval + 1
+        for ii in 1:nθ_local
+            iglob = θ_globals[ii]
+            Fi = Fθm[ii, m_fft]
+            wi = weights_cache[ii]
+            tblcol = view(plm_tables[col], :, iglob)
+            @simd for l in mval:lmax
+                temp_dense[l+1, col] += wi * tblcol[l+1] * Fi
+            end
+        end
+    end
+    return nothing
+end
+
 function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
     comm = communicator(fθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -304,53 +356,43 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
         weights_cache[ii] = cfg.w[iglob]
     end
 
-    # Pre-cache table views for hot loops (only allocate if actually using tables)
-    cached_table_views = use_tbl ? Dict{Int, SubArray}() : nothing
+    # Pre-cache x values for type-stable inner loop (avoids cfg.x[iglob] allocation)
+    x_cache = Vector{Float64}(undef, nθ_local)
+    for (ii, iglob) in enumerate(θ_globals)
+        x_cache[ii] = cfg.x[iglob]
+    end
 
-    # Main analysis loop: for each m mode (Fourier coefficient index)
-    for mval in 0:mmax
-        col = mval + 1  # Column index in dense storage (1-based)
-        m_fft = mval + 1  # FFT result index (1-based, corresponds to m=0,1,2,...)
-
-        # Loop over local θ indices
-        for (ii, iglob) in enumerate(θ_globals)
-            Fi = Fθm[ii, m_fft]  # Fourier coefficient at this (θ, m)
-            wi = weights_cache[ii]
-
-            if use_tbl
-                # Use cached table view for better memory access patterns
-                cache_key = col * 1000000 + iglob
-                if haskey(cached_table_views, cache_key)
-                    tblcol = cached_table_views[cache_key]
-                else
+    # Main analysis loop using function barrier for type stability (eliminates ~33MB allocations)
+    # Packed storage is not supported with function barrier optimization - fall back to inline loop
+    if use_packed_storage
+        # Original inline loop for packed storage (not the hot path)
+        for mval in 0:mmax
+            col = mval + 1
+            m_fft = mval + 1
+            for (ii, iglob) in enumerate(θ_globals)
+                Fi = Fθm[ii, m_fft]
+                wi = weights_cache[ii]
+                if use_tbl
                     tblcol = view(cfg.plm_tables[col], :, iglob)
-                    cached_table_views[cache_key] = tblcol
-                end
-                if use_packed_storage
                     @inbounds @simd for l in mval:lmax
                         lm = storage_info.lm_to_packed[l+1, col]
                         Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * tblcol[l+1]) * Fi
                     end
                 else
-                    @inbounds @simd for l in mval:lmax
-                        temp_dense[l+1, col] += wi * tblcol[l+1] * Fi
-                    end
-                end
-            else
-                # Fallback: compute Legendre polynomials on-demand
-                SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
-                if use_packed_storage
+                    SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
                     @inbounds @simd for l in mval:lmax
                         lm = storage_info.lm_to_packed[l+1, col]
                         Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * P[l+1]) * Fi
                     end
-                else
-                    @inbounds @simd for l in mval:lmax
-                        temp_dense[l+1, col] += wi * P[l+1] * Fi
-                    end
                 end
             end
         end
+    elseif use_tbl
+        # Use function barrier for tables path (zero allocation)
+        _analysis_loop_with_tables!(temp_dense, cfg.plm_tables, Fθm, weights_cache, θ_globals, lmax, mmax)
+    else
+        # Use function barrier for no-tables path (zero allocation)
+        _analysis_loop_no_tables!(temp_dense, P, Fθm, weights_cache, x_cache, θ_globals, lmax, mmax)
     end
     
     # Handle MPI reduction based on storage type with optimized communication

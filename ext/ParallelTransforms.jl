@@ -350,17 +350,32 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     end
     
     # Handle MPI reduction based on storage type with optimized communication
-    if use_packed_storage
-        # Reduce packed coefficients directly (already normalized during accumulation)
-        SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
+    # Only reduce if θ is actually distributed across processes
+    # When φ is distributed but θ is not, all ranks compute identical results after gathering φ
+    θ_is_distributed = (nθ_local < nlat)
+
+    if θ_is_distributed
+        if use_packed_storage
+            # Reduce packed coefficients directly (already normalized during accumulation)
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
+        else
+            # Use efficient reduction for large spectral arrays
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
+            # Apply normalization to dense matrix with SIMD optimization
+            # Each (l,m) element is independent, so ivdep is safe
+            @inbounds for m in 0:mmax
+                @simd ivdep for l in m:lmax
+                    Alm_local[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
+                end
+            end
+        end
     else
-        # Use efficient reduction for large spectral arrays
-        SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
-        # Apply normalization to dense matrix with SIMD optimization
-        # Each (l,m) element is independent, so ivdep is safe
-        @inbounds for m in 0:mmax
-            @simd ivdep for l in m:lmax
-                Alm_local[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
+        # θ is not distributed - no reduction needed, just apply normalization
+        if !use_packed_storage
+            @inbounds for m in 0:mmax
+                @simd ivdep for l in m:lmax
+                    Alm_local[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
+                end
             end
         end
     end
@@ -1074,9 +1089,17 @@ function SHTnsKit.dist_spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilA
             end
         end
     end
-    # Use efficient reduction for better scaling on large process counts
-    SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, comm)
-    SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, comm)
+
+    # Only reduce if θ is actually distributed across processes
+    # When φ is distributed but θ is not, all ranks compute identical results after gathering φ
+    θ_is_distributed = (nθ_local < nlat)
+
+    if θ_is_distributed
+        # Use efficient reduction for better scaling on large process counts
+        SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, comm)
+        SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, comm)
+    end
+
     # Convert to cfg's requested normalization if needed
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         S2 = similar(Slm_local); T2 = similar(Tlm_local)

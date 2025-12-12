@@ -186,43 +186,50 @@ set_fft_threads(min(Sys.CPU_THREADS ÷ 2, 8))
 ```julia
 using SHTnsKit
 
-cfg = create_gauss_config(64, 64)
+lmax = 64
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
-# Method 1: Allocate once, reuse many times
-sh_buffer = allocate_spectral(cfg)
-spatial_buffer = allocate_spatial(cfg)
+# Method 1: Pre-allocate buffers for in-place operations
+Alm_buffer = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+spatial_buffer = zeros(cfg.nlat, cfg.nlon)
+fft_scratch = scratch_fft(cfg)
 
-function process_many_fields_optimized(field_generator, n_fields)
+function process_many_fields_optimized(cfg, n_fields)
     results = Float64[]
-    
+
     for i in 1:n_fields
-        # Generate field data (application-specific)
-        fill!(spatial_buffer, 0.0)
-        field_data = field_generator(i)
-        spatial_buffer .= field_data
-        
-        # In-place transform
-        analyze!(cfg, spatial_buffer, sh_buffer)
-        
-        # Process result (example: compute energy)
-        energy = sum(abs2, sh_buffer)
+        # Generate field data
+        for j in 1:cfg.nlat
+            x = cfg.x[j]
+            spatial_buffer[j, :] .= x^2 + 0.1*sin(i)
+        end
+
+        # In-place transform (reuses fft_scratch)
+        analysis!(cfg, Alm_buffer, spatial_buffer; fft_scratch=fft_scratch)
+
+        # Process result
+        energy = sum(abs2, Alm_buffer)
         push!(results, energy)
     end
-    
+
     return results
 end
 
 # vs Method 2: Allocate every time (slower)
-function process_many_fields_naive(field_generator, n_fields)
+function process_many_fields_naive(cfg, n_fields)
     results = Float64[]
-    
+
     for i in 1:n_fields
-        field_data = field_generator(i)
-        sh = analyze(cfg, field_data)  # Allocates new array
-        energy = sum(abs2, sh)
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for j in 1:cfg.nlat
+            x = cfg.x[j]
+            spatial[j, :] .= x^2 + 0.1*sin(i)
+        end
+        Alm = analysis(cfg, spatial)  # Allocates new array
+        energy = sum(abs2, Alm)
         push!(results, energy)
     end
-    
+
     return results
 end
 
@@ -232,75 +239,67 @@ destroy_config(cfg)
 ### Memory Layout Optimization
 
 ```julia
-# For batch processing, consider array-of-arrays vs array layout
+# For batch processing, consider array-of-arrays vs matrix layout
 using SHTnsKit
 
-cfg = create_gauss_config(32, 32)
-n_fields = 1000
+lmax = 32
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+n_fields = 100
 
-# Layout 1: Array of arrays (better for random access)
-spectral_data_aoa = [rand(cfg.nlm) for _ in 1:n_fields]
+# Layout 1: Array of matrices (better for random access)
+spectral_data_aoa = [zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1) for _ in 1:n_fields]
+for arr in spectral_data_aoa
+    arr[1,1] = 1.0
+    arr[3,1] = 0.5
+end
 
-# Layout 2: Single large array (better for streaming)
-nlm = cfg.nlm
-spectral_data_flat = rand(nlm, n_fields)
-
-# Process with different layouts
+# Process with array of arrays
 @time begin
     for i in 1:n_fields
-        spatial = synthesize(cfg, spectral_data_aoa[i])
+        spatial = synthesis(cfg, spectral_data_aoa[i])
     end
 end
 
-@time begin
-    for i in 1:n_fields
-        spatial = synthesize(cfg, @view spectral_data_flat[:, i])
-    end
-end
-
-    destroy_config(cfg)
+destroy_config(cfg)
 ```
 
 ### Large Problem Memory Management
 
 ```julia
 using SHTnsKit
+using Statistics
 
-function process_large_dataset(lmax=256, n_fields=10000)
-    cfg = create_gauss_config(lmax, lmax)
-    
+function process_large_dataset(lmax=256, n_fields=1000)
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
     # For very large problems, process in chunks
     chunk_size = 100
     n_chunks = div(n_fields, chunk_size)
-    
+
     results = Float64[]
-    
+
+    # Pre-allocate buffers to reuse
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+
     for chunk in 1:n_chunks
-        # Process chunk
         chunk_results = Float64[]
-        
+
         for i in 1:chunk_size
-            # Generate field (don't store all at once)
-            # Create bandlimited test coefficients (prevents high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-            spatial = synthesis(cfg, sh)
-            
-            # Compute result
-            result = mean(spatial)
-            push!(chunk_results, result)
+            # Modify coefficients in place
+            fill!(Alm, 0.0)
+            Alm[1,1] = 1.0 + 0.01*i
+            Alm[3,1] = 0.5
+
+            spatial = synthesis(cfg, Alm)
+            push!(chunk_results, mean(spatial))
         end
-        
-        # Store chunk results
+
         append!(results, chunk_results)
-        
-        # Force garbage collection between chunks
-        GC.gc()
+        GC.gc()  # Force garbage collection between chunks
     end
-    
+
     destroy_config(cfg)
     return results
 end
@@ -317,45 +316,45 @@ This package is CPU‑focused and does not include GPU support.
 ```julia
 using SHTnsKit
 
-cfg = create_gauss_config(64, 64)
+lmax = 64
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
 # Forward transforms (synthesis) are generally faster than backward (analysis)
 # Plan your algorithm to minimize analysis operations
 
-function optimize_transform_direction()
-    # Create bandlimited test coefficients (prevents high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-    # Create bandlimited spatial data (smooth test function)
-θ, φ = cfg.θ, cfg.φ
-spatial = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat, j in 1:cfg.nlon
-    spatial[i,j] = 1.0 + 0.5 * cos(θ[i]) + 0.3 * sin(θ[i]) * cos(φ[j])
-end
-    
-    # Forward transform timing
+function optimize_transform_direction(cfg)
+    # Create test coefficients
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm[1,1] = 1.0
+    Alm[3,1] = 0.5
+
+    # Create test spatial data
+    spatial = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat
+        x = cfg.x[i]
+        spatial[i, :] .= (3*x^2 - 1)/2
+    end
+
+    # Forward transform timing (synthesis)
     forward_time = @elapsed begin
         for i in 1:100
-            synthesis(cfg, sh)
+            synthesis(cfg, Alm)
         end
     end
-    
-    # Backward transform timing
+
+    # Backward transform timing (analysis)
     backward_time = @elapsed begin
         for i in 1:100
             analysis(cfg, spatial)
         end
     end
-    
-    println("Forward: $(forward_time/100)s")
-    println("Backward: $(backward_time/100)s") 
+
+    println("Synthesis: $(forward_time/100*1000) ms")
+    println("Analysis: $(backward_time/100*1000) ms")
     println("Ratio: $(backward_time/forward_time)")
 end
 
-optimize_transform_direction()
+optimize_transform_direction(cfg)
 destroy_config(cfg)
 ```
 
@@ -365,35 +364,39 @@ destroy_config(cfg)
 using SHTnsKit
 
 function compare_grid_types(lmax=32)
-    # Gauss grids: optimal for accuracy, fewer points
-    cfg_gauss = create_gauss_config(lmax, lmax)
-    
-    # Regular grids: more points, but uniform spacing
-    cfg_regular = create_regular_config(lmax, lmax)
-    
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+
+    # Gauss grids: optimal for accuracy
+    cfg_gauss = create_gauss_config(lmax, nlat; nlon=nlon)
+
+    # Regular grids: uniform spacing
+    cfg_regular = create_regular_config(lmax, nlat; nlon=nlon)
+
     println("Grid Comparison (lmax=$lmax):")
-    println("Gauss: $(get_nlat(cfg_gauss)) × $(get_nphi(cfg_gauss)) = $(get_nlat(cfg_gauss)*get_nphi(cfg_gauss)) points")
-    println("Regular: $(get_nlat(cfg_regular)) × $(get_nphi(cfg_regular)) = $(get_nlat(cfg_regular)*get_nphi(cfg_regular)) points")
-    
-    # Benchmark both
-    sh = rand(get_nlm(cfg_gauss))  # Same spectral resolution
-    
+    println("Gauss: $(cfg_gauss.nlat) × $(cfg_gauss.nlon) points")
+    println("Regular: $(cfg_regular.nlat) × $(cfg_regular.nlon) points")
+
+    # Create test coefficients
+    Alm = zeros(ComplexF64, cfg_gauss.lmax+1, cfg_gauss.mmax+1)
+    Alm[1,1] = 1.0
+    Alm[3,1] = 0.5
+
     gauss_time = @elapsed begin
         for i in 1:50
-            synthesize(cfg_gauss, sh)
+            synthesis(cfg_gauss, Alm)
         end
     end
-    
-    regular_time = @elapsed begin  
+
+    regular_time = @elapsed begin
         for i in 1:50
-            synthesize(cfg_regular, sh)
+            synthesis(cfg_regular, Alm)
         end
     end
-    
-    println("Gauss time: $(gauss_time/50)s")
-    println("Regular time: $(regular_time/50)s")
-    println("Gauss is $(regular_time/gauss_time)x faster")
-    
+
+    println("Gauss time: $(gauss_time/50*1000) ms")
+    println("Regular time: $(regular_time/50*1000) ms")
+
     destroy_config(cfg_gauss)
     destroy_config(cfg_regular)
 end
@@ -406,65 +409,66 @@ compare_grid_types()
 ```julia
 using SHTnsKit
 
-cfg = create_gauss_config(48, 48)
+lmax = 48
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
 # Vector transforms are more expensive than scalar
-function benchmark_vector_vs_scalar()
-    # Scalar data
-    sh_scalar = rand(cfg.nlm)
-    # Create bandlimited spatial scalar field
-    θ, φ = cfg.θ, cfg.φ
+function benchmark_vector_vs_scalar(cfg)
+    # Scalar coefficients
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm[1,1] = 1.0
+    Alm[3,1] = 0.5
+
+    # Scalar spatial field
     spatial_scalar = zeros(cfg.nlat, cfg.nlon)
-    for i in 1:cfg.nlat, j in 1:cfg.nlon
-        spatial_scalar[i,j] = 1.0 + 0.4 * sin(2*θ[i]) * cos(φ[j])
+    for i in 1:cfg.nlat
+        x = cfg.x[i]
+        spatial_scalar[i, :] .= (3*x^2 - 1)/2
     end
-    
-    # Vector data  
-    S_lm = rand(cfg.nlm)
-    T_lm = rand(cfg.nlm)
-    # Create bandlimited vector field components
-    θ, φ = cfg.θ, cfg.φ
-    Vθ = zeros(cfg.nlat, cfg.nlon)
-    Vφ = zeros(cfg.nlat, cfg.nlon)
-    for i in 1:cfg.nlat, j in 1:cfg.nlon
-        Vθ[i,j] = 0.8 * cos(θ[i]) * sin(φ[j])
-        Vφ[i,j] = 0.6 * sin(θ[i]) * cos(2*φ[j])
-    end
-    
+
+    # Vector coefficients
+    Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Slm[2,1] = 1.0
+    Tlm[3,2] = 0.5
+
+    # Vector spatial fields
+    Vθ, Vφ = SHsphtor_to_spat(cfg, Slm, Tlm)
+
     # Scalar benchmarks
     scalar_synth = @elapsed begin
         for i in 1:20
-            synthesize(cfg, sh_scalar)
+            synthesis(cfg, Alm)
         end
     end
-    
+
     scalar_analysis = @elapsed begin
         for i in 1:20
-            analyze(cfg, spatial_scalar)
+            analysis(cfg, spatial_scalar)
         end
     end
-    
+
     # Vector benchmarks
     vector_synth = @elapsed begin
         for i in 1:20
-            synthesize_vector(cfg, S_lm, T_lm)
+            SHsphtor_to_spat(cfg, Slm, Tlm)
         end
     end
-    
+
     vector_analysis = @elapsed begin
         for i in 1:20
-            analyze_vector(cfg, Vθ, Vφ)
-        end  
+            spat_to_SHsphtor(cfg, Vθ, Vφ)
+        end
     end
-    
+
     println("Transform Performance Comparison:")
-    println("Scalar synthesis: $(scalar_synth/20)s")
-    println("Vector synthesis: $(vector_synth/20)s ($(vector_synth/scalar_synth)x slower)")
-    println("Scalar analysis: $(scalar_analysis/20)s")
-    println("Vector analysis: $(vector_analysis/20)s ($(vector_analysis/scalar_analysis)x slower)")
+    println("Scalar synthesis: $(scalar_synth/20*1000) ms")
+    println("Vector synthesis: $(vector_synth/20*1000) ms")
+    println("Scalar analysis: $(scalar_analysis/20*1000) ms")
+    println("Vector analysis: $(vector_analysis/20*1000) ms")
 end
 
-benchmark_vector_vs_scalar()
+benchmark_vector_vs_scalar(cfg)
 destroy_config(cfg)
 ```
 
@@ -478,51 +482,46 @@ destroy_config(cfg)
 using SHTnsKit
 using Profile
 using BenchmarkTools
+using Statistics
 
-cfg = create_gauss_config(64, 64)
+lmax = 64
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
-function profile_transforms()
-    # Create bandlimited test coefficients (prevents high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-    
+function profile_transforms(cfg)
+    # Create test coefficients
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm[1,1] = 1.0
+    Alm[3,1] = 0.5
+
     # Detailed benchmarking
-    forward_bench = @benchmark synthesize($cfg, $sh)
+    forward_bench = @benchmark synthesis($cfg, $Alm)
     println("Forward transform statistics:")
-    println("  Median: $(median(forward_bench.times))ns")
-    println("  Mean: $(mean(forward_bench.times))ns") 
-    println("  Std: $(std(forward_bench.times))ns")
-    
+    println("  Median: $(median(forward_bench.times)/1e6) ms")
+    println("  Mean: $(mean(forward_bench.times)/1e6) ms")
+
     # Memory allocation tracking
-    spatial = synthesis(cfg, sh)
-    backward_bench = @benchmark analyze($cfg, $spatial)
-    
+    spatial = synthesis(cfg, Alm)
+    backward_bench = @benchmark analysis($cfg, $spatial)
+
     println("Backward transform statistics:")
-    println("  Median: $(median(backward_bench.times))ns")
+    println("  Median: $(median(backward_bench.times)/1e6) ms")
     println("  Allocations: $(backward_bench.memory) bytes")
 end
 
-profile_transforms()
+profile_transforms(cfg)
 
 # Julia profiling
-function profile_detailed()
-    # Create bandlimited test coefficients (prevents high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-    
+function profile_detailed(cfg)
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm[1,1] = 1.0
+
     Profile.clear()
     @profile begin
         for i in 1:100
-            spatial = synthesis(cfg, sh)
+            synthesis(cfg, Alm)
         end
     end
-    
+
     Profile.print()
 end
 
@@ -533,54 +532,51 @@ destroy_config(cfg)
 
 ```julia
 using SHTnsKit
+using Statistics
 
-function performance_report(cfg, n_runs=100)
+function performance_report(lmax, n_runs=100)
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+    # Create test coefficients
+    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Alm[1,1] = 1.0
+    Alm[3,1] = 0.5
+
     # Warm up
-    sh_test = rand(cfg.nlm)
     for i in 1:5
-        synthesize(cfg, sh_test)
+        synthesis(cfg, Alm)
     end
-    
+
     # Collect metrics
     times = Float64[]
-    
+
     for i in 1:n_runs
-        # Create bandlimited test coefficients (prevents high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-        
-        time = @elapsed begin
-            spatial = synthesis(cfg, sh)
-        end
-        
+        time = @elapsed synthesis(cfg, Alm)
         push!(times, time)
     end
-    
+
     # Statistics
     mean_time = mean(times)
     std_time = std(times)
     min_time = minimum(times)
     max_time = maximum(times)
-    
+
     # Compute derived metrics
-    lmax = get_lmax(cfg)
     operations_per_sec = 1.0 / mean_time
     points_per_sec = (cfg.nlat * cfg.nlon) / mean_time
-    
+
     println("Performance Report (lmax=$lmax, $n_runs runs):")
-    println("  Mean time: $(mean_time*1000)ms (±$(std_time*1000)ms)")
-    println("  Min/Max: $(min_time*1000)ms / $(max_time*1000)ms")
-    println("  Transforms/sec: $(operations_per_sec)")
-    println("  Points/sec: $(points_per_sec)")
-    println("  Grid efficiency: $(cfg.nlm/(cfg.nlat*cfg.nlon))")
+    println("  Mean time: $(mean_time*1000) ms (±$(std_time*1000) ms)")
+    println("  Min/Max: $(min_time*1000) ms / $(max_time*1000) ms")
+    println("  Transforms/sec: $(round(operations_per_sec, digits=1))")
+    println("  Points/sec: $(round(points_per_sec/1e6, digits=2)) M")
+
+    destroy_config(cfg)
 end
 
-cfg = create_gauss_config(32, 32)
-performance_report(cfg)
-destroy_config(cfg)
+performance_report(32)
 ```
 
 ## Optimization Checklist

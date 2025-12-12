@@ -146,7 +146,7 @@ destroy_config(cfg)
 MPI.Finalize()
 ```
 
-### High-Performance SIMD
+<!-- ### High-Performance SIMD
 
 ```julia
 using SHTnsKit
@@ -174,7 +174,7 @@ results = benchmark_turbo_vs_simd(cfg)
 
 destroy_config(cfg)
 
-```
+``` -->
 
 ## Performance Optimization
 

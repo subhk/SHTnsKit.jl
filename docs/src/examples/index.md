@@ -430,75 +430,82 @@ destroy_config(cfg)
 
 ```julia
 # Save as parallel_example.jl and run with: mpiexec -n 4 julia parallel_example.jl
-using SHTnsKit, MPI, PencilArrays, PencilFFTs
-
+using MPI
 MPI.Init()
 
-comm = COMM_WORLD
-rank = Comm_rank(comm)
-size = Comm_size(comm)
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nprocs = MPI.Comm_size(comm)
 
 if rank == 0
-    println("Running SHTnsKit parallel example with $size processes")
+    println("Running SHTnsKit parallel example with $nprocs processes")
 end
 
 # Create configuration (same on all processes)
-cfg = create_gauss_config(30, 24; mres=64, nlon=96)
-pcfg = create_parallel_config(cfg, comm)
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 if rank == 0
     println("Problem size: $(cfg.nlm) spectral coefficients")
-    println("Grid: $(cfg.nlat) × $(cfg.nphi) spatial points")
+    println("Grid: $(cfg.nlat) × $(cfg.nlon) spatial points")
 end
 
-# Create test data
-sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-result = similar(sh_coeffs)
+# Create distributed array using PencilArrays
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
-# Benchmark parallel Laplacian operator
-Barrier(comm)  # Synchronize timing
-start_time = Wtime()
-
-for i in 1:50
-    apply_laplacian!(cfg, sh_coeffs)  # Using standard matrix operators
+# Fill with test data (Y_2^0 pattern)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
 end
 
-Barrier(comm)
-end_time = Wtime()
+# Benchmark parallel transforms
+MPI.Barrier(comm)
+start_time = MPI.Wtime()
+
+n_iter = 50
+for i in 1:n_iter
+    Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+    fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+end
+
+MPI.Barrier(comm)
+end_time = MPI.Wtime()
 
 if rank == 0
-    avg_time = (end_time - start_time) / 50
-    println("Parallel Laplacian: $(avg_time*1000) ms per operation")
-    
-    # Compare with performance model
-    perf_model = parallel_performance_model(cfg, size)
-    println("Expected speedup: $(perf_model.speedup)x")
-    println("Parallel efficiency: $(perf_model.efficiency*100)%")
+    avg_time = (end_time - start_time) / n_iter
+    println("Parallel roundtrip: $(avg_time*1000) ms per iteration")
 end
 
-# Test parallel transforms
-spatial_data = allocate_spatial(cfg)
-memory_efficient_parallel_transform!(pcfg, :synthesis, sh_coeffs, spatial_data)
+# Verify accuracy
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+max_err = maximum(abs.(parent(fθφ_recovered) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, comm)
 
 if rank == 0
-    println("Parallel synthesis completed")
+    println("Roundtrip error: $global_max_err")
+    println(global_max_err < 1e-10 ? "SUCCESS!" : "FAILED")
 end
 
-# Test communication-intensive operator (cos θ)
-apply_costheta_operator!(cfg, sh_coeffs, result)  # Using standard matrix operators
-
-if rank == 0
-    println("Parallel cos(θ) operator completed")
-end
-
+destroy_config(cfg)
 MPI.Finalize()
 ```
 
 **Key concepts:**
 - MPI initialization and communicator setup
-- Creating parallel configurations with domain decomposition
-- Using parallel operators for distributed computation
-- Performance timing and comparison with models
+- PencilArrays for domain decomposition
+- Distributed transforms with `dist_analysis` and `dist_synthesis`
+- Error verification across MPI ranks
 
 ### Run Example Scripts
 
@@ -510,198 +517,218 @@ mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl
 mpiexec -n 2 julia --project=. examples/parallel_fft_roundtrip.jl
 ```
 
-### SIMD Vectorization Example
+### Single-Node Performance Example
 
-**Goal:** Leverage advanced SIMD optimizations for single-node performance
+**Goal:** Benchmark and optimize single-node performance
 
 ```julia
-using SHTnsKit, LoopVectorization, BenchmarkTools
+using SHTnsKit, BenchmarkTools
 
-cfg = create_gauss_config(64, 64)
-sh_coeffs = randn(Complex{Float64}, cfg.nlm)
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-println("SIMD Optimization Comparison")
+println("Single-Node Performance Benchmark")
 println("="^40)
+println("Grid size: $(cfg.nlat) × $(cfg.nlon)")
+println("Spectral coefficients: $(cfg.nlm)")
 
-# Benchmark regular SIMD
-regular_time = @belapsed apply_laplacian!($cfg, copy($sh_coeffs))
-println("Regular SIMD: $(regular_time*1000) ms")
+# Create test data
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    spatial[i,j] = sin(2θ) * cos(φ) + 0.5 * sin(4θ) * cos(3φ)
+end
 
-# Same function for comparison (all optimizations are built-in)
-optimized_time = @belapsed apply_laplacian!($cfg, copy($sh_coeffs))
-println("Optimized:    $(optimized_time*1000) ms")
+# Benchmark analysis (spatial → spectral)
+analysis_time = @belapsed analysis($cfg, $spatial)
+println("Analysis time: $(analysis_time*1000) ms")
 
-# Since we're using the same function, speedup will be ~1.0
-speedup = regular_time / optimized_time
-println("Implementation speedup: $(speedup)x")
+Alm = analysis(cfg, spatial)
 
-# Both results are identical (same function)
-result1 = copy(sh_coeffs)
-result2 = copy(sh_coeffs)
+# Benchmark synthesis (spectral → spatial)
+synthesis_time = @belapsed synthesis($cfg, $Alm)
+println("Synthesis time: $(synthesis_time*1000) ms")
 
-apply_laplacian!(cfg, result1)
-apply_laplacian!(cfg, result2)
+# Benchmark roundtrip
+roundtrip_time = @belapsed begin
+    alm = analysis($cfg, $spatial)
+    synthesis($cfg, alm)
+end
+println("Roundtrip time: $(roundtrip_time*1000) ms")
 
-max_diff = maximum(abs.(result1 - result2))
-println("Max difference: $max_diff (should be ~0)")
+# Verify accuracy
+recovered = synthesis(cfg, Alm)
+max_error = maximum(abs.(spatial - recovered))
+println("Roundtrip error: $max_error")
 
-# Benchmark comprehensive comparison
-results = benchmark_turbo_vs_simd(cfg)
-println("\nDetailed Benchmark Results:")
-println("  SIMD time: $(results.simd_time*1000) ms")
-println("  Turbo time: $(results.turbo_time*1000) ms") 
-println("  Speedup: $(results.speedup)x")
-println("  Accuracy: max diff = $(results.max_difference)")
+# Threading info
+println("\nThreading configuration:")
+println("  Julia threads: $(Threads.nthreads())")
 
 destroy_config(cfg)
 ```
 
 **Key concepts:**
-- LoopVectorization.jl integration for enhanced SIMD
-- Performance benchmarking and verification
-- Automatic optimization selection
+- Performance benchmarking with BenchmarkTools
+- Forward and inverse transform timing
+- Accuracy verification
 
-### Hybrid MPI + SIMD Example
+### Parallel Vector Transform Example
 
-**Goal:** Combine distributed and SIMD parallelization for maximum performance
+**Goal:** Perform distributed vector field transforms
 
 ```julia
-# Save as hybrid_example.jl, run with: mpiexec -n 4 julia hybrid_example.jl
-using SHTnsKit, MPI, PencilArrays, PencilFFTs, LoopVectorization
-
+# Save as parallel_vector.jl, run with: mpiexec -n 4 julia parallel_vector.jl
+using MPI
 MPI.Init()
 
-comm = COMM_WORLD
-rank = Comm_rank(comm)
-size = Comm_size(comm)
+using SHTnsKit, PencilArrays, PencilFFTs
 
-# Large problem that benefits from both MPI and SIMD
-cfg = create_gauss_config(128, 128; mres=256, nlon=512)
-pcfg = create_parallel_config(cfg, comm)
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nprocs = MPI.Comm_size(comm)
 
-if rank == 0
-    println("Hybrid MPI + SIMD Example")
-    println("Problem: $(cfg.nlm) coefficients, $(cfg.nlat)×$(cfg.nphi) grid")
-    println("MPI processes: $size")
-    println("SIMD: LoopVectorization enabled")
-end
-
-# Test data
-sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-result = similar(sh_coeffs)
-
-# Benchmark different approaches
-tests = [
-    ("Parallel standard", () -> apply_laplacian!(cfg, sh_coeffs)  # Using standard matrix operators),
-    ("Parallel + turbo", () -> begin
-        # This would use turbo optimizations within parallel operations
-        apply_laplacian!(cfg, sh_coeffs)  # Using standard matrix operators
-    end)
-]
+# Create configuration
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 if rank == 0
-    println("\nPerformance Comparison:")
+    println("Parallel Vector Transform Example")
+    println("Problem: $(cfg.nlm) coefficients, $(cfg.nlat)×$(cfg.nlon) grid")
+    println("MPI processes: $nprocs")
 end
 
-for (name, test_func) in tests
-    Barrier(comm)
-    start_time = Wtime()
-    
-    for i in 1:20
-        test_func()
-    end
-    
-    Barrier(comm)
-    end_time = Wtime()
-    
-    if rank == 0
-        avg_time = (end_time - start_time) / 20
-        println("$name: $(avg_time*1000) ms per operation")
+# Create distributed arrays for velocity field
+pen = Pencil((nlat, nlon), comm)
+Vθ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+Vφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test vector field (solid body rotation)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    θ = cfg.θ[i_global]
+    for (j_local, j_global) in enumerate(ranges[2])
+        φ = cfg.φ[j_global]
+        Vθ[i_local, j_local] = cos(θ) * sin(φ)
+        Vφ[i_local, j_local] = cos(φ)
     end
 end
 
-# Test scaling efficiency
-if rank == 0
-    println("\nScaling Analysis:")
-    for test_size in [2, 4, 8, 16]
-        if test_size <= size * 2  # Don't test more than 2x current size
-            model = parallel_performance_model(cfg, test_size)
-            println("$test_size processes: $(model.speedup)x speedup, $(model.efficiency*100)% efficiency")
-        end
-    end
+# Benchmark distributed vector transforms
+MPI.Barrier(comm)
+start_time = MPI.Wtime()
+
+n_iter = 20
+for i in 1:n_iter
+    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
+    Vθ_out, Vφ_out = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
 end
 
+MPI.Barrier(comm)
+end_time = MPI.Wtime()
+
+if rank == 0
+    avg_time = (end_time - start_time) / n_iter
+    println("Vector roundtrip: $(avg_time*1000) ms per iteration")
+end
+
+# Verify accuracy
+Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
+Vθ_rec, Vφ_rec = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+
+θ_err = maximum(abs.(parent(Vθ_rec) .- parent(Vθ)))
+φ_err = maximum(abs.(parent(Vφ_rec) .- parent(Vφ)))
+global_θ_err = MPI.Allreduce(θ_err, MPI.MAX, comm)
+global_φ_err = MPI.Allreduce(φ_err, MPI.MAX, comm)
+
+if rank == 0
+    println("Vθ roundtrip error: $global_θ_err")
+    println("Vφ roundtrip error: $global_φ_err")
+    println((global_θ_err < 1e-10 && global_φ_err < 1e-10) ? "SUCCESS!" : "FAILED")
+end
+
+destroy_config(cfg)
 MPI.Finalize()
 ```
 
-### Asynchronous Parallel Operations
+### Scaling Test Example
 
-**Goal:** Use non-blocking communication for better performance overlap
+**Goal:** Test parallel scaling with different process counts
 
 ```julia
-using SHTnsKit, MPI, PencilArrays, PencilFFTs
-
+# Save as scaling_test.jl, run with: mpiexec -n 4 julia scaling_test.jl
+using MPI
 MPI.Init()
 
-comm = COMM_WORLD
-rank = Comm_rank(comm)
-size = Comm_size(comm)
+using SHTnsKit, PencilArrays, PencilFFTs
 
-cfg = create_gauss_config(64, 48; mres=128, nlon=192)
-pcfg = create_parallel_config(cfg, comm)
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nprocs = MPI.Comm_size(comm)
 
 if rank == 0
-    println("Asynchronous Parallel Operations Example")
+    println("Parallel Scaling Test")
+    println("MPI processes: $nprocs")
 end
 
-sh_coeffs = randn(Complex{Float64}, cfg.nlm)
-result = similar(sh_coeffs)
+# Test different problem sizes
+for lmax in [32, 64, 128]
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-# Compare synchronous vs asynchronous operations
-if rank == 0
-    println("Benchmarking communication patterns...")
-end
+    # Create distributed array
+    pen = Pencil((nlat, nlon), comm)
+    fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
-# Synchronous (blocking)
-Barrier(comm)
-sync_time = @elapsed begin
-    for i in 1:30
-        apply_costheta_operator!(cfg, sh_coeffs, result)  # Using standard matrix operators
-    end
-end
-
-# Asynchronous (non-blocking, if available)
-Barrier(comm)
-async_time = @elapsed begin
-    for i in 1:30
-        try
-            # Try asynchronous version
-            apply_costheta_operator!(cfg, sh_coeffs, result)  # Standard implementation
-        catch
-            # Fall back to synchronous if not available
-            apply_costheta_operator!(cfg, sh_coeffs, result)  # Using standard matrix operators
+    # Fill with test data
+    ranges = PencilArrays.range_local(pen)
+    for (i_local, i_global) in enumerate(ranges[1])
+        x = cfg.x[i_global]
+        for j in 1:length(ranges[2])
+            fθφ[i_local, j] = (3*x^2 - 1)/2
         end
     end
-end
 
-if rank == 0
-    println("Communication Performance:")
-    println("  Synchronous:  $(sync_time/30*1000) ms per operation")
-    println("  Asynchronous: $(async_time/30*1000) ms per operation")
-    if async_time < sync_time
-        println("  Async speedup: $(sync_time/async_time)x")
-    else
-        println("  No async improvement (likely using fallback)")
+    # Warmup
+    for _ in 1:5
+        Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+        SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
     end
+
+    # Benchmark
+    MPI.Barrier(comm)
+    start_time = MPI.Wtime()
+
+    n_iter = 50
+    for _ in 1:n_iter
+        Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+        SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+    end
+
+    MPI.Barrier(comm)
+    end_time = MPI.Wtime()
+
+    if rank == 0
+        avg_time = (end_time - start_time) / n_iter * 1000
+        println("lmax=$lmax: $(round(avg_time, digits=2)) ms/roundtrip")
+    end
+
+    destroy_config(cfg)
 end
 
 MPI.Finalize()
 ```
 
 **Key concepts:**
-- Non-blocking MPI communication patterns
-- Communication-computation overlap
-- Performance analysis of different parallel strategies
+- Testing performance across problem sizes
+- Proper warmup before timing
+- Parallel synchronization for accurate timing
 
 ## Advanced Applications
 
@@ -711,37 +738,53 @@ MPI.Finalize()
 using SHTnsKit
 
 # Create different resolution configurations
-cfgs = [create_gauss_config(l, l) for l in [16, 32, 64, 128]]
+lmax_values = [16, 32, 64, 128]
+cfgs = []
+for lmax in lmax_values
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    push!(cfgs, create_gauss_config(lmax, nlat; nlon=nlon))
+end
 
-# Create test field with multiple scales
-θ, φ = SHTnsKit.create_coordinate_matrices(cfgs[end])  # Use highest resolution grid
-field = @. (sin(2θ) * cos(φ) +           # Large scale
-           0.3 * sin(8θ) * cos(4φ) +     # Medium scale
-           0.1 * sin(16θ) * cos(8φ))     # Small scale
+# Use highest resolution for reference field
+cfg_hi = cfgs[end]
+
+# Create test field with multiple scales at highest resolution
+field = zeros(cfg_hi.nlat, cfg_hi.nlon)
+for i in 1:cfg_hi.nlat, j in 1:cfg_hi.nlon
+    θ = cfg_hi.θ[i]
+    φ = cfg_hi.φ[j]
+    field[i,j] = sin(2θ) * cos(φ) +           # Large scale
+                 0.3 * sin(8θ) * cos(4φ) +     # Medium scale
+                 0.1 * sin(16θ) * cos(8φ)      # Small scale
+end
 
 # Analyze at different resolutions
 powers = []
-for (i, cfg) in enumerate(cfgs)
-    # Interpolate field to current grid if needed
-    θ_i, φ_i = SHTnsKit.create_coordinate_matrices(cfg)
-    field_i = field[1:cfg.nlat, 1:cfg.nlon]  # Simple subsampling
-    
+for cfg in cfgs
+    # Create field at this resolution
+    field_i = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat, j in 1:cfg.nlon
+        θ = cfg.θ[i]
+        φ = cfg.φ[j]
+        field_i[i,j] = sin(2θ) * cos(φ) +
+                       0.3 * sin(8θ) * cos(4φ) +
+                       0.1 * sin(16θ) * cos(8φ)
+    end
+
     # Analyze and compute power spectrum
     f_lm = analysis(cfg, field_i)
-    power_i = power_spectrum(cfg, f_lm)
+    power_i = energy_scalar_l_spectrum(cfg, f_lm)
     push!(powers, power_i)
-    
-    println("Resolution $(get_lmax(cfg)): $(length(power_i)) modes")
+
+    println("Resolution lmax=$(cfg.lmax): $(length(power_i)) modes")
 end
 
-# Compare power spectra
-using Plots
-p = plot(xlabel="Spherical Harmonic Degree", ylabel="Power", yscale=:log10)
-for (i, power) in enumerate(powers)
-    plot!(p, 0:length(power)-1, power, 
-          label="lmax = $(get_lmax(cfgs[i]))", linewidth=2)
+# Compare power spectra at common degrees
+println("\nPower at l=2 (large scale):")
+for (i, cfg) in enumerate(cfgs)
+    println("  lmax=$(cfg.lmax): $(powers[i][3])")
 end
-display(p)
 
 # Cleanup
 for cfg in cfgs

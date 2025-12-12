@@ -490,29 +490,39 @@ Works on the local data of a PencilArray.
 """
 function fft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{T2}) where {T<:AbstractFloat, T2}
     nlat, nlon = size(input)
-    # Get cached in-place FFT plan (avoids ~6MB allocation on first call)
-    plan = get_fftw_plan(:fft, nlon, Complex{T}; inplace=true)
+    # Use a contiguous temp buffer for FFT (avoids stride mismatch with cached plans)
+    # FFTW internally caches plans for the same size/type, so this is still efficient after warmup
+    temp = Vector{Complex{T}}(undef, nlon)
     @inbounds for i in 1:nlat
-        # Copy with conversion to complex - element-by-element to avoid temporary allocation
+        # Copy with conversion to complex into contiguous buffer
         for j in 1:nlon
-            output[i, j] = Complex{T}(input[i, j])
+            temp[j] = Complex{T}(input[i, j])
         end
-        # In-place FFT on the row using cached plan
-        row_out = view(output, i, :)
-        plan * row_out  # In-place plan modifies the array directly
+        # In-place FFT on contiguous buffer (FFTW caches the plan internally)
+        FFTW.fft!(temp)
+        # Copy result back to output
+        for j in 1:nlon
+            output[i, j] = temp[j]
+        end
     end
     return output
 end
 
 function fft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{Complex{T}}) where {T<:AbstractFloat}
     nlat, nlon = size(input)
-    # Get cached in-place FFT plan
-    plan = get_fftw_plan(:fft, nlon, Complex{T}; inplace=true)
+    # Use a contiguous temp buffer for FFT
+    temp = Vector{Complex{T}}(undef, nlon)
     @inbounds for i in 1:nlat
-        row_in = view(input, i, :)
-        row_out = view(output, i, :)
-        copyto!(row_out, row_in)
-        plan * row_out  # In-place plan modifies the array directly
+        # Copy to contiguous buffer
+        for j in 1:nlon
+            temp[j] = input[i, j]
+        end
+        # In-place FFT
+        FFTW.fft!(temp)
+        # Copy result back
+        for j in 1:nlon
+            output[i, j] = temp[j]
+        end
     end
     return output
 end
@@ -524,13 +534,16 @@ Perform inverse FFT along dimension 2 (longitude) for each row.
 """
 function ifft_along_dim2!(output::AbstractMatrix{T}, input::AbstractMatrix{Complex{T2}}) where {T<:AbstractFloat, T2<:AbstractFloat}
     nlat, nlon = size(input)
-    # Get cached in-place IFFT plan
-    plan = get_fftw_plan(:ifft, nlon, Complex{T2}; inplace=true)
-    # Pre-allocate temp buffer OUTSIDE the loop
+    # Pre-allocate contiguous temp buffer OUTSIDE the loop
     temp = Vector{Complex{T2}}(undef, nlon)
     @inbounds for i in 1:nlat
-        copyto!(temp, view(input, i, :))
-        plan * temp  # In-place IFFT
+        # Copy to contiguous buffer
+        for j in 1:nlon
+            temp[j] = input[i, j]
+        end
+        # In-place IFFT (FFTW caches plans internally)
+        FFTW.ifft!(temp)
+        # Copy real part back to output
         for j in 1:nlon
             output[i, j] = real(temp[j])
         end
@@ -540,12 +553,19 @@ end
 
 function ifft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{Complex{T}}) where {T<:AbstractFloat}
     nlat, nlon = size(input)
-    # Get cached in-place IFFT plan
-    plan = get_fftw_plan(:ifft, nlon, Complex{T}; inplace=true)
+    # Pre-allocate contiguous temp buffer
+    temp = Vector{Complex{T}}(undef, nlon)
     @inbounds for i in 1:nlat
-        row_out = view(output, i, :)
-        copyto!(row_out, view(input, i, :))
-        plan * row_out  # In-place IFFT
+        # Copy to contiguous buffer
+        for j in 1:nlon
+            temp[j] = input[i, j]
+        end
+        # In-place IFFT
+        FFTW.ifft!(temp)
+        # Copy back to output
+        for j in 1:nlon
+            output[i, j] = temp[j]
+        end
     end
     return output
 end

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples Gallery · SHTnsKit.jl</title><meta name="title" content="Examples Gallery · SHTnsKit.jl"/><meta property="og:title" content="Examples Gallery · SHTnsKit.jl"/><meta property="twitter:title" content="Examples Gallery · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../distributed/">Distributed Guide</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li class="is-active"><a class="tocitem" href>Examples Gallery</a><ul class="internal"><li><a class="tocitem" href="#Beginner-Examples"><span>Beginner Examples</span></a></li><li><a class="tocitem" href="#Intermediate-Examples"><span>Intermediate Examples</span></a></li><li><a class="tocitem" href="#Geophysics-Applications"><span>Geophysics Applications</span></a></li><li><a class="tocitem" href="#Climate-Science-Applications"><span>Climate Science Applications</span></a></li><li><a class="tocitem" href="#Parallel-Computing-Examples"><span>Parallel Computing Examples</span></a></li><li><a class="tocitem" href="#Advanced-Applications"><span>Advanced Applications</span></a></li><li><a class="tocitem" href="#High-Performance-Examples"><span>High-Performance Examples</span></a></li><li><a class="tocitem" href="#Validation-and-Testing-Examples"><span>Validation and Testing Examples</span></a></li></ul></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Examples Gallery</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples Gallery</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/examples/index.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples-Gallery"><a class="docs-heading-anchor" href="#Examples-Gallery">Examples Gallery</a><a id="Examples-Gallery-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-Gallery" title="Permalink"></a></h1><p>Real-world examples and tutorials demonstrating SHTnsKit.jl capabilities, organized by difficulty level.</p><p><strong>How to use this guide:</strong></p><ul><li><strong>Beginner</strong>: Start here if you&#39;re new to spherical harmonics</li><li><strong>Intermediate</strong>: For users comfortable with basic transforms</li><li><strong>Advanced</strong>: Complex workflows and specialized applications</li></ul><p><strong>Learning path:</strong> Work through the examples in order for the best learning experience.</p><h2 id="Beginner-Examples"><a class="docs-heading-anchor" href="#Beginner-Examples">Beginner Examples</a><a id="Beginner-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Beginner-Examples" title="Permalink"></a></h2><p>Start here if you&#39;re new to spherical harmonics. These examples teach fundamental concepts with simple, well-explained code.</p><h3 id="Example-1:-Your-First-Transform"><a class="docs-heading-anchor" href="#Example-1:-Your-First-Transform">Example 1: Your First Transform</a><a id="Example-1:-Your-First-Transform-1"></a><a class="docs-heading-anchor-permalink" href="#Example-1:-Your-First-Transform" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn the basic workflow of spherical harmonic transforms</p><pre><code class="language-julia hljs">using SHTnsKit
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples Gallery · SHTnsKit.jl</title><meta name="title" content="Examples Gallery · SHTnsKit.jl"/><meta property="og:title" content="Examples Gallery · SHTnsKit.jl"/><meta property="twitter:title" content="Examples Gallery · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../distributed/">Distributed Guide</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li class="is-active"><a class="tocitem" href>Examples Gallery</a><ul class="internal"><li><a class="tocitem" href="#Beginner-Examples"><span>Beginner Examples</span></a></li><li><a class="tocitem" href="#Intermediate-Examples"><span>Intermediate Examples</span></a></li><li><a class="tocitem" href="#Parallel-Computing-Examples"><span>Parallel Computing Examples</span></a></li><li><a class="tocitem" href="#Advanced-Applications"><span>Advanced Applications</span></a></li><li><a class="tocitem" href="#High-Performance-Examples"><span>High-Performance Examples</span></a></li><li><a class="tocitem" href="#Validation-and-Testing-Examples"><span>Validation and Testing Examples</span></a></li></ul></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Examples Gallery</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples Gallery</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/examples/index.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples-Gallery"><a class="docs-heading-anchor" href="#Examples-Gallery">Examples Gallery</a><a id="Examples-Gallery-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-Gallery" title="Permalink"></a></h1><p>Real-world examples and tutorials demonstrating SHTnsKit.jl capabilities, organized by difficulty level.</p><p><strong>How to use this guide:</strong></p><ul><li><strong>Beginner</strong>: Start here if you&#39;re new to spherical harmonics</li><li><strong>Intermediate</strong>: For users comfortable with basic transforms</li><li><strong>Advanced</strong>: Complex workflows and specialized applications</li></ul><p><strong>Learning path:</strong> Work through the examples in order for the best learning experience.</p><h2 id="Beginner-Examples"><a class="docs-heading-anchor" href="#Beginner-Examples">Beginner Examples</a><a id="Beginner-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Beginner-Examples" title="Permalink"></a></h2><p>Start here if you&#39;re new to spherical harmonics. These examples teach fundamental concepts with simple, well-explained code.</p><h3 id="Example-1:-Your-First-Transform"><a class="docs-heading-anchor" href="#Example-1:-Your-First-Transform">Example 1: Your First Transform</a><a id="Example-1:-Your-First-Transform-1"></a><a class="docs-heading-anchor-permalink" href="#Example-1:-Your-First-Transform" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn the basic workflow of spherical harmonic transforms</p><pre><code class="language-julia hljs">using SHTnsKit
 
 # Step 1: Create a configuration (like setting up your workspace)
 lmax = 16
@@ -159,161 +159,6 @@ stream_function = synthesis(cfg, ψ_lm)
 
 println(&quot;Stream function range: &quot;, extrema(stream_function))
 println(&quot;Max velocity from stream: &quot;, maximum(sqrt.(u_stream.^2 .+ v_stream.^2)))
-
-destroy_config(cfg)</code></pre><h2 id="Geophysics-Applications"><a class="docs-heading-anchor" href="#Geophysics-Applications">Geophysics Applications</a><a id="Geophysics-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Geophysics-Applications" title="Permalink"></a></h2><h3 id="Gravitational-Potential-Analysis"><a class="docs-heading-anchor" href="#Gravitational-Potential-Analysis">Gravitational Potential Analysis</a><a id="Gravitational-Potential-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Gravitational-Potential-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
-
-lmax = 72
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-
-# Create realistic gravity anomalies
-# J₂ (Earth&#39;s oblate shape) + smaller harmonics
-gravity_field = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat, j in 1:cfg.nlon
-    θ = cfg.θ[i]
-    φ = cfg.φ[j]
-    gravity_field[i,j] = -9.81 * (1 + 0.001082 * (1.5 * cos(θ)^2 - 0.5) +
-                                  0.0001 * sin(3θ) * cos(2φ))
-end
-
-# Analyze gravity field
-g_lm = analysis(cfg, gravity_field)
-
-# Extract J₂ coefficient (l=2, m=0)
-J2_coeff = g_lm[3, 1]  # Index is (l+1, m+1)
-println(&quot;J₂ coefficient: $J2_coeff&quot;)
-
-# Compute power spectrum
-power = energy_scalar_l_spectrum(cfg, g_lm)
-
-# Display power vs degree
-println(&quot;Gravity Field Power Spectrum (first 10 degrees):&quot;)
-for l in 0:min(9, length(power)-1)
-    println(&quot;  l=$l: $(power[l+1])&quot;)
-end
-
-destroy_config(cfg)</code></pre><h3 id="Magnetic-Field-Modeling"><a class="docs-heading-anchor" href="#Magnetic-Field-Modeling">Magnetic Field Modeling</a><a id="Magnetic-Field-Modeling-1"></a><a class="docs-heading-anchor-permalink" href="#Magnetic-Field-Modeling" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
-using LinearAlgebra
-
-lmax = 48
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-
-# Simulate magnetic field measurements (3 components)
-# Dipole + quadrupole + small-scale fields
-Br = zeros(cfg.nlat, cfg.nlon)
-Bθ = zeros(cfg.nlat, cfg.nlon)
-Bφ = zeros(cfg.nlat, cfg.nlon)
-
-for i in 1:cfg.nlat, j in 1:cfg.nlon
-    θ = cfg.θ[i]
-    φ = cfg.φ[j]
-    Br[i,j] = 30000 * cos(θ) * (1 + 0.1 * cos(2θ) * sin(φ))   # Radial
-    Bθ[i,j] = 15000 * sin(θ) * (1 - 0.05 * sin(3φ))           # Colatitude
-    Bφ[i,j] = 5000 * sin(θ) * cos(θ) * cos(2φ)                # Azimuthal
-end
-
-# Analyze radial component to get spherical harmonic coefficients
-Br_lm = analysis(cfg, Br / 30000)  # Normalized
-
-# Decompose horizontal field into spheroidal/toroidal components
-Slm, Tlm = spat_to_SHsphtor(cfg, Bθ / 15000, Bφ / 5000)
-
-# Reconstruct horizontal field from spheroidal/toroidal coefficients
-Bθ_computed, Bφ_computed = SHsphtor_to_spat(cfg, Slm, Tlm)
-
-# Compare with input
-θ_error = norm(Bθ/15000 - Bθ_computed) / norm(Bθ/15000)
-φ_error = norm(Bφ/5000 - Bφ_computed) / norm(Bφ/5000)
-
-println(&quot;Magnetic field modeling roundtrip errors:&quot;)
-println(&quot;θ component: $θ_error&quot;)
-println(&quot;φ component: $φ_error&quot;)
-
-destroy_config(cfg)</code></pre><h2 id="Climate-Science-Applications"><a class="docs-heading-anchor" href="#Climate-Science-Applications">Climate Science Applications</a><a id="Climate-Science-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Climate-Science-Applications" title="Permalink"></a></h2><h3 id="Temperature-Anomaly-Analysis"><a class="docs-heading-anchor" href="#Temperature-Anomaly-Analysis">Temperature Anomaly Analysis</a><a id="Temperature-Anomaly-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Temperature-Anomaly-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
-using Statistics
-
-lmax = 64
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-
-# Simulate monthly temperature anomalies
-n_months = 120  # 10 years
-anomalies = []
-
-for month in 1:n_months
-    temp_anomaly = zeros(cfg.nlat, cfg.nlon)
-    for i in 1:cfg.nlat, j in 1:cfg.nlon
-        θ = cfg.θ[i]
-        # Seasonal cycle + trend + random variations
-        seasonal = 5 * cos(2π * month / 12) * cos(θ)
-        trend = 0.01 * month
-        random = 2 * randn() * exp(-3 * (θ - π/2)^2)
-        temp_anomaly[i,j] = seasonal + trend + random
-    end
-    push!(anomalies, temp_anomaly)
-end
-
-# Analyze each month
-monthly_spectra = []
-for anomaly in anomalies
-    T_lm = analysis(cfg, anomaly)
-    push!(monthly_spectra, T_lm)
-end
-
-# Compute time-averaged power spectrum
-avg_power = mean([energy_scalar_l_spectrum(cfg, spectrum) for spectrum in monthly_spectra])
-
-# Find dominant modes
-max_power_idx = argmax(avg_power[2:end]) + 1  # Skip l=0
-println(&quot;Dominant mode: l = $(max_power_idx-1)&quot;)
-println(&quot;Power: $(avg_power[max_power_idx])&quot;)
-
-# Trend analysis - extract l=0,m=0 component (global mean)
-global_means = [real(spectrum[1,1]) for spectrum in monthly_spectra]
-println(&quot;Global mean trend: $(global_means[1]) → $(global_means[end])&quot;)
-
-destroy_config(cfg)</code></pre><h3 id="Precipitation-Pattern-Analysis"><a class="docs-heading-anchor" href="#Precipitation-Pattern-Analysis">Precipitation Pattern Analysis</a><a id="Precipitation-Pattern-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Precipitation-Pattern-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
-
-lmax = 32
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-
-# Seasonal precipitation patterns
-# Summer: ITCZ near equator, winter: shifted south
-precip_summer = zeros(cfg.nlat, cfg.nlon)
-precip_winter = zeros(cfg.nlat, cfg.nlon)
-
-for i in 1:cfg.nlat, j in 1:cfg.nlon
-    θ = cfg.θ[i]
-    φ = cfg.φ[j]
-    precip_summer[i,j] = max(0, 10 * exp(-5 * (θ - π/2)^2) * (1 + 0.3 * cos(2φ)))
-    precip_winter[i,j] = max(0, 8 * exp(-5 * (θ - π/2 - 0.2)^2) * (1 + 0.2 * cos(3φ)))
-end
-
-# Transform to spectral domain
-P_summer_lm = analysis(cfg, precip_summer)
-P_winter_lm = analysis(cfg, precip_winter)
-
-# Compute seasonal difference
-seasonal_diff_lm = P_summer_lm - P_winter_lm
-seasonal_diff = synthesis(cfg, seasonal_diff_lm)
-
-# Power spectrum of seasonal difference
-diff_power = energy_scalar_l_spectrum(cfg, seasonal_diff_lm)
-
-println(&quot;Seasonal precipitation analysis:&quot;)
-println(&quot;Summer total: &quot;, sum(precip_summer))
-println(&quot;Winter total: &quot;, sum(precip_winter))
-println(&quot;Max seasonal difference: &quot;, maximum(abs.(seasonal_diff)))
-
-# Find regions of maximum seasonal variation
-max_diff_locations = findall(abs.(seasonal_diff) .&gt; 0.8 * maximum(abs.(seasonal_diff)))
-println(&quot;High variability regions: $(length(max_diff_locations)) grid points&quot;)
 
 destroy_config(cfg)</code></pre><h2 id="Parallel-Computing-Examples"><a class="docs-heading-anchor" href="#Parallel-Computing-Examples">Parallel Computing Examples</a><a id="Parallel-Computing-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Computing-Examples" title="Permalink"></a></h2><h3 id="MPI-Distributed-Computing"><a class="docs-heading-anchor" href="#MPI-Distributed-Computing">MPI Distributed Computing</a><a id="MPI-Distributed-Computing-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Distributed-Computing" title="Permalink"></a></h3><p><strong>Goal:</strong> Learn how to use MPI for large-scale parallel spherical harmonic computations</p><pre><code class="language-julia hljs"># Save as parallel_example.jl and run with: mpiexec -n 4 julia parallel_example.jl
 using MPI
@@ -791,4 +636,4 @@ Alm_recovered = analysis(cfg, spatial)
 error = norm(Alm_original - Alm_recovered) / norm(Alm_original)
 println(&quot;l=2, m=2 roundtrip error: $(round(error, sigdigits=3))&quot;)
 
-destroy_config(cfg)</code></pre><p>These examples demonstrate the full range of SHTnsKit.jl capabilities from basic transforms to advanced scientific applications. Each example can serve as a starting point for your specific research needs.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><a class="docs-footer-nextpage" href="../performance/">Performance Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 16:21">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+destroy_config(cfg)</code></pre><p>These examples demonstrate the full range of SHTnsKit.jl capabilities from basic transforms to advanced scientific applications. Each example can serve as a starting point for your specific research needs.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><a class="docs-footer-nextpage" href="../performance/">Performance Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 16:27">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -168,61 +168,118 @@ destroy_config(cfg)
 
 ### Spectral Derivative Operations
 
+SHTnsKit provides spectral methods for computing derivatives, which are more accurate than finite differences.
+
+#### Gradient Computation
+
 ```julia
 using SHTnsKit
 
-function spectral_laplacian(cfg::SHTnsConfig, sh::Vector{Float64})
-    # ∇²f has spectral coefficients: -l(l+1) * f_lm
-    laplacian_sh = copy(sh)
-    
-    for i in 1:length(sh)
-        l, m = lm_from_index(cfg, i)
-        laplacian_sh[i] *= -l * (l + 1)
+# Setup configuration
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create test field: Y_2^1-like pattern
+test_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    test_field[i,j] = sin(θ) * cos(θ) * cos(φ)  # ∝ Y_2^1
+end
+
+# Transform to spectral coefficients
+Alm = analysis(cfg, test_field)
+
+# Compute gradient using spectral method (exact derivatives)
+# SH_to_grad_spat computes ∇f = (∂f/∂θ, (1/sinθ)∂f/∂φ)
+∂f_∂θ, ∂f_∂φ_over_sinθ = SH_to_grad_spat(cfg, Alm)
+
+println("Gradient computed using spectral method:")
+println("  ∂f/∂θ range: ", extrema(∂f_∂θ))
+println("  (1/sinθ)∂f/∂φ range: ", extrema(∂f_∂φ_over_sinθ))
+
+destroy_config(cfg)
+```
+
+#### Laplacian in Spectral Space
+
+The Laplacian has a simple form in spectral space: `∇²f_lm = -l(l+1) f_lm`
+
+```julia
+using SHTnsKit
+
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create test field
+test_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    x = cfg.x[i]  # cos(θ)
+    test_field[i,j] = (3*x^2 - 1)/2  # Y_2^0
+end
+
+# Transform to spectral
+Alm = analysis(cfg, test_field)
+
+# Apply Laplacian in spectral space: multiply by -l(l+1)
+Laplacian_Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+for l in 0:cfg.lmax
+    for m in 0:min(l, cfg.mmax)
+        Laplacian_Alm[l+1, m+1] = -l * (l + 1) * Alm[l+1, m+1]
     end
-    
-    return laplacian_sh
 end
 
-function spectral_horizontal_gradient(cfg::SHTnsConfig, sh::Vector{Float64})
-    # Returns (∂f/∂θ, ∂f/∂φ/sin(θ)) in spectral domain
-    # These are vector field components
-    
-    # This is complex - need to compute derivatives of Y_l^m
-    # Implementation depends on SHTns internal representation
-    # For now, use spatial domain computation
-    
-    spatial = synthesis(cfg, sh)
-    θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-    
-    # Finite differences (not optimal, but illustrative)
-    dθ = θ[2,1] - θ[1,1]
-    dφ = φ[1,2] - φ[1,1]
-    
-    ∂f_∂θ = similar(spatial)
-    ∂f_∂φ = similar(spatial)
-    
-    # Central differences
-    ∂f_∂θ[2:end-1, :] = (spatial[3:end, :] - spatial[1:end-2, :]) / (2*dθ)
-    ∂f_∂φ[:, 2:end-1] = (spatial[:, 3:end] - spatial[:, 1:end-2]) / (2*dφ)
-    
-    # Handle boundaries (simplified)
-    ∂f_∂θ[[1,end], :] = ∂f_∂θ[[2,end-1], :]
-    ∂f_∂φ[:, [1,end]] = ∂f_∂φ[:, [2,end-1]]
-    
-    return ∂f_∂θ, ∂f_∂φ
+# Transform back to spatial domain
+laplacian_field = synthesis(cfg, Laplacian_Alm)
+
+# For Y_2^0, the Laplacian should be -2(2+1) = -6 times the original
+println("Laplacian computed spectrally")
+println("Original field range: ", extrema(test_field))
+println("Laplacian field range: ", extrema(laplacian_field))
+println("Ratio (should be ≈ -6): ", laplacian_field[cfg.nlat÷2, 1] / test_field[cfg.nlat÷2, 1])
+
+destroy_config(cfg)
+```
+
+#### Divergence and Vorticity
+
+For vector fields decomposed into spheroidal (S) and toroidal (T) components:
+
+```julia
+using SHTnsKit
+
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create a velocity field
+Vθ = zeros(cfg.nlat, cfg.nlon)
+Vφ = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    Vθ[i,j] = cos(θ) * sin(φ)
+    Vφ[i,j] = cos(φ)
 end
 
-# Example: Compute and analyze gradients
-cfg = create_gauss_config(32, 32)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-test_field = @. sin(3θ) * cos(2φ)
+# Decompose into spheroidal/toroidal
+Slm, Tlm = spat_to_SHsphtor(cfg, Vθ, Vφ)
 
-sh = analysis(cfg, test_field)
-∂f_∂θ, ∂f_∂φ = spectral_horizontal_gradient(cfg, sh)
+# Compute divergence from spheroidal component
+# div(V) = ∇·V is related to S_lm by -l(l+1) factor
+div_field = divergence_from_spheroidal(cfg, Slm)
 
-println("Gradient magnitudes:")
-println("  ∂f/∂θ: ", extrema(∂f_∂θ))
-println("  ∂f/∂φ: ", extrema(∂f_∂φ))
+# Compute vorticity from toroidal component
+# ζ = k·(∇×V) is related to T_lm
+vort_field = vorticity_from_toroidal(cfg, Tlm)
+
+println("Divergence range: ", extrema(div_field))
+println("Vorticity range: ", extrema(vort_field))
 
 destroy_config(cfg)
 ```

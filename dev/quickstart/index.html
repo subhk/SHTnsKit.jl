@@ -236,24 +236,24 @@ spatial = synthesis(cfg, sh)
 println(&quot;Successful transform with proper size&quot;)
 
 destroy_config(cfg)</code></pre><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><p>Now that you&#39;ve mastered the basics:</p><ol><li><strong>Read the <a href="../api/">API Reference</a></strong> for complete function documentation</li><li><strong>Explore <a href="../examples/">Examples</a></strong> for real-world applications  </li><li><strong>Check <a href="../performance/">Performance Guide</a></strong> for optimization tips</li><li><strong>See <a href="../advanced/">Advanced Usage</a></strong> for complex workflows</li></ol><h2 id="Quick-Reference"><a class="docs-heading-anchor" href="#Quick-Reference">Quick Reference</a><a id="Quick-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Reference" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Configuration
-cfg = create_gauss_config(lmax, mmax)
-cfg = create_regular_config(lmax, mmax)
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+cfg = create_regular_config(lmax, nlat; nlon=nlon)
 
 # Basic transforms
 spatial = synthesis(cfg, spectral)
 spectral = analysis(cfg, spatial)
 
-# Vector transforms  
-Vθ, Vφ = synthesize_vector(cfg, S_lm, T_lm)
-S_lm, T_lm = analyze_vector(cfg, Vθ, Vφ)
+# Vector transforms (spheroidal/toroidal decomposition)
+Vθ, Vφ = SHsphtor_to_spat(cfg, S_lm, T_lm)
+S_lm, T_lm = spat_to_SHsphtor(cfg, Vθ, Vφ)
 
 # Complex fields
-spatial_c = synthesize_complex(cfg, spectral_c)
-spectral_c = analyze_complex(cfg, spatial_c)
+spatial_c = SH_to_spat_cplx(cfg, spectral_c)
+spectral_c = spat_cplx_to_SH(cfg, spatial_c)
 
 # Threading
 set_threading!(true)
 set_optimal_threads!()
 
 # Cleanup
-destroy_config(cfg)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../installation/">« Installation</a><a class="docs-footer-nextpage" href="../distributed/">Distributed Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 15:41">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+destroy_config(cfg)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../installation/">« Installation</a><a class="docs-footer-nextpage" href="../distributed/">Distributed Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 16:04">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

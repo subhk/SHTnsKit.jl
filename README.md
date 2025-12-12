@@ -76,35 +76,33 @@ julia -e 'using Pkg; Pkg.build("MPI")'
 
 ## Quick Start
 
-### Basic Usage (Serial)
+### Hello World (Serial)
 
 ```julia
 using SHTnsKit
 
-# Create spherical harmonic configuration
-lmax = 32
-nlat = lmax + 2  # Must be ≥ lmax+1 for Gauss-Legendre accuracy
-nlon = 2 * (2*lmax + 1)  # Use double the minimum for better accuracy
+# Step 1: Create configuration
+lmax = 16                      # Maximum spherical harmonic degree
+nlat = lmax + 2                # Number of latitude points
+nlon = 2*lmax + 1              # Number of longitude points
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-# Create bandlimited test data (representable by chosen lmax)
-# Note: Random data contains high frequencies beyond lmax and won't roundtrip perfectly
-θ, φ = cfg.θ, cfg.φ
-spatial_data = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat, j in 1:cfg.nlon
-    # Simple bandlimited function: Y_0^0 + Y_2^0 + Y_4^1 components
-    spatial_data[i,j] = 1.0 + 0.5 * (3*cos(θ[i])^2 - 1) + 0.3 * sin(θ[i]) * cos(φ[j])
+# Step 2: Create a test pattern (Y_2^0 harmonic)
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]  # cos(θ) at this latitude
+    spatial[i, :] .= (3*x^2 - 1)/2
 end
 
-# Transform to spherical harmonic coefficients
-coeffs = analysis(cfg, spatial_data)
+# Step 3: Transform to spectral coefficients
+Alm = analysis(cfg, spatial)
 
-# Transform back to spatial domain
-reconstructed = synthesis(cfg, coeffs; real_output=true)
+# Step 4: Transform back to spatial domain
+recovered = synthesis(cfg, Alm)
 
-# Check accuracy (should be ~1e-14 for bandlimited data)
-max_error = maximum(abs.(spatial_data - reconstructed))
-println("Roundtrip error: $max_error")
+# Step 5: Verify accuracy
+max_error = maximum(abs.(spatial - recovered))
+println("Roundtrip error: $max_error")  # Should be ~1e-14
 
 destroy_config(cfg)
 ```
@@ -116,34 +114,35 @@ using SHTnsKit, MPI, PencilArrays, PencilFFTs
 
 MPI.Init()
 
-# Config
+# Create configuration
 lmax = 32
 nlat = lmax + 2
 nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-# Pencil grid: dims (:θ,:φ)
-P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
-fθφ = PencilArrays.zeros(P; eltype=Float64)
+# Create distributed array using PencilArrays
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
-# Fill some data (each rank writes to its local block)
-for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-    fθφ[iθ, iφ] = sin(0.2*(iθ+1)) + cos(0.1*(iφ+1))
+# Fill local data (Y_2^0 pattern)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]  # cos(θ)
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
 end
 
-# Distributed analysis and synthesis
-Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft=true)
-fθφ2 = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true, use_rfft=true)
+# Distributed transforms
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
 
-# Vector/QST transforms (distributed)
-Vt = copy(fθφ); Vp = copy(fθφ)
-Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vt, Vp; use_rfft=true)
-Vt2, Vp2 = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vt, real_output=true, use_rfft=true)
+# Vector transforms (spheroidal/toroidal)
+Vt, Vp = copy(fθφ), copy(fθφ)
+Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vt, Vp)
+Vt2, Vp2 = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vt, real_output=true)
 
-Vr = copy(fθφ)
-Q,S,T = SHTnsKit.dist_spat_to_SHqst(cfg, Vr, Vt, Vp)
-Vr2, Vt2, Vp2 = SHTnsKit.dist_SHqst_to_spat(cfg, Q, S, T; prototype_θφ=Vr, real_output=true)
-
+destroy_config(cfg)
 MPI.Finalize()
 ```
 
@@ -184,8 +183,10 @@ destroy_config(cfg)
 ```julia
 using SHTnsKit
 
-# Setup for climate-scale problem
-cfg = create_gauss_config(42, 44; mres=86, nlon=128)  # ~2.8° resolution
+# Setup for climate-scale problem (~2.8° resolution)
+lmax = 42
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
 # Create realistic temperature field with seasonal variation
 summer_pattern = zeros(cfg.nlat, cfg.nlon)
 for i in 1:cfg.nlat, j in 1:cfg.nlon
@@ -201,8 +202,8 @@ characteristic_length = 40075.0 / dominant_scale_l  # km (Earth circumference)
 
 println("Dominant spatial scale: $(characteristic_length) km")
 
-# Global mean temperature
-global_mean = real(coeffs[1]) / sqrt(4π)
+# Global mean temperature (Y_0^0 coefficient)
+global_mean = real(coeffs[1, 1]) / sqrt(4π)
 println("Global mean temperature: $(global_mean) K")
 
 destroy_config(cfg)
@@ -214,17 +215,18 @@ destroy_config(cfg)
 using SHTnsKit
 using Printf
 
-cfg = create_gauss_config(32, 34; mres=66, nlon=128)
+lmax = 32
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
-# Create 2D coordinate grids for broadcasting
-u_wind = zeros(cfg.nlat, cfg.nlon)
-v_wind = zeros(cfg.nlat, cfg.nlon)
+# Create wind field arrays
+u_wind = zeros(cfg.nlat, cfg.nlon)  # Zonal (east-west)
+v_wind = zeros(cfg.nlat, cfg.nlon)  # Meridional (north-south)
 
 # Create realistic wind field: jet stream + wave pattern
 for i in 1:cfg.nlat, j in 1:cfg.nlon
     θ, φ = cfg.θ[i], cfg.φ[j]
-    u_wind[i,j] = 30 * sin(2*θ) + 15 * cos(3*φ) * sin(θ)  # Zonal
-    v_wind[i,j] = 10 * cos(θ) * sin(2*φ)                   # Meridional
+    u_wind[i,j] = 30 * sin(2*θ) + 15 * cos(3*φ) * sin(θ)
+    v_wind[i,j] = 10 * cos(θ) * sin(2*φ)
 end
 
 # Decompose into spheroidal (divergent) and toroidal (rotational) components
@@ -235,9 +237,9 @@ divergent_energy = sum(abs2, sph_coeffs)
 rotational_energy = sum(abs2, tor_coeffs)
 total_energy = divergent_energy + rotational_energy
 
-@printf("Flow decomposition: \n")
-@printf("Divergent flow:  %.2fx\n", 100*divergent_energy/total_energy)
-@printf("Rotational flow: %.2fx\n", 100*rotational_energy/total_energy)
+@printf("Flow decomposition:\n")
+@printf("  Divergent:  %.1f%%\n", 100*divergent_energy/total_energy)
+@printf("  Rotational: %.1f%%\n", 100*rotational_energy/total_energy)
 
 destroy_config(cfg)
 ```
@@ -249,23 +251,24 @@ using SHTnsKit
 
 # Problem size scaling analysis
 for lmax in [16, 32, 48, 64]
-    cfg = create_gauss_config(lmax, lmax+2; mres=2*lmax+2, nlon=4*lmax+1)
-    
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
     # Basic configuration information
-    println("lmax=$lmax ($(cfg.nlm) coefficients):")
-    println("  Grid size: $(cfg.nlat) × $(cfg.nlon)")
-    println("  Total spatial points: $(cfg.nspat)")
-    
-    # Simple timing test
+    println("lmax=$lmax: $(nlat)×$(nlon) grid, $(cfg.nlm) coefficients")
+
     # Create simple bandlimited test function
-    θ, φ = cfg.θ, cfg.φ
     test_data = zeros(cfg.nlat, cfg.nlon)
-    for i in 1:cfg.nlat, j in 1:cfg.nlon
-        test_data[i,j] = 1.0 + 0.3 * cos(θ[i]) + 0.2 * sin(θ[i]) * cos(φ[j])
+    for i in 1:cfg.nlat
+        x = cfg.x[i]
+        test_data[i, :] .= (3*x^2 - 1)/2  # Y_2^0
     end
+
+    # Time the transforms
     @time coeffs = analysis(cfg, test_data)
     @time reconstructed = synthesis(cfg, coeffs)
-    
+
     destroy_config(cfg)
 end
 ```
@@ -455,32 +458,22 @@ Full support for gradient-based optimization:
 ```julia
 using SHTnsKit, ForwardDiff, Zygote
 
+# Setup
+cfg = create_gauss_config(12, 14; nlon=25)
+sh_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+sh_coeffs[1,1] = 1.0
+
 # Forward-mode differentiation
-cfg = create_gauss_config(12, 12; mres=26, nlon=48)
-objective(sh) = sum(abs2, sh_to_spat(cfg, sh))
+objective(sh) = sum(abs2, synthesis(cfg, sh))
 gradient = ForwardDiff.gradient(objective, sh_coeffs)
 
 # Reverse-mode differentiation (better for many parameters)
 loss_val, grad = Zygote.withgradient(objective, sh_coeffs)
+
+destroy_config(cfg)
 ```
 
 Supported functions include all core transforms, vector operations, spectral analysis, and differential operators.
-
-### Matrix Operators
-
-Efficient spectral differential operators:
-
-```julia
-# Apply Laplacian in spectral domain
-apply_laplacian!(cfg, sh_coeffs, laplacian_result)
-
-# cos(θ) multiplication operator  
-apply_costheta_operator!(cfg, sh_coeffs, costheta_result)
-
-# Custom matrix operations
-matrix = create_custom_operator_matrix(cfg)
-result = apply_matrix_operator(cfg, matrix, sh_coeffs)
-```
 
 ### Allocation Benchmarks
 

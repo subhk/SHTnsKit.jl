@@ -124,58 +124,72 @@ println("SHTnsKit.jl installation verified!")
 
 ### Parallel Functionality Test
 
+Save this as `test_mpi.jl` and run with `mpiexec -n 2 julia --project test_mpi.jl`:
+
 ```julia
-# Test serial mode (no MPI required)
-using SHTnsKit
+using MPI
+MPI.Init()
 
-cfg = create_gauss_config(10, 8; mres=24, nlon=32)
-sh_coeffs = randn(Complex{Float64}, cfg.nlm)
+using SHTnsKit, PencilArrays, PencilFFTs
 
-# This should work without MPI packages
-try
-    auto_cfg = auto_parallel_config(cfg)
-    println("Serial fallback working")
-catch
-    println("Parallel packages not detected (expected)")
+# Create configuration
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data (Y_2^0 pattern)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
 end
 
-# Test with MPI packages (run with: mpiexec -n 2 julia script.jl)
-try
-    using MPI, PencilArrays, PencilFFTs
-    MPI.Init()
-    
-    pcfg = create_parallel_config(cfg, MPI.COMM_WORLD)
-    result = similar(sh_coeffs)
-    parallel_apply_operator(pcfg, :laplacian, sh_coeffs, result)
-    
-    println("Parallel functionality verified!")
-    MPI.Finalize()
-catch e
-    println("INFO: Parallel packages not available: $e")
+# Distributed roundtrip test
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+# Verify accuracy
+max_err = maximum(abs.(parent(fθφ_recovered) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, MPI.COMM_WORLD)
+
+if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+    println("Parallel roundtrip error: $global_max_err")
+    println(global_max_err < 1e-10 ? "SUCCESS!" : "FAILED")
 end
+
+destroy_config(cfg)
+MPI.Finalize()
 ```
 
 ### Extended Verification
 
 ```julia
-using SHTnsKit, Test
+using SHTnsKit, Test, LinearAlgebra
 
 @testset "Installation Verification" begin
     # Basic functionality
-    cfg = create_gauss_config(16, 16)
-    # Create bandlimited test coefficients (avoids high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-    spat = synthesis(cfg, sh)
-    sh2 = analysis(cfg, spat)
-    @test norm(sh - sh2) < 1e-12
-    
-    # Threading (FFTW thread setting available)
-    @test get_fft_threads() >= 1
-    
+    lmax = 16
+    cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
+    # Create bandlimited test pattern
+    spatial = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat
+        x = cfg.x[i]
+        spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0
+    end
+
+    # Roundtrip test
+    Alm = analysis(cfg, spatial)
+    recovered = synthesis(cfg, Alm)
+    @test norm(spatial - recovered) < 1e-12
+
     # Memory management
     destroy_config(cfg)
     @test true  # No crash
@@ -188,10 +202,10 @@ end
 
 **1. Array size mismatch:**
 ```
-ERROR: DimensionMismatch: spatial_data size (X, Y) must be (nlat, nphi)
+ERROR: DimensionMismatch: spatial_data size (X, Y) must be (nlat, nlon)
 ```
 
-**Fix:** Ensure `length(sh) == cfg.nlm` and `size(spatial) == (cfg.nlat, cfg.nlon)`.
+**Fix:** Ensure `size(Alm) == (cfg.lmax+1, cfg.mmax+1)` and `size(spatial) == (cfg.nlat, cfg.nlon)`.
 
 **2. Memory issues:**
 ```
@@ -199,9 +213,9 @@ ERROR: Out of memory
 ```
 
 **Solutions:**
-- Reduce problem size (lmax, mmax)
+- Reduce problem size (lmax)
 - Increase system swap space
- - Reuse allocations with in‑place APIs (`synthesize!`, `analyze!`)
+- Reuse allocations with in‑place APIs (`synthesis!`, `analysis!`)
 
 ### Advanced Debugging
 

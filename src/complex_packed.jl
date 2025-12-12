@@ -1,3 +1,54 @@
+#=
+================================================================================
+complex_packed.jl - Complex Packed Layout (LM_cplx) Support
+================================================================================
+
+This file implements the packed coefficient storage for complex-valued fields
+where both positive and negative m values are stored (no Hermitian symmetry).
+
+WHEN IS THIS NEEDED?
+--------------------
+Real-valued fields have Hermitian symmetry: a_{l,-m} = (-1)^m conj(a_{l,m})
+So we only need to store m ≥ 0 coefficients (the "real" packed layout).
+
+Complex-valued fields have NO symmetry - we must store all m from -l to +l.
+This doubles the storage but is necessary for:
+- Complex scalar fields
+- Intermediate calculations in rotations
+- Some mathematical analyses
+
+LAYOUT (LM_cplx)
+----------------
+Coefficients are packed in order:
+    l=0: m=0                    (1 coefficient)
+    l=1: m=-1, 0, +1            (3 coefficients)
+    l=2: m=-2, -1, 0, +1, +2    (5 coefficients)
+    ...
+
+For l ≤ mmax: index = l(l+1) + m
+For l > mmax: index = mmax(2l - mmax) + l + m
+
+This matches the SHTns C library LM_cplx macro (for mres=1).
+
+FUNCTIONS
+---------
+    LM_cplx_index(lmax, mmax, l, m)    : Get packed index for (l,m)
+    LM_cplx(cfg, l, m)                 : Compatibility wrapper
+    nlm_cplx_calc(lmax, mmax, mres)    : Count total complex coefficients
+
+    SH_to_spat_cplx(cfg, alm_packed)   : Synthesis for complex field
+    spat_cplx_to_SH(cfg, z)            : Analysis for complex field
+    SH_to_point_cplx(cfg, alm, cosθ, φ): Point evaluation for complex field
+
+COMPARISON WITH REAL LAYOUT
+---------------------------
+For lmax=mmax=2:
+    Real layout:    (0,0), (1,0), (2,0), (1,1), (2,1), (2,2)     = 6 coeffs
+    Complex layout: (0,0), (1,-1),(1,0),(1,1), (2,-2),...,(2,2)  = 9 coeffs
+
+================================================================================
+=#
+
 """
 Complex packed layout (LM_cplx) support and transforms in pure Julia.
 Compatible with SHTns `LM_cplx` macro for `mres == 1`.

@@ -1,3 +1,65 @@
+#=
+================================================================================
+spectral_diagnostics.jl - Spectral Analysis and Energy Spectrum Functions
+================================================================================
+
+This file provides functions for computing energy spectra and spectral
+diagnostics from spherical harmonic coefficients.
+
+WHY SPECTRAL DIAGNOSTICS?
+-------------------------
+Energy spectra reveal the scale distribution of physical fields:
+- E(l): Energy vs spherical harmonic degree (length scale ~ R/l)
+- E(m): Energy vs azimuthal order (zonal vs eddy contributions)
+- E(l,m): Full 2D spectral energy distribution
+
+These are essential for:
+- Turbulence analysis (checking power law scalings)
+- Model validation (comparing spectra to observations)
+- Numerical debugging (detecting aliasing, truncation errors)
+- Understanding energy cascades in geophysical flows
+
+SPECTRAL SLOPES
+---------------
+Different physical processes produce characteristic spectral slopes:
+- E(l) ~ l^{-3}: 2D enstrophy cascade (geostrophic turbulence)
+- E(l) ~ l^{-5/3}: 2D inverse energy cascade
+- E(l) ~ l^{-5}: 3D rotating turbulence
+- E(l) flat at high l: numerical noise or aliasing
+
+FUNCTIONS PROVIDED
+------------------
+Degree spectra (summed over m):
+    energy_scalar_l_spectrum(cfg, alm)     : E(l) for scalar
+    energy_vector_l_spectrum(cfg, Slm, Tlm): KE(l) for vector
+
+Order spectra (summed over l):
+    energy_scalar_m_spectrum(cfg, alm)     : E(m) for scalar
+    energy_vector_m_spectrum(cfg, Slm, Tlm): KE(m) for vector
+
+2D spectra (per-mode):
+    energy_scalar_lm(cfg, alm)             : E_{lm} matrix
+    energy_vector_lm(cfg, Slm, Tlm)        : KE_{lm} matrix
+
+USAGE EXAMPLE
+-------------
+```julia
+cfg = create_gauss_config(64, 128)
+alm = analysis(cfg, f)
+
+# Get energy spectrum vs degree
+El = energy_scalar_l_spectrum(cfg, alm)
+ls = 0:cfg.lmax
+
+# Check for -3 power law
+using Plots
+loglog(ls[2:end], El[2:end], label="E(l)")
+plot!(ls[2:end], El[5] .* (ls[2:end] ./ 5).^(-3), ls="--", label="l^{-3}")
+```
+
+================================================================================
+=#
+
 """
 Spectral Analysis and Spectrum Functions
 

@@ -1,3 +1,67 @@
+#=
+================================================================================
+specialized_transforms.jl - Specialized Spherical Harmonic Transform Functions
+================================================================================
+
+This file provides specialized transform variants for cases where full 2D
+transforms are unnecessary or inefficient.
+
+WHEN TO USE SPECIALIZED TRANSFORMS
+----------------------------------
+- Axisymmetric fields (m=0 only): Use *_axisym functions
+- Single azimuthal mode: Use *_ml functions
+- Point evaluation: Use SH_to_point
+- Degree truncation: Use *_l variants
+- Packed coefficient layout: Use SH_to_spat / spat_to_SH
+
+FUNCTION CATEGORIES
+-------------------
+1. Packed Layout Transforms:
+   spat_to_SH(cfg, Vr)      : Grid → packed coefficients (1D vector)
+   SH_to_spat(cfg, Qlm)     : Packed coefficients → flattened grid
+
+2. Axisymmetric (m=0) Transforms:
+   spat_to_SH_axisym(cfg, Vr)     : Latitude values → l-coefficients
+   SH_to_spat_axisym(cfg, Qlm)    : l-coefficients → latitude values
+   *_l_axisym variants            : Degree-limited versions
+
+3. Mode-Limited (single m) Transforms:
+   spat_to_SH_ml(cfg, m, Vr_m, ltr)  : Single-mode analysis
+   SH_to_spat_ml(cfg, m, Ql, ltr)    : Single-mode synthesis
+
+4. Degree-Limited Transforms:
+   spat_to_SH_l(cfg, Vr, ltr)  : Analysis with l ≤ ltr
+   SH_to_spat_l(cfg, Qlm, ltr) : Synthesis with l ≤ ltr
+
+5. Point Evaluation:
+   SH_to_point(cfg, Qlm, cosθ, φ)  : Evaluate at single point
+
+PERFORMANCE BENEFITS
+--------------------
+- Axisymmetric: O(lmax × nlat) vs O(lmax × nlat × nlon) for full transform
+- Mode-limited: Process only needed azimuthal modes
+- Point evaluation: No grid storage needed
+- Degree truncation: Skip high-degree computations
+
+USAGE EXAMPLES
+--------------
+```julia
+cfg = create_gauss_config(32, 64)
+
+# Axisymmetric field (zonal average)
+f_zonal = mean(f, dims=2)[:, 1]  # Average over longitude
+Ql = spat_to_SH_axisym(cfg, f_zonal)
+
+# Point evaluation (avoid full synthesis for single point)
+val = SH_to_point(cfg, Qlm, cos(θ), φ)
+
+# Degree-limited synthesis (e.g., for low-pass filtering)
+f_smooth = SH_to_spat_l(cfg, Qlm, 10)  # Only l ≤ 10
+```
+
+================================================================================
+=#
+
 """
 Specialized Spherical Harmonic Transforms
 

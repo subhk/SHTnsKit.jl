@@ -1,3 +1,71 @@
+#=
+================================================================================
+layout.jl - SHTns-Compatible Mode Counting and Index Mapping
+================================================================================
+
+This file implements the packed coefficient storage layout used by SHTns.
+Understanding this layout is essential for efficient memory access and
+compatibility with other SHTns-based tools.
+
+THE (l,m) INDEX PROBLEM
+-----------------------
+Spherical harmonic coefficients are naturally indexed by two integers:
+- l: degree (0 ≤ l ≤ lmax)
+- m: order (-l ≤ m ≤ l)
+
+Storing these in a 2D array wastes memory since half the entries are
+invalid (|m| > l). For lmax=100, only ~50% of a 101×201 array is used.
+
+THE PACKED LAYOUT SOLUTION
+--------------------------
+SHTns uses a 1D packed layout that stores only valid (l,m) pairs.
+For real-valued fields, Hermitian symmetry (a_{l,-m} = (-1)^m conj(a_{l,m}))
+means we only need m ≥ 0 modes.
+
+Layout scheme (for mres=1):
+    Index 0: (0,0)
+    Index 1: (1,0)
+    ...
+    Index lmax: (lmax,0)     <- End of m=0 block
+    Index lmax+1: (1,1)      <- Start of m=1 block
+    Index lmax+2: (2,1)
+    ...
+
+Modes are grouped by m, with l running from m to lmax within each block.
+
+THE mres PARAMETER
+------------------
+mres controls which m-values are included:
+- mres=1: all m (standard)
+- mres=2: only even m (equatorial symmetry)
+- mres=3: only m divisible by 3 (3-fold symmetry)
+
+This is useful for flows with discrete rotational symmetry.
+
+CORE FUNCTIONS
+--------------
+    nlm_calc(lmax, mmax, mres)     : Count total packed coefficients
+    LM_index(lmax, mres, l, m)     : Convert (l,m) → packed index
+    LiM_index(lmax, mres, l, im)   : Same but with reduced m-index
+    build_li_mi(lmax, mmax, mres)  : Build reverse lookup tables
+
+MEMORY EFFICIENCY
+-----------------
+For lmax=100, mmax=100, mres=1:
+    2D array: 101 × 101 = 10,201 elements (many invalid)
+    Packed:   nlm_calc = 5,151 elements (all valid)
+    Savings:  ~50% memory reduction
+
+COMPATIBILITY
+-------------
+These functions match the SHTns C library layout exactly, enabling:
+- Direct data exchange with SHTns
+- Same algorithms as reference implementation
+- Validated test cases from SHTns
+
+================================================================================
+=#
+
 """
 SHTns-compatible layout utilities: mode counting and index mapping.
 

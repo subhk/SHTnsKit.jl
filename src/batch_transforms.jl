@@ -1,3 +1,88 @@
+#=
+================================================================================
+batch_transforms.jl - Batch Spherical Harmonic Transforms
+================================================================================
+
+This file implements batch transform operations for processing multiple
+fields simultaneously, providing significant performance benefits.
+
+WHY BATCH TRANSFORMS?
+---------------------
+When transforming many fields (e.g., time series, ensemble members, or
+multi-component fields), individual transforms have repeated overhead:
+
+Individual transforms (N fields):
+- N × Legendre polynomial computations
+- N × FFT plan creations
+- N × function call overhead
+
+Batch transforms:
+- 1 × Legendre polynomial computation (shared)
+- 1 × FFT plan (shared or batched)
+- 1 × function call
+
+PERFORMANCE GAINS
+-----------------
+- Legendre polynomials: Computed once, applied to all fields
+- Cache efficiency: Contiguous memory access patterns
+- Reduced function overhead: Single dispatch for N fields
+- Better vectorization: Larger working sets for SIMD
+
+TYPICAL USE CASES
+-----------------
+- Time-stepping PDEs: Transform velocity/pressure at each timestep
+- Ensemble simulations: Transform all ensemble members together
+- Multi-component fields: (u, v, w) velocity components
+- Sensitivity analysis: Transform many perturbed fields
+
+FUNCTION OVERVIEW
+-----------------
+Scalar batch transforms:
+    analysis_batch(cfg, fields)      : Multiple spatial → spectral
+    synthesis_batch(cfg, alm_batch)  : Multiple spectral → spatial
+
+Vector batch transforms:
+    spat_to_SHsphtor_batch(cfg, Vt, Vp)           : 2D vector analysis
+    SHsphtor_to_spat_batch(cfg, Slm, Tlm)         : 2D vector synthesis
+
+QST batch transforms:
+    spat_to_SHqst_batch(cfg, Vr, Vt, Vp)          : 3D vector analysis
+    SHqst_to_spat_batch(cfg, Qlm, Slm, Tlm)       : 3D vector synthesis
+
+USAGE EXAMPLE
+-------------
+```julia
+cfg = create_gauss_config(64, 128)
+
+# Process 10 fields at once
+nfields = 10
+fields = rand(cfg.nlat, cfg.nlon, nfields)
+
+# Batch analysis - much faster than looping
+alm_batch = analysis_batch(cfg, fields)
+
+# Modify all spectra (e.g., filter)
+alm_batch[50:end, :, :] .= 0  # Low-pass filter
+
+# Batch synthesis
+fields_filtered = synthesis_batch(cfg, alm_batch)
+```
+
+DATA LAYOUT
+-----------
+Spatial arrays:  (nlat, nlon, nfields)
+Spectral arrays: (lmax+1, mmax+1, nfields)
+
+The third dimension indexes the different fields.
+
+THREADING
+---------
+Batch operations use @threads for parallelization across m-modes,
+with thread-local Legendre polynomial buffers to avoid race conditions.
+
+================================================================================
+=#
+
 """
 Batch Spherical Harmonic Transforms
 

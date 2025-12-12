@@ -1,3 +1,60 @@
+#=
+================================================================================
+energy_diagnostics.jl - Energy Diagnostics for Spherical Harmonic Fields
+================================================================================
+
+This file provides functions to compute energy integrals from spherical harmonic
+fields, both in spectral and physical space. Energy diagnostics are essential
+for validating transforms (Parseval identity) and monitoring simulations.
+
+ENERGY DEFINITIONS
+------------------
+For a scalar field f(θ,φ) = Σ a_lm Y_l^m(θ,φ), the energy is:
+    E = (1/2) ∫∫ |f|² dΩ = (1/2) Σ |a_lm|²  (Parseval's identity)
+
+For a vector field V with spheroidal/toroidal decomposition:
+    KE = (1/2) ∫∫ |V|² dΩ = (1/2) Σ l(l+1) [|S_lm|² + |T_lm|²]
+
+The l(l+1) factor arises from the gradient operator acting on scalar potentials.
+
+HERMITIAN SYMMETRY
+------------------
+For real-valued fields, spectral coefficients satisfy:
+    a_{l,-m} = (-1)^m conj(a_{l,m})
+
+We only store m ≥ 0 coefficients. In energy sums, m > 0 modes must be
+counted twice to account for the symmetric negative-m contributions:
+    wm[m] = 1 for m=0, 2 for m>0
+
+FUNCTION CATEGORIES
+-------------------
+Spectral energy:
+    energy_scalar(cfg, alm)           : Total scalar energy from coefficients
+    energy_vector(cfg, Slm, Tlm)      : Total vector kinetic energy
+    energy_*_packed(cfg, Qlm)         : Same for packed coefficient format
+
+Grid energy (physical space integration):
+    grid_energy_scalar(cfg, f)        : Energy by Gauss-Legendre quadrature
+    grid_energy_vector(cfg, Vt, Vp)   : Vector energy on grid
+
+Energy gradients (for optimization):
+    grad_energy_scalar_alm(cfg, alm)  : ∂E/∂a_lm
+    grad_energy_vector_Slm_Tlm(...)   : ∂KE/∂S_lm, ∂KE/∂T_lm
+    grad_grid_energy_*_field(...)     : ∂E/∂f for spatial fields
+
+VALIDATION
+----------
+Parseval's identity: spectral and grid energies should match:
+```julia
+E_spectral = energy_scalar(cfg, alm)
+f = synthesis(cfg, alm)
+E_grid = grid_energy_scalar(cfg, f)
+@assert isapprox(E_spectral, E_grid, rtol=1e-10)
+```
+
+================================================================================
+=#
+
 """
 Energy Diagnostics for Spherical Harmonic Fields
 

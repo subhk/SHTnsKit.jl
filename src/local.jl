@@ -22,6 +22,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     # m=0 contribution
     Plm_row!(P, x, lmax, 0)
     g0 = 0.0 + 0.0im
+    
     @inbounds for l in 0:ltr
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
         a = Qlm[lm]
@@ -32,6 +33,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
         end
         g0 += cfg.Nlm[l+1, 1] * P[l+1] * a
     end
+    
     @inbounds for j in 0:(nphi-1)
         vals[j+1] = real(g0)
     end
@@ -42,6 +44,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
         Plm_row!(P, x, lmax, m)
         gm = 0.0 + 0.0im
         col = m + 1
+        
         @inbounds for l in m:min(ltr, lmax)
             lm = LM_index(lmax, cfg.mres, l, m) + 1
             a = Qlm[lm]
@@ -52,6 +55,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
             end
             gm += cfg.Nlm[l+1, col] * P[l+1] * a
         end
+        
         for j in 0:(nphi-1)
             vals[j+1] += 2 * real(gm * cis(2π * m * j / nphi))
         end
@@ -74,6 +78,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     # m=0
     Plm_row!(P, x, lmax, 0)
     g0 = 0.0 + 0.0im
+    
     @inbounds for l in 0:min(ltr, lmax)
         idx = LM_cplx_index(lmax, mmax, l, 0) + 1
         a = alm_packed[idx]
@@ -84,9 +89,11 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
         end
         g0 += cfg.Nlm[l+1, 1] * P[l+1] * a
     end
+    
     @inbounds for j in 1:nphi
         vals[j] += g0
     end
+    
     # m ≠ 0
     for m in 1:mmax
         Plm_row!(P, x, lmax, m)
@@ -135,6 +142,7 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     vr = zero(CT)
     vt = zero(CT)
     vp = zero(CT)
+    
     # m=0
     Plm_and_dPdx_row!(P, dPdx, x, lmax, 0)
     for l in 0:lmax
@@ -153,6 +161,7 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
         vt += dθY * aS
         vp += (sθ * N * dPdx[l+1]) * aT
     end
+    
     # m>0
     for m in 1:mmax
         (m % cfg.mres == 0) || continue
@@ -227,6 +236,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     gθ0 = 0.0 + 0.0im
     gφ0 = 0.0 + 0.0im
     sθ = sqrt(max(0.0, 1 - x*x))
+    
     @inbounds for l in 0:ltr
         N = cfg.Nlm[l+1, 1]
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
@@ -256,6 +266,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
         gφ = 0.0 + 0.0im
         inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
         col = m + 1
+        
         @inbounds for l in m:min(ltr, lmax)
             N = cfg.Nlm[l+1, col]
             lm = LM_index(lmax, cfg.mres, l, m) + 1

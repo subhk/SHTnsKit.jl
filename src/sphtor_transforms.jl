@@ -1,3 +1,108 @@
+#=
+================================================================================
+sphtor_transforms.jl - Spheroidal-Toroidal Vector Field Transforms
+================================================================================
+
+This file implements spherical harmonic transforms for 2D horizontal (tangential)
+vector fields on the sphere using the spheroidal-toroidal (S/T) decomposition.
+
+PHYSICAL MOTIVATION
+-------------------
+Any smooth horizontal vector field V on the sphere can be uniquely decomposed:
+    V = V_S + V_T  (spheroidal + toroidal)
+
+where:
+- Spheroidal (S): curl-free, associated with DIVERGENT flow (sources/sinks)
+- Toroidal (T):   div-free, associated with ROTATIONAL flow (vortices)
+
+This is analogous to the Helmholtz decomposition in 3D, but specialized for
+tangent vectors on a 2-sphere.
+
+MATHEMATICAL FORMULATION
+------------------------
+Given spheroidal potential S(θ,φ) and toroidal potential T(θ,φ), the vector
+components are:
+
+    V_θ = ∂S/∂θ - (1/sin θ) ∂T/∂φ    (colatitude/meridional component)
+    V_φ = (1/sin θ) ∂S/∂φ + ∂T/∂θ    (azimuthal/zonal component)
+
+In spectral space with Y_l^m(θ,φ) = N_lm P_l^m(cos θ) exp(imφ):
+
+    S(θ,φ) = Σ_{l,m} S_lm Y_l^m(θ,φ)
+    T(θ,φ) = Σ_{l,m} T_lm Y_l^m(θ,φ)
+
+The scalar invariants (divergence and vorticity) are directly related:
+
+    δ_lm = -l(l+1) S_lm    (divergence spectrum)
+    ζ_lm = -l(l+1) T_lm    (vorticity spectrum)
+
+This makes S/T decomposition extremely useful in fluid dynamics where
+divergence and vorticity are fundamental quantities.
+
+APPLICATIONS
+------------
+- Atmospheric/oceanic flows: wind velocity, ocean currents
+- Geophysics: surface plate motions, magnetic field horizontal components
+- Astrophysics: stellar surface flows, solar wind
+
+IMPLEMENTATION STRUCTURE
+------------------------
+Main transforms:
+    SHsphtor_to_spat(cfg, Slm, Tlm)   : Synthesis (spectral → spatial)
+    spat_to_SHsphtor(cfg, Vt, Vp)     : Analysis (spatial → spectral)
+
+Helper functions:
+    SHsph_to_spat(cfg, Slm)           : Spheroidal-only synthesis (T=0)
+    SHtor_to_spat(cfg, Tlm)           : Toroidal-only synthesis (S=0)
+
+Spectral operators:
+    divergence_from_spheroidal(cfg, Slm)   : δ_lm = -l(l+1) S_lm
+    vorticity_from_toroidal(cfg, Tlm)      : ζ_lm = -l(l+1) T_lm
+    spheroidal_from_divergence(cfg, δlm)   : Invert for S_lm
+    toroidal_from_vorticity(cfg, ζlm)      : Invert for T_lm
+
+Degree-limited variants (suffix _l):
+    SHsphtor_to_spat_l, spat_to_SHsphtor_l, etc.
+
+Mode-limited variants (suffix _ml):
+    For single azimuthal mode m processing
+
+DEBUGGING TIPS
+--------------
+1. Test with pure spheroidal field (should have zero vorticity):
+   ```julia
+   cfg = create_gauss_config(32, 64)
+   Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+   Slm[3, 1] = 1.0  # l=2, m=0 mode
+   Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+   Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm)
+   S_back, T_back = spat_to_SHsphtor(cfg, Vt, Vp)
+   @assert norm(T_back) < 1e-10 "Pure spheroidal should have no toroidal"
+   ```
+
+2. Verify divergence/vorticity relationships:
+   ```julia
+   δ = divergence_from_spheroidal(cfg, Slm)
+   @assert δ[3,1] ≈ -6.0 * Slm[3,1]  # -l(l+1) = -2*3 = -6
+   ```
+
+3. Check pole behavior - sin θ → 0 at poles:
+   - V_φ term (1/sinθ)∂S/∂φ can be singular
+   - Implementation guards against this via inv_sθ = sθ == 0 ? 0.0 : 1/sθ
+
+4. Robert form scaling:
+   - If cfg.robert_form = true, outputs are scaled by sin(θ)
+   - This regularizes pole singularities for numerical stability
+
+PERFORMANCE NOTES
+-----------------
+- Uses thread-local Legendre polynomial arrays to enable @threads parallelism
+- Can use precomputed tables (cfg.plm_tables, cfg.dplm_tables) if available
+- Requires BOTH P_l^m AND dP_l^m/dx for vector transforms (unlike scalar)
+
+================================================================================
+=#
+
 """
 Spheroidal-Toroidal Vector Field Transforms
 
@@ -11,7 +116,7 @@ Key relationships:
 
 Where S represents the spheroidal (curl-free) part and T the toroidal (div-free) part.
 The corresponding scalar invariants are:
-- Divergence: δ = ∇·V = -∑_{l,m} l(l+1) S_lm Y_l^m  
+- Divergence: δ = ∇·V = -∑_{l,m} l(l+1) S_lm Y_l^m
 - Vorticity:  ζ = (∇×V)·r̂ = -∑_{l,m} l(l+1) T_lm Y_l^m
 so spheroidal/toroidal spectra are directly tied to divergence and vorticity.
 """

@@ -1,8 +1,90 @@
+#=
+================================================================================
+qst_transforms.jl - QST (Radial-Spheroidal-Toroidal) Vector Transforms
+================================================================================
+
+This file implements spherical harmonic transforms for full 3-component vector
+fields on the sphere using the QST decomposition.
+
+WHAT IS QST DECOMPOSITION?
+--------------------------
+QST extends the 2D spheroidal-toroidal decomposition to 3D by adding a radial
+(Q) component:
+
+    V(r,θ,φ) = V_r r̂ + V_θ θ̂ + V_φ φ̂
+
+The three components are:
+    Q (Radial):    Scalar field expanded in Y_l^m, gives V_r
+    S (Spheroidal): Horizontal divergent flow (curl-free tangent)
+    T (Toroidal):   Horizontal rotational flow (div-free tangent)
+
+The horizontal components (V_θ, V_φ) come from S and T exactly as in
+the sphtor_transforms.jl file:
+    V_θ = ∂S/∂θ - (1/sin θ) ∂T/∂φ
+    V_φ = (1/sin θ) ∂S/∂φ + ∂T/∂θ
+
+PHYSICAL INTERPRETATION
+-----------------------
+In spherical geometry:
+    Q_lm : radial flow strength at degree l, order m
+    S_lm : horizontal divergent flow (linked to mass convergence/divergence)
+    T_lm : horizontal rotational flow (linked to vorticity)
+
+For a divergence-free 3D vector field (like incompressible flow):
+    ∇·V = 0  ⟹  Q and S are related by continuity
+
+IMPLEMENTATION
+--------------
+QST transforms are implemented by combining scalar and sphtor transforms:
+    - Q component: standard scalar SH analysis/synthesis
+    - S,T components: spheroidal-toroidal vector transforms
+
+Main functions:
+    SHqst_to_spat(cfg, Qlm, Slm, Tlm)    : Spectral → Spatial (Vr, Vθ, Vφ)
+    spat_to_SHqst(cfg, Vr, Vt, Vp)       : Spatial → Spectral (Q, S, T)
+
+Variants:
+    *_cplx     : Complex-valued output
+    *_l        : Degree-limited (truncate at degree ltr)
+    *_ml       : Single azimuthal mode (for mode-by-mode processing)
+
+USAGE EXAMPLE
+-------------
+```julia
+cfg = create_gauss_config(32, 64)
+
+# Create spectral coefficients
+Qlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+
+Qlm[3, 1] = 1.0  # Radial l=2, m=0
+Slm[4, 2] = 0.5  # Spheroidal l=3, m=1
+
+# Synthesize to spatial
+Vr, Vt, Vp = SHqst_to_spat(cfg, Qlm, Slm, Tlm)
+
+# Analyze back to spectral
+Q2, S2, T2 = spat_to_SHqst(cfg, Vr, Vt, Vp)
+@assert Q2 ≈ Qlm
+@assert S2 ≈ Slm
+```
+
+APPLICATIONS
+------------
+- Geodynamics: mantle convection patterns
+- Astrophysics: stellar internal flows
+- Geomagnetic field modeling (poloidal-toroidal decomposition)
+- Any 3D vector field in spherical coordinates
+
+================================================================================
+=#
+
 """
 QST Vector Field Transforms
 
 This module handles transforms for 3-component vector fields using the QST decomposition:
-- Q: radial (spheroidal) component 
+- Q: radial (spheroidal) component
 - S: tangential spheroidal component
 - T: tangential toroidal component
 

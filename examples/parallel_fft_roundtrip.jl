@@ -1,22 +1,23 @@
 #!/usr/bin/env julia
 
-# Distributed FFT roundtrip with PencilArrays + PencilFFTs
+# Distributed FFT roundtrip with PencilArrays + FFTW
 #
 # Run:
 #   mpiexec -n 2 julia --project=. examples/parallel_fft_roundtrip.jl
 #
 # Notes:
-# - Uses safe PencilArrays allocation (no zeros(pencil; eltype=...) calls).
-# - Attempts real-to-complex (rfft/irfft) along φ; falls back to complex FFT if needed.
+# - Uses PencilArrays for distributed array management
+# - Uses FFTW for 1D FFTs along the longitude dimension (local operations)
+# - This matches the approach used in SHTnsKit's parallel extension
 
 using Random
 
 try
     using MPI
     using PencilArrays
-    using PencilFFTs
+    using FFTW
 catch e
-    @error "This example requires MPI, PencilArrays, and PencilFFTs" exception=(e, catch_backtrace())
+    @error "This example requires MPI, PencilArrays, and FFTW" exception=(e, catch_backtrace())
     exit(1)
 end
 
@@ -26,7 +27,7 @@ const RANK = MPI.Comm_rank(COMM)
 const SIZE = MPI.Comm_size(COMM)
 
 if RANK == 0
-    println("Distributed FFT roundtrip with PencilFFTs ($SIZE ranks)")
+    println("Distributed FFT roundtrip with PencilArrays + FFTW ($SIZE ranks)")
 end
 
 # Choose a modest 2D grid (θ × φ)
@@ -50,9 +51,8 @@ end
 pθ, pφ = procgrid(SIZE)
 topo = PencilArrays.Pencil((nlat, nlon), (pθ, pφ), COMM)
 
-# Safe allocation helpers for PencilArrays v0.19+
+# Safe allocation helper for PencilArrays v0.19+
 function pa_zeros(::Type{T}, pen::Pencil) where {T}
-    # For PencilArrays v0.19+, use PencilArray constructor with local array
     local_dims = PencilArrays.size_local(pen)
     local_data = zeros(T, local_dims...)
     return PencilArray(pen, local_data)
@@ -61,67 +61,81 @@ end
 # Build a real-valued distributed field f(θ,φ)
 Random.seed!(1234)
 fθφ = pa_zeros(Float64, topo)
-fill!(fθφ, 0)
-# Fill with a smooth, separable pattern
-for iθ in axes(fθφ, 1), iφ in axes(fθφ, 2)
-    fθφ[iθ, iφ] = sin(0.3 * (iθ + 1)) * cos(0.2 * (iφ + 1))
+
+# Get local data and fill with a smooth, separable pattern
+local_data = parent(fθφ)
+for iθ in axes(local_data, 1), iφ in axes(local_data, 2)
+    local_data[iθ, iφ] = sin(0.3 * (iθ + 1)) * cos(0.2 * (iφ + 1))
 end
 
-# Try real-to-complex roundtrip first, then fall back to complex FFTs
-function r2c_roundtrip!(fθφ)
-    # Plan and execute R2C FFT along φ (dimension 2)
-    pr = PencilFFTs.plan_rfft(fθφ; dims=2)
-    Fθk = PencilFFTs.rfft(fθφ, pr)
-    # Inverse transform back to real grid
-    pi = PencilFFTs.plan_irfft(Fθk; dims=2)
-    fθφ2 = PencilFFTs.irfft(Fθk, pi)
-    # Normalize by nlon to match FFTW conventions (ifft is unnormalized)
-    fθφ2 ./= nlon
-    return fθφ2
-end
+# Store original for comparison
+fθφ_orig = copy(local_data)
 
-function c2c_roundtrip!(fθφ)
-    # Promote to complex and perform complex FFT → iFFT along φ
-    g = pa_zeros(ComplexF64, topo)
-    for iθ in axes(fθφ, 1), iφ in axes(fθφ, 2)
-        g[iθ, iφ] = complex(fθφ[iθ, iφ])
+# Perform FFT → IFFT roundtrip along φ (dimension 2) using FFTW on local data
+function fft_roundtrip(data::Matrix{Float64})
+    nlat_loc, nlon_loc = size(data)
+
+    # Forward FFT along dimension 2 (longitude) for each row
+    fft_result = Matrix{ComplexF64}(undef, nlat_loc, nlon_loc)
+    for i in 1:nlat_loc
+        row = data[i, :]
+        fft_result[i, :] = FFTW.fft(row)
     end
-    pf = PencilFFTs.plan_fft(g; dims=2)
-    G = PencilFFTs.fft(g, pf)
-    pb = PencilFFTs.plan_fft(G; dims=2)
-    g2 = PencilFFTs.ifft(G, pb)
-    g2 ./= nlon
-    # Return real part to compare with original
-    out = pa_zeros(Float64, topo)
-    for iθ in axes(out, 1), iφ in axes(out, 2)
-        out[iθ, iφ] = real(g2[iθ, iφ])
+
+    # Inverse FFT to recover original
+    recovered = Matrix{Float64}(undef, nlat_loc, nlon_loc)
+    for i in 1:nlat_loc
+        row = fft_result[i, :]
+        recovered[i, :] = real.(FFTW.ifft(row))
     end
-    return out
+
+    return recovered
 end
 
-ok_r2c = true
-fθφ_rt = nothing
-try
-    fθφ_rt = r2c_roundtrip!(fθφ)
-catch e
-    ok_r2c = false
-    if RANK == 0
-        @warn "R2C path unavailable; falling back to complex FFT" exception=(e, catch_backtrace())
+# Real-to-complex FFT roundtrip (more efficient for real data)
+function rfft_roundtrip(data::Matrix{Float64})
+    nlat_loc, nlon_loc = size(data)
+    nk = nlon_loc ÷ 2 + 1
+
+    # Forward RFFT along dimension 2 (longitude) for each row
+    rfft_result = Matrix{ComplexF64}(undef, nlat_loc, nk)
+    for i in 1:nlat_loc
+        row = data[i, :]
+        rfft_result[i, :] = FFTW.rfft(row)
     end
+
+    # Inverse RFFT to recover original
+    recovered = Matrix{Float64}(undef, nlat_loc, nlon_loc)
+    for i in 1:nlat_loc
+        row = rfft_result[i, :]
+        recovered[i, :] = FFTW.irfft(row, nlon_loc)
+    end
+
+    return recovered
 end
 
-if !ok_r2c
-    fθφ_rt = c2c_roundtrip!(fθφ)
-end
+# Test complex FFT roundtrip
+fθφ_recovered_c2c = fft_roundtrip(local_data)
+local_err_c2c = maximum(abs.(fθφ_recovered_c2c .- fθφ_orig))
 
-# Compute max error and reduce across ranks
-local_err = maximum(abs.(fθφ_rt .- fθφ))
-global_err = Ref(0.0)
-MPI.Allreduce!(Ref(local_err), global_err, MPI.MAX, COMM)
+# Test real FFT roundtrip
+fθφ_recovered_r2c = rfft_roundtrip(local_data)
+local_err_r2c = maximum(abs.(fθφ_recovered_r2c .- fθφ_orig))
+
+# Reduce across ranks to get global max error
+global_err_c2c = MPI.Allreduce(local_err_c2c, MPI.MAX, COMM)
+global_err_r2c = MPI.Allreduce(local_err_r2c, MPI.MAX, COMM)
 
 if RANK == 0
-    mode = ok_r2c ? "R2C/IR2C" : "C2C"
-    println("[$mode] FFT roundtrip max error: $(global_err[]) (expected ~1e-12 to 1e-14)")
+    println("[C2C] FFT roundtrip max error: $global_err_c2c (expected ~1e-14 to 1e-15)")
+    println("[R2C] FFT roundtrip max error: $global_err_r2c (expected ~1e-14 to 1e-15)")
+
+    if global_err_c2c < 1e-10 && global_err_r2c < 1e-10
+        println("✓ FFT roundtrip test PASSED")
+    else
+        println("✗ FFT roundtrip test FAILED")
+        exit(1)
+    end
 end
 
 MPI.Barrier(COMM)
@@ -129,4 +143,3 @@ if RANK == 0
     println("Done.")
 end
 MPI.Finalize()
-

@@ -93,28 +93,10 @@ let
                 PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
             end
 
-            # Try multiple variants for cross-version compatibility
-            A = try
-                PencilArrays.zeros(Float64, pencil)
-            catch
-                try
-                    PencilArrays.zeros(pencil; eltype=Float64)
-                catch
-                    try
-                        PencilArrays.PencilArray(undef, Float64, pencil) |> x -> (fill!(x, 0.0); x)
-                    catch
-                        try
-                            PencilArrays.PencilArray{Float64}(undef, pencil) |> x -> (fill!(x, 0.0); x)
-                        catch
-                            error("No compatible PencilArrays zeros/similar/PencilArray constructor found")
-                        end
-                    end
-                end
-            end
-
-            # Safe fallback that works across versions
-            B = similar(pencil, ComplexF64)
-            fill!(B, zero(ComplexF64))
+            # For PencilArrays v0.19+, use PencilArray constructor with local array
+            local_dims = PencilArrays.size_local(pencil)
+            A = PencilArray(pencil, zeros(Float64, local_dims...))
+            B = PencilArray(pencil, zeros(ComplexF64, local_dims...))
 
             # Avoid the problematic pattern: zeros(pencil; eltype=…)
             if RANK == 0
@@ -137,7 +119,8 @@ let
             catch
                 PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
             end
-            fθφ = PencilArrays.zeros(pencil; eltype=Float64)
+            local_dims = PencilArrays.size_local(pencil)
+            fθφ = PencilArray(pencil, zeros(Float64, local_dims...))
             # Local fill (deterministic pattern)
             for (iθ, iφ) in Iterators.product(axes(fθφ,1), axes(fθφ,2))
                 fθφ[iθ, iφ] = sin(0.11*Int(iθ)) + cos(0.07*Int(iφ))

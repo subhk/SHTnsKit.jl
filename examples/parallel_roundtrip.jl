@@ -12,10 +12,9 @@
 # - Demonstrates how to safely allocate arrays from a Pencil using
 #   PencilArrays.zeros(T, pencil) or similar(pencil, T) + fill!
 
-using SHTnsKit
 using Random
 
-# Load MPI; keep the example usable even if MPI is not present
+# Load MPI and PencilArrays FIRST so that SHTnsKit's parallel extension is triggered
 try
     using MPI
 catch e
@@ -23,14 +22,17 @@ catch e
     exit(1)
 end
 
-# Load PencilArrays/PencilFFTs optionally. The SHT roundtrip below does not
-# depend on them, but we demonstrate safe allocation from a Pencil when present.
+# Load PencilArrays/PencilFFTs to enable the parallel extension
 const HAVE_PENCIL = try
     @eval using PencilArrays
+    @eval using PencilFFTs
     true
 catch
     false
 end
+
+# Now load SHTnsKit - the parallel extension will be loaded if MPI+PencilArrays+PencilFFTs are available
+using SHTnsKit
 
 MPI.Init()
 const COMM = MPI.COMM_WORLD

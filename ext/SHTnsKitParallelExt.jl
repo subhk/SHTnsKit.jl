@@ -654,10 +654,11 @@ function hierarchical_spectral_reduce!(local_data::AbstractMatrix, comm, ppn::In
         
         MPI.Comm_free(inter_node_comm)
     else
-        # Create dummy communicator for non-representatives
-        MPI.Comm_split(comm, 1, 0)
+        # Create dummy communicator for non-representatives and free it
+        dummy_comm = MPI.Comm_split(comm, 1, 0)
+        MPI.Comm_free(dummy_comm)
     end
-    
+
     # Level 3: Broadcast results back within nodes
     if node_nprocs > 1
         MPI.Bcast!(local_data, 0, node_comm)
@@ -910,9 +911,11 @@ function hierarchical_spectral_reduce_vector!(data::AbstractVector, comm, ppn::I
         
         MPI.Comm_free(inter_node_comm)
     else
-        MPI.Comm_split(comm, 1, 0)  # Non-leaders create dummy communicator
+        # Non-leaders create dummy communicator and free it
+        dummy_comm = MPI.Comm_split(comm, 1, 0)
+        MPI.Comm_free(dummy_comm)
     end
-    
+
     # Broadcast results within nodes
     if node_nprocs > 1
         MPI.Bcast!(data, 0, node_comm)

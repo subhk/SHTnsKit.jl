@@ -1,3 +1,70 @@
+#=
+================================================================================
+legendre.jl - Associated Legendre Polynomial Computation
+================================================================================
+
+This file implements the core Legendre polynomial computations needed for
+spherical harmonic transforms. These polynomials are the latitude (θ) basis
+functions in the expansion of functions on the sphere.
+
+MATHEMATICAL BACKGROUND
+-----------------------
+Associated Legendre polynomials P_l^m(x) are solutions to the Legendre
+differential equation:
+
+    (1-x²) d²P/dx² - 2x dP/dx + [l(l+1) - m²/(1-x²)] P = 0
+
+where x = cos(θ), l is the degree, and m is the order (|m| ≤ l).
+
+For spherical harmonics:
+    Y_l^m(θ,φ) = N_lm * P_l^m(cos θ) * exp(imφ)
+
+where N_lm is a normalization factor.
+
+IMPLEMENTATION NOTES
+--------------------
+1. Recurrence Relations:
+   - P_l^m values are computed using three-term recurrence
+   - This is numerically stable and efficient: O(lmax) per m value
+   - The recurrence CANNOT be vectorized due to data dependencies
+
+2. Condon-Shortley Phase:
+   - We include the (-1)^m factor in P_m^m (physics convention)
+   - This affects the sign of odd-m polynomials
+
+3. Numerical Stability:
+   - Normalization factors use log-space arithmetic to avoid overflow
+   - (1-x²) is clamped to avoid sqrt of negative due to roundoff
+
+4. Indexing Convention:
+   - P[l+1] stores P_l^m (1-based Julia indexing)
+   - Valid for l = m, m+1, ..., lmax
+
+PERFORMANCE CONSIDERATIONS
+--------------------------
+- Plm_row!: Zero allocations, modifies P in place
+- Cannot use SIMD for main recurrence (iteration dependency)
+- Derivative computation CAN use SIMD (no iteration dependency)
+
+DEBUGGING
+---------
+```julia
+# Test P_0^0(x) = 1 for all x
+P = zeros(10)
+Plm_row!(P, 0.5, 9, 0)
+@assert P[1] ≈ 1.0
+
+# Test P_1^0(x) = x
+@assert P[2] ≈ 0.5
+
+# Test P_1^1(x) = -sqrt(1-x²) with CS phase
+Plm_row!(P, 0.5, 9, 1)
+@assert P[2] ≈ -sqrt(1 - 0.5^2)  # ≈ -0.866
+```
+
+================================================================================
+=#
+
 """
     Plm_row!(P::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
 

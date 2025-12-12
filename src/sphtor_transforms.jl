@@ -58,11 +58,14 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
             x = cfg.x[i]
             sθ = sqrt(max(0.0, 1 - x*x))
             inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+            
             gθ = 0.0 + 0.0im
             gφ = 0.0 + 0.0im
+            
             if cfg.use_plm_tables && length(cfg.plm_tables) == mmax+1 && length(cfg.dplm_tables) == mmax+1
                 tblP = cfg.plm_tables[m+1]
                 tbld = cfg.dplm_tables[m+1]
+                
                 @inbounds for l in m:lmax
                     N = cfg.Nlm[l+1, col]
                     dθY = -sθ * N * tbld[l+1, i]
@@ -78,6 +81,7 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
                 P = thread_local_P[Threads.threadid()]
                 dPdx = thread_local_dPdx[Threads.threadid()]
                 Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
+                
                 @inbounds for l in m:lmax
                     N = cfg.Nlm[l+1, col]
                     dθY = -sθ * N * dPdx[l+1]
@@ -101,8 +105,10 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
             end
         end
     end
+    
     Vt = real_output ? real.(ifft_phi(Fθ)) : ifft_phi(Fθ)
     Vp = real_output ? real.(ifft_phi(Fφ)) : ifft_phi(Fφ)
+    
     if cfg.robert_form
         @inbounds for i in 1:nlat
             sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))

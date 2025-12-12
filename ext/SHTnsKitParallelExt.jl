@@ -443,8 +443,8 @@ end
 # Use FFTW for 1D FFTs along the longitude dimension (not PencilFFTs which is for multi-D)
 # PencilArrays provides the distributed array framework, FFTW provides the FFTs
 
-# Cache for FFTW 1D plans
-const _fftw_plan_cache = Dict{Tuple{Symbol, Int, DataType}, Any}()
+# Cache for FFTW 1D plans (key includes inplace flag)
+const _fftw_plan_cache = Dict{Tuple{Symbol, Int, DataType, Bool}, Any}()
 const _fftw_cache_lock = Threads.ReentrantLock()
 
 """
@@ -452,8 +452,8 @@ const _fftw_cache_lock = Threads.ReentrantLock()
 
 Get or create a cached FFTW plan for 1D transforms.
 """
-function get_fftw_plan(kind::Symbol, n::Int, ::Type{T}) where T
-    key = (kind, n, T)
+function get_fftw_plan(kind::Symbol, n::Int, ::Type{T}; inplace::Bool=false) where T
+    key = (kind, n, T, inplace)
     lock(_fftw_cache_lock) do
         if haskey(_fftw_plan_cache, key)
             return _fftw_plan_cache[key]
@@ -462,13 +462,13 @@ function get_fftw_plan(kind::Symbol, n::Int, ::Type{T}) where T
         # Create sample array for planning
         if kind == :fft
             sample = zeros(Complex{real(T)}, n)
-            plan = FFTW.plan_fft(sample)
+            plan = inplace ? FFTW.plan_fft!(sample) : FFTW.plan_fft(sample)
         elseif kind == :ifft
             sample = zeros(Complex{real(T)}, n)
-            plan = FFTW.plan_ifft(sample)
+            plan = inplace ? FFTW.plan_ifft!(sample) : FFTW.plan_ifft(sample)
         elseif kind == :rfft
             sample = zeros(real(T), n)
-            plan = FFTW.plan_rfft(sample)
+            plan = FFTW.plan_rfft(sample)  # rfft is always out-of-place
         elseif kind == :irfft
             # For irfft, input size is n÷2+1
             sample = zeros(Complex{real(T)}, n ÷ 2 + 1)
@@ -490,21 +490,29 @@ Works on the local data of a PencilArray.
 """
 function fft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{T2}) where {T<:AbstractFloat, T2}
     nlat, nlon = size(input)
+    # Get cached in-place FFT plan (avoids ~6MB allocation on first call)
+    plan = get_fftw_plan(:fft, nlon, Complex{T}; inplace=true)
     @inbounds for i in 1:nlat
-        row_in = view(input, i, :)
+        # Copy with conversion to complex - element-by-element to avoid temporary allocation
+        for j in 1:nlon
+            output[i, j] = Complex{T}(input[i, j])
+        end
+        # In-place FFT on the row using cached plan
         row_out = view(output, i, :)
-        FFTW.fft!(row_out .= Complex{T}.(row_in))
+        plan * row_out  # In-place plan modifies the array directly
     end
     return output
 end
 
 function fft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{Complex{T}}) where {T<:AbstractFloat}
     nlat, nlon = size(input)
+    # Get cached in-place FFT plan
+    plan = get_fftw_plan(:fft, nlon, Complex{T}; inplace=true)
     @inbounds for i in 1:nlat
         row_in = view(input, i, :)
         row_out = view(output, i, :)
         copyto!(row_out, row_in)
-        FFTW.fft!(row_out)
+        plan * row_out  # In-place plan modifies the array directly
     end
     return output
 end
@@ -516,10 +524,13 @@ Perform inverse FFT along dimension 2 (longitude) for each row.
 """
 function ifft_along_dim2!(output::AbstractMatrix{T}, input::AbstractMatrix{Complex{T2}}) where {T<:AbstractFloat, T2<:AbstractFloat}
     nlat, nlon = size(input)
+    # Get cached in-place IFFT plan
+    plan = get_fftw_plan(:ifft, nlon, Complex{T2}; inplace=true)
+    # Pre-allocate temp buffer OUTSIDE the loop
     temp = Vector{Complex{T2}}(undef, nlon)
     @inbounds for i in 1:nlat
         copyto!(temp, view(input, i, :))
-        FFTW.ifft!(temp)
+        plan * temp  # In-place IFFT
         for j in 1:nlon
             output[i, j] = real(temp[j])
         end
@@ -529,10 +540,12 @@ end
 
 function ifft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMatrix{Complex{T}}) where {T<:AbstractFloat}
     nlat, nlon = size(input)
+    # Get cached in-place IFFT plan
+    plan = get_fftw_plan(:ifft, nlon, Complex{T}; inplace=true)
     @inbounds for i in 1:nlat
         row_out = view(output, i, :)
         copyto!(row_out, view(input, i, :))
-        FFTW.ifft!(row_out)
+        plan * row_out  # In-place IFFT
     end
     return output
 end

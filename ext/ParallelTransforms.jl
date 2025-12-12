@@ -159,38 +159,42 @@ end
 
 Gather data distributed along φ dimension, then perform FFT along φ.
 Returns Fθm matrix with FFT coefficients for the local θ rows.
+
+Optimized to minimize allocations by pre-allocating buffers outside the loop.
 """
 function _gather_and_fft_phi(local_data::AbstractMatrix, θ_range::AbstractRange,
                               φ_range::AbstractRange, nlon::Int, comm)
     nlat_local = length(θ_range)
     nlon_local = length(φ_range)
 
-    # Get process info
-    nprocs = MPI.Comm_size(comm)
-    rank = MPI.Comm_rank(comm)
-
-    # Gather local data counts and displacements for each θ row
-    # Each row needs to gather nlon elements from all processes
+    # Allocate output buffers (unavoidable allocations)
     row_gathered = Matrix{Float64}(undef, nlat_local, nlon)
     Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
 
     # Gather row sizes from all processes (only need to do this once)
     counts = MPI.Allgather(Int32(nlon_local), comm)
-
-    # Compute displacements
     displs = cumsum([Int32(0); counts[1:end-1]])
 
-    for i in 1:nlat_local
-        # Get local row
-        local_row = Vector{Float64}(collect(local_data[i, :]))
+    # Pre-allocate reusable buffers OUTSIDE the loop to minimize allocations
+    local_row = Vector{Float64}(undef, nlon_local)
+    gathered_row = Vector{Float64}(undef, nlon)
 
-        # Gather the full row
-        gathered_row = Vector{Float64}(undef, nlon)
+    @inbounds for i in 1:nlat_local
+        # Copy local row data directly (no collect needed - view is contiguous for row-major slices)
+        for j in 1:nlon_local
+            local_row[j] = local_data[i, j]
+        end
+
+        # Gather the full row into pre-allocated buffer
         MPI.Allgatherv!(local_row, VBuffer(gathered_row, counts, displs), comm)
-        row_gathered[i, :] = gathered_row
+
+        # Copy to output matrix
+        for j in 1:nlon
+            row_gathered[i, j] = gathered_row[j]
+        end
     end
 
-    # Now perform FFT along each row
+    # Perform FFT along each row
     SHTnsKitParallelExt.fft_along_dim2!(Fθm, row_gathered)
 
     return Fθm
@@ -300,8 +304,8 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
         weights_cache[ii] = cfg.w[iglob]
     end
 
-    # Pre-cache table views for hot loops to avoid repeated array indexing
-    cached_table_views = use_tbl ? Dict{Int, SubArray}() : Dict{Int, SubArray}()
+    # Pre-cache table views for hot loops (only allocate if actually using tables)
+    cached_table_views = use_tbl ? Dict{Int, SubArray}() : nothing
 
     # Main analysis loop: for each m mode (Fourier coefficient index)
     for mval in 0:mmax

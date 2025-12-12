@@ -141,62 +141,207 @@ lowpass_filter = create_spectral_filter(64, low_pass=20)
 apply_spectral_filter!(sh, lowpass_filter)
 smooth_field = synthesis(cfg, sh)
 
-destroy_config(cfg)</code></pre><h3 id="Spectral-Derivative-Operations"><a class="docs-heading-anchor" href="#Spectral-Derivative-Operations">Spectral Derivative Operations</a><a id="Spectral-Derivative-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Derivative-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+destroy_config(cfg)</code></pre><h3 id="Spectral-Derivative-Operations"><a class="docs-heading-anchor" href="#Spectral-Derivative-Operations">Spectral Derivative Operations</a><a id="Spectral-Derivative-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Derivative-Operations" title="Permalink"></a></h3><p>SHTnsKit provides spectral methods for computing derivatives, which are more accurate than finite differences. All operations support MPI parallelization with PencilArrays.</p><h4 id="Serial-Gradient-Computation"><a class="docs-heading-anchor" href="#Serial-Gradient-Computation">Serial Gradient Computation</a><a id="Serial-Gradient-Computation-1"></a><a class="docs-heading-anchor-permalink" href="#Serial-Gradient-Computation" title="Permalink"></a></h4><pre><code class="language-julia hljs">using SHTnsKit
 
-function spectral_laplacian(cfg::SHTnsConfig, sh::Vector{Float64})
-    # ∇²f has spectral coefficients: -l(l+1) * f_lm
-    laplacian_sh = copy(sh)
-    
-    for i in 1:length(sh)
-        l, m = lm_from_index(cfg, i)
-        laplacian_sh[i] *= -l * (l + 1)
+# Setup configuration
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create test field: Y_2^1-like pattern
+test_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    test_field[i,j] = sin(θ) * cos(θ) * cos(φ)  # ∝ Y_2^1
+end
+
+# Transform to spectral coefficients
+Alm = analysis(cfg, test_field)
+
+# Compute gradient using spectral method (exact derivatives)
+# SH_to_grad_spat computes ∇f = (∂f/∂θ, (1/sinθ)∂f/∂φ)
+∂f_∂θ, ∂f_∂φ_over_sinθ = SH_to_grad_spat(cfg, Alm)
+
+println(&quot;Gradient computed using spectral method:&quot;)
+println(&quot;  ∂f/∂θ range: &quot;, extrema(∂f_∂θ))
+println(&quot;  (1/sinθ)∂f/∂φ range: &quot;, extrema(∂f_∂φ_over_sinθ))
+
+destroy_config(cfg)</code></pre><h4 id="MPI-Parallel-Gradient-Computation"><a class="docs-heading-anchor" href="#MPI-Parallel-Gradient-Computation">MPI-Parallel Gradient Computation</a><a id="MPI-Parallel-Gradient-Computation-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Parallel-Gradient-Computation" title="Permalink"></a></h4><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+
+# Setup configuration
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array using PencilArrays
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill local portion with test pattern
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    θ = cfg.θ[i_global]
+    for (j_local, j_global) in enumerate(ranges[2])
+        φ = cfg.φ[j_global]
+        fθφ[i_local, j_local] = sin(θ) * cos(θ) * cos(φ)
     end
-    
-    return laplacian_sh
 end
 
-function spectral_horizontal_gradient(cfg::SHTnsConfig, sh::Vector{Float64})
-    # Returns (∂f/∂θ, ∂f/∂φ/sin(θ)) in spectral domain
-    # These are vector field components
-    
-    # This is complex - need to compute derivatives of Y_l^m
-    # Implementation depends on SHTns internal representation
-    # For now, use spatial domain computation
-    
-    spatial = synthesis(cfg, sh)
-    θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-    
-    # Finite differences (not optimal, but illustrative)
-    dθ = θ[2,1] - θ[1,1]
-    dφ = φ[1,2] - φ[1,1]
-    
-    ∂f_∂θ = similar(spatial)
-    ∂f_∂φ = similar(spatial)
-    
-    # Central differences
-    ∂f_∂θ[2:end-1, :] = (spatial[3:end, :] - spatial[1:end-2, :]) / (2*dθ)
-    ∂f_∂φ[:, 2:end-1] = (spatial[:, 3:end] - spatial[:, 1:end-2]) / (2*dφ)
-    
-    # Handle boundaries (simplified)
-    ∂f_∂θ[[1,end], :] = ∂f_∂θ[[2,end-1], :]
-    ∂f_∂φ[:, [1,end]] = ∂f_∂φ[:, [2,end-1]]
-    
-    return ∂f_∂θ, ∂f_∂φ
+# Distributed analysis: spatial → spectral
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+
+# Compute gradient using distributed synthesis with spheroidal transform
+# Gradient = (∂f/∂θ, (1/sinθ)∂f/∂φ) via spheroidal synthesis
+Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)  # Zero toroidal component
+∂f_∂θ, ∂f_∂φ_over_sinθ = SHTnsKit.dist_SHsphtor_to_spat(cfg, Alm, Tlm; prototype_θφ=fθφ)
+
+if rank == 0
+    println(&quot;Distributed gradient computed successfully&quot;)
 end
 
-# Example: Compute and analyze gradients
-cfg = create_gauss_config(32, 32)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-test_field = @. sin(3θ) * cos(2φ)
+destroy_config(cfg)
+MPI.Finalize()</code></pre><h4 id="Serial-Laplacian"><a class="docs-heading-anchor" href="#Serial-Laplacian">Serial Laplacian</a><a id="Serial-Laplacian-1"></a><a class="docs-heading-anchor-permalink" href="#Serial-Laplacian" title="Permalink"></a></h4><p>The Laplacian has a simple form in spectral space: <code>∇²f_lm = -l(l+1) f_lm</code></p><pre><code class="language-julia hljs">using SHTnsKit
 
-sh = analysis(cfg, test_field)
-∂f_∂θ, ∂f_∂φ = spectral_horizontal_gradient(cfg, sh)
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-println(&quot;Gradient magnitudes:&quot;)
-println(&quot;  ∂f/∂θ: &quot;, extrema(∂f_∂θ))
-println(&quot;  ∂f/∂φ: &quot;, extrema(∂f_∂φ))
+# Create test field (Y_2^0)
+test_field = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]  # cos(θ)
+    test_field[i, :] .= (3*x^2 - 1)/2
+end
 
-destroy_config(cfg)</code></pre><h2 id="Multi-Field-Processing-Patterns"><a class="docs-heading-anchor" href="#Multi-Field-Processing-Patterns">Multi-Field Processing Patterns</a><a id="Multi-Field-Processing-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Field-Processing-Patterns" title="Permalink"></a></h2><h3 id="Coherent-Transform-Pipeline"><a class="docs-heading-anchor" href="#Coherent-Transform-Pipeline">Coherent Transform Pipeline</a><a id="Coherent-Transform-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#Coherent-Transform-Pipeline" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+# Transform to spectral
+Alm = analysis(cfg, test_field)
+
+# Apply Laplacian in spectral space: multiply by -l(l+1)
+Laplacian_Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+for l in 0:cfg.lmax
+    for m in 0:min(l, cfg.mmax)
+        Laplacian_Alm[l+1, m+1] = -l * (l + 1) * Alm[l+1, m+1]
+    end
+end
+
+# Transform back to spatial domain
+laplacian_field = synthesis(cfg, Laplacian_Alm)
+
+# For Y_2^0, the Laplacian should be -2(2+1) = -6 times the original
+println(&quot;Ratio (should be ≈ -6): &quot;, laplacian_field[cfg.nlat÷2, 1] / test_field[cfg.nlat÷2, 1])
+
+destroy_config(cfg)</code></pre><h4 id="MPI-Parallel-Laplacian"><a class="docs-heading-anchor" href="#MPI-Parallel-Laplacian">MPI-Parallel Laplacian</a><a id="MPI-Parallel-Laplacian-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Parallel-Laplacian" title="Permalink"></a></h4><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with Y_2^0 pattern
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j_local in 1:length(ranges[2])
+        fθφ[i_local, j_local] = (3*x^2 - 1)/2
+    end
+end
+
+# Compute distributed Laplacian (uses spectral method internally)
+laplacian_fθφ = SHTnsKit.dist_scalar_laplacian(cfg, fθφ; prototype_θφ=fθφ)
+
+if rank == 0
+    println(&quot;Distributed Laplacian computed&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><h4 id="Serial-Divergence-and-Vorticity"><a class="docs-heading-anchor" href="#Serial-Divergence-and-Vorticity">Serial Divergence and Vorticity</a><a id="Serial-Divergence-and-Vorticity-1"></a><a class="docs-heading-anchor-permalink" href="#Serial-Divergence-and-Vorticity" title="Permalink"></a></h4><pre><code class="language-julia hljs">using SHTnsKit
+
+lmax = 32
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create a velocity field
+Vθ = zeros(cfg.nlat, cfg.nlon)
+Vφ = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = cfg.θ[i]
+    φ = cfg.φ[j]
+    Vθ[i,j] = cos(θ) * sin(φ)
+    Vφ[i,j] = cos(φ)
+end
+
+# Decompose into spheroidal/toroidal
+Slm, Tlm = spat_to_SHsphtor(cfg, Vθ, Vφ)
+
+# Compute divergence and vorticity
+div_field = divergence_from_spheroidal(cfg, Slm)
+vort_field = vorticity_from_toroidal(cfg, Tlm)
+
+println(&quot;Divergence range: &quot;, extrema(div_field))
+println(&quot;Vorticity range: &quot;, extrema(vort_field))
+
+destroy_config(cfg)</code></pre><h4 id="MPI-Parallel-Divergence-and-Vorticity"><a class="docs-heading-anchor" href="#MPI-Parallel-Divergence-and-Vorticity">MPI-Parallel Divergence and Vorticity</a><a id="MPI-Parallel-Divergence-and-Vorticity-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Parallel-Divergence-and-Vorticity" title="Permalink"></a></h4><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed velocity field components
+pen = Pencil((nlat, nlon), comm)
+Vtθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+Vpθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test velocity field
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    θ = cfg.θ[i_global]
+    for (j_local, j_global) in enumerate(ranges[2])
+        φ = cfg.φ[j_global]
+        Vtθφ[i_local, j_local] = cos(θ) * sin(φ)
+        Vpθφ[i_local, j_local] = cos(φ)
+    end
+end
+
+# Compute distributed divergence directly
+div_field = SHTnsKit.dist_spatial_divergence(cfg, Vtθφ, Vpθφ; prototype_θφ=Vtθφ)
+
+# Compute distributed vorticity directly
+vort_field = SHTnsKit.dist_spatial_vorticity(cfg, Vtθφ, Vpθφ; prototype_θφ=Vtθφ)
+
+if rank == 0
+    println(&quot;Distributed divergence and vorticity computed&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><h4 id="Running-MPI-Examples"><a class="docs-heading-anchor" href="#Running-MPI-Examples">Running MPI Examples</a><a id="Running-MPI-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Running-MPI-Examples" title="Permalink"></a></h4><p>Save as <code>gradient_mpi.jl</code> and run with:</p><pre><code class="language-bash hljs">mpiexec -n 4 julia --project gradient_mpi.jl</code></pre><h2 id="Multi-Field-Processing-Patterns"><a class="docs-heading-anchor" href="#Multi-Field-Processing-Patterns">Multi-Field Processing Patterns</a><a id="Multi-Field-Processing-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Field-Processing-Patterns" title="Permalink"></a></h2><h3 id="Coherent-Transform-Pipeline"><a class="docs-heading-anchor" href="#Coherent-Transform-Pipeline">Coherent Transform Pipeline</a><a id="Coherent-Transform-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#Coherent-Transform-Pipeline" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
 
 struct SpectralPipeline
     cfg::SHTnsConfig
@@ -1171,4 +1316,4 @@ function variational_assimilation(observations, background_sh, obs_locations, cf
     end
     
     return analysis_sh
-end</code></pre><p>This comprehensive advanced usage guide demonstrates sophisticated patterns for expert users of SHTnsKit.jl, covering everything from configuration management to large-scale data processing, automatic differentiation, and integration with external scientific computing workflows.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../performance_tips/">« Performance Tips</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 20:35">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+end</code></pre><p>This comprehensive advanced usage guide demonstrates sophisticated patterns for expert users of SHTnsKit.jl, covering everything from configuration management to large-scale data processing, automatic differentiation, and integration with external scientific computing workflows.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../performance_tips/">« Performance Tips</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 20:40">Friday 12 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

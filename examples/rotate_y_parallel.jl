@@ -62,7 +62,8 @@ function main()
 
     # Apply Y-rotation in spectral space
     # Y-rotation mixes coefficients with different m values at the same l
-    Alm_rot = SHTnsKit.dist_SH_Yrotate(cfg, Alm, β)
+    Alm_rot = zeros(ComplexF64, size(Alm)...)
+    SHTnsKit.dist_SH_Yrotate(cfg, Alm, β, Alm_rot)
 
     if rank == 0
         println("Y-rotation by β=$(β) applied in spectral space")

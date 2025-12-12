@@ -1,3 +1,78 @@
+#=
+================================================================================
+normalization.jl - Spherical Harmonic Normalization and Phase Conventions
+================================================================================
+
+This file handles conversions between different spherical harmonic normalization
+and phase conventions. This is essential for interoperability with other
+libraries and datasets that may use different conventions.
+
+WHY DIFFERENT CONVENTIONS?
+--------------------------
+Different scientific fields evolved their own spherical harmonic conventions:
+
+- Physics: orthonormal + Condon-Shortley phase (our internal convention)
+- Geodesy: 4π normalization
+- Geomagnetism: Schmidt semi-normalized
+
+These differ by factors and phases, which must be carefully tracked.
+
+INTERNAL CONVENTION
+-------------------
+SHTnsKit internally uses:
+    Y_l^m(θ,φ) = N_lm P_l^m(cos θ) exp(imφ)
+
+where N_lm = sqrt[(2l+1)/(4π) * (l-m)!/(l+m)!]
+
+This makes the spherical harmonics ORTHONORMAL:
+    ∫∫ Y_l^m (Y_{l'}^{m'})* dΩ = δ_{ll'} δ_{mm'}
+
+CONDON-SHORTLEY PHASE
+---------------------
+The Condon-Shortley (CS) phase is a (-1)^m factor included in P_l^m.
+- With CS phase: P_l^m contains (-1)^m factor (physics standard)
+- Without CS phase: No (-1)^m factor (some math texts)
+
+This affects the sign of coefficients for odd m values.
+
+SUPPORTED CONVENTIONS
+---------------------
+:orthonormal - Our internal convention, standard physics
+    N_lm = sqrt[(2l+1)/(4π) * (l-m)!/(l+m)!]
+
+:fourpi - Geodesy/meteorology
+    N_lm = sqrt[(2l+1) * (l-m)!/(l+m)!]
+    (factor of sqrt(4π) larger than orthonormal)
+
+:schmidt - Semi-normalized, geomagnetism (IGRF, WMM models)
+    N_lm = sqrt[(l-m)!/(l+m)!] for m>0, 1 for m=0
+    Common in geomagnetic field modeling
+
+CONVERSION FORMULAS
+-------------------
+To convert from orthonormal to target:
+    a_lm^target = a_lm^orthonormal / scale_factor
+
+where scale_factor = norm_scale_from_orthonormal(l, m, target)
+
+For CS phase conversion:
+    a_lm^new = (-1)^m * a_lm^old  (when switching CS convention)
+
+DEBUGGING
+---------
+```julia
+# Check scale factors
+@assert norm_scale_from_orthonormal(2, 1, :orthonormal) ≈ 1.0
+@assert norm_scale_from_orthonormal(2, 1, :fourpi) ≈ sqrt(4π)
+
+# Phase factor
+@assert cs_phase_factor(3, true, false) ≈ -1.0  # odd m
+@assert cs_phase_factor(2, true, false) ≈ 1.0   # even m
+```
+
+================================================================================
+=#
+
 """
 Spherical Harmonic Normalization and Phase Conversion Utilities
 
@@ -11,7 +86,7 @@ Internal Convention:
 
 External Conventions Supported:
 - :orthonormal - Standard physics normalization: ∫ Y_l^m (Y_{l'}^{m'})* dΩ = δ_{ll'} δ_{mm'}
-- :fourpi - Geodesy convention: Y_l^m scaled by sqrt(4π)  
+- :fourpi - Geodesy convention: Y_l^m scaled by sqrt(4π)
 - :schmidt - Semi-normalized: common in geomagnetism and geodesy
 
 Phase Conventions:

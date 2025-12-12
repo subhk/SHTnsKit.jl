@@ -1,3 +1,54 @@
+#=
+================================================================================
+gausslegendre.jl - Gauss-Legendre Quadrature Nodes and Weights
+================================================================================
+
+This file computes the nodes (abscissas) and weights for Gauss-Legendre
+numerical integration on the interval [-1, 1].
+
+WHY GAUSS-LEGENDRE FOR SPHERICAL HARMONICS?
+-------------------------------------------
+Spherical harmonic transforms require integrating functions against Legendre
+polynomials over the latitude (θ) direction. The standard substitution
+x = cos(θ) transforms this to an integral over [-1, 1]:
+
+    ∫₀^π f(θ) P_l(cos θ) sin θ dθ = ∫₋₁¹ f(arccos x) P_l(x) dx
+
+Gauss-Legendre quadrature with n points is EXACT for polynomials up to
+degree 2n-1. Since P_l(x) has degree l, using n = lmax+1 nodes ensures
+exact integration of the Legendre polynomial component.
+
+ALGORITHM
+---------
+1. Initial guess for roots using Abramowitz & Stegun formula (10.18.10):
+   z₀ = cos(π(k - 0.25)/(n + 0.5))
+
+2. Newton-Raphson iteration to refine root of P_n(z):
+   z_{new} = z - P_n(z)/P'_n(z)
+
+3. Weights computed from derivative at converged root:
+   w_k = 2 / ((1 - z_k²) [P'_n(z_k)]²)
+
+PROPERTIES
+----------
+- Nodes are symmetric: x_k = -x_{n-k+1}
+- Weights are symmetric: w_k = w_{n-k+1}
+- Weights sum to 2: Σ w_k = ∫₋₁¹ 1 dx = 2
+- Nodes are roots of P_n(x)
+
+DEBUGGING
+---------
+```julia
+x, w = gausslegendre(16)
+@assert length(x) == length(w) == 16
+@assert abs(sum(w) - 2.0) < 1e-14     # Weights sum to 2
+@assert all(x[i] ≈ -x[17-i] for i in 1:8)  # Symmetry
+@assert all(w[i] ≈ w[17-i] for i in 1:8)   # Weight symmetry
+```
+
+================================================================================
+=#
+
 """
     gausslegendre(n::Int)
 

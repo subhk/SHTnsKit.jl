@@ -1,3 +1,63 @@
+#=
+================================================================================
+fftutils.jl - FFT Utilities with Automatic Differentiation Support
+================================================================================
+
+This file provides FFT operations along the longitude (φ) dimension for
+spherical harmonic transforms, with automatic fallback to pure Julia DFT
+when FFTW cannot handle certain element types.
+
+WHY FFT FOR LONGITUDE?
+----------------------
+Spherical harmonics have the form:
+    Y_l^m(θ,φ) = N_lm P_l^m(cos θ) exp(imφ)
+
+The exp(imφ) dependence is a complex exponential - exactly what FFT extracts!
+For a function f(θ,φ) sampled on a grid:
+    f(θ,φ) = Σ_m F_m(θ) exp(imφ)
+
+The FFT along φ efficiently computes the Fourier modes F_m(θ) in O(N log N).
+
+AUTOMATIC DIFFERENTIATION SUPPORT
+---------------------------------
+FFTW is highly optimized but only works with Float64/ComplexF64. When using
+automatic differentiation (ForwardDiff, Zygote, etc.), the numbers become
+special types like ForwardDiff.Dual that FFTW cannot handle.
+
+Solution: automatic fallback to pure Julia DFT implementation that works
+with any numeric type supporting arithmetic operations.
+
+PERFORMANCE
+-----------
+- FFTW path: O(N log N) - used for normal numeric operations
+- DFT fallback: O(N²) - slower but AD-compatible
+- The fallback is only used when necessary (detected automatically)
+
+BACKEND TRACKING
+----------------
+The global _FFT_BACKEND[] tracks which backend was used:
+    SHTnsKit.fft_phi_backend()  # Returns :fftw or :dft
+
+DEBUGGING
+---------
+```julia
+# Force DFT fallback for testing
+ENV["SHTNSKIT_FORCE_FFTW"] = "0"
+
+# Check which backend was used
+A = rand(32, 64)
+B = fft_phi(A)
+@show SHTnsKit.fft_phi_backend()  # :fftw normally
+
+# Test with AD types
+using ForwardDiff
+f(x) = sum(abs2.(fft_phi(x .* ones(32,64))))
+ForwardDiff.gradient(f, [1.0])  # Uses DFT fallback
+```
+
+================================================================================
+=#
+
 """
 FFT Utilities with Automatic Differentiation Support
 

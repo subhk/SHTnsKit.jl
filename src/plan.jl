@@ -1,3 +1,99 @@
+#=
+================================================================================
+plan.jl - Optimized Transform Planning for Spherical Harmonic Operations
+================================================================================
+
+This file implements a planning system for spherical harmonic transforms that
+pre-allocates working arrays and FFT plans to minimize runtime overhead.
+
+MOTIVATION: WHY PLANNING?
+-------------------------
+The basic transform functions (analysis, synthesis) allocate temporary arrays
+on every call:
+- Legendre polynomial working arrays: O(lmax)
+- Fourier coefficient matrices: O(nlat × nlon)
+- FFT planning overhead
+
+For applications that call transforms repeatedly (e.g., time-stepping PDEs),
+these allocations dominate runtime and cause GC pressure.
+
+THE PLANNING APPROACH
+---------------------
+Inspired by FFTW: spend time upfront to optimize repeated operations.
+
+1. Pre-allocate ALL working arrays once
+2. Pre-compute optimized FFTW plans (can be slow but only done once)
+3. Reuse everything across many transform calls
+
+Result: Near-zero allocations per transform call.
+
+SHTPlan STRUCTURE
+-----------------
+```julia
+struct SHTPlan
+    cfg::SHTConfig          # Transform configuration
+    P::Vector{Float64}      # Legendre polynomial buffer
+    dPdx::Vector{Float64}   # Legendre derivative buffer
+    G::Vector{ComplexF64}   # Latitude profile buffer
+    Fθk::Matrix{ComplexF64} # Fourier coefficient matrix
+    fft_plan::Any           # Pre-optimized forward FFT plan
+    ifft_plan::Any          # Pre-optimized inverse FFT plan
+    use_rfft::Bool          # Use real-FFT optimization?
+end
+```
+
+IN-PLACE TRANSFORM FUNCTIONS
+----------------------------
+    analysis!(plan, alm_out, f)             : f → alm (scalar)
+    synthesis!(plan, f_out, alm)            : alm → f (scalar)
+    spat_to_SHsphtor!(plan, S, T, Vt, Vp)   : (Vt,Vp) → (S,T) (vector)
+    SHsphtor_to_spat!(plan, Vt, Vp, S, T)   : (S,T) → (Vt,Vp) (vector)
+
+USAGE EXAMPLE
+-------------
+```julia
+cfg = create_gauss_config(64, 128)
+
+# Create plan (does all allocation and FFT planning)
+plan = SHTPlan(cfg)
+
+# Preallocate output arrays
+f_out = Matrix{Float64}(undef, cfg.nlat, cfg.nlon)
+alm_out = Matrix{ComplexF64}(undef, cfg.lmax+1, cfg.mmax+1)
+
+# Now transforms are allocation-free
+for timestep in 1:10000
+    analysis!(plan, alm_out, f)    # No allocations!
+    # ... modify alm_out ...
+    synthesis!(plan, f_out, alm_out)  # No allocations!
+end
+```
+
+REAL FFT OPTIMIZATION
+---------------------
+For real-valued fields, use_rfft=true enables RFFT optimization:
+- Fourier buffer reduced from nlon to nlon/2+1 complex numbers
+- ~2× memory reduction for the Fourier matrix
+- Slightly different code path using FFTW.rfft/irfft
+
+DEBUGGING
+---------
+```julia
+# Check that planned transforms match basic transforms
+plan = SHTPlan(cfg)
+alm1 = analysis(cfg, f)
+alm2 = similar(alm1)
+analysis!(plan, alm2, f)
+@assert alm1 ≈ alm2
+
+# Benchmark allocation-free operation
+using BenchmarkTools
+@btime analysis!($plan, $alm_out, $f)  # Should show 0 allocations
+```
+
+================================================================================
+=#
+
 """
 Optimized Transform Planning for Spherical Harmonic Operations
 

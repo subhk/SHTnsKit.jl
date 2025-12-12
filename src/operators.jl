@@ -1,3 +1,81 @@
+#=
+================================================================================
+operators.jl - Spherical Differential Operators in Spectral Space
+================================================================================
+
+This file implements differential operators that act directly on spherical
+harmonic coefficients WITHOUT going to physical space. This enables efficient
+spectral methods for solving PDEs on the sphere.
+
+WHY SPECTRAL OPERATORS?
+-----------------------
+Many differential equations on the sphere can be solved more efficiently in
+spectral space. Instead of computing derivatives by finite differences, we
+apply recurrence relations that couple neighboring degrees.
+
+Key insight: Multiplication by cos(θ) or differentiation ∂/∂θ ONLY couples
+modes with adjacent l values (l-1 and l+1) at fixed m. This makes the
+operators sparse (tridiagonal in l).
+
+OPERATORS IMPLEMENTED
+---------------------
+1. cos(θ) multiplication:
+   cos(θ) Y_l^m = a_l^m Y_{l-1}^m + b_l^m Y_{l+1}^m
+
+   where:
+   a_l^m = sqrt[(l² - m²) / ((2l-1)(2l+1))]
+   b_l^m = sqrt[((l+1)² - m²) / ((2l+1)(2l+3))]
+
+2. sin(θ) ∂/∂θ derivative:
+   sin(θ) ∂/∂θ Y_l^m = l b_l^m Y_{l+1}^m - (l+1) a_l^m Y_{l-1}^m
+
+   The sin(θ) factor removes the coordinate singularity at poles.
+
+MATRIX STORAGE FORMAT
+---------------------
+Operators are stored as vectors of coupling coefficients in packed format:
+    mx[2*lm + 1] = c_minus  (coupling to l-1)
+    mx[2*lm + 2] = c_plus   (coupling to l+1)
+
+where lm is the packed index for (l,m) in SHTns LM order (m≥0 only).
+
+APPLICATIONS
+------------
+- Solving Laplace/Poisson equations spectrally
+- Computing Coriolis terms in shallow water equations
+- Latitude-weighted integration
+- Building spectral Jacobians for implicit solvers
+
+USAGE EXAMPLE
+-------------
+```julia
+cfg = create_gauss_config(32, 64)
+mx = zeros(2 * cfg.nlm)  # Allocate coefficient array
+
+# Fill with cos(θ) operator coefficients
+mul_ct_matrix(cfg, mx)
+
+# Apply operator to spectral field
+Qlm = pack_alm(cfg, alm)  # Convert to packed format
+Rlm = similar(Qlm)
+SH_mul_mx(cfg, mx, Qlm, Rlm)  # R = cos(θ) * Q in spectral space
+```
+
+DEBUGGING
+---------
+```julia
+# Verify operator application matches spatial multiplication
+f = synthesis(cfg, alm)
+f_times_costh = f .* cos.(acos.(cfg.x'))  # Spatial multiplication
+alm_check = analysis(cfg, f_times_costh)
+
+# Should match spectral operator result
+@assert alm_check ≈ unpack_alm(cfg, Rlm)
+```
+
+================================================================================
+=#
+
 """
 Spherical Differential Operators in Spectral Space
 
@@ -6,12 +84,12 @@ The operators are represented as sparse matrices that couple neighboring degrees
 azimuthal order m, taking advantage of the recurrence relations for spherical harmonics.
 
 The key operators implemented are:
-- cos(θ) multiplication: couples Y_l^m to Y_{l±1}^m  
+- cos(θ) multiplication: couples Y_l^m to Y_{l±1}^m
 - sin(θ) ∂/∂θ derivative: couples Y_l^m to Y_{l±1}^m with different coefficients
 
 SHTns-compatible functions provided:
 - `mul_ct_matrix(cfg, mx)`: fill `mx` (length 2*nlm) with coefficients for cos(θ) operator
-- `st_dt_matrix(cfg, mx)`: fill `mx` (length 2*nlm) with coefficients for sin(θ) ∂/∂θ operator  
+- `st_dt_matrix(cfg, mx)`: fill `mx` (length 2*nlm) with coefficients for sin(θ) ∂/∂θ operator
 - `SH_mul_mx(cfg, mx, Qlm, Rlm)`: apply a tridiagonal operator that couples (l,m) to l±1 at fixed m
 
 Matrix storage format:

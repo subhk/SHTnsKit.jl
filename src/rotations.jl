@@ -1,3 +1,91 @@
+#=
+================================================================================
+rotations.jl - Rotations of Spherical Harmonic Expansions
+================================================================================
+
+This file implements rotation operations on spherical harmonic coefficients.
+Rotations can be applied directly in spectral space without going through
+physical space, which is efficient for rotating fields on the sphere.
+
+WHY SPECTRAL ROTATIONS?
+-----------------------
+Rotating a function on the sphere in physical space requires:
+1. Synthesize to grid: O((lmax)² × nlon)
+2. Interpolate to new grid positions: O(nlat × nlon)
+3. Analyze back: O((lmax)² × nlon)
+
+Spectral rotation is more direct:
+- Rotation of Y_l^m produces a linear combination of Y_l^{m'} for |m'| ≤ l
+- The mixing is given by Wigner-d matrices d^l_{mm'}(β)
+- Complexity: O((lmax)³) but exact with no interpolation errors
+
+EULER ANGLE CONVENTIONS
+-----------------------
+Rotations are specified using Euler angles (α, β, γ) in either:
+- ZYZ convention (default): R = Rz(α) Ry(β) Rz(γ)
+- ZXZ convention: R = Rz(α) Rx(β) Rz(γ)
+
+Special cases implemented efficiently:
+- Z-rotation: Just phase multiplication (m-dependent), O(nlm)
+- Y-rotation: Requires full Wigner-d matrix application
+- 90° rotations: Common in coordinate transformations
+
+WIGNER-D MATRICES
+-----------------
+The little Wigner-d matrix d^l_{mm'}(β) gives the transformation of
+spherical harmonics under rotation by angle β about the y-axis:
+
+    R_y(β) Y_l^m = Σ_{m'} d^l_{m m'}(β) Y_l^{m'}
+
+Full rotation R(α,β,γ) in ZYZ convention:
+    a'_{lm} = Σ_{m'} e^{-imα} d^l_{mm'}(β) e^{-im'γ} a_{lm'}
+
+FUNCTIONS
+---------
+Fast axis rotations:
+    SH_Zrotate(cfg, Qlm, α, Rlm)     : Z-axis rotation (very fast)
+    SH_Yrotate(cfg, Qlm, α, Rlm)     : Y-axis rotation
+    SH_Xrotate90(cfg, Qlm, Rlm)      : X-axis 90° rotation
+    SH_Yrotate90(cfg, Qlm, Rlm)      : Y-axis 90° rotation
+
+General rotations:
+    SHTRotation                       : Rotation specification struct
+    shtns_rotation_set_angles_ZYZ     : Set Euler angles (ZYZ)
+    shtns_rotation_apply_real         : Apply to real-field coefficients
+    shtns_rotation_apply_cplx         : Apply to complex-field coefficients
+
+Wigner-d computation:
+    wigner_d_matrix(l, β)            : Compute d^l_{mm'}(β) matrix
+    wigner_d_matrix_deriv(l, β)      : Derivative ∂d^l/∂β
+
+USAGE EXAMPLE
+-------------
+```julia
+cfg = create_gauss_config(32, 64)
+Qlm = pack_alm(cfg, alm)  # Original coefficients
+Rlm = similar(Qlm)        # Output
+
+# Z-rotation by 45°
+SH_Zrotate(cfg, Qlm, π/4, Rlm)
+
+# General rotation using Euler angles
+rot = SHTRotation(cfg.lmax, cfg.mmax)
+shtns_rotation_set_angles_ZYZ(rot, α=π/6, β=π/3, γ=π/4)
+shtns_rotation_apply_real(rot, Qlm, Rlm)
+```
+
+DEBUGGING
+---------
+```julia
+# Z-rotation should just multiply by exp(imα)
+# For m=2 mode, rotation by α should multiply by exp(2iα)
+rot_coeff = Rlm[idx] / Qlm[idx]  # where idx is a mode with m=2
+@assert rot_coeff ≈ cis(2 * α)
+```
+
+================================================================================
+=#
+
 """
 Rotations of spherical harmonic expansions.
 

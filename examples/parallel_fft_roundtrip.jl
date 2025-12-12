@@ -50,25 +50,12 @@ end
 pθ, pφ = procgrid(SIZE)
 topo = PencilArrays.Pencil((nlat, nlon), (pθ, pφ), COMM)
 
-# Safe allocation helpers for PencilArrays across versions
-pa_zeros(::Type{T}, t) where {T} = begin
-    try
-        return PencilArrays.zeros(T, t)             # preferred API
-    catch
-        try
-            A = similar(t, T)                       # works on newer PencilArrays
-            fill!(A, zero(T))
-            return A
-        catch
-            # Fallback to extension's allocate if available
-            try
-                @eval using SHTnsKitParallelExt
-                return SHTnsKitParallelExt.allocate(t; eltype=T)
-            catch
-                error("Unable to allocate PencilArray of eltype $(T)")
-            end
-        end
-    end
+# Safe allocation helpers for PencilArrays v0.19+
+function pa_zeros(::Type{T}, pen::Pencil) where {T}
+    # For PencilArrays v0.19+, use PencilArray constructor with local array
+    local_dims = PencilArrays.size_local(pen)
+    local_data = zeros(T, local_dims...)
+    return PencilArray(pen, local_data)
 end
 
 # Build a real-valued distributed field f(θ,φ)

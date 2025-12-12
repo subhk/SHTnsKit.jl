@@ -21,27 +21,32 @@ Start here if you're new to spherical harmonics. These examples teach fundamenta
 using SHTnsKit
 
 # Step 1: Create a configuration (like setting up your workspace)
-cfg = create_gauss_config(16, 16)  # Start small for learning
-println("Created configuration for degree up to 16")
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+println("Created configuration for degree up to $lmax")
 
 # Step 2: Create a simple temperature pattern
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
-# Simple pattern: warm equator (θ = π/2), cold poles (θ = 0, π)
-temperature = @. 273.15 + 30 * sin(θ)^2  # Base temp + equatorial warming
+# Simple pattern: warm equator, cold poles (Y_2^0 harmonic)
+temperature = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]  # cos(θ) at this latitude
+    temperature[i, :] .= 273.15 + 30 * (1 - x^2)  # Warmer at equator
+end
 
 println("Temperature range: $(extrema(temperature)) K")
 
 # Step 3: Transform to spherical harmonic coefficients (analysis)
-T_coeffs = analysis(cfg, temperature)
-println("Number of coefficients: ", length(T_coeffs))
+Alm = analysis(cfg, temperature)
+println("Coefficient matrix size: $(size(Alm))")
 
-# Step 4: Find the most important coefficient
-max_coeff_idx = argmax(abs.(T_coeffs))
-l, m = SHTnsKit.lm_from_index(cfg, max_coeff_idx)
-println("Strongest mode: l=$l, m=$m")
+# Step 4: Find the most important coefficient (skip l=0 global mean)
+max_val, max_idx = findmax(abs.(Alm[2:end, :]))
+println("Largest non-constant mode magnitude: $max_val")
 
 # Step 5: Reconstruct the original field (synthesis)
-T_reconstructed = synthesize(cfg, T_coeffs)
+T_reconstructed = synthesis(cfg, Alm)
 error = maximum(abs.(temperature - T_reconstructed))
 println("Reconstruction error: $error (should be tiny!)")
 
@@ -51,8 +56,8 @@ destroy_config(cfg)
 **Key concepts learned:**
 - Configuration setup (`create_gauss_config`)
 - Creating realistic data patterns
-- Analysis: spatial → spectral (`analyze`)
-- Synthesis: spectral → spatial (`synthesize`)
+- Analysis: spatial → spectral (`analysis`)
+- Synthesis: spectral → spatial (`synthesis`)
 - Understanding (l,m) mode indices
 
 ### Example 2: Pure Spherical Harmonic Patterns
@@ -61,32 +66,28 @@ destroy_config(cfg)
 
 ```julia
 using SHTnsKit
-using Plots  # For visualization
 
-cfg = create_gauss_config(32, 32)
-θ, φ = SHTnsKit.create_coordinate_matrices(cfg)
+lmax = 32
+cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
 # Create pure Y_2^0 spherical harmonic (zonal mode)
-sh = zeros(cfg.nlm)
-idx = SHTnsKit.lmidx(cfg, 2, 0)  # l=2, m=0 (depends only on latitude)
-sh[idx] = 1.0
+# Coefficients are stored as (lmax+1) × (mmax+1) matrix
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[3, 1] = 1.0  # l=2, m=0 (index is l+1 for row, m+1 for column)
 println("Creating Y₂⁰ pattern (zonal, m=0)")
 
 # Synthesize to spatial domain
-Y20_pattern = synthesis(cfg, sh)
+Y20_pattern = synthesis(cfg, Alm)
 
 # This creates a pattern that varies only with latitude
 println("Pattern statistics:")
 println("  Min value: $(minimum(Y20_pattern))")
 println("  Max value: $(maximum(Y20_pattern))")
-println("  At north pole (θ=0): $(Y20_pattern[1,1])")
-println("  At equator (θ=π/2): $(Y20_pattern[div(end,2),1])")
+println("  At north pole: $(Y20_pattern[1,1])")
+println("  At equator: $(Y20_pattern[div(cfg.nlat,2),1])")
 
-# Plot the pattern
-heatmap(φ*180/π, θ*180/π, Y20_pattern, 
-        xlabel="Longitude (°)", ylabel="Colatitude (°)",
-        title="Y₂⁰ Spherical Harmonic (Zonal Pattern)",
-        color=:RdBu)
+# The Y_2^0 pattern = (3cos²θ - 1)/2
+# Positive at poles, negative at equator
 
 destroy_config(cfg)
 ```
@@ -95,9 +96,9 @@ destroy_config(cfg)
 - How to create pure spherical harmonic patterns
 - Understanding zonal (m=0) vs sectoral (m≠0) modes
 - The relationship between (l,m) indices and spatial patterns
-- Basic visualization of spherical data
+- Coefficient indexing: `Alm[l+1, m+1]`
 
-**Try this:** Change `(2,0)` to `(2,2)` to see a sectoral pattern!
+**Try this:** Change to `Alm[3, 3] = 1.0` (l=2, m=2) to see a sectoral pattern!
 
 ### Example 3: Understanding Power Spectra
 

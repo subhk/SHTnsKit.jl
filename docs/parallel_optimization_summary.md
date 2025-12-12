@@ -77,60 +77,79 @@ The parallel optimization is implemented through five main modules:
 
 ## Usage Examples
 
-### 1. Basic Parallel Usage (Automatic)
+### 1. Basic Serial Usage
 
 ```julia
 using SHTnsKit
 
-# Standard usage automatically applies optimizations
-cfg = create_gauss_config(256, 256)
-# Create bandlimited test coefficients (prevents parallel errors)
-sh_coeffs = zeros(cfg.nlm)
-sh_coeffs[1] = 1.0
-if cfg.nlm > 8
-    sh_coeffs[2:8] .= 0.1 * [cos(i/8) for i in 1:7]
-end
-spatial_data = synthesize(cfg, sh_coeffs)  # Automatically optimized
+# Standard usage
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create coefficients (2D matrix format)
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[1, 1] = 1.0
+Alm[3, 1] = 0.5
+
+# Perform transform
+spatial_data = synthesis(cfg, Alm)
+
+destroy_config(cfg)
 ```
 
-### 2. Explicit Advanced Usage
-
-```julia
-# Load advanced modules
-include("src/advanced/hybrid_algorithms.jl")
-include("src/advanced/performance_tuning.jl")
-
-# Create advanced configurations
-base_cfg = create_gauss_config(512, 512)
-advanced_cfg = advanced_hybrid_create_config(base_cfg)
-tuning_cfg = advanced_tuning_create_config(Float64)
-
-# Use advanced optimizations
-sh_coeffs = randn(advanced_cfg.base_cfg.nlm)
-spatial_data = Matrix{Float64}(undef, advanced_cfg.base_cfg.nlat, advanced_cfg.base_cfg.nphi)
-advanced_tuning_optimize_transform!(advanced_cfg.base_cfg, sh_coeffs, spatial_data, tuning_cfg)
-```
-
-### 3. HPC Cluster Usage
+### 2. MPI Distributed Usage
 
 ```julia
 using MPI
 MPI.Init()
 
-# Load advanced parallel modules
-include("src/advanced/parallel_transforms.jl")
-include("src/advanced/communication_patterns.jl")
+using SHTnsKit, PencilArrays, PencilFFTs
 
-# Create parallel configurations
-mpi_size = MPI.Comm_size(MPI.COMM_WORLD)
-base_cfg = create_gauss_config(1024, 1024)
-parallel_cfg = advanced_parallel_create_config(mpi_size, base_cfg)
-comm_cfg = advanced_comm_create_config(mpi_size)
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nprocs = MPI.Comm_size(comm)
 
-# Execute with advanced parallelism
-sh_coeffs = randn(base_cfg.nlm)
-spatial_data = Matrix{Float64}(undef, base_cfg.nlat, base_cfg.nphi)
-advanced_parallel_sh_to_spat!(parallel_cfg, sh_coeffs, spatial_data)
+# Create configuration
+lmax = 128
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array using PencilArrays
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Distributed transforms
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+destroy_config(cfg)
+MPI.Finalize()
+```
+
+### 3. HPC Cluster Job Script
+
+```bash
+#!/bin/bash
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=16
+#SBATCH --time=01:00:00
+
+module load julia/1.11
+module load openmpi
+
+mpirun julia --project parallel_transforms.jl
 ```
 
 ## Performance Benchmarks

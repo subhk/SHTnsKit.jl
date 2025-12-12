@@ -279,7 +279,7 @@ mpiexec -n 2 julia --project=. examples/rotate_y_parallel.jl
 
 ```
 
-Enable rfft in distributed plans (when supported):
+<!-- Enable rfft in distributed plans (when supported):
 
 ```julia
 using SHTnsKit, MPI, PencilArrays, PencilFFTs
@@ -300,7 +300,7 @@ vplan = DistSphtorPlan(cfg, PencilArrays.zeros(Pθφ; eltype=Float64); use_rfft=
 # Cache PencilFFT plans across calls once warm-up completes
 enable_fft_plan_cache!()
 MPI.Finalize()
-```
+``` -->
 
 ### Automatic Differentiation
 
@@ -326,7 +326,7 @@ destroy_config(cfg)
 
 Supported functions include all core transforms, vector operations, spectral analysis, and differential operators.
 
-### Allocation Benchmarks
+<!-- ### Allocation Benchmarks
 
 ```bash
 # Serial and (if available) MPI allocation benchmarks
@@ -334,7 +334,7 @@ julia --project=. examples/alloc_benchmark.jl 16
 mpiexec -n 2 julia --project=. examples/alloc_benchmark.jl 16
 
 Tip: To avoid allocations for real-output distributed synthesis, construct plans with `with_spatial_scratch=true`, which keeps a single complex (θ,φ) scratch buffer inside the plan. This modest, fixed footprint removes per-call allocations for iFFT writes when outputs are real.
-```
+``` -->
 
 ##  Contributing
 

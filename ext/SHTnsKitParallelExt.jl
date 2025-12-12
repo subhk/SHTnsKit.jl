@@ -1,19 +1,79 @@
 module SHTnsKitParallelExt
 
-"""
-SHTnsKit Parallel Extension
+#=
+================================================================================
+SHTnsKit Parallel Extension - MPI-based Distributed Spherical Harmonic Transforms
+================================================================================
 
 This Julia package extension provides distributed/parallel spherical harmonic transform
 capabilities using MPI for inter-process communication and PencilArrays for distributed
-memory management. The extension is automatically loaded when both MPI.jl and 
+memory management. The extension is automatically loaded when both MPI.jl and
 PencilArrays.jl are available in the environment.
 
-Key capabilities:
-- Distributed spherical harmonic transforms across MPI processes
-- Pencil decomposition for memory-distributed arrays (latitude/longitude/spectral)
-- Parallel FFTs via PencilFFTs for longitude direction transforms
-- Load balancing and data redistribution for optimal performance
-- Caching of FFT plans for repeated operations (optional via environment variable)
+ARCHITECTURE OVERVIEW
+---------------------
+The parallel transforms use a "pencil decomposition" strategy:
+1. Input data (θ,φ grid) is distributed across MPI ranks along one or both dimensions
+2. FFT along longitude (φ) transforms spatial data to Fourier coefficients
+3. Legendre integration along latitude (θ) produces spherical harmonic coefficients
+4. MPI reductions combine partial results from all ranks
+
+Data flow for dist_analysis (spatial → spectral):
+    PencilArray(θ,φ) → [gather φ if distributed] → FFT(φ) → Legendre(θ) → Alm
+
+Data flow for dist_synthesis (spectral → spatial):
+    Alm → Legendre(θ) → IFFT(φ) → [scatter φ if distributed] → PencilArray(θ,φ)
+
+KEY FILES
+---------
+- SHTnsKitParallelExt.jl: Module setup, FFT wrappers, utility functions
+- ParallelTransforms.jl: Core distributed transform implementations
+- ParallelPlans.jl: Pre-allocated buffer management for repeated transforms
+
+PERFORMANCE NOTES
+-----------------
+1. Memory allocations: The main loop uses "function barriers" to ensure type stability
+   and eliminate boxing allocations. See _analysis_loop_no_tables!() in ParallelTransforms.jl
+
+2. FFT plans: FFTW internally caches plans for arrays of the same size/type, so
+   repeated transforms on same-sized arrays are efficient after warmup.
+
+3. MPI communication: φ-distributed data requires MPI.Allgatherv! per latitude row.
+   For large problems, consider distributing along θ only to minimize communication.
+
+DEBUGGING TIPS
+--------------
+1. Check extension loaded: `Base.get_extension(SHTnsKit, :SHTnsKitParallelExt) !== nothing`
+
+2. Verify PencilArray layout:
+   - `PencilArrays.range_local(pencil(arr))` shows which global indices this rank owns
+   - `size(parent(arr))` shows local array dimensions
+   - `PencilArrays.size_global(arr)` shows full global dimensions
+
+3. Common issues:
+   - "Unable to get global indices": PencilArrays version incompatibility
+   - Hanging on MPI calls: Ensure all ranks call collective operations
+   - Wrong results: Check that θ/φ ranges are correctly identified
+
+4. Enable verbose output: `ENV["SHTNSKIT_VERBOSE_STORAGE"] = "1"`
+
+5. Allocation profiling: Use @allocated or @timed to measure memory usage:
+   ```julia
+   @timed Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+   ```
+
+ENVIRONMENT VARIABLES
+--------------------
+- SHTNSKIT_CACHE_PENCILFFTS: "1" (default) to cache FFT plans, "0" to disable
+- SHTNSKIT_VERBOSE_STORAGE: "1" to print storage optimization info
+================================================================================
+=#
+
+"""
+    SHTnsKitParallelExt
+
+Parallel extension module providing MPI-distributed spherical harmonic transforms.
+See module-level comments for architecture overview and debugging tips.
 """
 
 using Base.Threads                       # Threads.@threads and locks/macros

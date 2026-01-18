@@ -761,9 +761,10 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
         :regular
     end
 
-    # All grids use DFT scaling (2π factor from spherical harmonic normalization)
-    # The 2π comes from ∫_0^{2π} exp(imφ) exp(-im'φ) dφ = 2π δ_mm'
-    phi_scale = :dft
+    # Regular/equiangular grids use "quad" scaling (nlon/(2π)) for proper roundtrip
+    # This matches the spherical quadrature convention where the φ integral is
+    # normalized by 1/(2π) rather than using DFT normalization
+    phi_scale = :quad
 
     cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
                     θ, φ, x, w, wlat = w, Nlm,
@@ -900,18 +901,21 @@ Create a spherical harmonic configuration with GPU device selection.
 Enhanced version of `create_gauss_config` with automatic device detection.
 
 # Arguments
-- `device::Symbol`: Target device (:auto, :cpu, :cuda, :amdgpu)
+- `device::Symbol`: Target device (:auto, :cpu, :cuda)
 - `device_preference::Vector{Symbol}`: Preference order when device=:auto
 """
-function create_gauss_config_gpu(lmax::Int, nlat::Int; 
-                                nlon::Union{Int,Nothing}=nothing, 
+function create_gauss_config_gpu(lmax::Int, nlat::Int;
+                                nlon::Union{Int,Nothing}=nothing,
                                 mres::Int=1,
                                 device::Symbol=:auto,
-                                device_preference::Vector{Symbol}=[:cuda, :amdgpu, :cpu],
+                                device_preference::Vector{Symbol}=[:cuda, :cpu],
                                 kwargs...)
-    
+
+    # Compute effective nlon: use provided value or default
+    nlon_eff = isnothing(nlon) ? max(2*lmax + 1, 4) : nlon
+
     # Create the base configuration
-    cfg = create_gauss_config(lmax, nlat; nlon=nlon, mres=mres, kwargs...)
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon_eff, mres=mres, kwargs...)
     
     # Determine the compute device
     if device == :auto

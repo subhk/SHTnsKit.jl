@@ -1,5 +1,12 @@
 # Installation Guide
 
+```@raw html
+<div style="background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Installation</h2>
+    <p style="margin: 0; opacity: 0.9;">Get SHTnsKit.jl up and running in your Julia environment</p>
+</div>
+```
+
 This guide provides detailed instructions for installing SHTnsKit.jl and its dependencies.
 
 ## Quick Installation
@@ -32,11 +39,31 @@ using Pkg
 Pkg.add("SHTnsKit")
 ```
 
-### Full Installation (Parallel + SIMD)
+### With GPU Support
 
 ```julia
 using Pkg
-Pkg.add(["SHTnsKit", "MPI", "PencilArrays", "PencilFFTs", "LoopVectorization"])
+Pkg.add(["SHTnsKit", "CUDA", "GPUArrays", "KernelAbstractions"])
+```
+
+### With MPI Support (Parallel)
+
+```julia
+using Pkg
+Pkg.add(["SHTnsKit", "MPI", "PencilArrays", "PencilFFTs"])
+```
+
+### Full Installation (GPU + Parallel + SIMD)
+
+```julia
+using Pkg
+Pkg.add([
+    "SHTnsKit",
+    "CUDA", "GPUArrays", "KernelAbstractions",           # GPU
+    "MPI", "PencilArrays", "PencilFFTs",                 # Distributed
+    "LoopVectorization",                                  # SIMD optimization
+    "ForwardDiff", "Zygote"                              # Auto-differentiation
+])
 ```
 
 ### Development Installation
@@ -54,6 +81,73 @@ Pkg.add(url="https://github.com/username/SHTnsKit.jl.git")
 using Pkg
 Pkg.develop(path="/path/to/SHTnsKit.jl")
 ```
+
+## GPU Setup
+
+### Requirements
+
+- NVIDIA GPU with CUDA Compute Capability 5.0+ (Maxwell or newer)
+- CUDA Toolkit (automatically installed via CUDA.jl)
+- 4GB+ GPU memory recommended
+
+### Installation
+
+```julia
+using Pkg
+Pkg.add(["CUDA", "GPUArrays", "KernelAbstractions"])
+```
+
+### Verify GPU Installation
+
+```julia
+using CUDA
+
+println("CUDA functional: ", CUDA.functional())
+println("CUDA version: ", CUDA.version())
+println("GPU: ", CUDA.name(CUDA.device()))
+println("Memory: ", CUDA.available_memory() / 1e9, " GB available")
+```
+
+### Test GPU Transforms
+
+```julia
+using SHTnsKit, CUDA
+
+# Create configuration
+cfg = create_gauss_config(32, 34)
+
+# Create test data
+spatial = rand(cfg.nlat, cfg.nlon)
+
+# GPU transform
+Alm = gpu_analysis(cfg, spatial)
+recovered = gpu_synthesis(cfg, Alm)
+
+# Verify
+error = maximum(abs.(spatial - recovered))
+println("GPU roundtrip error: $error")
+println(error < 1e-10 ? "GPU SUCCESS!" : "Check GPU installation")
+```
+
+### Troubleshooting GPU
+
+**"CUDA not available"**
+```julia
+# Check CUDA installation
+using CUDA
+println(CUDA.versioninfo())
+
+# Rebuild if needed
+using Pkg
+Pkg.build("CUDA")
+```
+
+**"Out of GPU memory"**
+- Use `gpu_analysis_safe()` for automatic CPU fallback
+- Reduce problem size
+- Call `gpu_clear_cache!()` to free memory
+
+---
 
 ## Parallel Computing Setup
 

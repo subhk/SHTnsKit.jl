@@ -209,8 +209,8 @@ end
 """
     SHTnsKit.turbo_apply_laplacian!(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix)
 
-In-place multiplication by l(l+1) in spectral space (Laplacian factor) using
-LoopVectorization. This mirrors the common spectral Laplacian application.
+In-place multiplication by -l(l+1) in spectral space (spherical Laplacian eigenvalue) using
+LoopVectorization. The spherical Laplacian satisfies Δ Y_l^m = -l(l+1) Y_l^m.
 """
 function SHTnsKit.turbo_apply_laplacian!(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix)
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -219,7 +219,7 @@ function SHTnsKit.turbo_apply_laplacian!(cfg::SHTnsKit.SHTConfig, alm::AbstractM
     @threads for m in 0:mmax
         col = m + 1
         @tturbo warn_check_args=false for l in m:lmax
-            alm[l + 1, col] *= l * (l + 1)
+            alm[l + 1, col] *= -(l * (l + 1))
         end
     end
     return alm
@@ -229,12 +229,13 @@ end
     SHTnsKit.turbo_apply_laplacian!(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex})
 
 In-place Laplacian factor application for packed coefficients (SHTns LM order).
+The spherical Laplacian satisfies Δ Y_l^m = -l(l+1) Y_l^m.
 """
 function SHTnsKit.turbo_apply_laplacian!(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex})
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
     @tturbo warn_check_args=false for lm0 in 0:(cfg.nlm-1)
         l = cfg.li[lm0 + 1]
-        Qlm[lm0 + 1] *= l * (l + 1)
+        Qlm[lm0 + 1] *= -(l * (l + 1))
     end
     return Qlm
 end

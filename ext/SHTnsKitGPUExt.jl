@@ -4,38 +4,98 @@ using SHTnsKit
 using KernelAbstractions, GPUArrays, GPUArraysCore
 using LinearAlgebra, FFTW
 
-# Global variables for GPU backend availability
-CUDA_LOADED = false
-AMDGPU_LOADED = false
-CUDA = nothing
-AMDGPU = nothing
+# Import CUDA
+using CUDA
+using CUDA.CUFFT
 
-# Conditional imports for GPU backends  
+# Import functions from SHTnsKit to extend them
+import SHTnsKit: get_device, set_device!,
+                 gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
+                 gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat,
+                 gpu_apply_laplacian!,
+                 gpu_memory_info, check_gpu_memory, gpu_clear_cache!,
+                 estimate_memory_usage, get_available_gpus, set_gpu_device,
+                 create_multi_gpu_config, multi_gpu_analysis, multi_gpu_synthesis,
+                 multi_gpu_analysis_streaming, multi_gpu_synthesis_streaming, estimate_streaming_chunks
+
+# Import device utilities functions to override
+import SHTnsKit: _to_gpu, on_device, _get_device_details, _ensure_cuda_initialized,
+                 _notify_cuda_loaded!
+
+# ============================================================================
+# CUDA Backend Integration with device_utils.jl
+# ============================================================================
+
+# Notify the main module that CUDA is available
 function __init__()
-    global CUDA, AMDGPU, CUDA_LOADED, AMDGPU_LOADED
-    
-    try
-        CUDA = Base.require(Main, :CUDA)
-        if CUDA.functional()
-            CUDA_LOADED = true
-            @info "CUDA backend loaded successfully"
-        end
-    catch
-        CUDA_LOADED = false
-    end
-    
-    try
-        AMDGPU = Base.require(Main, :AMDGPU)
-        if AMDGPU.functional()
-            AMDGPU_LOADED = true
-            @info "AMDGPU backend loaded successfully"
-        end
-    catch
-        AMDGPU_LOADED = false
+    if CUDA.functional()
+        _notify_cuda_loaded!()
     end
 end
 
-# Device management
+"""
+    _to_gpu(arr::AbstractArray)
+
+Transfer array to CUDA GPU. Overrides the stub in device_utils.jl.
+"""
+function _to_gpu(arr::AbstractArray)
+    if !CUDA.functional()
+        error("CUDA is not functional")
+    end
+    return CuArray(arr)
+end
+
+# Avoid double conversion
+_to_gpu(arr::CuArray) = arr
+
+"""
+    on_device(arr::CuArray) -> Symbol
+
+Returns :gpu for CUDA arrays.
+"""
+on_device(::CuArray) = :gpu
+
+"""
+    _get_device_details(::Val{:gpu})
+
+Get detailed GPU device information.
+"""
+function _get_device_details(::Val{:gpu})
+    if !CUDA.functional()
+        return (device_type = :gpu, available = false)
+    end
+
+    dev = CUDA.device()
+    return (
+        device_type = :gpu,
+        gpu_backend = :cuda,
+        available = true,
+        device_id = Int(dev),
+        device_name = CUDA.name(dev),
+        compute_capability = CUDA.capability(dev),
+        total_memory = CUDA.totalmem(dev),
+        free_memory = CUDA.available_memory(),
+        num_devices = CUDA.ndevices()
+    )
+end
+
+"""
+    _ensure_cuda_initialized()
+
+Ensure CUDA is properly initialized.
+"""
+function _ensure_cuda_initialized()
+    if !CUDA.functional()
+        error("CUDA is not available")
+    end
+    # Trigger lazy initialization
+    CUDA.device()
+    return nothing
+end
+
+# ============================================================================
+# Legacy Device Management (for backward compatibility)
+# ============================================================================
 """
     SHTDevice
 
@@ -43,20 +103,17 @@ Enum representing supported compute devices for SHTnsKit operations.
 """
 @enum SHTDevice begin
     CPU_DEVICE
-    CUDA_DEVICE  
-    AMDGPU_DEVICE
+    CUDA_DEVICE
 end
 
 """
     get_device()
 
-Returns the currently active GPU device, or CPU_DEVICE if no GPU is available.
+Returns CUDA_DEVICE if CUDA is functional, otherwise CPU_DEVICE.
 """
 function get_device()
-    if CUDA_LOADED && CUDA.functional()
+    if CUDA.functional()
         return CUDA_DEVICE
-    elseif AMDGPU_LOADED && AMDGPU.functional()  
-        return AMDGPU_DEVICE
     else
         return CPU_DEVICE
     end
@@ -65,51 +122,37 @@ end
 """
     get_available_gpus()
 
-Returns a list of available GPU devices with their IDs and types.
+Returns a list of available CUDA GPU devices with their IDs and names.
 """
 function get_available_gpus()
     gpus = []
-    
-    if CUDA_LOADED && CUDA.functional()
+    if CUDA.functional()
         for i = 0:(CUDA.ndevices()-1)
             push!(gpus, (device=:cuda, id=i, name=CUDA.name(CUDA.CuDevice(i))))
         end
     end
-    
-    if AMDGPU_LOADED && AMDGPU.functional()
-        # AMDGPU device enumeration if available
-        try
-            for i = 0:(AMDGPU.ndevices()-1)
-                push!(gpus, (device=:amdgpu, id=i, name="AMDGPU Device $i"))
-            end
-        catch
-            # Fallback if AMDGPU doesn't support device enumeration
-        end
-    end
-    
     return gpus
 end
 
 """
-    set_gpu_device(device_type::Symbol, device_id::Int)
+    set_gpu_device(device_id::Int)
 
-Set the active GPU device by type and ID.
+Set the active CUDA GPU device by ID.
 """
-function set_gpu_device(device_type::Symbol, device_id::Int)
-    if device_type == :cuda && CUDA_LOADED
+function set_gpu_device(device_id::Int)
+    if CUDA.functional()
         CUDA.device!(device_id)
         return true
-    elseif device_type == :amdgpu && AMDGPU_LOADED
-        # AMDGPU device selection if available
-        try
-            AMDGPU.device!(device_id)
-            return true
-        catch
-            return false
-        end
-    else
-        return false
     end
+    return false
+end
+
+# Legacy overload for compatibility
+function set_gpu_device(device_type::Symbol, device_id::Int)
+    if device_type == :cuda
+        return set_gpu_device(device_id)
+    end
+    return false
 end
 
 """
@@ -125,299 +168,49 @@ struct MultiGPUConfig
 end
 
 """
-    create_multi_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude, gpu_ids=nothing, allow_mixed=true)
+    create_multi_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude, gpu_ids=nothing)
 
 Create a multi-GPU configuration for spherical harmonic transforms.
-Supports mixing NVIDIA and AMD GPUs when allow_mixed=true.
 """
-function create_multi_gpu_config(lmax::Int, nlat::Int; 
+function create_multi_gpu_config(lmax::Int, nlat::Int;
                                  nlon::Union{Int,Nothing}=nothing,
                                  strategy::Symbol=:latitude,
-                                 gpu_ids::Union{Vector{Int},Nothing}=nothing,
-                                 gpu_types::Union{Vector{Symbol},Nothing}=nothing,
-                                 allow_mixed::Bool=true)
-    
-    # Get available GPUs
+                                 gpu_ids::Union{Vector{Int},Nothing}=nothing)
+
     available_gpus = get_available_gpus()
     if isempty(available_gpus)
-        error("No GPUs available for multi-GPU configuration")
+        error("No CUDA GPUs available for multi-GPU configuration")
     end
-    
+
     # Select GPUs to use
-    if gpu_ids === nothing && gpu_types === nothing
-        selected_gpus = available_gpus  # Use all available
-    elseif gpu_types !== nothing
-        # Select by GPU type (e.g., [:cuda, :amdgpu])
-        selected_gpus = [gpu for gpu in available_gpus if gpu.device in gpu_types]
-    elseif gpu_ids !== nothing
-        # Select by GPU IDs (more complex for mixed types)
-        selected_gpus = []
-        for id in gpu_ids
-            matching_gpus = [gpu for gpu in available_gpus if gpu.id == id]
-            append!(selected_gpus, matching_gpus)
-        end
+    selected_gpus = if gpu_ids === nothing
+        available_gpus  # Use all available
+    else
+        [gpu for gpu in available_gpus if gpu.id in gpu_ids]
     end
-    
+
     if isempty(selected_gpus)
-        error("No valid GPUs found with specified criteria")
+        error("No valid GPUs found with specified IDs")
     end
-    
-    # Check for mixed GPU types
-    gpu_device_types = unique([gpu.device for gpu in selected_gpus])
-    if length(gpu_device_types) > 1 && !allow_mixed
-        error("Mixed GPU types detected but allow_mixed=false. Found: $gpu_device_types")
-    end
-    
-    if length(gpu_device_types) > 1
-        @info "Using mixed GPU types: $gpu_device_types"
-        @info "Performance may be limited by slowest GPU type"
-    end
-    
+
     # Create base configuration
     base_cfg = SHTnsKit.create_gauss_config(lmax, nlat; nlon=nlon)
-    
+
     # Validate distribution strategy
     if strategy ∉ [:latitude, :longitude, :spectral]
         error("Invalid distribution strategy: $strategy. Must be :latitude, :longitude, or :spectral")
     end
-    
-    # Enable P2P for CUDA GPUs if multiple CUDA devices
-    if length([gpu for gpu in selected_gpus if gpu.device == :cuda]) >= 2
+
+    # Enable P2P for CUDA GPUs if multiple devices
+    if length(selected_gpus) >= 2
         try
             enable_gpu_p2p_access(selected_gpus)
         catch e
             @warn "Failed to enable P2P access: $e"
         end
     end
-    
+
     return MultiGPUConfig(base_cfg, selected_gpus, strategy, selected_gpus[1].id)
-end
-
-"""
-    create_balanced_mixed_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude)
-
-Create a multi-GPU configuration that automatically balances workload across 
-different GPU types based on their relative performance.
-"""
-function create_balanced_mixed_gpu_config(lmax::Int, nlat::Int;
-                                         nlon::Union{Int,Nothing}=nothing,
-                                         strategy::Symbol=:latitude)
-    
-    available_gpus = get_available_gpus()
-    if isempty(available_gpus)
-        error("No GPUs available")
-    end
-    
-    # Estimate relative performance (rough approximation)
-    # In practice, these would be benchmarked values
-    gpu_performance_weights = Dict{Symbol, Float64}(
-        :cuda => 1.0,    # Reference performance
-        :amdgpu => 0.85  # Typically slightly slower than equivalent NVIDIA
-    )
-    
-    # Calculate work distribution based on performance
-    total_weight = sum(gpu_performance_weights[gpu.device] for gpu in available_gpus)
-    
-    # Create weighted GPU selection
-    weighted_gpus = []
-    for gpu in available_gpus
-        weight = gpu_performance_weights[gpu.device] / total_weight
-        # Store weight for potential use in load balancing
-        weighted_gpu = merge(gpu, (performance_weight=weight,))
-        push!(weighted_gpus, weighted_gpu)
-    end
-    
-    base_cfg = SHTnsKit.create_gauss_config(lmax, nlat; nlon=nlon)
-    
-    @info "Created balanced mixed-GPU config with $(length(weighted_gpus)) GPUs"
-    for (i, gpu) in enumerate(weighted_gpus)
-        @info "  GPU $i: $(gpu.device) $(gpu.id) (weight: $(round(gpu.performance_weight, digits=2)))"
-    end
-    
-    return MultiGPUConfig(base_cfg, weighted_gpus, strategy, weighted_gpus[1].id)
-end
-
-# Multi-GPU array distribution strategies
-
-"""
-    distribute_spatial_array(array, mgpu_config::MultiGPUConfig)
-
-Distribute a spatial array across multiple GPUs according to the distribution strategy.
-"""
-function distribute_spatial_array(array::AbstractArray, mgpu_config::MultiGPUConfig)
-    ngpus = length(mgpu_config.gpu_devices)
-    nlat, nlon = size(array)
-    distributed_arrays = []
-    
-    if mgpu_config.distribution_strategy == :latitude
-        # Split by latitude bands
-        lat_per_gpu = div(nlat, ngpus)
-        lat_remainder = nlat % ngpus
-        
-        lat_start = 1
-        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-            # Handle remainder by giving extra rows to first few GPUs
-            lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
-            lat_end = lat_start + lat_count - 1
-            
-            # Set device and transfer data chunk
-            set_gpu_device(gpu.device, gpu.id)
-            chunk = array[lat_start:lat_end, :]
-            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
-            
-            push!(distributed_arrays, (
-                data=gpu_chunk, 
-                gpu=gpu, 
-                indices=(lat_start:lat_end, 1:nlon)
-            ))
-            
-            lat_start = lat_end + 1
-        end
-        
-    elseif mgpu_config.distribution_strategy == :longitude
-        # Split by longitude sectors  
-        lon_per_gpu = div(nlon, ngpus)
-        lon_remainder = nlon % ngpus
-        
-        lon_start = 1
-        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-            lon_count = lon_per_gpu + (i <= lon_remainder ? 1 : 0)
-            lon_end = lon_start + lon_count - 1
-            
-            set_gpu_device(gpu.device, gpu.id)
-            chunk = array[:, lon_start:lon_end]
-            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
-            
-            push!(distributed_arrays, (
-                data=gpu_chunk,
-                gpu=gpu,
-                indices=(1:nlat, lon_start:lon_end)
-            ))
-            
-            lon_start = lon_end + 1
-        end
-        
-    else  # :spectral - for coefficient arrays
-        error("Spectral distribution not implemented for spatial arrays")
-    end
-    
-    return distributed_arrays
-end
-
-"""
-    distribute_coefficient_array(coeffs, mgpu_config::MultiGPUConfig)
-
-Distribute spherical harmonic coefficients across multiple GPUs.
-"""
-function distribute_coefficient_array(coeffs::AbstractArray, mgpu_config::MultiGPUConfig)
-    ngpus = length(mgpu_config.gpu_devices)
-    lmax_plus1, mmax_plus1 = size(coeffs)
-    distributed_coeffs = []
-    
-    if mgpu_config.distribution_strategy == :spectral
-        # Split by l-modes (degree)
-        l_per_gpu = div(lmax_plus1, ngpus)
-        l_remainder = lmax_plus1 % ngpus
-        
-        l_start = 1
-        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-            l_count = l_per_gpu + (i <= l_remainder ? 1 : 0)
-            l_end = l_start + l_count - 1
-            
-            set_gpu_device(gpu.device, gpu.id)
-            chunk = coeffs[l_start:l_end, :]
-            gpu_chunk = to_device(chunk, gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
-            
-            push!(distributed_coeffs, (
-                data=gpu_chunk,
-                gpu=gpu,
-                indices=(l_start:l_end, 1:mmax_plus1),
-                l_range=(l_start-1:l_end-1)  # 0-based l values
-            ))
-            
-            l_start = l_end + 1
-        end
-    else
-        error("Can only distribute coefficient arrays with :spectral strategy")
-    end
-    
-    return distributed_coeffs
-end
-
-"""
-    gpu_to_gpu_transfer(src_data, src_gpu, dest_gpu)
-
-Transfer data directly between GPUs using peer-to-peer communication when possible.
-Falls back to CPU transfer if P2P is not available.
-"""
-function gpu_to_gpu_transfer(src_data, src_gpu, dest_gpu)
-    if src_gpu.device == dest_gpu.device == :cuda && CUDA_LOADED
-        # CUDA peer-to-peer transfer
-        try
-            # Check if P2P access is enabled between devices
-            src_device = CUDA.CuDevice(src_gpu.id)
-            dest_device = CUDA.CuDevice(dest_gpu.id)
-            
-            # Enable P2P access if available
-            can_access = try
-                CUDA.can_access_peer(src_device, dest_device)
-            catch
-                false
-            end
-            
-            if can_access
-                # Direct GPU-to-GPU transfer
-                set_gpu_device(:cuda, dest_gpu.id)
-                dest_data = CUDA.CuArray{eltype(src_data)}(undef, size(src_data))
-                
-                # Copy directly between GPUs
-                set_gpu_device(:cuda, src_gpu.id)
-                copyto!(dest_data, src_data)
-                
-                return dest_data
-            end
-        catch e
-            @warn "P2P transfer failed, falling back to CPU: $e"
-        end
-    end
-    
-    # Fallback: transfer via CPU
-    set_gpu_device(src_gpu.device, src_gpu.id)
-    cpu_data = Array(src_data)
-    set_gpu_device(dest_gpu.device, dest_gpu.id)
-    return to_device(cpu_data, dest_gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
-end
-
-"""
-    gather_distributed_arrays(distributed_arrays, original_shape)
-
-Gather distributed arrays back into a single array on the primary GPU.
-Uses optimized GPU-to-GPU transfers when possible.
-"""
-function gather_distributed_arrays(distributed_arrays, original_shape)
-    # Set primary GPU
-    primary_gpu = distributed_arrays[1].gpu
-    set_gpu_device(primary_gpu.device, primary_gpu.id)
-    
-    # Create output array on primary GPU
-    result = to_device(zeros(eltype(distributed_arrays[1].data), original_shape), 
-                      primary_gpu.device == :cuda ? CUDA_DEVICE : AMDGPU_DEVICE)
-    
-    # Copy data chunks to appropriate locations
-    for chunk in distributed_arrays
-        if chunk.gpu != primary_gpu
-            # Use optimized GPU-to-GPU transfer
-            gpu_data = gpu_to_gpu_transfer(chunk.data, chunk.gpu, primary_gpu)
-        else
-            gpu_data = chunk.data
-        end
-        
-        # Place in correct location
-        lat_range, lon_range = chunk.indices
-        result[lat_range, lon_range] .= gpu_data
-    end
-    
-    return result
 end
 
 """
@@ -426,36 +219,31 @@ end
 Enable peer-to-peer access between all CUDA GPUs if possible.
 """
 function enable_gpu_p2p_access(gpus::Vector)
-    if !CUDA_LOADED
+    if !CUDA.functional() || length(gpus) < 2
         return false
     end
-    
-    cuda_gpus = [gpu for gpu in gpus if gpu.device == :cuda]
-    if length(cuda_gpus) < 2
-        return false
-    end
-    
+
     enabled_pairs = 0
     total_pairs = 0
-    
-    for i in 1:length(cuda_gpus), j in 1:length(cuda_gpus)
+
+    for i in 1:length(gpus), j in 1:length(gpus)
         if i != j
             total_pairs += 1
             try
-                src_device = CUDA.CuDevice(cuda_gpus[i].id)
-                dest_device = CUDA.CuDevice(cuda_gpus[j].id)
-                
+                src_device = CUDA.CuDevice(gpus[i].id)
+                dest_device = CUDA.CuDevice(gpus[j].id)
+
                 if CUDA.can_access_peer(src_device, dest_device)
-                    set_gpu_device(:cuda, cuda_gpus[i].id)
+                    CUDA.device!(gpus[i].id)
                     CUDA.enable_peer_access(dest_device)
                     enabled_pairs += 1
                 end
-            catch e
+            catch
                 # P2P not available for this pair
             end
         end
     end
-    
+
     if enabled_pairs > 0
         @info "Enabled P2P access for $enabled_pairs/$total_pairs GPU pairs"
         return true
@@ -472,15 +260,10 @@ Set the active compute device for SHTnsKit operations.
 """
 function set_device!(device::SHTDevice)
     if device == CUDA_DEVICE
-        if !CUDA_LOADED
+        if !CUDA.functional()
             error("CUDA not available. Install and load CUDA.jl first.")
         end
         CUDA.device!(CUDA.device())
-    elseif device == AMDGPU_DEVICE
-        if !AMDGPU_LOADED
-            error("AMDGPU not available. Install and load AMDGPU.jl first.")
-        end
-        # AMDGPU device selection if needed
     end
     # CPU_DEVICE doesn't require setup
     nothing
@@ -493,389 +276,375 @@ Transfer array to the specified device.
 """
 function to_device(array::AbstractArray, device::SHTDevice)
     if device == CUDA_DEVICE
-        if !CUDA_LOADED
+        if !CUDA.functional()
             error("CUDA not available")
         end
-        return CUDA.CuArray(array)
-    elseif device == AMDGPU_DEVICE  
-        if !AMDGPU_LOADED
-            error("AMDGPU not available")
-        end
-        return AMDGPU.ROCArray(array)
+        return CuArray(array)
     else
         return Array(array)  # Transfer to CPU
     end
 end
 
-# GPU FFT utilities
-"""
-    gpu_fft!(data, dims)
+# ============================================================================
+# cuFFT-based FFT operations with pre-planned transforms
+# ============================================================================
 
-Perform in-place FFT on GPU data along specified dimensions.
 """
-function gpu_fft!(data, dims)
-    if data isa CUDA.CuArray
-        CUDA.CUFFT.fft!(data, dims)
-    elseif data isa AMDGPU.ROCArray
-        AMDGPU.rocFFT.fft!(data, dims)
-    else
-        fft!(data, dims)  # CPU fallback
-    end
+    CuFFTPlan
+
+Pre-planned cuFFT operations for efficient repeated transforms.
+"""
+struct CuFFTPlan
+    forward_plan::CUFFT.cCuFFTPlan
+    inverse_plan::CUFFT.cCuFFTPlan
+    buffer::CuArray{ComplexF64, 2}
+    nlat::Int
+    nlon::Int
+end
+
+"""
+    create_cufft_plan(nlat::Int, nlon::Int)
+
+Create pre-planned cuFFT operations for a grid of size (nlat, nlon).
+Forward and inverse plans are created for transforms along the longitude dimension.
+"""
+function create_cufft_plan(nlat::Int, nlon::Int)
+    # Allocate buffer for FFT operations
+    buffer = CUDA.zeros(ComplexF64, nlat, nlon)
+
+    # Create forward FFT plan along dimension 2 (longitude)
+    forward_plan = CUFFT.plan_fft!(buffer, 2)
+
+    # Create inverse FFT plan along dimension 2 (longitude)
+    inverse_plan = CUFFT.plan_ifft!(buffer, 2)
+
+    return CuFFTPlan(forward_plan, inverse_plan, buffer, nlat, nlon)
+end
+
+"""
+    gpu_fft!(plan::CuFFTPlan, data::CuArray)
+
+Perform in-place forward FFT using pre-planned cuFFT.
+"""
+function gpu_fft!(plan::CuFFTPlan, data::CuArray)
+    plan.forward_plan * data
     return data
 end
 
 """
-    gpu_ifft!(data, dims)
+    gpu_ifft!(plan::CuFFTPlan, data::CuArray)
 
-Perform in-place inverse FFT on GPU data along specified dimensions.
+Perform in-place inverse FFT using pre-planned cuFFT.
 """
-function gpu_ifft!(data, dims)
-    if data isa CUDA.CuArray
-        CUDA.CUFFT.ifft!(data, dims)
-    elseif data isa AMDGPU.ROCArray  
-        AMDGPU.rocFFT.ifft!(data, dims)
-    else
-        ifft!(data, dims)  # CPU fallback
-    end
+function gpu_ifft!(plan::CuFFTPlan, data::CuArray)
+    plan.inverse_plan * data
     return data
 end
 
 """
-    gpu_rfft(data, dims)
+    gpu_fft!(data::CuArray, dims)
 
-Perform real-to-complex FFT on GPU data.
+Perform FFT on CUDA array along specified dimensions (without pre-planning).
 """
-function gpu_rfft(data, dims)
-    if data isa CUDA.CuArray
-        return CUDA.CUFFT.rfft(data, dims)
-    elseif data isa AMDGPU.ROCArray
-        return AMDGPU.rocFFT.rfft(data, dims)  
-    else
-        return rfft(data, dims)  # CPU fallback
-    end
+function gpu_fft!(data::CuArray, dims)
+    plan = CUFFT.plan_fft!(data, dims)
+    plan * data
+    return data
 end
 
 """
-    gpu_irfft(data, n, dims)
+    gpu_ifft!(data::CuArray, dims)
 
-Perform complex-to-real inverse FFT on GPU data.
+Perform inverse FFT on CUDA array along specified dimensions (without pre-planning).
 """
-function gpu_irfft(data, n, dims)
-    if data isa CUDA.CuArray
-        return CUDA.CUFFT.irfft(data, n, dims)
-    elseif data isa AMDGPU.ROCArray
-        return AMDGPU.rocFFT.irfft(data, n, dims)
-    else
-        return irfft(data, n, dims)  # CPU fallback
-    end
+function gpu_ifft!(data::CuArray, dims)
+    plan = CUFFT.plan_ifft!(data, dims)
+    plan * data
+    return data
 end
 
+"""
+    gpu_rfft(data::CuArray, dims)
+
+Perform real-to-complex FFT on CUDA array.
+"""
+function gpu_rfft(data::CuArray{<:Real}, dims)
+    return CUFFT.rfft(data, dims)
+end
+
+"""
+    gpu_irfft(data::CuArray, n, dims)
+
+Perform complex-to-real inverse FFT on CUDA array.
+"""
+function gpu_irfft(data::CuArray, n, dims)
+    return CUFFT.irfft(data, n, dims)
+end
+
+# ============================================================================
 # GPU-accelerated core operations using KernelAbstractions
+# ============================================================================
 
-@kernel function legendre_associated_kernel!(Plm, x, lmax, mmax, normalization)
+@kernel function legendre_associated_kernel!(Plm, x, lmax, mmax)
     """
     GPU kernel for computing associated Legendre polynomials P_l^m(x).
+    Parallelized over (latitude, m) pairs for maximum GPU utilization.
     Uses stable three-term recurrence relations.
+    Computes UNNORMALIZED Plm - normalization is applied during integration.
     """
-    i = @index(Global)
-    if i <= length(x)
+    i, m_idx = @index(Global, NTuple)
+    nlat = length(x)
+    if i <= nlat && m_idx <= mmax + 1
+        m = m_idx - 1
         xi = x[i]
-        sint = sqrt(1 - xi*xi)  # sin(θ) = sqrt(1 - cos²(θ))
-        
-        # Initialize P_0^0 = 1 (with normalization)
-        Plm[i, 1, 1] = normalization[1, 1]  # P_0^0
-        
-        # Compute diagonal terms P_m^m using recurrence
-        for m = 1:mmax
-            if m <= lmax
-                # P_m^m = (-1)^m * (2m-1)!! * sin^m(θ)
-                pm_prev = Plm[i, m, m]  # P_{m-1}^{m-1}
-                Plm[i, m+1, m+1] = -sqrt(2*m + 1) / sqrt(2*m) * sint * pm_prev * normalization[m+1, m+1]
-            end
+        sint = sqrt(max(0.0, 1 - xi*xi))  # sin(θ) = sqrt(1 - cos²(θ))
+
+        # Compute P_m^m (diagonal term) using recurrence from P_0^0
+        # P_0^0 = 1, P_m^m = -(2m-1) * sin(θ) * P_{m-1}^{m-1}
+        pmm = 1.0
+        @inbounds for k = 1:m
+            pmm *= -(2*k - 1) * sint
         end
-        
-        # Compute off-diagonal terms P_l^m for l > m using recurrence
-        for m = 0:mmax
-            for l = m+1:lmax
-                if l-1 >= m
-                    # Three-term recurrence: (l-m)P_l^m = (2l-1)xP_{l-1}^m - (l+m-1)P_{l-2}^m
-                    if l == m+1
-                        # Two-term recurrence for l = m+1
-                        Plm[i, l+1, m+1] = xi * sqrt(2*l + 1) * sqrt(2*l - 1) * Plm[i, l, m+1] * normalization[l+1, m+1]
-                    else
-                        # Full three-term recurrence
-                        a_lm = sqrt((2*l + 1) * (2*l - 1)) / sqrt((l - m) * (l + m))
-                        b_lm = sqrt((2*l + 1) * (l + m - 1) * (l - m - 1)) / sqrt((l - m) * (l + m) * (2*l - 3))
-                        
-                        Plm[i, l+1, m+1] = (a_lm * xi * Plm[i, l, m+1] - b_lm * Plm[i, l-1, m+1]) * normalization[l+1, m+1]
-                    end
-                end
+        Plm[i, m+1, m_idx] = pmm
+
+        # Compute P_{m+1}^m if m < lmax
+        if m < lmax
+            pm1m = (2*m + 1) * xi * pmm
+            Plm[i, m+2, m_idx] = pm1m
+
+            # Compute remaining P_l^m for l > m+1 using recurrence:
+            # P_l^m = ((2l-1) * x * P_{l-1}^m - (l+m-1) * P_{l-2}^m) / (l-m)
+            plm_prev2 = pmm      # P_{l-2}^m
+            plm_prev1 = pm1m     # P_{l-1}^m
+            @inbounds for l = m+2:lmax
+                plm = ((2*l - 1) * xi * plm_prev1 - (l + m - 1) * plm_prev2) / (l - m)
+                Plm[i, l+1, m_idx] = plm
+                plm_prev2 = plm_prev1
+                plm_prev1 = plm
             end
         end
     end
 end
 
-@kernel function legendre_transform_kernel!(coeffs, spatial_data, Plm, weights, nlat, nlon, lmax, mmax)
+@kernel function legendre_and_derivative_kernel!(Plm, dPlm, x, lmax, mmax)
     """
-    GPU kernel for spherical harmonic analysis transform.
-    Performs weighted integration over θ using precomputed Legendre polynomials.
+    GPU kernel for computing associated Legendre polynomials P_l^m(x) AND their
+    derivatives dP_l^m/dx. Required for vector spherical harmonic transforms.
+
+    The derivative satisfies: dP_l^m/dx = [l*x*P_l^m - (l+m)*P_{l-1}^m] / (x²-1)
     """
-    l, m = @index(Global, NTuple)
-    
-    if l <= lmax + 1 && m <= mmax + 1
-        l_idx, m_idx = l, m  # Convert to 0-based internally
-        l_val, m_val = l_idx - 1, m_idx - 1
-        
-        if l_val >= m_val && l_val <= lmax && m_val <= mmax
-            coeff_sum = ComplexF64(0, 0)
-            
-            # Integrate over θ (latitude) 
-            for i_lat = 1:nlat
-                plm_val = Plm[i_lat, l_idx, m_idx]
-                weight = weights[i_lat]
-                
-                # Integrate over φ (longitude) - this should be done via FFT
-                phi_sum = ComplexF64(0, 0)
-                for i_lon = 1:nlon
-                    phi = 2π * (i_lon - 1) / nlon
-                    exp_factor = exp(-im * m_val * phi)  # e^(-imφ)
-                    phi_sum += spatial_data[i_lat, i_lon] * exp_factor
-                end
-                
-                coeff_sum += plm_val * weight * phi_sum
+    i, m_idx = @index(Global, NTuple)
+    nlat = length(x)
+    if i <= nlat && m_idx <= mmax + 1
+        m = m_idx - 1
+        xi = x[i]
+        sint = sqrt(max(0.0, 1 - xi*xi))
+        x2m1 = xi*xi - 1.0
+        # Guard against x = ±1 (poles)
+        inv_x2m1 = abs(x2m1) < 1e-14 ? 0.0 : 1.0 / x2m1
+
+        # Compute P_m^m (diagonal term)
+        pmm = 1.0
+        @inbounds for k = 1:m
+            pmm *= -(2*k - 1) * sint
+        end
+        Plm[i, m+1, m_idx] = pmm
+
+        # dP_m^m/dx: use recurrence dP_m^m/dx = m*x*P_m^m / (x²-1) for m > 0
+        # For m=0: dP_0^0/dx = 0
+        if m == 0
+            dPlm[i, 1, 1] = 0.0
+        else
+            dPlm[i, m+1, m_idx] = m * xi * pmm * inv_x2m1
+        end
+
+        # Compute P_{m+1}^m and its derivative if m < lmax
+        if m < lmax
+            pm1m = (2*m + 1) * xi * pmm
+            Plm[i, m+2, m_idx] = pm1m
+            # dP_{m+1}^m/dx = [(m+1)*x*P_{m+1}^m - (m+1+m)*P_m^m] / (x²-1)
+            dPlm[i, m+2, m_idx] = ((m+1) * xi * pm1m - (2*m+1) * pmm) * inv_x2m1
+
+            # Compute remaining P_l^m and dP_l^m/dx for l > m+1
+            plm_prev2 = pmm
+            plm_prev1 = pm1m
+            @inbounds for l = m+2:lmax
+                plm = ((2*l - 1) * xi * plm_prev1 - (l + m - 1) * plm_prev2) / (l - m)
+                Plm[i, l+1, m_idx] = plm
+                # dP_l^m/dx = [l*x*P_l^m - (l+m)*P_{l-1}^m] / (x²-1)
+                dPlm[i, l+1, m_idx] = (l * xi * plm - (l + m) * plm_prev1) * inv_x2m1
+                plm_prev2 = plm_prev1
+                plm_prev1 = plm
             end
-            
-            coeffs[l_idx, m_idx] = coeff_sum
         end
-    end
-end
-
-@kernel function synthesis_kernel!(spatial_data, coeffs, Plm, nlat, nlon, lmax, mmax)
-    """
-    GPU kernel for spherical harmonic synthesis transform.
-    Reconstructs spatial field from spectral coefficients.
-    """
-    i_lat, i_lon = @index(Global, NTuple)
-    
-    if i_lat <= nlat && i_lon <= nlon
-        phi = 2π * (i_lon - 1) / nlon
-        result = ComplexF64(0, 0)
-        
-        # Sum over all (l,m) modes
-        for l = 0:lmax, m = 0:min(l, mmax)
-            l_idx, m_idx = l + 1, m + 1
-            plm_val = Plm[i_lat, l_idx, m_idx]
-            coeff = coeffs[l_idx, m_idx]
-            exp_factor = exp(im * m * phi)  # e^(imφ)
-            
-            result += coeff * plm_val * exp_factor
-        end
-        
-        spatial_data[i_lat, i_lon] = result
-    end
-end
-
-"""
-    gpu_legendre!(P, x, lmax; device=get_device())
-
-GPU-accelerated computation of Legendre polynomials using KernelAbstractions.
-"""
-function gpu_legendre!(P, x, lmax; device=get_device())
-    if device == CPU_DEVICE
-        # Fallback to CPU implementation
-        return SHTnsKit.legendre_sphPlm_array(P, x, lmax)
-    end
-    
-    kernel! = legendre_kernel!(get_backend(P))
-    kernel!(P, x, lmax; ndrange=size(P, 1))
-    return P
-end
-
-@kernel function fft_preprocess_kernel!(data_out, data_in, scale)
-    i = @index(Global)
-    if i <= length(data_in)
-        data_out[i] = data_in[i] * scale
     end
 end
 
 """
     gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
 
-GPU-accelerated spherical harmonic analysis transform.
-Performs complete spatial → spectral transform using GPU kernels and FFTs.
+GPU-accelerated spherical harmonic analysis transform using cuFFT.
+
+Implements: a_lm = ∫∫ f(θ,φ) Y_l^m*(θ,φ) sin(θ) dθ dφ
+1. FFT along φ (dimension 2) to extract Fourier modes
+2. Gauss-Legendre integration along θ (dimension 1) with P_l^m weights
+
+Fully parallelized: all (l,m) coefficients computed in a single kernel launch.
+
+Note: `real_output` parameter is kept for API compatibility but spherical harmonic
+coefficients are always complex. The parameter has no effect on the output type.
 """
 function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
     if device == CPU_DEVICE
         return SHTnsKit.analysis(cfg, spatial_data)
     end
-    
+
+    # Validate input dimensions
+    nlat, nlon = cfg.nlat, cfg.nlon
+    size(spatial_data, 1) == nlat || throw(DimensionMismatch("spatial_data must have $nlat rows (nlat), got $(size(spatial_data, 1))"))
+    size(spatial_data, 2) == nlon || throw(DimensionMismatch("spatial_data must have $nlon columns (nlon), got $(size(spatial_data, 2))"))
+
     # Transfer input data to GPU
-    gpu_data = to_device(ComplexF64.(spatial_data), device)
-    
+    gpu_data = CuArray(ComplexF64.(spatial_data))
+
     # Allocate GPU arrays
-    coeffs = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
-    Plm = to_device(zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1), device)
-    normalization = to_device(cfg.Nlm, device)
-    weights = to_device(cfg.w, device)
-    x_values = to_device(cfg.x, device)  # cos(θ) values
-    
-    # Step 1: Precompute Legendre polynomials on GPU
-    backend = get_backend(gpu_data)
+    coeffs = CUDA.zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    Plm = CUDA.zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1)
+    normalization = CuArray(cfg.Nlm)
+    weights = CuArray(cfg.w)
+    x_values = CuArray(cfg.x)  # cos(θ) values at Gauss points
+
+    # Step 1: Precompute UNNORMALIZED Legendre polynomials on GPU
+    # Parallelized over (latitude, m) pairs: nlat * (mmax+1) threads
+    backend = CUDABackend()
     legendre_kernel! = legendre_associated_kernel!(backend)
-    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax, normalization; 
-                    ndrange=cfg.nlat)
-    KernelAbstractions.synchronize(backend)
-    
-    # Step 2: Optimized analysis using FFT + Legendre transform
-    # Method A: Use FFT for φ integration, then Legendre for θ integration
-    
-    # Perform FFT in φ direction (longitude)
-    phi_transformed = gpu_fft!(copy(gpu_data), 2)  # FFT along longitude dimension
-    
-    # Step 3: Legendre integration for each m-mode
-    for m = 0:cfg.mmax
-        m_idx = m + 1
-        
-        # Extract m-th Fourier mode (handle negative m by symmetry)
-        if m == 0
-            phi_mode = real(phi_transformed[:, 1])  # m=0 mode is real
-        else
-            # For m > 0, combine positive and negative m modes
-            if m <= size(phi_transformed, 2) - 1
-                phi_mode = phi_transformed[:, m+1]
-            else
-                continue  # Skip if m exceeds FFT output size
-            end
-        end
-        
-        # GPU-accelerated Legendre integration for this m
-        @kernel function m_mode_integration!(coeffs_m, phi_mode, Plm_m, weights, nlat, lmax, m_val)
-            l = @index(Global)
-            if l <= lmax + 1
-                l_val = l - 1
-                if l_val >= m_val
-                    result = ComplexF64(0, 0)
-                    for i_lat = 1:nlat
-                        result += phi_mode[i_lat] * Plm_m[i_lat, l] * weights[i_lat]
-                    end
-                    coeffs_m[l] = result
+    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax; ndrange=(cfg.nlat, cfg.mmax+1))
+    CUDA.synchronize()
+
+    # Step 2: FFT along φ direction (dimension 2) using cuFFT
+    # After FFT: gpu_data[:, m+1] contains the m-th Fourier mode for m = 0, 1, ..., nlon-1
+    gpu_fft!(gpu_data, 2)
+
+    # Scaling factor for φ integration (matches CPU: cfg.cphi = 2π/nlon)
+    scaleφ = cfg.cphi
+
+    # Step 3: Fully parallel Legendre integration - ALL (l,m) pairs in one kernel
+    # Each thread computes one a_lm coefficient
+    @kernel function analysis_kernel!(coeffs, Fφ, Plm, weights, norm, nlat, nlon, lmax, mmax, scale)
+        l_idx, m_idx = @index(Global, NTuple)
+        if l_idx <= lmax + 1 && m_idx <= mmax + 1
+            l = l_idx - 1
+            m = m_idx - 1
+            # Only compute for l >= m (triangular structure)
+            if l >= m && m <= nlon ÷ 2
+                result = ComplexF64(0, 0)
+                @inbounds for i_lat = 1:nlat
+                    # Gauss-Legendre quadrature: weight * Plm * Fourier_mode
+                    # Fourier mode m is in column m+1
+                    result += weights[i_lat] * Plm[i_lat, l_idx, m_idx] * Fφ[i_lat, m_idx]
                 end
+                # Apply normalization and φ scaling
+                coeffs[l_idx, m_idx] = result * norm[l_idx, m_idx] * scale
             end
         end
-        
-        # Launch kernel for this m-mode
-        m_coeffs = to_device(zeros(ComplexF64, cfg.lmax+1), device)
-        Plm_m = @view Plm[:, :, m_idx]
-        
-        m_integration_kernel! = m_mode_integration!(backend)
-        m_integration_kernel!(m_coeffs, phi_mode, Plm_m, weights, cfg.nlat, cfg.lmax, m;
-                              ndrange=cfg.lmax+1)
-        KernelAbstractions.synchronize(backend)
-        
-        # Copy results to main coefficient array
-        coeffs[:, m_idx] .= m_coeffs
     end
-    
-    # Apply normalization and phase corrections
-    # Scale by appropriate factors (4π normalization, etc.)
-    scale_factor = 4π / cfg.nlon
-    coeffs .*= scale_factor
-    
-    # Transfer result back to CPU
-    result_coeffs = Array(coeffs)
-    
-    if real_output && eltype(spatial_data) <: Real
-        # For real input, return real coefficients where appropriate
-        return real(result_coeffs)
-    else
-        return result_coeffs
-    end
+
+    analysis_k! = analysis_kernel!(backend)
+    analysis_k!(coeffs, gpu_data, Plm, weights, normalization,
+                cfg.nlat, cfg.nlon, cfg.lmax, cfg.mmax, scaleφ;
+                ndrange=(cfg.lmax+1, cfg.mmax+1))
+    CUDA.synchronize()
+
+    # Transfer result back to CPU - coefficients are always complex
+    return Array(coeffs)
 end
 
 """
     gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
 
-GPU-accelerated spherical harmonic synthesis transform.
-Performs complete spectral → spatial transform using GPU kernels and inverse FFTs.
+GPU-accelerated spherical harmonic synthesis transform using cuFFT.
+
+Implements: f(θ,φ) = Σ_l Σ_m a_lm Y_l^m(θ,φ)
+1. Legendre summation along θ: F_m(θ) = Σ_l a_lm * P_l^m(cos θ) * N_lm
+2. Inverse FFT along φ (dimension 2) to reconstruct spatial field
+
+Fully parallelized: all (θ,m) Fourier modes computed in a single kernel launch.
 """
 function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
         return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
     end
-    
+
+    # Validate input dimensions
+    lmax, mmax = cfg.lmax, cfg.mmax
+    size(coeffs, 1) == lmax + 1 || throw(DimensionMismatch("coeffs must have $(lmax+1) rows (lmax+1), got $(size(coeffs, 1))"))
+    size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
+
     # Transfer coefficients to GPU
-    gpu_coeffs = to_device(ComplexF64.(coeffs), device)
-    
+    gpu_coeffs = CuArray(ComplexF64.(coeffs))
+
     # Allocate GPU arrays
-    spatial_data = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
-    Plm = to_device(zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1), device)
-    normalization = to_device(cfg.Nlm, device)
-    x_values = to_device(cfg.x, device)  # cos(θ) values
-    
-    backend = get_backend(gpu_coeffs)
-    
-    # Step 1: Precompute Legendre polynomials on GPU (same as analysis)
+    Plm = CUDA.zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1)
+    normalization = CuArray(cfg.Nlm)
+    x_values = CuArray(cfg.x)  # cos(θ) values at Gauss points
+
+    backend = CUDABackend()
+
+    # Step 1: Precompute UNNORMALIZED Legendre polynomials on GPU
+    # Parallelized over (latitude, m) pairs: nlat * (mmax+1) threads
     legendre_kernel! = legendre_associated_kernel!(backend)
-    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax, normalization; 
-                    ndrange=cfg.nlat)
-    KernelAbstractions.synchronize(backend)
-    
-    # Step 2: Compute spatial field for each m-mode, then inverse FFT
-    # Allocate temporary array for Fourier modes
-    fourier_modes = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
-    
-    # Step 3: For each m-mode, compute spatial contribution
-    for m = 0:cfg.mmax
-        m_idx = m + 1
-        
-        # GPU kernel for Legendre synthesis for this m-mode
-        @kernel function m_mode_synthesis!(spatial_m, coeffs_m, Plm_m, nlat, lmax, m_val)
-            i_lat = @index(Global)
-            if i_lat <= nlat
-                result = ComplexF64(0, 0)
-                for l = m_val:lmax
-                    l_idx = l + 1
-                    result += coeffs_m[l_idx] * Plm_m[i_lat, l_idx]
-                end
-                spatial_m[i_lat] = result
+    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax; ndrange=(cfg.nlat, cfg.mmax+1))
+    CUDA.synchronize()
+
+    # Step 2: Fully parallel Legendre summation - ALL (θ, m) pairs in one kernel
+    # Each thread computes F_m(θ_i) for one latitude and one m-mode
+    fourier_modes = CUDA.zeros(ComplexF64, cfg.nlat, cfg.nlon)
+
+    @kernel function synthesis_kernel!(Fφ, coeffs, Plm, norm, nlat, nlon, lmax, mmax, do_hermitian)
+        i_lat, m_idx = @index(Global, NTuple)
+        if i_lat <= nlat && m_idx <= mmax + 1
+            m = m_idx - 1
+            # Compute F_m(θ_i) = Σ_l a_lm * P_l^m(cos θ_i) * N_lm
+            result = ComplexF64(0, 0)
+            @inbounds for l = m:lmax
+                l_idx = l + 1
+                result += coeffs[l_idx, m_idx] * Plm[i_lat, l_idx, m_idx] * norm[l_idx, m_idx]
             end
-        end
-        
-        # Launch kernel for this m-mode
-        spatial_m = to_device(zeros(ComplexF64, cfg.nlat), device)
-        coeffs_m = @view gpu_coeffs[:, m_idx]
-        Plm_m = @view Plm[:, :, m_idx]
-        
-        m_synthesis_kernel! = m_mode_synthesis!(backend)
-        m_synthesis_kernel!(spatial_m, coeffs_m, Plm_m, cfg.nlat, cfg.lmax, m;
-                           ndrange=cfg.nlat)
-        KernelAbstractions.synchronize(backend)
-        
-        # Place this m-mode in appropriate Fourier mode slot
-        if m == 0
-            # m=0 mode goes in the first column (DC component)
-            fourier_modes[:, 1] .= real(spatial_m)
-        elseif m <= cfg.nlon ÷ 2
-            # Positive m modes
-            fourier_modes[:, m+1] .= spatial_m
-            
-            # Use Hermitian symmetry for negative m modes (for real output)
-            if real_output && m > 0 && cfg.nlon - m + 1 <= cfg.nlon
-                fourier_modes[:, cfg.nlon - m + 1] .= conj(spatial_m)
+
+            # Place in Fourier mode slots for IFFT
+            # FFT convention: [0, 1, 2, ..., N/2, -N/2+1, ..., -1]
+            if m == 0
+                Fφ[i_lat, 1] = result
+            elseif m <= nlon ÷ 2
+                Fφ[i_lat, m + 1] = result
+                # Hermitian symmetry for real output: F_{-m} = conj(F_m)
+                if do_hermitian && m > 0
+                    neg_m_idx = nlon - m + 1
+                    if neg_m_idx >= 1 && neg_m_idx <= nlon
+                        Fφ[i_lat, neg_m_idx] = conj(result)
+                    end
+                end
             end
         end
     end
-    
-    # Step 4: Perform inverse FFT in φ direction to get spatial field
-    spatial_result = gpu_ifft!(fourier_modes, 2)
-    
-    # Apply normalization
-    scale_factor = cfg.nlon / 4π
-    spatial_result .*= scale_factor
-    
+
+    synthesis_k! = synthesis_kernel!(backend)
+    synthesis_k!(fourier_modes, gpu_coeffs, Plm, normalization,
+                 cfg.nlat, cfg.nlon, cfg.lmax, cfg.mmax, real_output;
+                 ndrange=(cfg.nlat, cfg.mmax+1))
+    CUDA.synchronize()
+
+    # Step 3: Inverse FFT along φ direction (dimension 2) using cuFFT
+    gpu_ifft!(fourier_modes, 2)
+
+    # Apply inverse φ scaling (matches CPU: phi_inv_scale(cfg))
+    # For Gauss grids: nlon; for regular grids: nlon/(2π)
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+    fourier_modes .*= inv_scaleφ
+
     # Transfer result back to CPU
-    result = Array(spatial_result)
-    
+    result = Array(fourier_modes)
+
     if real_output
         return real(result)
     else
@@ -883,220 +652,289 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
     end
 end
 
-# Vector field GPU operations
-
-@kernel function vector_divergence_kernel!(div_field, vθ, vφ, sintheta, dtheta, dphi, nlat, nlon)
-    """
-    GPU kernel for computing divergence: ∇·V = (1/sinθ)[∂(sinθ·vθ)/∂θ + ∂vφ/∂φ]
-    """
-    i, j = @index(Global, NTuple)
-    if i <= nlat && j <= nlon
-        # Finite difference approximation for derivatives
-        # ∂vθ/∂θ using central differences
-        i_prev = max(1, i-1)
-        i_next = min(nlat, i+1) 
-        dvtheta_dtheta = (vθ[i_next, j] - vθ[i_prev, j]) / (2 * dtheta)
-        
-        # ∂vφ/∂φ using central differences (periodic in φ)
-        j_prev = j == 1 ? nlon : j-1
-        j_next = j == nlon ? 1 : j+1
-        dvphi_dphi = (vφ[i, j_next] - vφ[i, j_prev]) / (2 * dphi)
-        
-        # Compute divergence
-        sin_theta = sintheta[i]
-        div_field[i, j] = (sin_theta * dvtheta_dtheta + vθ[i, j] * cos(asin(sin_theta)) + dvphi_dphi) / sin_theta
-    end
-end
-
-@kernel function vector_curl_kernel!(curl_field, vθ, vφ, sintheta, dtheta, dphi, nlat, nlon)  
-    """
-    GPU kernel for computing curl: (∇×V)_r = (1/sinθ)[∂vφ/∂θ - ∂(sinθ·vθ)/∂φ]
-    """
-    i, j = @index(Global, NTuple)
-    if i <= nlat && j <= nlon
-        # ∂vφ/∂θ using central differences
-        i_prev = max(1, i-1)
-        i_next = min(nlat, i+1)
-        dvphi_dtheta = (vφ[i_next, j] - vφ[i_prev, j]) / (2 * dtheta)
-        
-        # ∂(sinθ·vθ)/∂φ using central differences (periodic in φ)  
-        j_prev = j == 1 ? nlon : j-1
-        j_next = j == nlon ? 1 : j+1
-        sin_theta = sintheta[i]
-        d_sinvtheta_dphi = (sin_theta * vθ[i, j_next] - sin_theta * vθ[i, j_prev]) / (2 * dphi)
-        
-        # Compute curl radial component
-        curl_field[i, j] = (dvphi_dtheta - d_sinvtheta_dphi) / sin_theta
-    end
-end
+# ============================================================================
+# Vector field GPU operations using proper spectral method
+# ============================================================================
 
 """
     gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 
-GPU-accelerated spheroidal-toroidal decomposition of vector fields.
-Computes divergence and curl, then transforms to spectral space.
+GPU-accelerated spheroidal-toroidal decomposition of vector fields using proper spectral method.
+
+Uses the adjoint of the synthesis formula with Gauss-Legendre quadrature:
+    S_lm = Σ_i w_i * scaleφ / (l(l+1)) * (F_θ * ∂Y_l^m/∂θ + conj(im·m/sinθ·Y_l^m) * F_φ)
+    T_lm = Σ_i w_i * scaleφ / (l(l+1)) * (-conj(im·m/sinθ·Y_l^m) * F_θ + ∂Y_l^m/∂θ * F_φ)
+
+Where F_θ, F_φ are Fourier modes of Vθ, Vφ and w_i are quadrature weights.
+All computation stays on GPU for maximum performance.
 """
 function gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     if device == CPU_DEVICE
         return SHTnsKit.spat_to_SHsphtor(cfg, vθ, vφ)
     end
-    
-    # Transfer to GPU
-    gpu_vθ = to_device(ComplexF64.(vθ), device)
-    gpu_vφ = to_device(ComplexF64.(vφ), device)
-    
-    backend = get_backend(gpu_vθ)
-    
-    # Compute grid spacings
-    dtheta = π / (cfg.nlat - 1)
-    dphi = 2π / cfg.nlon
-    sintheta = to_device(cfg.st, device)
-    
-    # Step 1: Compute divergence and curl on GPU
-    divergence = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
-    curl_r = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
-    
-    div_kernel! = vector_divergence_kernel!(backend)
-    curl_kernel! = vector_curl_kernel!(backend)
-    
-    div_kernel!(divergence, gpu_vθ, gpu_vφ, sintheta, dtheta, dphi, cfg.nlat, cfg.nlon;
-                ndrange=(cfg.nlat, cfg.nlon))
-    curl_kernel!(curl_r, gpu_vθ, gpu_vφ, sintheta, dtheta, dphi, cfg.nlat, cfg.nlon;
-                 ndrange=(cfg.nlat, cfg.nlon))
-    
-    KernelAbstractions.synchronize(backend)
-    
-    # Step 2: Transform divergence and curl to spherical harmonic coefficients
-    # Spheroidal coefficients from divergence
-    sph_coeffs_temp = gpu_analysis(cfg, Array(divergence); device=device, real_output=false)
-    sph_coeffs = to_device(ComplexF64.(sph_coeffs_temp), device)
-    
-    # Toroidal coefficients from curl  
-    tor_coeffs_temp = gpu_analysis(cfg, Array(curl_r); device=device, real_output=false)
-    tor_coeffs = to_device(ComplexF64.(tor_coeffs_temp), device)
-    
-    # Step 3: Apply operator corrections for spheroidal-toroidal decomposition
-    @kernel function sphtor_correction_kernel!(sph_out, tor_out, sph_in, tor_in, lmax, mmax)
-        l, m = @index(Global, NTuple)
-        if l <= lmax + 1 && m <= mmax + 1
-            l_val, m_val = l - 1, m - 1
-            if l_val >= m_val && l_val > 0  # Avoid division by zero for l=0
-                # Apply l(l+1) factor for Poisson equation inversion
-                factor = -1.0 / (l_val * (l_val + 1))
-                sph_out[l, m] = sph_in[l, m] * factor
-                tor_out[l, m] = tor_in[l, m] * factor
-            elseif l_val == 0
-                sph_out[l, m] = ComplexF64(0, 0)  # l=0 modes are zero for vector fields
-                tor_out[l, m] = ComplexF64(0, 0)
+
+    backend = CUDABackend()
+    nlat, nlon = cfg.nlat, cfg.nlon
+    lmax, mmax = cfg.lmax, cfg.mmax
+
+    # Transfer input to GPU and compute FFT along φ
+    gpu_vθ = CuArray(ComplexF64.(vθ))
+    gpu_vφ = CuArray(ComplexF64.(vφ))
+    gpu_fft!(gpu_vθ, 2)
+    gpu_fft!(gpu_vφ, 2)
+
+    # Transfer config data to GPU
+    x_values = CuArray(cfg.x)
+    weights = CuArray(cfg.w)
+    normalization = CuArray(cfg.Nlm)
+    scaleφ = cfg.cphi
+    robert_form = cfg.robert_form
+
+    # Compute Legendre polynomials AND their derivatives on GPU
+    Plm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
+    dPlm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
+    legendre_deriv_kernel! = legendre_and_derivative_kernel!(backend)
+    legendre_deriv_kernel!(Plm, dPlm, x_values, lmax, mmax; ndrange=(nlat, mmax+1))
+    CUDA.synchronize()
+
+    # Phase 1: Compute per-latitude weighted contributions for each (l, m)
+    # This produces intermediate arrays of shape (nlat, lmax+1, mmax+1)
+    # Each thread handles one (latitude, l, m) triplet
+    S_contrib = CUDA.zeros(ComplexF64, nlat, lmax+1, mmax+1)
+    T_contrib = CUDA.zeros(ComplexF64, nlat, lmax+1, mmax+1)
+
+    @kernel function vector_analysis_contrib_kernel!(S_out, T_out, Fθ, Fφ, Plm, dPlm,
+                                                      x_vals, w_vals, norm, scale,
+                                                      nlat, lmax, mmax, do_robert)
+        i_lat, l_idx, m_idx = @index(Global, NTuple)
+
+        if i_lat <= nlat && l_idx <= lmax + 1 && m_idx <= mmax + 1
+            l = l_idx - 1
+            m = m_idx - 1
+
+            # Only compute for valid (l, m) pairs where l >= max(1, m)
+            if l >= max(1, m)
+                x = x_vals[i_lat]
+                sθ = sqrt(max(0.0, 1.0 - x * x))
+                inv_sθ = sθ < 1e-14 ? 0.0 : 1.0 / sθ
+                wi = w_vals[i_lat]
+
+                # Get Fourier modes for this latitude and m
+                Fθ_val = Fθ[i_lat, m_idx]
+                Fφ_val = Fφ[i_lat, m_idx]
+
+                # Robert-form handling: input is sin(θ)*V, divide by sin(θ)
+                if do_robert && sθ > 1e-14
+                    Fθ_val /= sθ
+                    Fφ_val /= sθ
+                end
+
+                # Get Legendre values
+                N = norm[l_idx, m_idx]
+                P = Plm[i_lat, l_idx, m_idx]
+                dP = dPlm[i_lat, l_idx, m_idx]
+
+                # ∂Y_l^m/∂θ = -sinθ * N * dP/dx
+                dθY = -sθ * N * dP
+                Y = N * P
+
+                # Compute coefficient and term
+                coeff = wi * scale / (l * (l + 1))
+                term_re = 0.0
+                term_im = m * inv_sθ * Y
+
+                # Adjoint of synthesis formulas:
+                # S_lm += coeff * (Fθ * dθY + conj(term) * Fφ)
+                # T_lm += coeff * (-conj(term) * Fθ + dθY * Fφ)
+
+                # conj(term) = (term_re, -term_im) = (0, -m*inv_sθ*Y)
+                Fθ_re = real(Fθ_val)
+                Fθ_im = imag(Fθ_val)
+                Fφ_re = real(Fφ_val)
+                Fφ_im = imag(Fφ_val)
+
+                # Fθ * dθY (dθY is real)
+                s1_re = Fθ_re * dθY
+                s1_im = Fθ_im * dθY
+
+                # conj(term) * Fφ = (0 - (-term_im)*Fφ_im, 0*Fφ_im + (-term_im)*Fφ_re)
+                #                 = (term_im * Fφ_im, -term_im * Fφ_re)
+                s2_re = term_im * Fφ_im
+                s2_im = -term_im * Fφ_re
+
+                S_out[i_lat, l_idx, m_idx] = coeff * ComplexF64(s1_re + s2_re, s1_im + s2_im)
+
+                # -conj(term) * Fθ = -(term_im * Fθ_im, -term_im * Fθ_re)
+                #                  = (-term_im * Fθ_im, term_im * Fθ_re)
+                t1_re = -term_im * Fθ_im
+                t1_im = term_im * Fθ_re
+
+                # dθY * Fφ (dθY is real)
+                t2_re = dθY * Fφ_re
+                t2_im = dθY * Fφ_im
+
+                T_out[i_lat, l_idx, m_idx] = coeff * ComplexF64(t1_re + t2_re, t1_im + t2_im)
             end
         end
     end
-    
-    sph_coeffs_corrected = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
-    tor_coeffs_corrected = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
-    
-    correction_kernel! = sphtor_correction_kernel!(backend)
-    correction_kernel!(sph_coeffs_corrected, tor_coeffs_corrected, 
-                      sph_coeffs, tor_coeffs, cfg.lmax, cfg.mmax;
-                      ndrange=(cfg.lmax+1, cfg.mmax+1))
-    
-    KernelAbstractions.synchronize(backend)
-    
-    return Array(sph_coeffs_corrected), Array(tor_coeffs_corrected)
+
+    contrib_kernel! = vector_analysis_contrib_kernel!(backend)
+    contrib_kernel!(S_contrib, T_contrib, gpu_vθ, gpu_vφ, Plm, dPlm,
+                    x_values, weights, normalization, scaleφ,
+                    nlat, lmax, mmax, robert_form;
+                    ndrange=(nlat, lmax+1, mmax+1))
+    CUDA.synchronize()
+
+    # Phase 2: Sum over latitude dimension to get final coefficients
+    # Use CUDA reduction: sum along dimension 1
+    Slm_gpu = dropdims(sum(S_contrib, dims=1), dims=1)
+    Tlm_gpu = dropdims(sum(T_contrib, dims=1), dims=1)
+
+    # Transfer results back to CPU
+    Slm = Array(Slm_gpu)
+    Tlm = Array(Tlm_gpu)
+
+    # Convert from internal to external normalization if needed (matching CPU behavior)
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        Slm_out = similar(Slm)
+        Tlm_out = similar(Tlm)
+        SHTnsKit.convert_alm_norm!(Slm_out, Slm, cfg; to_internal=false)
+        SHTnsKit.convert_alm_norm!(Tlm_out, Tlm, cfg; to_internal=false)
+        return Slm_out, Tlm_out
+    else
+        return Slm, Tlm
+    end
 end
 
 """
     gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
 
-GPU-accelerated synthesis of spheroidal-toroidal vector field components.
-Reconstructs vθ and vφ from spheroidal and toroidal spectral coefficients.
+GPU-accelerated synthesis of spheroidal-toroidal vector field components using proper spectral method.
+
+Uses the spectral formula:
+    V_θ = ∂S/∂θ - (1/sinθ) ∂T/∂φ = Σ_{l,m} [∂Y_l^m/∂θ * S_lm - im/sinθ * Y_l^m * T_lm]
+    V_φ = (1/sinθ) ∂S/∂φ + ∂T/∂θ = Σ_{l,m} [im/sinθ * Y_l^m * S_lm + ∂Y_l^m/∂θ * T_lm]
+
+Where ∂Y_l^m/∂θ = -sinθ * N_lm * dP_l^m/dx (x = cosθ)
 """
 function gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
         return SHTnsKit.SHsphtor_to_spat(cfg, sph_coeffs, tor_coeffs; real_output=real_output)
     end
-    
-    # Transfer to GPU
-    gpu_sph = to_device(ComplexF64.(sph_coeffs), device)
-    gpu_tor = to_device(ComplexF64.(tor_coeffs), device)
-    
-    backend = get_backend(gpu_sph)
-    
-    # Step 1: Apply differential operators to get potential fields
-    @kernel function sphtor_derivative_kernel!(sph_pot, tor_pot, sph_in, tor_in, lmax, mmax)
-        l, m = @index(Global, NTuple)
-        if l <= lmax + 1 && m <= mmax + 1
-            l_val, m_val = l - 1, m - 1
-            if l_val >= m_val
-                # For synthesis, we need to apply ∇ to get vector components
-                sph_pot[l, m] = sph_in[l, m]  # Spheroidal potential
-                tor_pot[l, m] = tor_in[l, m]  # Toroidal potential
+
+    backend = CUDABackend()
+    nlat, nlon = cfg.nlat, cfg.nlon
+    lmax, mmax = cfg.lmax, cfg.mmax
+
+    # Convert to internal normalization if needed (matching CPU behavior)
+    Slm_int, Tlm_int = sph_coeffs, tor_coeffs
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        Slm_int = similar(sph_coeffs)
+        Tlm_int = similar(tor_coeffs)
+        SHTnsKit.convert_alm_norm!(Slm_int, sph_coeffs, cfg; to_internal=true)
+        SHTnsKit.convert_alm_norm!(Tlm_int, tor_coeffs, cfg; to_internal=true)
+    end
+
+    # Transfer coefficients and normalization to GPU
+    gpu_Slm = CuArray(ComplexF64.(Slm_int))
+    gpu_Tlm = CuArray(ComplexF64.(Tlm_int))
+    gpu_Nlm = CuArray(cfg.Nlm)
+    x_values = CuArray(cfg.x)
+
+    # Compute Legendre polynomials AND their derivatives on GPU
+    Plm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
+    dPlm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
+    legendre_deriv_kernel! = legendre_and_derivative_kernel!(backend)
+    legendre_deriv_kernel!(Plm, dPlm, x_values, lmax, mmax; ndrange=(nlat, mmax+1))
+    CUDA.synchronize()
+
+    # Fourier coefficients for vector components
+    Fθ = CUDA.zeros(ComplexF64, nlat, nlon)
+    Fφ = CUDA.zeros(ComplexF64, nlat, nlon)
+
+    # sin(θ) values for each latitude
+    sintheta = CuArray(cfg.st)
+
+    # Scale factor for inverse FFT - use phi_inv_scale to match CPU (not 1/cphi!)
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+
+    # Kernel for spectral vector synthesis - compute Fourier modes for each (latitude, m)
+    @kernel function vector_spectral_synthesis_kernel!(Ftheta, Fphi, Slm, Tlm, Plm, dPlm, Nlm, sintheta, nlat, nlon, lmax, mmax, inv_scale)
+        i, m_idx = @index(Global, NTuple)
+        if i <= nlat && m_idx <= mmax + 1
+            m = m_idx - 1
+            sθ = sintheta[i]
+            inv_sθ = abs(sθ) < 1e-14 ? 0.0 : 1.0 / sθ
+
+            gθ = ComplexF64(0, 0)
+            gφ = ComplexF64(0, 0)
+
+            @inbounds for l = m:lmax
+                l_idx = l + 1
+                N = Nlm[l_idx, m_idx]
+                P = Plm[i, l_idx, m_idx]
+                dP = dPlm[i, l_idx, m_idx]
+
+                # Y_l^m contribution (without exp(imφ) which comes from FFT)
+                Y = N * P
+                # ∂Y_l^m/∂θ = -sinθ * N * dP/dx
+                dYdθ = -sθ * N * dP
+
+                Sl = Slm[l_idx, m_idx]
+                Tl = Tlm[l_idx, m_idx]
+
+                # V_θ = ∂S/∂θ - (im/sinθ) * T
+                gθ += dYdθ * Sl - ComplexF64(0, m) * inv_sθ * Y * Tl
+                # V_φ = (im/sinθ) * S + ∂T/∂θ
+                gφ += ComplexF64(0, m) * inv_sθ * Y * Sl + dYdθ * Tl
+            end
+
+            # Store in Fourier coefficient array
+            Ftheta[i, m_idx] = inv_scale * gθ
+            Fphi[i, m_idx] = inv_scale * gφ
+        end
+    end
+
+    synth_kernel! = vector_spectral_synthesis_kernel!(backend)
+    synth_kernel!(Fθ, Fφ, gpu_Slm, gpu_Tlm, Plm, dPlm, gpu_Nlm, sintheta, nlat, nlon, lmax, mmax, inv_scaleφ; ndrange=(nlat, mmax+1))
+    CUDA.synchronize()
+
+    # Apply Hermitian symmetry for real output
+    if real_output
+        @kernel function hermitian_symmetry_kernel!(F, nlat, nlon, mmax)
+            i, m_idx = @index(Global, NTuple)
+            if i <= nlat && m_idx <= mmax + 1
+                m = m_idx - 1
+                if m > 0 && m <= nlon ÷ 2
+                    conj_idx = nlon - m + 1
+                    if conj_idx >= 1 && conj_idx <= nlon
+                        F[i, conj_idx] = conj(F[i, m_idx])
+                    end
+                end
             end
         end
+        herm_kernel! = hermitian_symmetry_kernel!(backend)
+        herm_kernel!(Fθ, nlat, nlon, mmax; ndrange=(nlat, mmax+1))
+        herm_kernel!(Fφ, nlat, nlon, mmax; ndrange=(nlat, mmax+1))
+        CUDA.synchronize()
     end
-    
-    sph_potential = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
-    tor_potential = to_device(zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1), device)
-    
-    derivative_kernel! = sphtor_derivative_kernel!(backend)
-    derivative_kernel!(sph_potential, tor_potential, gpu_sph, gpu_tor, cfg.lmax, cfg.mmax;
-                      ndrange=(cfg.lmax+1, cfg.mmax+1))
-    
-    KernelAbstractions.synchronize(backend)
-    
-    # Step 2: Synthesize potential fields to spatial domain
-    sph_spatial = gpu_synthesis(cfg, Array(sph_potential); device=device, real_output=false)
-    tor_spatial = gpu_synthesis(cfg, Array(tor_potential); device=device, real_output=false)
-    
-    # Step 3: Compute gradient components to get vector field
-    gpu_sph_spatial = to_device(ComplexF64.(sph_spatial), device)
-    gpu_tor_spatial = to_device(ComplexF64.(tor_spatial), device)
-    
-    vθ = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
-    vφ = to_device(zeros(ComplexF64, cfg.nlat, cfg.nlon), device)
-    
-    # Compute gradients using finite differences  
-    dtheta = π / (cfg.nlat - 1)
-    dphi = 2π / cfg.nlon
-    sintheta = to_device(cfg.st, device)
-    
-    @kernel function vector_synthesis_kernel!(vtheta, vphi, sph_field, tor_field, sintheta, dtheta, dphi, nlat, nlon)
-        i, j = @index(Global, NTuple)
-        if i <= nlat && j <= nlon
-            # Compute derivatives of potentials
-            # ∂(sph)/∂θ for vθ component
-            i_prev = max(1, i-1)
-            i_next = min(nlat, i+1)
-            dsph_dtheta = (sph_field[i_next, j] - sph_field[i_prev, j]) / (2 * dtheta)
-            
-            # ∂(tor)/∂φ for vθ component  
-            j_prev = j == 1 ? nlon : j-1
-            j_next = j == nlon ? 1 : j+1
-            dtor_dphi = (tor_field[i, j_next] - tor_field[i, j_prev]) / (2 * dphi)
-            
-            # ∂(sph)/∂φ for vφ component
-            dsph_dphi = (sph_field[i, j_next] - sph_field[i, j_prev]) / (2 * dphi)
-            
-            # ∂(tor)/∂θ for vφ component
-            dtor_dtheta = (tor_field[i_next, j] - tor_field[i_prev, j]) / (2 * dtheta)
-            
-            # Construct vector components
-            sin_theta = sintheta[i]
-            vtheta[i, j] = dsph_dtheta + dtor_dphi / sin_theta
-            vphi[i, j] = dsph_dphi / sin_theta - dtor_dtheta
+
+    # Inverse FFT along φ
+    gpu_ifft!(Fθ, 2)
+    gpu_ifft!(Fφ, 2)
+
+    result_vθ = Array(Fθ)
+    result_vφ = Array(Fφ)
+
+    # Apply Robert-form scaling if configured (multiply by sin(θ) after IFFT)
+    if cfg.robert_form
+        for i in 1:nlat
+            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
+            result_vθ[i, :] .*= sθ
+            result_vφ[i, :] .*= sθ
         end
     end
-    
-    vector_kernel! = vector_synthesis_kernel!(backend)
-    vector_kernel!(vθ, vφ, gpu_sph_spatial, gpu_tor_spatial, sintheta, dtheta, dphi, cfg.nlat, cfg.nlon;
-                   ndrange=(cfg.nlat, cfg.nlon))
-    
-    KernelAbstractions.synchronize(backend)
-    
-    # Transfer results back to CPU
-    result_vθ = Array(vθ)
-    result_vφ = Array(vφ)
-    
+
     if real_output
         return real(result_vθ), real(result_vφ)
     else
@@ -1104,12 +942,18 @@ function gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
     end
 end
 
-# Differential operators on GPU
-@kernel function laplacian_kernel!(output, input, l_vals)
-    idx = @index(Global)
-    if idx <= length(input)
-        l = l_vals[idx]
-        output[idx] = -l * (l + 1) * input[idx]
+# ============================================================================
+# Laplacian operator
+# ============================================================================
+
+@kernel function laplacian_kernel!(output, input, lmax, mmax)
+    l, m = @index(Global, NTuple)
+    if l <= lmax + 1 && m <= mmax + 1
+        l_val = l - 1
+        m_val = m - 1
+        if l_val >= m_val
+            output[l, m] = -l_val * (l_val + 1) * input[l, m]
+        end
     end
 end
 
@@ -1122,79 +966,84 @@ function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=get_device())
     if device == CPU_DEVICE
         return SHTnsKit.apply_laplacian!(cfg, coeffs)
     end
-    
-    gpu_coeffs = to_device(coeffs, device)
-    
-    # Create l values for each coefficient
-    l_vals = zeros(Int, size(coeffs))
-    for l = 0:cfg.lmax, m = 0:min(l, cfg.mmax)
-        idx = SHTnsKit.LM_index(l, m, cfg.lmax)
-        l_vals[idx] = l
-    end
-    gpu_l_vals = to_device(l_vals, device)
-    
-    kernel! = laplacian_kernel!(get_backend(gpu_coeffs))
-    kernel!(gpu_coeffs, gpu_coeffs, gpu_l_vals; ndrange=length(gpu_coeffs))
-    
-    # Copy result back
-    coeffs .= Array(gpu_coeffs)
+
+    # Validate input dimensions
+    lmax, mmax = cfg.lmax, cfg.mmax
+    size(coeffs, 1) == lmax + 1 || throw(DimensionMismatch("coeffs must have $(lmax+1) rows (lmax+1), got $(size(coeffs, 1))"))
+    size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
+
+    gpu_coeffs = CuArray(coeffs)
+    # Zero-initialize output to handle l < m entries (which should be zero)
+    output = CUDA.zeros(eltype(gpu_coeffs), size(gpu_coeffs))
+
+    backend = CUDABackend()
+    kernel! = laplacian_kernel!(backend)
+    kernel!(output, gpu_coeffs, lmax, mmax; ndrange=(lmax+1, mmax+1))
+    CUDA.synchronize()
+
+    coeffs .= Array(output)
     return coeffs
 end
 
-# Utility functions
-# Memory optimization and error handling utilities
+# ============================================================================
+# Memory utilities
+# ============================================================================
 
 """
-    get_backend(array)
+    gpu_memory_info(; device=nothing)
 
-Get the appropriate KernelAbstractions backend for the array type.
+Get CUDA memory information. The `device` argument is accepted for API compatibility
+but currently only returns info for the active CUDA device.
 """
-function get_backend(array)
-    if CUDA_LOADED && array isa CUDA.CuArray
-        return CUDABackend()
-    elseif AMDGPU_LOADED && isdefined(AMDGPU, :ROCArray) && array isa AMDGPU.ROCArray
-        return ROCBackend()
-    else
-        return CPU()
-    end
-end
-
-"""
-    gpu_memory_info(device::SHTDevice)
-
-Get memory information for the specified device.
-"""
-function gpu_memory_info(device::SHTDevice)
-    if device == CUDA_DEVICE && CUDA_LOADED
+function gpu_memory_info(; device=nothing)
+    if CUDA.functional()
         return CUDA.MemoryInfo()
-    elseif device == AMDGPU_DEVICE && AMDGPU_LOADED
-        # AMDGPU memory info if available
-        return (free=0, total=0)  # Placeholder
     else
         return (free=Sys.free_memory(), total=Sys.total_memory())
     end
 end
 
-"""
-    check_gpu_memory(required_bytes, device::SHTDevice)
+# Overload to accept positional device argument for compatibility
+gpu_memory_info(device) = gpu_memory_info(; device=device)
 
-Check if sufficient GPU memory is available for the operation.
 """
-function check_gpu_memory(required_bytes::Int, device::SHTDevice)
+    check_gpu_memory(required_bytes::Int; device=nothing)
+
+Check if sufficient GPU memory is available.
+"""
+function check_gpu_memory(required_bytes::Int; device=nothing)
     try
-        mem_info = gpu_memory_info(device)
-        available = device == CPU_DEVICE ? mem_info.free : mem_info.free
-        
-        if available < required_bytes
-            @warn "Insufficient memory: need $(required_bytes÷(1024^3)) GB, have $(available÷(1024^3)) GB available"
+        mem_info = gpu_memory_info(; device=device)
+        if mem_info.free < required_bytes
+            @warn "Insufficient memory: need $(required_bytes÷(1024^3)) GB, have $(mem_info.free÷(1024^3)) GB available"
             return false
         end
         return true
     catch e
         @warn "Could not check memory availability: $e"
-        return true  # Proceed optimistically
+        return true
     end
 end
+
+"""
+    gpu_clear_cache!(; device=nothing)
+
+Clear CUDA memory cache. The `device` argument is accepted for API compatibility.
+"""
+function gpu_clear_cache!(; device=nothing)
+    if CUDA.functional()
+        try
+            CUDA.reclaim()
+            @info "CUDA memory cache cleared"
+        catch e
+            @warn "Failed to clear CUDA cache: $e"
+        end
+    end
+    return nothing
+end
+
+# Overload to accept positional device argument for compatibility
+gpu_clear_cache!(device) = gpu_clear_cache!(; device=device)
 
 """
     estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
@@ -1202,43 +1051,41 @@ end
 Estimate memory usage for GPU operations.
 """
 function estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
-    # Estimate memory requirements
     spatial_size = cfg.nlat * cfg.nlon * 16  # ComplexF64 = 16 bytes
     coeff_size = (cfg.lmax + 1) * (cfg.mmax + 1) * 16
-    legendre_size = cfg.nlat * (cfg.lmax + 1) * (cfg.mmax + 1) * 8  # Float64 = 8 bytes
-    
+    legendre_size = cfg.nlat * (cfg.lmax + 1) * (cfg.mmax + 1) * 8
+
     if operation == :analysis
-        return spatial_size + coeff_size + legendre_size + spatial_size  # Input + output + Plm + temp
-    elseif operation == :synthesis  
-        return coeff_size + spatial_size + legendre_size + spatial_size  # Input + output + Plm + temp
+        return spatial_size + coeff_size + legendre_size + spatial_size
+    elseif operation == :synthesis
+        return coeff_size + spatial_size + legendre_size + spatial_size
     elseif operation == :vector
-        return 2 * spatial_size + 2 * coeff_size + legendre_size + 2 * spatial_size  # 2 components
+        return 2 * spatial_size + 2 * coeff_size + legendre_size + 2 * spatial_size
     else
-        return spatial_size + coeff_size  # Conservative estimate
+        return spatial_size + coeff_size
     end
 end
 
 """
     gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
 
-Memory-safe version of gpu_analysis with automatic fallback to CPU if needed.
+Memory-safe GPU analysis with automatic fallback to CPU.
 """
 function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
     if device == CPU_DEVICE
         return SHTnsKit.analysis(cfg, spatial_data)
     end
-    
-    # Check memory requirements
+
     required_memory = estimate_memory_usage(cfg, :analysis)
-    if !check_gpu_memory(required_memory, device)
+    if !check_gpu_memory(required_memory)
         @info "Falling back to CPU due to memory constraints"
         return SHTnsKit.analysis(cfg, spatial_data)
     end
-    
+
     try
         return gpu_analysis(cfg, spatial_data; device=device, real_output=real_output)
     catch e
-        if isa(e, OutOfMemoryError) || contains(string(e), "memory")
+        if isa(e, CUDA.OutOfGPUMemoryError) || contains(string(e), "memory")
             @warn "GPU out of memory, falling back to CPU: $e"
             return SHTnsKit.analysis(cfg, spatial_data)
         else
@@ -1250,24 +1097,23 @@ end
 """
     gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
 
-Memory-safe version of gpu_synthesis with automatic fallback to CPU if needed.
+Memory-safe GPU synthesis with automatic fallback to CPU.
 """
 function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
         return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
     end
-    
-    # Check memory requirements
+
     required_memory = estimate_memory_usage(cfg, :synthesis)
-    if !check_gpu_memory(required_memory, device)
+    if !check_gpu_memory(required_memory)
         @info "Falling back to CPU due to memory constraints"
         return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
     end
-    
+
     try
         return gpu_synthesis(cfg, coeffs; device=device, real_output=real_output)
     catch e
-        if isa(e, OutOfMemoryError) || contains(string(e), "memory")
+        if isa(e, CUDA.OutOfGPUMemoryError) || contains(string(e), "memory")
             @warn "GPU out of memory, falling back to CPU: $e"
             return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
         else
@@ -1276,173 +1122,38 @@ function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_ou
     end
 end
 
-"""
-    gpu_clear_cache!(device::SHTDevice)
+# ============================================================================
+# Helper functions for multi-GPU configs
+# ============================================================================
 
-Clear GPU memory cache to free up memory.
 """
-function gpu_clear_cache!(device::SHTDevice)
-    if device == CUDA_DEVICE && CUDA_LOADED
-        try
-            CUDA.reclaim()
-            @info "CUDA memory cache cleared"
-        catch e
-            @warn "Failed to clear CUDA cache: $e"
-        end
-    elseif device == AMDGPU_DEVICE && AMDGPU_LOADED
-        try
-            # AMDGPU cache clearing if available
-            @info "AMDGPU memory cache cleared"
-        catch e
-            @warn "Failed to clear AMDGPU cache: $e"
-        end
-    end
-    return nothing
+    create_latitude_subset_config(base_cfg, lat_indices, gpu_device::Symbol)
+
+Create a temporary SHTConfig for a subset of latitude points.
+"""
+function create_latitude_subset_config(base_cfg, lat_indices, gpu_device::Symbol)
+    chunk_nlat = length(lat_indices)
+    return SHTnsKit.SHTConfig(
+        lmax=base_cfg.lmax, mmax=base_cfg.mmax, mres=base_cfg.mres,
+        nlat=chunk_nlat, nlon=base_cfg.nlon, grid_type=base_cfg.grid_type,
+        θ=base_cfg.θ[lat_indices], φ=base_cfg.φ,
+        x=base_cfg.x[lat_indices], w=base_cfg.w[lat_indices],
+        wlat=base_cfg.w[lat_indices], Nlm=base_cfg.Nlm, cphi=base_cfg.cphi,
+        nlm=base_cfg.nlm, li=base_cfg.li, mi=base_cfg.mi,
+        nspat=chunk_nlat * base_cfg.nlon,
+        ct=base_cfg.ct[lat_indices], st=base_cfg.st[lat_indices],
+        sintheta=base_cfg.st[lat_indices],
+        norm=base_cfg.norm, cs_phase=base_cfg.cs_phase,
+        real_norm=base_cfg.real_norm, robert_form=base_cfg.robert_form,
+        phi_scale=base_cfg.phi_scale,
+        compute_device=gpu_device,
+        device_preference=[gpu_device]
+    )
 end
 
-# Multi-GPU vector field transform functions
-
-"""
-    multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_output=true)
-
-Perform multi-GPU spheroidal-toroidal decomposition of vector fields.
-"""
-function multi_gpu_spat_to_SHsphtor(mgpu_config::MultiGPUConfig, vθ, vφ; real_output=true)
-    # Distribute vector field components across GPUs
-    distributed_vθ = distribute_spatial_array(vθ, mgpu_config)
-    distributed_vφ = distribute_spatial_array(vφ, mgpu_config)
-    
-    # Perform partial spheroidal-toroidal analysis on each GPU
-    partial_sph_results = []
-    partial_tor_results = []
-    
-    for (chunk_vθ, chunk_vφ) in zip(distributed_vθ, distributed_vφ)
-        set_gpu_device(chunk_vθ.gpu.device, chunk_vθ.gpu.id)
-        
-        # Create temporary config for this GPU chunk (similar to scalar case)
-        if mgpu_config.distribution_strategy == :latitude
-            lat_indices = chunk_vθ.indices[1]
-            chunk_nlat = length(lat_indices)
-            
-            cfg = mgpu_config.base_config
-            temp_cfg = SHTnsKit.SHTConfig(
-                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=chunk_nlat, nlon=cfg.nlon, grid_type=cfg.grid_type,
-                θ=cfg.θ[lat_indices], φ=cfg.φ,
-                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
-                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
-                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                nspat=chunk_nlat*cfg.nlon,
-                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
-                sintheta=cfg.st[lat_indices],
-                norm=cfg.norm, cs_phase=cfg.cs_phase,
-                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=chunk_vθ.gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[chunk_vθ.gpu.device == :cuda ? :cuda : :amdgpu]
-            )
-            
-            # Perform GPU vector analysis on this chunk
-            chunk_sph, chunk_tor = gpu_spat_to_SHsphtor(temp_cfg, Array(chunk_vθ.data), Array(chunk_vφ.data))
-            
-        else
-            error("Multi-GPU vector analysis currently only supports :latitude distribution strategy")
-        end
-        
-        push!(partial_sph_results, chunk_sph)
-        push!(partial_tor_results, chunk_tor)
-    end
-    
-    # Combine results from all GPUs
-    set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
-    
-    cfg = mgpu_config.base_config
-    final_sph_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    final_tor_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    
-    for (sph_result, tor_result) in zip(partial_sph_results, partial_tor_results)
-        final_sph_coeffs .+= sph_result
-        final_tor_coeffs .+= tor_result
-    end
-    
-    if real_output && eltype(vθ) <: Real && eltype(vφ) <: Real
-        return real(final_sph_coeffs), real(final_tor_coeffs)
-    else
-        return final_sph_coeffs, final_tor_coeffs
-    end
-end
-
-"""
-    multi_gpu_SHsphtor_to_spat(mgpu_config::MultiGPUConfig, sph_coeffs, tor_coeffs; real_output=true)
-
-Perform multi-GPU synthesis of spheroidal-toroidal vector field components.
-"""
-function multi_gpu_SHsphtor_to_spat(mgpu_config::MultiGPUConfig, sph_coeffs, tor_coeffs; real_output=true)
-    cfg = mgpu_config.base_config
-    
-    if mgpu_config.distribution_strategy == :latitude
-        # Distribute by latitude bands - each GPU synthesizes its portion
-        distributed_vθ_results = []
-        distributed_vφ_results = []
-        
-        ngpus = length(mgpu_config.gpu_devices)
-        lat_per_gpu = div(cfg.nlat, ngpus)
-        lat_remainder = cfg.nlat % ngpus
-        
-        lat_start = 1
-        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-            lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
-            lat_end = lat_start + lat_count - 1
-            lat_indices = lat_start:lat_end
-            
-            set_gpu_device(gpu.device, gpu.id)
-            
-            # Create config for this latitude band
-            temp_cfg = SHTnsKit.SHTConfig(
-                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=lat_count, nlon=cfg.nlon, grid_type=cfg.grid_type,
-                θ=cfg.θ[lat_indices], φ=cfg.φ,
-                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
-                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
-                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                nspat=lat_count*cfg.nlon,
-                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
-                sintheta=cfg.st[lat_indices],
-                norm=cfg.norm, cs_phase=cfg.cs_phase,
-                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
-            )
-            
-            # Perform synthesis on this GPU
-            chunk_vθ, chunk_vφ = gpu_SHsphtor_to_spat(temp_cfg, sph_coeffs, tor_coeffs; real_output=real_output)
-            
-            push!(distributed_vθ_results, (
-                data=chunk_vθ,
-                gpu=gpu,
-                indices=(lat_indices, 1:cfg.nlon)
-            ))
-            
-            push!(distributed_vφ_results, (
-                data=chunk_vφ,
-                gpu=gpu,
-                indices=(lat_indices, 1:cfg.nlon)
-            ))
-            
-            lat_start = lat_end + 1
-        end
-        
-        # Gather results back to single arrays
-        result_vθ = gather_distributed_arrays(distributed_vθ_results, (cfg.nlat, cfg.nlon))
-        result_vφ = gather_distributed_arrays(distributed_vφ_results, (cfg.nlat, cfg.nlon))
-        
-        return Array(result_vθ), Array(result_vφ)
-        
-    else
-        error("Multi-GPU vector synthesis currently only supports :latitude distribution strategy")
-    end
-end
-
-# Multi-GPU transform functions
+# ============================================================================
+# Multi-GPU functions
+# ============================================================================
 
 """
     multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_output=true)
@@ -1450,83 +1161,35 @@ end
 Perform spherical harmonic analysis using multiple GPUs.
 """
 function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_output=true)
-    # Distribute spatial data across GPUs
-    distributed_data = distribute_spatial_array(spatial_data, mgpu_config)
-    
-    # Perform partial analysis on each GPU
-    partial_results = []
-    for chunk in distributed_data
-        set_gpu_device(chunk.gpu.device, chunk.gpu.id)
-        
-        # Create temporary config for this GPU chunk
-        if mgpu_config.distribution_strategy == :latitude
-            # For latitude distribution, each GPU processes a subset of latitude bands
-            lat_indices = chunk.indices[1]
-            chunk_nlat = length(lat_indices)
-            
-            # Extract relevant parts of the base config
-            cfg = mgpu_config.base_config
-            temp_cfg = SHTnsKit.SHTConfig(
-                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=chunk_nlat, nlon=cfg.nlon, grid_type=cfg.grid_type,
-                θ=cfg.θ[lat_indices], φ=cfg.φ, 
-                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
-                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
-                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi, 
-                nspat=chunk_nlat*cfg.nlon,
-                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices], 
-                sintheta=cfg.st[lat_indices],
-                norm=cfg.norm, cs_phase=cfg.cs_phase, 
-                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=chunk.gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[chunk.gpu.device == :cuda ? :cuda : :amdgpu]
-            )
-            
-            # Perform GPU analysis on this chunk
-            chunk_coeffs = gpu_analysis(temp_cfg, Array(chunk.data); real_output=false)
-            
-        elseif mgpu_config.distribution_strategy == :longitude
-            # For longitude distribution, each GPU processes longitude sectors
-            lon_indices = chunk.indices[2]
-            chunk_nlon = length(lon_indices)
-            
-            cfg = mgpu_config.base_config
-            temp_cfg = SHTnsKit.SHTConfig(
-                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=cfg.nlat, nlon=chunk_nlon, grid_type=cfg.grid_type,
-                θ=cfg.θ, φ=cfg.φ[lon_indices],
-                x=cfg.x, w=cfg.w,
-                wlat=cfg.w, Nlm=cfg.Nlm, cphi=2π/chunk_nlon,
-                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                nspat=cfg.nlat*chunk_nlon,
-                ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
-                norm=cfg.norm, cs_phase=cfg.cs_phase,
-                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=chunk.gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[chunk.gpu.device == :cuda ? :cuda : :amdgpu]
-            )
-            
-            # Perform GPU analysis on longitude sector
-            chunk_coeffs = gpu_analysis(temp_cfg, Array(chunk.data); real_output=false)
-            
-        else
-            error("Multi-GPU analysis currently supports :latitude and :longitude distribution strategies")
-        end
-        
-        push!(partial_results, (coeffs=chunk_coeffs, chunk=chunk))
-    end
-    
-    # Combine results from all GPUs
-    # For latitude distribution, we need to sum contributions from all latitude bands
-    set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
-    
     cfg = mgpu_config.base_config
-    final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    
-    for result in partial_results
-        final_coeffs .+= result.coeffs
+    ngpus = length(mgpu_config.gpu_devices)
+
+    if mgpu_config.distribution_strategy != :latitude
+        error("Multi-GPU analysis currently only supports :latitude distribution strategy")
     end
-    
+
+    # Split by latitude bands
+    lat_per_gpu = div(cfg.nlat, ngpus)
+    lat_remainder = cfg.nlat % ngpus
+
+    final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+
+    lat_start = 1
+    for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+        lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
+        lat_end = lat_start + lat_count - 1
+        lat_indices = lat_start:lat_end
+
+        set_gpu_device(gpu.id)
+
+        temp_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
+        chunk_data = spatial_data[lat_indices, :]
+        chunk_coeffs = gpu_analysis(temp_cfg, chunk_data; real_output=false)
+
+        final_coeffs .+= chunk_coeffs
+        lat_start = lat_end + 1
+    end
+
     if real_output && eltype(spatial_data) <: Real
         return real(final_coeffs)
     else
@@ -1541,371 +1204,147 @@ Perform spherical harmonic synthesis using multiple GPUs.
 """
 function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=true)
     cfg = mgpu_config.base_config
-    
-    if mgpu_config.distribution_strategy == :latitude
-        # Distribute by latitude bands - each GPU synthesizes its portion
-        distributed_results = []
-        
-        ngpus = length(mgpu_config.gpu_devices)
-        lat_per_gpu = div(cfg.nlat, ngpus)
-        lat_remainder = cfg.nlat % ngpus
-        
-        lat_start = 1
-        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-            lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
-            lat_end = lat_start + lat_count - 1
-            lat_indices = lat_start:lat_end
-            
-            set_gpu_device(gpu.device, gpu.id)
-            
-            # Create config for this latitude band
-            temp_cfg = SHTnsKit.SHTConfig(
-                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=lat_count, nlon=cfg.nlon, grid_type=cfg.grid_type,
-                θ=cfg.θ[lat_indices], φ=cfg.φ,
-                x=cfg.x[lat_indices], w=cfg.w[lat_indices],
-                wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
-                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                nspat=lat_count*cfg.nlon,
-                ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
-                sintheta=cfg.st[lat_indices],
-                norm=cfg.norm, cs_phase=cfg.cs_phase,
-                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
-            )
-            
-            # Perform synthesis on this GPU
-            chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
-            
-            push!(distributed_results, (
-                data=chunk_result,
-                gpu=gpu,
-                indices=(lat_indices, 1:cfg.nlon)
-            ))
-            
-            lat_start = lat_end + 1
-        end
-        
-        # Gather results back to single array
-        result = gather_distributed_arrays(distributed_results, (cfg.nlat, cfg.nlon))
-        return Array(result)
-        
-    elseif mgpu_config.distribution_strategy == :longitude
-        # Distribute by longitude sectors - each GPU synthesizes its portion
-        distributed_results = []
-        
-        ngpus = length(mgpu_config.gpu_devices)
-        lon_per_gpu = div(cfg.nlon, ngpus)
-        lon_remainder = cfg.nlon % ngpus
-        
-        lon_start = 1
-        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-            lon_count = lon_per_gpu + (i <= lon_remainder ? 1 : 0)
-            lon_end = lon_start + lon_count - 1
-            lon_indices = lon_start:lon_end
-            
-            set_gpu_device(gpu.device, gpu.id)
-            
-            # Create config for this longitude sector
-            temp_cfg = SHTnsKit.SHTConfig(
-                lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                nlat=cfg.nlat, nlon=lon_count, grid_type=cfg.grid_type,
-                θ=cfg.θ, φ=cfg.φ[lon_indices],
-                x=cfg.x, w=cfg.w,
-                wlat=cfg.w, Nlm=cfg.Nlm, cphi=2π/lon_count,
-                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                nspat=cfg.nlat*lon_count,
-                ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
-                norm=cfg.norm, cs_phase=cfg.cs_phase,
-                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
-            )
-            
-            # Perform synthesis on longitude sector
-            chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
-            
-            push!(distributed_results, (
-                data=chunk_result,
-                gpu=gpu,
-                indices=(1:cfg.nlat, lon_indices)
-            ))
-            
-            lon_start = lon_end + 1
-        end
-        
-        # Gather results back to single array
-        result = gather_distributed_arrays(distributed_results, (cfg.nlat, cfg.nlon))
-        return Array(result)
-        
-    elseif mgpu_config.distribution_strategy == :spectral
-        # Spectral distribution - divide coefficients by m or l modes
-        # This is more complex but can be beneficial for high-resolution problems
-        distributed_results = []
-        
-        ngpus = length(mgpu_config.gpu_devices)
-        
-        # Distribute by m modes (azimuthal modes)
-        m_per_gpu = div(cfg.mmax + 1, ngpus)
-        m_remainder = (cfg.mmax + 1) % ngpus
-        
-        m_start = 0
-        for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-            m_count = m_per_gpu + (i <= m_remainder ? 1 : 0)
-            m_end = m_start + m_count - 1
-            m_indices = m_start:m_end
-            
-            set_gpu_device(gpu.device, gpu.id)
-            
-            # Extract coefficients for this m range
-            coeffs_chunk = coeffs[:, m_indices .+ 1]  # +1 for 1-based indexing
-            
-            # Create temporary config for spectral chunk
-            temp_cfg = SHTnsKit.SHTConfig(
-                lmax=cfg.lmax, mmax=m_end, mres=cfg.mres,
-                nlat=cfg.nlat, nlon=cfg.nlon, grid_type=cfg.grid_type,
-                θ=cfg.θ, φ=cfg.φ,
-                x=cfg.x, w=cfg.w,
-                wlat=cfg.w, Nlm=cfg.Nlm, cphi=cfg.cphi,
-                nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                nspat=cfg.nspat,
-                ct=cfg.ct, st=cfg.st, sintheta=cfg.st,
-                norm=cfg.norm, cs_phase=cfg.cs_phase,
-                real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                compute_device=gpu.device == :cuda ? :cuda : :amdgpu,
-                device_preference=[gpu.device == :cuda ? :cuda : :amdgpu]
-            )
-            
-            # Perform synthesis with coefficient subset
-            chunk_result = gpu_synthesis(temp_cfg, coeffs_chunk; real_output=real_output)
-            
-            push!(distributed_results, (
-                data=chunk_result,
-                gpu=gpu,
-                m_range=m_indices
-            ))
-            
-            m_start = m_end + 1
-        end
-        
-        # Combine results from different m modes
-        set_gpu_device(mgpu_config.gpu_devices[1].device, mgpu_config.gpu_devices[1].id)
-        final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
-        
-        for result in distributed_results
-            final_result .+= result.data
-        end
-        
-        return Array(final_result)
-        
-    else
-        error("Multi-GPU synthesis supports :latitude, :longitude, and :spectral distribution strategies")
+    ngpus = length(mgpu_config.gpu_devices)
+
+    if mgpu_config.distribution_strategy != :latitude
+        error("Multi-GPU synthesis currently only supports :latitude distribution strategy")
     end
+
+    lat_per_gpu = div(cfg.nlat, ngpus)
+    lat_remainder = cfg.nlat % ngpus
+
+    final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
+
+    lat_start = 1
+    for (i, gpu) in enumerate(mgpu_config.gpu_devices)
+        lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
+        lat_end = lat_start + lat_count - 1
+        lat_indices = lat_start:lat_end
+
+        set_gpu_device(gpu.id)
+
+        temp_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
+        chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
+
+        final_result[lat_indices, :] = chunk_result
+        lat_start = lat_end + 1
+    end
+
+    return final_result
 end
-
-# Export GPU functions
-export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE
-export get_device, set_device!, to_device
-export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe
-export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat  
-export gpu_apply_laplacian!, gpu_legendre!
-export gpu_memory_info, check_gpu_memory, gpu_clear_cache!
-export estimate_memory_usage
-
-# Multi-GPU memory streaming for large problems
 
 """
     estimate_streaming_chunks(mgpu_config::MultiGPUConfig, data_size, max_memory_per_gpu=4*1024^3)
 
-Estimate optimal chunk sizes for memory streaming with multiple GPUs.
-Returns number of chunks needed to keep memory usage below max_memory_per_gpu bytes.
+Estimate optimal chunk sizes for memory streaming.
 """
 function estimate_streaming_chunks(mgpu_config::MultiGPUConfig, data_size, max_memory_per_gpu=4*1024^3)
-    # Estimate memory requirements
-    element_size = 16  # ComplexF64 = 16 bytes
-    total_memory_needed = prod(data_size) * element_size
-    
-    # Account for temporary arrays and FFT workspace
-    memory_overhead = 3.0  # Roughly 3x for intermediates and FFT
-    total_memory_with_overhead = total_memory_needed * memory_overhead
-    
+    element_size = 16  # ComplexF64
+    total_memory_needed = prod(data_size) * element_size * 3.0  # 3x overhead
+
     ngpus = length(mgpu_config.gpu_devices)
-    memory_per_gpu = total_memory_with_overhead / ngpus
-    
+    memory_per_gpu = total_memory_needed / ngpus
+
     if memory_per_gpu <= max_memory_per_gpu
-        return 1  # No streaming needed
+        return 1
     else
-        chunks_needed = ceil(Int, memory_per_gpu / max_memory_per_gpu)
-        return chunks_needed
+        return ceil(Int, memory_per_gpu / max_memory_per_gpu)
     end
 end
 
 """
-    multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data; 
-                                max_memory_per_gpu=4*1024^3, real_output=true)
+    multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data; max_memory_per_gpu=4*1024^3, real_output=true)
 
-Perform multi-GPU analysis with memory streaming for very large problems.
+Multi-GPU analysis with memory streaming for large problems.
 """
-function multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data; 
+function multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data;
                                      max_memory_per_gpu=4*1024^3, real_output=true)
-    data_size = size(spatial_data)
-    chunks_needed = estimate_streaming_chunks(mgpu_config, data_size, max_memory_per_gpu)
-    
+    chunks_needed = estimate_streaming_chunks(mgpu_config, size(spatial_data), max_memory_per_gpu)
+
     if chunks_needed == 1
-        # Use regular multi-GPU analysis
         return multi_gpu_analysis(mgpu_config, spatial_data; real_output=real_output)
     end
-    
-    println("Using memory streaming with $(chunks_needed) chunks per GPU")
-    
-    # Split data into chunks
+
+    @info "Using memory streaming with $chunks_needed chunks per GPU"
+
     cfg = mgpu_config.base_config
-    if mgpu_config.distribution_strategy == :latitude
-        # Split latitude dimension into chunks
-        lat_chunk_size = div(cfg.nlat, chunks_needed)
-        lat_remainder = cfg.nlat % chunks_needed
-        
-        # Accumulate results across chunks
-        final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-        
-        lat_start = 1
-        for chunk_idx in 1:chunks_needed
-            chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
-            lat_end = lat_start + chunk_lat_size - 1
-            lat_indices = lat_start:lat_end
-            
-            # Extract chunk data
-            chunk_data = spatial_data[lat_indices, :]
-            
-            # Create temporary config for this chunk
-            chunk_mgpu_config = MultiGPUConfig(
-                base_config=SHTnsKit.SHTConfig(
-                    lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                    nlat=chunk_lat_size, nlon=cfg.nlon, grid_type=cfg.grid_type,
-                    θ=cfg.θ[lat_indices], φ=cfg.φ,
-                    x=cfg.x[lat_indices], w=cfg.w[lat_indices],
-                    wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
-                    nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                    nspat=chunk_lat_size*cfg.nlon,
-                    ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
-                    sintheta=cfg.st[lat_indices],
-                    norm=cfg.norm, cs_phase=cfg.cs_phase,
-                    real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                    compute_device=cfg.compute_device, device_preference=cfg.device_preference
-                ),
-                gpu_devices=mgpu_config.gpu_devices,
-                distribution_strategy=mgpu_config.distribution_strategy
-            )
-            
-            # Process this chunk
-            chunk_coeffs = multi_gpu_analysis(chunk_mgpu_config, chunk_data; real_output=false)
-            final_coeffs .+= chunk_coeffs
-            
-            lat_start = lat_end + 1
-            
-            # Clear GPU caches between chunks
-            for gpu in mgpu_config.gpu_devices
-                try
-                    gpu_clear_cache!(gpu.device)
-                catch e
-                    # Ignore cache clear errors
-                end
-            end
-        end
-        
-        if real_output && eltype(spatial_data) <: Real
-            return real(final_coeffs)
-        else
-            return final_coeffs
-        end
-        
+    lat_chunk_size = div(cfg.nlat, chunks_needed)
+    lat_remainder = cfg.nlat % chunks_needed
+
+    final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+
+    lat_start = 1
+    for chunk_idx in 1:chunks_needed
+        chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
+        lat_end = lat_start + chunk_lat_size - 1
+        lat_indices = lat_start:lat_end
+
+        chunk_data = spatial_data[lat_indices, :]
+        chunk_base_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
+        chunk_mgpu_config = MultiGPUConfig(chunk_base_cfg, mgpu_config.gpu_devices, :latitude, mgpu_config.primary_gpu)
+
+        chunk_coeffs = multi_gpu_analysis(chunk_mgpu_config, chunk_data; real_output=false)
+        final_coeffs .+= chunk_coeffs
+
+        lat_start = lat_end + 1
+        gpu_clear_cache!()
+    end
+
+    if real_output && eltype(spatial_data) <: Real
+        return real(final_coeffs)
     else
-        error("Memory streaming currently only supports :latitude distribution strategy")
+        return final_coeffs
     end
 end
 
 """
-    multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs; 
-                                 max_memory_per_gpu=4*1024^3, real_output=true)
+    multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs; max_memory_per_gpu=4*1024^3, real_output=true)
 
-Perform multi-GPU synthesis with memory streaming for very large problems.
+Multi-GPU synthesis with memory streaming for large problems.
 """
-function multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs; 
+function multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs;
                                       max_memory_per_gpu=4*1024^3, real_output=true)
     cfg = mgpu_config.base_config
-    data_size = (cfg.nlat, cfg.nlon)
-    chunks_needed = estimate_streaming_chunks(mgpu_config, data_size, max_memory_per_gpu)
-    
+    chunks_needed = estimate_streaming_chunks(mgpu_config, (cfg.nlat, cfg.nlon), max_memory_per_gpu)
+
     if chunks_needed == 1
-        # Use regular multi-GPU synthesis
         return multi_gpu_synthesis(mgpu_config, coeffs; real_output=real_output)
     end
-    
-    println("Using memory streaming with $(chunks_needed) chunks per GPU")
-    
-    # Process in chunks and combine results
-    if mgpu_config.distribution_strategy == :latitude
-        # Split latitude dimension
-        lat_chunk_size = div(cfg.nlat, chunks_needed)
-        lat_remainder = cfg.nlat % chunks_needed
-        
-        final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
-        
-        lat_start = 1
-        for chunk_idx in 1:chunks_needed
-            chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
-            lat_end = lat_start + chunk_lat_size - 1
-            lat_indices = lat_start:lat_end
-            
-            # Create chunk configuration
-            chunk_mgpu_config = MultiGPUConfig(
-                base_config=SHTnsKit.SHTConfig(
-                    lmax=cfg.lmax, mmax=cfg.mmax, mres=cfg.mres,
-                    nlat=chunk_lat_size, nlon=cfg.nlon, grid_type=cfg.grid_type,
-                    θ=cfg.θ[lat_indices], φ=cfg.φ,
-                    x=cfg.x[lat_indices], w=cfg.w[lat_indices],
-                    wlat=cfg.w[lat_indices], Nlm=cfg.Nlm, cphi=cfg.cphi,
-                    nlm=cfg.nlm, li=cfg.li, mi=cfg.mi,
-                    nspat=chunk_lat_size*cfg.nlon,
-                    ct=cfg.ct[lat_indices], st=cfg.st[lat_indices],
-                    sintheta=cfg.st[lat_indices],
-                    norm=cfg.norm, cs_phase=cfg.cs_phase,
-                    real_norm=cfg.real_norm, robert_form=cfg.robert_form,
-                    compute_device=cfg.compute_device, device_preference=cfg.device_preference
-                ),
-                gpu_devices=mgpu_config.gpu_devices,
-                distribution_strategy=mgpu_config.distribution_strategy
-            )
-            
-            # Process this chunk
-            chunk_result = multi_gpu_synthesis(chunk_mgpu_config, coeffs; real_output=real_output)
-            final_result[lat_indices, :] = chunk_result
-            
-            lat_start = lat_end + 1
-            
-            # Clear GPU caches between chunks
-            for gpu in mgpu_config.gpu_devices
-                try
-                    gpu_clear_cache!(gpu.device)
-                catch e
-                    # Ignore cache clear errors
-                end
-            end
-        end
-        
-        return final_result
-        
-    else
-        error("Memory streaming currently only supports :latitude distribution strategy")
+
+    @info "Using memory streaming with $chunks_needed chunks per GPU"
+
+    lat_chunk_size = div(cfg.nlat, chunks_needed)
+    lat_remainder = cfg.nlat % chunks_needed
+
+    final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
+
+    lat_start = 1
+    for chunk_idx in 1:chunks_needed
+        chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
+        lat_end = lat_start + chunk_lat_size - 1
+        lat_indices = lat_start:lat_end
+
+        chunk_base_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
+        chunk_mgpu_config = MultiGPUConfig(chunk_base_cfg, mgpu_config.gpu_devices, :latitude, mgpu_config.primary_gpu)
+
+        chunk_result = multi_gpu_synthesis(chunk_mgpu_config, coeffs; real_output=real_output)
+        final_result[lat_indices, :] = chunk_result
+
+        lat_start = lat_end + 1
+        gpu_clear_cache!()
     end
+
+    return final_result
 end
 
-# Multi-GPU functions
-export MultiGPUConfig, create_multi_gpu_config
-export get_available_gpus, set_gpu_device
-export distribute_spatial_array, distribute_coefficient_array, gather_distributed_arrays
-export multi_gpu_analysis, multi_gpu_synthesis
-export multi_gpu_analysis_streaming, multi_gpu_synthesis_streaming, estimate_streaming_chunks
+# ============================================================================
+# Local exports (types defined in this extension)
+# ============================================================================
+
+# These types are defined in this extension and need to be exported
+# The GPU functions are already exported by SHTnsKit.jl and we extend them via import
+export SHTDevice, CPU_DEVICE, CUDA_DEVICE
+export CuFFTPlan, create_cufft_plan, gpu_fft!, gpu_ifft!
+export MultiGPUConfig
 
 end # module SHTnsKitGPUExt

@@ -3,15 +3,15 @@
 GPU-Accelerated Spherical Harmonic Transforms Example
 
 This example demonstrates how to use SHTnsKit.jl with GPU acceleration
-using CUDA, AMDGPU, GPUArrays, and KernelAbstractions.
+using CUDA, GPUArrays, and KernelAbstractions.
 
 Before running this example, install the required GPU packages:
 ```bash
-julia -e 'using Pkg; Pkg.add(["CUDA", "AMDGPU", "GPUArrays", "KernelAbstractions"])'
+julia -e 'using Pkg; Pkg.add(["CUDA", "GPUArrays", "KernelAbstractions"])'
 ```
 
 Usage:
-    julia --project=. examples/gpu_acceleration.jl [--device cuda|amdgpu|cpu]
+    julia --project=. examples/gpu_acceleration.jl [--device cuda|cpu]
 """
 
 using SHTnsKit
@@ -20,12 +20,12 @@ using BenchmarkTools
 
 # Try to load GPU packages - they're optional
 try
-    using CUDA, AMDGPU, GPUArrays, KernelAbstractions
+    using CUDA, GPUArrays, KernelAbstractions
     println("GPU packages loaded successfully")
     GPU_AVAILABLE = true
 catch e
     println("WARNING: GPU packages not available: $e")
-    println("  Install with: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"AMDGPU\", \"GPUArrays\", \"KernelAbstractions\"])'"
+    println("  Install with: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"GPUArrays\", \"KernelAbstractions\"])'")
     GPU_AVAILABLE = false
 end
 
@@ -41,8 +41,6 @@ function parse_device_arg()
             return :cpu
         elseif device_str == "cuda"
             return :cuda
-        elseif device_str == "amdgpu"
-            return :amdgpu
         else
             @warn "Unknown device '$device_str', using auto-detection"
             return :auto
@@ -295,7 +293,7 @@ function run_gpu_comparison_example()
     
     if !GPU_AVAILABLE
         println("\nTo enable GPU acceleration:")
-        println("   1. Install GPU packages: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"AMDGPU\", \"GPUArrays\", \"KernelAbstractions\"])'"
+        println("   1. Install GPU packages: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"GPUArrays\", \"KernelAbstractions\"])'")
         println("   2. Restart Julia and run this example again")
     end
 end

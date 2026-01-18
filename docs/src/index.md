@@ -1,197 +1,265 @@
 # SHTnsKit.jl
 
-High-performance spherical harmonic transforms for scientific computing
+```@raw html
+<div style="background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%); color: white; padding: 2.5rem; border-radius: 16px; margin-bottom: 2rem; text-align: center;">
+    <h1 style="font-size: 2.5rem; margin: 0 0 0.5rem 0; color: white; border: none;">SHTnsKit.jl</h1>
+    <p style="font-size: 1.25rem; margin: 0; opacity: 0.95;">High-Performance Spherical Harmonic Transforms for Julia</p>
+    <p style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">CPU | GPU | MPI Distributed | Auto-Differentiation</p>
+</div>
+```
 
 [![Build Status](https://github.com/subhk/SHTnsKit.jl/workflows/CI/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions)
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://subhk.github.io/SHTnsKit.jl/stable)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-SHTnsKit.jl is a high-performance native Julia implementation of spherical harmonic transforms (SHT). It provides fast and memory‑efficient scalar, vector, and complex transforms with comprehensive parallel computing support, suitable for fluid dynamics, geophysics, astrophysics, and climate science applications.
+---
 
 ## Features
 
-### Core Transforms
-- **Scalar Transforms**: Forward and backward spherical harmonic transforms
-- **Complex Field Transforms**: Support for complex-valued fields on the sphere  
-- **Vector Transforms**: Spheroidal-toroidal decomposition of vector fields
-- **In-place Operations**: Memory-efficient transform operations
+```@raw html
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin: 2rem 0;">
 
-### Advanced Capabilities
-- **Multiple Grid Types**: Gauss-Legendre and regular (equiangular) grids
-- **Field Rotations**: Wigner D-matrix rotations in spectral and spatial domains
-- **Power Spectrum Analysis**: Energy distribution across spherical harmonic modes
-- **Multipole Analysis**: Expansion coefficients for gravitational/magnetic fields
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; transition: transform 0.2s, box-shadow 0.2s;">
+    <h3 style="color: #2563eb; margin-top: 0;">Core Transforms</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Forward & backward spherical harmonic transforms</li>
+        <li>Scalar, vector, and complex field support</li>
+        <li>In-place operations for memory efficiency</li>
+    </ul>
+</div>
 
-### High-Performance Computing
-- **MPI Parallelization**: Distributed spherical harmonic transforms with domain decomposition
-- **SIMD Optimization**: Advanced vectorization with LoopVectorization.jl
-- **Threading Controls**: Julia `Threads.@threads` loops and FFTW thread tuning
-- **Memory Management**: Efficient allocation and thread‑safe operations
-- **Automatic Differentiation**: Full support for ForwardDiff.jl and ChainRulesCore.jl
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #7c3aed; margin-top: 0;">GPU Acceleration</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>CUDA/cuFFT for NVIDIA GPUs</li>
+        <li>KernelAbstractions.jl backend</li>
+        <li>Automatic CPU fallback</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #059669; margin-top: 0;">MPI Distributed</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>PencilArrays domain decomposition</li>
+        <li>Scalable to thousands of cores</li>
+        <li>Efficient communication patterns</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #dc2626; margin-top: 0;">Analysis Tools</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Power spectrum analysis</li>
+        <li>Energy diagnostics</li>
+        <li>Wigner D-matrix rotations</li>
+    </ul>
+</div>
+
+</div>
+```
+
+---
 
 ## Quick Start
 
-### Hello World Example
+### Installation
+
+```julia
+using Pkg
+
+# Basic installation
+Pkg.add("SHTnsKit")
+
+# With GPU support
+Pkg.add(["SHTnsKit", "CUDA", "KernelAbstractions"])
+
+# With MPI support
+Pkg.add(["SHTnsKit", "MPI", "PencilArrays", "PencilFFTs"])
+```
+
+### Hello World
+
 ```julia
 using SHTnsKit
 
-# Step 1: Create a configuration for spherical harmonics
-lmax = 16                              # Maximum degree (controls resolution)
-nlat = lmax + 2                        # Number of latitude points
-nlon = 2*lmax + 1                      # Number of longitude points
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+# Create configuration for lmax=16
+cfg = create_gauss_config(16, 18)
 
-# Step 2: Create a simple test pattern on the sphere
-# This is Y_2^0 = (3cos²θ - 1)/2, the "peanut" shape
+# Create a test pattern on the sphere
 spatial = zeros(cfg.nlat, cfg.nlon)
 for i in 1:cfg.nlat
-    x = cfg.x[i]  # cos(θ) at this latitude
-    spatial[i, :] .= (3*x^2 - 1)/2
+    x = cfg.x[i]  # cos(θ)
+    spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0 pattern
 end
 
-# Step 3: Transform to spectral coefficients (analysis)
+# Transform: spatial → spectral → spatial
 Alm = analysis(cfg, spatial)
-
-# Step 4: Transform back to spatial domain (synthesis)
 recovered = synthesis(cfg, Alm)
 
-# Step 5: Verify roundtrip accuracy
-max_error = maximum(abs.(spatial - recovered))
-println("Roundtrip error: $max_error")  # Should be ~1e-14
-
-# Step 6: Always clean up when done
-destroy_config(cfg)
+# Verify roundtrip accuracy
+println("Error: ", maximum(abs.(spatial - recovered)))  # ~1e-14
 ```
 
-### Serial Usage (More Complete Example)
+!!! tip "Pro Tip"
+    For large problems (lmax > 64), use GPU acceleration with `gpu_analysis()` and `gpu_synthesis()` for significant speedup.
+
+---
+
+## GPU Example
+
 ```julia
-using SHTnsKit
+using SHTnsKit, CUDA
 
-# Create configuration
-lmax = 32
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+cfg = create_gauss_config(128, 130)
+spatial = rand(cfg.nlat, cfg.nlon)
 
-# Create spectral coefficients directly
-Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-Alm[1, 1] = 1.0      # Y_0^0: constant term (global mean)
-Alm[3, 1] = 0.5      # Y_2^0: latitude variation
+# GPU-accelerated transforms
+Alm = gpu_analysis(cfg, spatial)
+recovered = gpu_synthesis(cfg, Alm)
 
-# Forward transform: spectral → spatial
-spatial_field = synthesis(cfg, Alm)
-
-# Backward transform: spatial → spectral
-recovered_Alm = analysis(cfg, spatial_field)
-
-# Clean up
-destroy_config(cfg)
+# Safe version with automatic CPU fallback
+Alm_safe = gpu_analysis_safe(cfg, spatial)
 ```
 
-### Parallel Usage (MPI)
-```julia
-using SHTnsKit, MPI, PencilArrays, PencilFFTs
+---
 
-MPI.Init()
+## Scientific Applications
 
-# Create configuration
-lmax, nlat, nlon = 32, 34, 65
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+```@raw html
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
 
-# Create distributed spatial array using PencilArrays
-pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
-fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+<div style="background: #eff6ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #2563eb;">
+    <strong style="color: #1e40af;">Climate Science</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Atmospheric dynamics, weather prediction, ocean circulation
+    </p>
+</div>
 
-# Fill local data (each rank handles its portion)
-ranges = PencilArrays.range_local(pen)
-for (i_local, i_global) in enumerate(ranges[1])
-    x = cfg.x[i_global]  # cos(θ)
-    for j in 1:length(ranges[2])
-        fθφ[i_local, j] = x  # Y_1^0 pattern
-    end
-end
+<div style="background: #fef3c7; border-radius: 8px; padding: 1rem; border-left: 4px solid #f59e0b;">
+    <strong style="color: #92400e;">Geophysics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Gravitational fields, magnetic anomalies, Earth surface modeling
+    </p>
+</div>
 
-# Distributed analysis (spatial → spectral)
-Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+<div style="background: #f3e8ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #7c3aed;">
+    <strong style="color: #5b21b6;">Astrophysics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        CMB analysis, stellar dynamics, gravitational waves
+    </p>
+</div>
 
-# Distributed synthesis (spectral → spatial)
-fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+<div style="background: #ecfdf5; border-radius: 8px; padding: 1rem; border-left: 4px solid #10b981;">
+    <strong style="color: #065f46;">Fluid Dynamics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Vorticity-divergence decomposition, turbulence on spheres
+    </p>
+</div>
 
-destroy_config(cfg)
-MPI.Finalize()
+</div>
 ```
 
-## Installation
+---
 
-### Basic Installation
-```julia
-using Pkg
-Pkg.add("SHTnsKit")
+## Documentation
+
+```@raw html
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+<a href="quickstart/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Quick Start</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Get started in minutes</p>
+    </div>
+</a>
+
+<a href="gpu/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>GPU Guide</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">CUDA acceleration</p>
+    </div>
+</a>
+
+<a href="distributed/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Distributed</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">MPI parallelization</p>
+    </div>
+</a>
+
+<a href="api/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>API Reference</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Complete documentation</p>
+    </div>
+</a>
+
+</div>
 ```
-
-### With Parallel Computing Support
-```julia
-using Pkg
-Pkg.add(["SHTnsKit", "MPI", "PencilArrays", "PencilFFTs", "LoopVectorization"])
-```
-
-See the [Installation Guide](installation.md) for detailed setup instructions and MPI configuration.
-
-## Documentation Overview
 
 ```@contents
 Pages = [
-    "installation.md",
-    "parallel_installation.md",
-    "quickstart.md", 
+    "quickstart.md",
+    "gpu.md",
+    "distributed.md",
     "api/index.md",
     "examples/index.md",
     "performance.md",
     "advanced.md"
 ]
-Depth = 2
+Depth = 1
 ```
 
-## Scientific Applications
+---
 
-- **Fluid Dynamics**: Vorticity-divergence decomposition, stream function computation
-- **Geophysics**: Gravitational and magnetic field analysis, Earth's surface modeling
-- **Astrophysics**: Cosmic microwave background analysis, stellar surface dynamics
-- **Climate Science**: Atmospheric and oceanic flow patterns, weather prediction
-- **Plasma Physics**: Magnetohydrodynamics simulations, fusion plasma modeling
+## Installation Options
 
-## Performance
+| Setup | Command | Use Case |
+|-------|---------|----------|
+| **Basic** | `Pkg.add("SHTnsKit")` | Single CPU, getting started |
+| **GPU** | `+ CUDA, KernelAbstractions` | NVIDIA GPU acceleration |
+| **MPI** | `+ MPI, PencilArrays, PencilFFTs` | Cluster computing |
+| **Full** | All of the above | Maximum flexibility |
 
-SHTnsKit.jl achieves exceptional performance through:
-- **MPI Parallelization**: Distributed computing with 2D domain decomposition
-- **SIMD Vectorization**: Advanced optimizations with LoopVectorization.jl
-- **Pure Julia kernels**: SIMD‑friendly loops with automatic optimization
-- **FFTW integration**: Parallel FFTs with configurable threading
-- **Memory efficiency**: Minimal allocations and optimized data layouts
+!!! note "Requirements"
+    - Julia 1.10 or later
+    - For GPU: NVIDIA GPU with CUDA support
+    - For MPI: OpenMPI or MPICH installed
 
-| Problem Size (nlm) | Serial | 4 Processes | 16 Processes | Speedup |
-|--------------------|--------|-------------|--------------|----------|
-| 1,000             | 5ms    | 4ms         | 5ms          | 1.3x     |
-| 10,000            | 50ms   | 18ms        | 12ms         | 4.2x     |
-| 100,000           | 500ms  | 140ms       | 65ms         | 7.7x     |
+---
+
+## Contributing
+
+We welcome contributions! See our [GitHub repository](https://github.com/subhk/SHTnsKit.jl) for:
+- Bug reports and feature requests
+- Documentation improvements
+- Pull requests
+
+---
 
 ## Citation
 
-If you use SHTnsKit.jl in your research, please cite the package (citation info forthcoming).
+If you use SHTnsKit.jl in your research, please cite:
+
+```bibtex
+@software{shtnskit,
+  author = {Kar, Subhajit},
+  title = {SHTnsKit.jl: High-Performance Spherical Harmonic Transforms},
+  url = {https://github.com/subhk/SHTnsKit.jl},
+  year = {2024}
+}
+```
+
+---
 
 ## License
 
-SHTnsKit.jl is released under the GNU General Public License v3.0, ensuring compatibility with the underlying SHTns library's CeCILL license.
+SHTnsKit.jl is released under the **GNU General Public License v3.0**.
 
-## Support
-
-- **Documentation**: Complete API reference and examples
-- **Examples**: Comprehensive example gallery covering all use cases
-- **Issues**: Report bugs and feature requests on [GitHub](https://github.com/subhk/SHTnsKit.jl/issues)
-- **Discussions**: Community support and questions
-
-## Related Packages
-
-- [FFTW.jl](https://github.com/JuliaMath/FFTW.jl) - Fast Fourier transforms
-- [SphericalHarmonics.jl](https://github.com/JuliaApproximation/SphericalHarmonics.jl) - Alternative pure Julia implementation
-- [FastTransforms.jl](https://github.com/JuliaApproximation/FastTransforms.jl) - Various fast transforms
+```@raw html
+<div style="text-align: center; margin-top: 2rem; padding: 1.5rem; background: #f8fafc; border-radius: 8px;">
+    <p style="margin: 0; color: #64748b;">
+        Made for the scientific computing community
+    </p>
+</div>
+```

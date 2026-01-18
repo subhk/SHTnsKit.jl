@@ -119,6 +119,7 @@ module SHTnsKit
 using LinearAlgebra  # For linear algebra operations
 using FFTW          # For Fast Fourier Transform operations
 using Base.Threads  # For multi-threading support
+using KernelAbstractions  # For unified CPU/GPU loop abstraction
 
 # Runtime knob for inverse-FFT φ scaling during synthesis.
 # Defaults: Gauss grids use "dft" (nlon), regular/equiangular use "quad" (nlon/(2π)).
@@ -126,6 +127,7 @@ using Base.Threads  # For multi-threading support
 phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : nlon)
 
 # Include all module source files
+include("loop.jl")                           # Unified CPU/GPU loop abstraction
 include("fftutils.jl")                      # FFT utility functions and helpers
 include("layout.jl")                        # Data layout and memory organization
 include("mathutils.jl")                      # Mathematical utility functions
@@ -248,16 +250,33 @@ export loss_vorticity_grid, grad_loss_vorticity_Tlm, loss_and_grad_vorticity_Tlm
 # ===== PERFORMANCE OPTIMIZATIONS =====
 export prepare_plm_tables!, enable_plm_tables!, disable_plm_tables!  # Precomputed Legendre tables
 
+# ===== UNIFIED LOOP ABSTRACTION =====
+export @sht_loop, @sht_inside                                        # Unified CPU/GPU loop macros
+export loop_backend, set_loop_backend                                # Loop backend configuration
+export CI, δ, inside                                                 # CartesianIndex utilities
+export spectral_range, spatial_range, latitude_range, mode_range     # SHT-specific loop ranges
+export local_range, local_size                                       # PencilArray-aware range helpers
+
+# ===== BACKEND/DEVICE MANAGEMENT =====
+# Transparent CPU/GPU backend switching (from device_utils.jl)
+export SHTBackend, CPU, GPU                               # Backend enum
+export available_backends, current_backend, set_backend!  # Backend management
+export use_gpu, with_backend, reset_backend!              # Backend utilities
+export select_compute_device                              # Device selection
+export to_device, on_device, device_transfer_arrays       # Array transfers
+export dispatch_to_backend, @dispatch_backend             # Dispatch helpers
+export device_info, ensure_backend_initialized            # Device info
+
 # ===== EXTENSION-PROVIDED FUNCTIONS =====
 # These functions are implemented in Julia package extensions and only available when
 # the corresponding packages are loaded
 
 # GPU Computing functions (SHTnsKitGPUExt extension)
-export SHTDevice, CPU_DEVICE, CUDA_DEVICE, AMDGPU_DEVICE  # Device management
-export get_device, set_device!, to_device                 # Device utilities
+export SHTDevice, CPU_DEVICE, CUDA_DEVICE  # Legacy device management (deprecated)
+export get_device, set_device!                            # Device utilities
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU transforms
 export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
-export gpu_apply_laplacian!, gpu_legendre!               # GPU operators
+export gpu_apply_laplacian!                              # GPU operators
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
 export MultiGPUConfig, create_multi_gpu_config           # Multi-GPU configuration
 export get_available_gpus, set_gpu_device                # Multi-GPU device management
@@ -360,15 +379,29 @@ with an MPI-aware heuristic that favours balanced 2D decompositions.
 suggest_pencil_grid
 
 # GPU extension fallbacks
-get_device() = error("GPU extension not loaded. Install and load CUDA.jl or AMDGPU.jl with GPUArrays and KernelAbstractions")
-set_device!(::Any) = error("GPU extension not loaded")
-to_device(::Any, ::Any) = error("GPU extension not loaded")
-gpu_analysis(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
-gpu_synthesis(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
-gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
-gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
-gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error("GPU extension not loaded")
-gpu_legendre!(::Any, ::Any, ::Any; kwargs...) = error("GPU extension not loaded")
+const _GPU_NOT_LOADED_MSG = "GPU extension not loaded. Install and load CUDA.jl with GPUArrays and KernelAbstractions"
+get_device() = error(_GPU_NOT_LOADED_MSG)
+set_device!(::Any) = error(_GPU_NOT_LOADED_MSG)
+to_device(::Any, ::Any) = error(_GPU_NOT_LOADED_MSG)
+gpu_analysis(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_synthesis(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_analysis_safe(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_synthesis_safe(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_memory_info(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+check_gpu_memory(::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_clear_cache!(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+estimate_memory_usage(::SHTConfig, ::Any) = error(_GPU_NOT_LOADED_MSG)
+get_available_gpus() = error(_GPU_NOT_LOADED_MSG)
+set_gpu_device(::Any) = error(_GPU_NOT_LOADED_MSG)
+create_multi_gpu_config(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+multi_gpu_analysis(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+multi_gpu_synthesis(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+multi_gpu_analysis_streaming(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+multi_gpu_synthesis_streaming(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+estimate_streaming_chunks(::Any, ::Any) = error(_GPU_NOT_LOADED_MSG)
 
 # Default fallbacks if extensions are not loaded (use broad signatures to avoid overwriting)
 zgrad_scalar_energy(::SHTConfig, ::Any) = error("Zygote extension not loaded")

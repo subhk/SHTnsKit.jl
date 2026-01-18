@@ -69,12 +69,13 @@ for timestep in 1:10000
 end
 ```
 
-REAL FFT OPTIMIZATION
----------------------
-For real-valued fields, use_rfft=true enables RFFT optimization:
+REAL FFT OPTIMIZATION (NOT YET IMPLEMENTED)
+-------------------------------------------
+A future optimization (use_rfft=true) could enable RFFT for real-valued fields:
 - Fourier buffer reduced from nlon to nlon/2+1 complex numbers
 - ~2× memory reduction for the Fourier matrix
 - Slightly different code path using FFTW.rfft/irfft
+Currently only use_rfft=false is supported.
 
 DEBUGGING
 ---------
@@ -134,45 +135,37 @@ plan can then be reused for many transforms without additional allocations.
 
 Parameters:
 - cfg: SHTConfig defining the grid and spectral resolution
-- use_rfft: Enable real-FFT optimization for real-valued output fields
+- use_rfft: Reserved for future real-FFT optimization (currently not implemented, must be false)
 
-Real FFT optimization (use_rfft=true):
-- Allocates smaller Fourier buffer (N/2+1 instead of N complex numbers)
-- Skips complex FFTW planning (uses RFFT functions directly)
-- Reduces memory usage and improves performance for real-valued synthesis
-
-Complex FFT mode (use_rfft=false):
-- Full-spectrum Fourier buffer for maximum flexibility
-- Pre-optimizes both forward and inverse FFT plans
-- Required for complex-valued fields or analysis operations
+Note: The `use_rfft=true` option is reserved for a future optimization that would
+reduce memory usage for real-valued fields. Currently, only `use_rfft=false` is
+supported, which uses full complex FFT for maximum compatibility.
 """
 function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
+    # Real FFT optimization is not yet fully implemented
+    if use_rfft
+        throw(ArgumentError(
+            "use_rfft=true is not yet fully implemented. " *
+            "The RFFT code paths in analysis!, synthesis!, and vector transforms are incomplete. " *
+            "Please use use_rfft=false (the default) for now."
+        ))
+    end
+
     # Allocate working arrays for Legendre polynomial computation
     P = Vector{Float64}(undef, cfg.lmax + 1)     # P_l^m(cos θ) values
     dPdx = Vector{Float64}(undef, cfg.lmax + 1)  # dP_l^m/d(cos θ) derivatives
     G = Vector{ComplexF64}(undef, cfg.nlat)      # Temporary latitudinal profiles
-    
-    if use_rfft
-        # Real FFT optimization path
-        nlon_half = fld(cfg.nlon, 2) + 1  # Only need positive frequencies + Nyquist
-        Fθk = Matrix{ComplexF64}(undef, cfg.nlat, nlon_half)
-        fill!(Fθk, 0)  # Initialize to zero
-        
-        # No FFT planning needed (will use FFTW.rfft/irfft functions directly)
-        return SHTPlan(cfg, P, dPdx, G, Fθk, nothing, nothing, true)
-        
-    else
-        # Full complex FFT path 
-        Fθk = Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon)
-        fill!(Fθk, 0)  # Initialize to zero
-        
-        # Pre-optimize FFTW plans for this specific array layout
-        # Planning may take time but subsequent transforms will be faster
-        fft_plan = FFTW.plan_fft!(Fθk, 2)   # Forward FFT along longitude (dim 2)
-        ifft_plan = FFTW.plan_ifft!(Fθk, 2) # Inverse FFT along longitude (dim 2)
-        
-        return SHTPlan(cfg, P, dPdx, G, Fθk, fft_plan, ifft_plan, false)
-    end
+
+    # Full complex FFT path
+    Fθk = Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon)
+    fill!(Fθk, 0)  # Initialize to zero
+
+    # Pre-optimize FFTW plans for this specific array layout
+    # Planning may take time but subsequent transforms will be faster
+    fft_plan = FFTW.plan_fft!(Fθk, 2)   # Forward FFT along longitude (dim 2)
+    ifft_plan = FFTW.plan_ifft!(Fθk, 2) # Inverse FFT along longitude (dim 2)
+
+    return SHTPlan(cfg, P, dPdx, G, Fθk, fft_plan, ifft_plan, false)
 end
 
 """

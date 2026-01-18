@@ -173,27 +173,31 @@ function SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVect
     lmax = cfg.lmax; mres = cfg.mres
     
     # Apply the tridiagonal operator to each (l,m) mode
+    # Key insight: mx stores coefficients describing how (l,m) contributes to its neighbors.
+    # For R_l^m = (Op * Q)_lm, we need coefficients from neighbors that contribute TO (l,m):
+    # - Y_{l-1}^m contributes to Y_l^m via b_{l-1}^m (the upward coefficient from l-1)
+    # - Y_{l+1}^m contributes to Y_l^m via a_{l+1}^m (the downward coefficient from l+1)
     @inbounds for lm0 in 0:(cfg.nlm-1)
         l = cfg.li[lm0+1]; m = cfg.mi[lm0+1]  # Get (l,m) for this packed index
-        
-        # Extract coupling coefficients for this (l,m) mode
-        c_minus = mx[2*lm0 + 1]  # Coefficient for coupling to Y_{l-1}^m
-        c_plus  = mx[2*lm0 + 2]  # Coefficient for coupling to Y_{l+1}^m
-        
+
         acc = 0.0 + 0.0im  # Accumulator for the result
-        
-        # Couple to lower degree neighbor Y_{l-1}^m
+
+        # Contribution from lower degree neighbor Y_{l-1}^m
+        # Y_{l-1}^m couples upward to Y_l^m via b_{l-1}^m
         if l > m && l > 0  # Check bounds: l-1 ≥ m and l-1 ≥ 0
             lm_prev = LM_index(lmax, mres, l-1, m)  # Get packed index for (l-1,m)
-            acc += c_minus * Qlm[lm_prev + 1]       # Add contribution from lower neighbor
+            c_from_below = mx[2*lm_prev + 2]        # b_{l-1}^m: upward coeff from neighbor
+            acc += c_from_below * Qlm[lm_prev + 1]  # Add contribution from lower neighbor
         end
-        
-        # Couple to higher degree neighbor Y_{l+1}^m  
+
+        # Contribution from higher degree neighbor Y_{l+1}^m
+        # Y_{l+1}^m couples downward to Y_l^m via a_{l+1}^m
         if l < lmax  # Check bounds: l+1 ≤ lmax
             lm_next = LM_index(lmax, mres, l+1, m)  # Get packed index for (l+1,m)
-            acc += c_plus * Qlm[lm_next + 1]        # Add contribution from upper neighbor
+            c_from_above = mx[2*lm_next + 1]        # a_{l+1}^m: downward coeff from neighbor
+            acc += c_from_above * Qlm[lm_next + 1]  # Add contribution from upper neighbor
         end
-        
+
         Rlm[lm0 + 1] = acc  # Store result for this (l,m) mode
     end
     return Rlm

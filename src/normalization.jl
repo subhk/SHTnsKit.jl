@@ -106,23 +106,27 @@ mathematical relationships.
 The scale factor depends on the target convention:
 - :orthonormal → k = 1 (no scaling)
 - :fourpi → k = sqrt(4π) (geodesy convention)
-- :schmidt → k = sqrt(4π/(2l+1)) (semi-normalized, common in geomagnetics)
+- :schmidt → k = sqrt((2 - δ_{0m}) * 4π/(2l+1)) (semi-normalized, common in geomagnetics)
+  where δ_{0m} = 1 if m=0, else 0. This gives sqrt(4π/(2l+1)) for m=0,
+  and sqrt(2) * sqrt(4π/(2l+1)) for m>0.
 """
 function norm_scale_from_orthonormal(l::Int, m::Int, to::Symbol)
     if to === :orthonormal
         # No conversion needed
         return 1.0
-        
+
     elseif to === :fourpi
-        # Geodesy convention: multiply by sqrt(4π) 
+        # Geodesy convention: multiply by sqrt(4π)
         # This removes the 1/sqrt(4π) factor from orthonormal normalization
         return sqrt(4π)
-        
+
     elseif to === :schmidt
         # Schmidt semi-normalized spherical harmonics
         # Used extensively in geomagnetic field modeling (e.g., IGRF, WMM)
-        return sqrt(4π / (2l + 1))
-        
+        # The ratio includes the (2 - δ_{0m}) factor for proper m-dependence
+        m_factor = m == 0 ? 1.0 : 2.0  # (2 - δ_{0m})
+        return sqrt(m_factor * 4π / (2l + 1))
+
     else
         throw(ArgumentError("Unsupported normalization: $to"))
     end

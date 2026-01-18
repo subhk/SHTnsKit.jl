@@ -1,5 +1,12 @@
 # Performance Tips
 
+```@raw html
+<div style="background: linear-gradient(135deg, #ea580c 0%, #f59e0b 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Performance Tips</h2>
+    <p style="margin: 0; opacity: 0.9;">Quick tips for reducing allocations and maximizing throughput</p>
+</div>
+```
+
 This page summarizes practical tips to reduce allocations and improve locality and throughput in SHTnsKit.jl, especially for distributed (MPI + PencilArrays) use.
 
 - Reuse plans: Construct `SHTPlan` (serial) and distributed plans (`DistAnalysisPlan`, `DistSphtorPlan`, `DistQstPlan`) once per size and reuse. Plans hold FFT plans and working buffers to avoid per-call allocations.

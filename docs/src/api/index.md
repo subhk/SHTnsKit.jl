@@ -1,5 +1,12 @@
 # API Reference
 
+```@raw html
+<div style="background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">API Reference</h2>
+    <p style="margin: 0; opacity: 0.9;">Complete function and type documentation</p>
+</div>
+```
+
 Complete reference for all SHTnsKit.jl functions and types.
 
 ## Configuration Management

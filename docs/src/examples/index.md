@@ -1,13 +1,43 @@
 # Examples Gallery
 
+```@raw html
+<div style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Examples Gallery</h2>
+    <p style="margin: 0; opacity: 0.9;">Real-world examples and tutorials from beginner to advanced</p>
+</div>
+```
+
 Real-world examples and tutorials demonstrating SHTnsKit.jl capabilities, organized by difficulty level.
 
-**How to use this guide:**
-- **Beginner**: Start here if you're new to spherical harmonics
-- **Intermediate**: For users comfortable with basic transforms
-- **Advanced**: Complex workflows and specialized applications
+```@raw html
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
 
-**Learning path:** Work through the examples in order for the best learning experience.
+<div style="background: #eff6ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #2563eb;">
+    <strong style="color: #1e40af;">Beginner</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Start here if you're new to spherical harmonics
+    </p>
+</div>
+
+<div style="background: #fef3c7; border-radius: 8px; padding: 1rem; border-left: 4px solid #f59e0b;">
+    <strong style="color: #92400e;">Intermediate</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        For users comfortable with basic transforms
+    </p>
+</div>
+
+<div style="background: #f3e8ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #7c3aed;">
+    <strong style="color: #5b21b6;">Advanced</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Complex workflows and specialized applications
+    </p>
+</div>
+
+</div>
+```
+
+!!! tip "Learning Path"
+    Work through the examples in order for the best learning experience.
 
 ## Beginner Examples
 

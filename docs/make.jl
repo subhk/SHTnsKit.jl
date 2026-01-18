@@ -79,7 +79,9 @@ end
 format = Documenter.HTML(
     prettyurls = get(ENV, "CI", "false") == "true",
     canonical = "https://subhk.github.io/SHTnsKit.jl/stable",
-    assets = String[],
+    assets = [
+        "assets/custom.css",
+    ],
     analytics = "",
     collapselevel = 2,
     sidebar_sitename = true,
@@ -92,15 +94,20 @@ format = Documenter.HTML(
 # Documentation pages structure
 pages = Any[
     "Home" => "index.md",
-    "Installation" => "installation.md", 
-    "Quick Start" => "quickstart.md",
+    "Getting Started" => Any[
+        "Installation" => "installation.md",
+        "Quick Start" => "quickstart.md"
+    ],
     "User Guide" => Any[
-        "Distributed Guide" => "distributed.md",
-        "API Reference" => "api/index.md",
-        "Examples Gallery" => "examples/index.md", 
+        "GPU Acceleration" => "gpu.md",
+        "Distributed Computing" => "distributed.md",
         "Performance Guide" => "performance.md",
         "Performance Tips" => "performance_tips.md",
         "Advanced Usage" => "advanced.md"
+    ],
+    "Reference" => Any[
+        "API Reference" => "api/index.md",
+        "Examples Gallery" => "examples/index.md"
     ]
 ]
 

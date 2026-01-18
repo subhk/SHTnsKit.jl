@@ -71,16 +71,23 @@ function dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Al
     size(Rlm,1)==lmax+1 && size(Rlm,2)==mmax+1 || throw(DimensionMismatch("Rlm dims"))
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
     fill!(Rlm, 0)
+    # Key insight: mx stores coefficients describing how (l,m) contributes to its neighbors.
+    # For R_l^m = (Op * A)_lm, we need coefficients from neighbors that contribute TO (l,m):
+    # - Y_{l-1}^m contributes to Y_l^m via b_{l-1}^m (the upward coefficient from l-1)
+    # - Y_{l+1}^m contributes to Y_l^m via a_{l+1}^m (the downward coefficient from l+1)
     @inbounds for m in 0:mmax, l in m:lmax
-        idx = SHTnsKit.LM_index(lmax, cfg.mres, l, m)
-        c_minus = mx[2*idx + 1]
-        c_plus  = mx[2*idx + 2]
         acc = 0.0 + 0.0im
+        # Contribution from lower degree neighbor Y_{l-1}^m
         if l > m && l > 0
-            acc += c_minus * Alm[l, m+1]
+            idx_prev = SHTnsKit.LM_index(lmax, cfg.mres, l-1, m)
+            c_from_below = mx[2*idx_prev + 2]  # b_{l-1}^m: upward coeff from neighbor
+            acc += c_from_below * Alm[l, m+1]
         end
+        # Contribution from higher degree neighbor Y_{l+1}^m
         if l < lmax
-            acc += c_plus * Alm[l+2, m+1]
+            idx_next = SHTnsKit.LM_index(lmax, cfg.mres, l+1, m)
+            c_from_above = mx[2*idx_next + 1]  # a_{l+1}^m: downward coeff from neighbor
+            acc += c_from_above * Alm[l+2, m+1]
         end
         Rlm[l+1, m+1] = acc
     end

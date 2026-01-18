@@ -175,6 +175,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_fus
 
     lmax, mmax = cfg.lmax, cfg.mmax
     alm_batch = Array{ComplexF64,3}(undef, lmax + 1, mmax + 1, nfields)
+    fill!(alm_batch, zero(ComplexF64))  # Initialize to zero for += accumulation in on-the-fly path
 
     # Preallocate FFT scratch space for all fields
     Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)

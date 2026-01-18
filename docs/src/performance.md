@@ -1,6 +1,19 @@
 # Performance Guide
 
+```@raw html
+<div style="background: linear-gradient(135deg, #dc2626 0%, #f97316 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Optimize Your Transforms</h2>
+    <p style="margin: 0; opacity: 0.9;">Threading, memory management, and algorithm-level optimizations</p>
+</div>
+```
+
 This guide provides comprehensive information on optimizing SHTnsKit.jl performance for various computational scenarios, including serial, parallel (MPI), and SIMD optimizations.
+
+!!! tip "Quick Wins"
+    - Pre-allocate arrays and reuse buffers
+    - Use in-place operations (`analysis!`, `synthesis!`)
+    - Set FFTW threads appropriately
+    - For lmax > 64, consider GPU acceleration
 
 ## Understanding Performance Characteristics
 
@@ -110,15 +123,6 @@ benchmark_parallel_performance()
 destroy_config(cfg)
 MPI.Finalize()
 ```
-
-### Performance Scaling by Problem Size
-
-| Problem Size (nlm) | Serial | 4 Processes | 16 Processes | Expected Speedup |
-|--------------------|--------|-------------|--------------|------------------|
-| 1,000             | 5ms    | 4ms         | 5ms          | 1.3x             |
-| 10,000            | 50ms   | 18ms        | 12ms         | 4.2x             |
-| 100,000           | 500ms  | 140ms       | 65ms         | 7.7x             |
-| 1,000,000         | 5.2s   | 1.8s        | 0.9s         | 14.2x            |
 
 ## Threading Optimization
 
@@ -307,7 +311,21 @@ end
 
 ## GPU Acceleration
 
-This package is CPU‑focused and does not include GPU support.
+For GPU-accelerated transforms, see the dedicated [GPU Guide](gpu.md). GPU acceleration provides 10-30× speedup for large problems (lmax > 64).
+
+```julia
+using SHTnsKit, CUDA
+
+cfg = create_gauss_config(128, 130)
+spatial = rand(cfg.nlat, cfg.nlon)
+
+# GPU transforms
+Alm = gpu_analysis(cfg, spatial)
+recovered = gpu_synthesis(cfg, Alm)
+```
+
+!!! tip "When to Use GPU"
+    GPU acceleration is most beneficial for **lmax ≥ 64**. For smaller problems, CPU is often faster due to data transfer overhead.
 
 ## Algorithm-Specific Optimizations
 

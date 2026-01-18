@@ -132,17 +132,24 @@ unavailable for the element type.
 function ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     size(dest) == size(A) || throw(DimensionMismatch("dest and A must have same size"))
     @inbounds dest .= A
-    nlon = size(A, 2)
+    nlat, nlon = size(A)
     try
         ifft!(dest, 2)
         _FFT_BACKEND[] = :fftw
         return dest
     catch
-        @inbounds for i in 1:size(A,1)
+        # DFT fallback: must preserve original row data before overwriting
+        row_buf = Vector{eltype(dest)}(undef, nlon)
+        @inbounds for i in 1:nlat
+            # Copy row to buffer before overwriting
+            for j in 1:nlon
+                row_buf[j] = dest[i, j]
+            end
+            # Compute inverse DFT for this row
             for k in 0:(nlon-1)
                 s = zero(eltype(dest))
                 @simd for j in 0:(nlon-1)
-                    s += dest[i, j+1] * cis(_TWO_PI * k * j / nlon)
+                    s += row_buf[j+1] * cis(_TWO_PI * k * j / nlon)
                 end
                 dest[i, k+1] = s / nlon
             end
@@ -196,18 +203,24 @@ Falls back to the pure-DFT path for unsupported element types.
 function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     size(dest) == size(A) || throw(DimensionMismatch("dest and A must have same size"))
     @inbounds dest .= complex.(A)
+    nlat, nlon = size(A)
     try
         fft!(dest, 2)
         _FFT_BACKEND[] = :fftw
         return dest
     catch
-        # fallback to DFT computed into dest
-        nlat, nlon = size(A)
+        # DFT fallback: must preserve original row data before overwriting
+        row_buf = Vector{eltype(dest)}(undef, nlon)
         @inbounds for i in 1:nlat
+            # Copy row to buffer before overwriting
+            for j in 1:nlon
+                row_buf[j] = dest[i, j]
+            end
+            # Compute forward DFT for this row
             for k in 0:(nlon-1)
                 s = zero(eltype(dest))
                 @simd for j in 0:(nlon-1)
-                    s += dest[i, j+1] * cis(-_TWO_PI * k * j / nlon)
+                    s += row_buf[j+1] * cis(-_TWO_PI * k * j / nlon)
                 end
                 dest[i, k+1] = s
             end

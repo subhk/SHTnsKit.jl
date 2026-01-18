@@ -1,6 +1,16 @@
 # Advanced Usage Patterns
 
+```@raw html
+<div style="background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Advanced Techniques</h2>
+    <p style="margin: 0; opacity: 0.9;">Sophisticated patterns for experienced users and scientific computing</p>
+</div>
+```
+
 This guide covers sophisticated usage patterns and advanced techniques for experienced SHTnsKit.jl users.
+
+!!! note "Prerequisites"
+    This guide assumes familiarity with basic SHTnsKit.jl usage. See the [Quick Start Guide](quickstart.md) first if you're new to the package.
 
 ## Advanced Configuration Management
 

@@ -6,8 +6,8 @@ This example demonstrates how to use SHTnsKit.jl with multiple GPUs
 for accelerated spherical harmonic transforms.
 
 Before running this example, ensure you have:
-1. Multiple GPUs available (NVIDIA or AMD)
-2. GPU packages installed: CUDA.jl, AMDGPU.jl, GPUArrays.jl, KernelAbstractions.jl
+1. Multiple NVIDIA GPUs available
+2. GPU packages installed: CUDA.jl, GPUArrays.jl, KernelAbstractions.jl
 
 Usage:
     julia --project=. examples/multi_gpu_example.jl [--gpus 0,1] [--strategy latitude]
@@ -19,12 +19,12 @@ using BenchmarkTools
 
 # Try to load GPU packages
 try
-    using CUDA, AMDGPU, GPUArrays, KernelAbstractions
+    using CUDA, GPUArrays, KernelAbstractions
     println("Multi-GPU packages loaded successfully")
     GPU_AVAILABLE = true
 catch e
     println("WARNING: GPU packages not available: $e")
-    println("  Install with: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"AMDGPU\", \"GPUArrays\", \"KernelAbstractions\"])'"
+    println("  Install with: julia -e 'using Pkg; Pkg.add([\"CUDA\", \"GPUArrays\", \"KernelAbstractions\"])'")
     GPU_AVAILABLE = false
 end
 
@@ -244,7 +244,7 @@ function main()
         println("ERROR: Multi-GPU example failed: $e")
         if isa(e, MethodError) && contains(string(e), "get_available_gpus")
             println("\\nNOTE: Multi-GPU functionality requires GPU extension to be loaded.")
-            println("Make sure CUDA.jl and/or AMDGPU.jl are installed and functional.")
+            println("Make sure CUDA.jl is installed and functional.")
         end
         rethrow(e)
     end

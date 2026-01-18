@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Home · SHTnsKit.jl</title><meta name="title" content="Home · SHTnsKit.jl"/><meta property="og:title" content="Home · SHTnsKit.jl"/><meta property="twitter:title" content="Home · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/"/><script data-outdated-warner src="assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="assets/documenter.js"></script><script src="search_index.js"></script><script src="siteinfo.js"></script><script src="../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="assets/themeswap.js"></script><link href="assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href>SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li class="is-active"><a class="tocitem" href>Home</a><ul class="internal"><li><a class="tocitem" href="#Features"><span>Features</span></a></li><li><a class="tocitem" href="#Quick-Start"><span>Quick Start</span></a></li><li><a class="tocitem" href="#GPU-Example"><span>GPU Example</span></a></li><li><a class="tocitem" href="#Scientific-Applications"><span>Scientific Applications</span></a></li><li><a class="tocitem" href="#Documentation"><span>Documentation</span></a></li><li><a class="tocitem" href="#Installation-Options"><span>Installation Options</span></a></li><li><a class="tocitem" href="#Contributing"><span>Contributing</span></a></li><li><a class="tocitem" href="#Citation"><span>Citation</span></a></li><li><a class="tocitem" href="#License"><span>License</span></a></li></ul></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="installation/">Installation</a></li><li><a class="tocitem" href="quickstart/">Quick Start</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="gpu/">GPU Acceleration</a></li><li><a class="tocitem" href="distributed/">Distributed Computing</a></li><li><a class="tocitem" href="performance/">Performance Guide</a></li><li><a class="tocitem" href="performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="advanced/">Advanced Usage</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="api/">API Reference</a></li><li><a class="tocitem" href="examples/">Examples Gallery</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Home</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Home</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/index.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="SHTnsKit.jl"><a class="docs-heading-anchor" href="#SHTnsKit.jl">SHTnsKit.jl</a><a id="SHTnsKit.jl-1"></a><a class="docs-heading-anchor-permalink" href="#SHTnsKit.jl" title="Permalink"></a></h1><div style="background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%); color: white; padding: 2.5rem; border-radius: 16px; margin-bottom: 2rem; text-align: center;">
+    <h1 style="font-size: 2.5rem; margin: 0 0 0.5rem 0; color: white; border: none;">SHTnsKit.jl</h1>
+    <p style="font-size: 1.25rem; margin: 0; opacity: 0.95;">High-Performance Spherical Harmonic Transforms for Julia</p>
+    <p style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">CPU | GPU | MPI Distributed | Auto-Differentiation</p>
+</div><p><a href="https://github.com/subhk/SHTnsKit.jl/actions"><img src="https://github.com/subhk/SHTnsKit.jl/workflows/CI/badge.svg" alt="Build Status"/></a> <a href="https://subhk.github.io/SHTnsKit.jl/stable"><img src="https://img.shields.io/badge/docs-stable-blue.svg" alt="Documentation"/></a> <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"/></a></p><hr/><h2 id="Features"><a class="docs-heading-anchor" href="#Features">Features</a><a id="Features-1"></a><a class="docs-heading-anchor-permalink" href="#Features" title="Permalink"></a></h2><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin: 2rem 0;">
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; transition: transform 0.2s, box-shadow 0.2s;">
+    <h3 style="color: #2563eb; margin-top: 0;">Core Transforms</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Forward & backward spherical harmonic transforms</li>
+        <li>Scalar, vector, and complex field support</li>
+        <li>In-place operations for memory efficiency</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #7c3aed; margin-top: 0;">GPU Acceleration</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>CUDA/cuFFT for NVIDIA GPUs</li>
+        <li>KernelAbstractions.jl backend</li>
+        <li>Automatic CPU fallback</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #059669; margin-top: 0;">MPI Distributed</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>PencilArrays domain decomposition</li>
+        <li>Scalable to thousands of cores</li>
+        <li>Efficient communication patterns</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #dc2626; margin-top: 0;">Analysis Tools</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Power spectrum analysis</li>
+        <li>Energy diagnostics</li>
+        <li>Wigner D-matrix rotations</li>
+    </ul>
+</div>
+
+</div><hr/><h2 id="Quick-Start"><a class="docs-heading-anchor" href="#Quick-Start">Quick Start</a><a id="Quick-Start-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Start" title="Permalink"></a></h2><h3 id="Installation"><a class="docs-heading-anchor" href="#Installation">Installation</a><a id="Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Installation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+
+# Basic installation
+Pkg.add(&quot;SHTnsKit&quot;)
+
+# With GPU support
+Pkg.add([&quot;SHTnsKit&quot;, &quot;CUDA&quot;, &quot;KernelAbstractions&quot;])
+
+# With MPI support
+Pkg.add([&quot;SHTnsKit&quot;, &quot;MPI&quot;, &quot;PencilArrays&quot;, &quot;PencilFFTs&quot;])</code></pre><h3 id="Hello-World"><a class="docs-heading-anchor" href="#Hello-World">Hello World</a><a id="Hello-World-1"></a><a class="docs-heading-anchor-permalink" href="#Hello-World" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+# Create configuration for lmax=16
+cfg = create_gauss_config(16, 18)
+
+# Create a test pattern on the sphere
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]  # cos(θ)
+    spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0 pattern
+end
+
+# Transform: spatial → spectral → spatial
+Alm = analysis(cfg, spatial)
+recovered = synthesis(cfg, Alm)
+
+# Verify roundtrip accuracy
+println(&quot;Error: &quot;, maximum(abs.(spatial - recovered)))  # ~1e-14</code></pre><div class="admonition is-success" id="Pro-Tip-8340eebcbd70aa39"><header class="admonition-header">Pro Tip<a class="admonition-anchor" href="#Pro-Tip-8340eebcbd70aa39" title="Permalink"></a></header><div class="admonition-body"><p>For large problems (lmax &gt; 64), use GPU acceleration with <code>gpu_analysis()</code> and <code>gpu_synthesis()</code> for significant speedup.</p></div></div><hr/><h2 id="GPU-Example"><a class="docs-heading-anchor" href="#GPU-Example">GPU Example</a><a id="GPU-Example-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using SHTnsKit, CUDA
+
+cfg = create_gauss_config(128, 130)
+spatial = rand(cfg.nlat, cfg.nlon)
+
+# GPU-accelerated transforms
+Alm = gpu_analysis(cfg, spatial)
+recovered = gpu_synthesis(cfg, Alm)
+
+# Safe version with automatic CPU fallback
+Alm_safe = gpu_analysis_safe(cfg, spatial)</code></pre><hr/><h2 id="Scientific-Applications"><a class="docs-heading-anchor" href="#Scientific-Applications">Scientific Applications</a><a id="Scientific-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Scientific-Applications" title="Permalink"></a></h2><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+<div style="background: #eff6ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #2563eb;">
+    <strong style="color: #1e40af;">Climate Science</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Atmospheric dynamics, weather prediction, ocean circulation
+    </p>
+</div>
+
+<div style="background: #fef3c7; border-radius: 8px; padding: 1rem; border-left: 4px solid #f59e0b;">
+    <strong style="color: #92400e;">Geophysics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Gravitational fields, magnetic anomalies, Earth surface modeling
+    </p>
+</div>
+
+<div style="background: #f3e8ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #7c3aed;">
+    <strong style="color: #5b21b6;">Astrophysics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        CMB analysis, stellar dynamics, gravitational waves
+    </p>
+</div>
+
+<div style="background: #ecfdf5; border-radius: 8px; padding: 1rem; border-left: 4px solid #10b981;">
+    <strong style="color: #065f46;">Fluid Dynamics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Vorticity-divergence decomposition, turbulence on spheres
+    </p>
+</div>
+
+</div><hr/><h2 id="Documentation"><a class="docs-heading-anchor" href="#Documentation">Documentation</a><a id="Documentation-1"></a><a class="docs-heading-anchor-permalink" href="#Documentation" title="Permalink"></a></h2><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+<a href="quickstart/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Quick Start</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Get started in minutes</p>
+    </div>
+</a>
+
+<a href="gpu/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>GPU Guide</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">CUDA acceleration</p>
+    </div>
+</a>
+
+<a href="distributed/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Distributed</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">MPI parallelization</p>
+    </div>
+</a>
+
+<a href="api/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>API Reference</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Complete documentation</p>
+    </div>
+</a>
+
+</div><ul><li><a href="quickstart/#Quick-Start-Guide">Quick Start Guide</a></li><li><a href="gpu/#GPU-Acceleration">GPU Acceleration</a></li><li><a href="distributed/#Distributed-Computing">Distributed Computing</a></li><li><a href="api/#API-Reference">API Reference</a></li><li><a href="examples/#Examples-Gallery">Examples Gallery</a></li><li><a href="performance/#Performance-Guide">Performance Guide</a></li><li><a href="advanced/#Advanced-Usage-Patterns">Advanced Usage Patterns</a></li></ul><hr/><h2 id="Installation-Options"><a class="docs-heading-anchor" href="#Installation-Options">Installation Options</a><a id="Installation-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Installation-Options" title="Permalink"></a></h2><table><tr><th style="text-align: right">Setup</th><th style="text-align: right">Command</th><th style="text-align: right">Use Case</th></tr><tr><td style="text-align: right"><strong>Basic</strong></td><td style="text-align: right"><code>Pkg.add(&quot;SHTnsKit&quot;)</code></td><td style="text-align: right">Single CPU, getting started</td></tr><tr><td style="text-align: right"><strong>GPU</strong></td><td style="text-align: right"><code>+ CUDA, KernelAbstractions</code></td><td style="text-align: right">NVIDIA GPU acceleration</td></tr><tr><td style="text-align: right"><strong>MPI</strong></td><td style="text-align: right"><code>+ MPI, PencilArrays, PencilFFTs</code></td><td style="text-align: right">Cluster computing</td></tr><tr><td style="text-align: right"><strong>Full</strong></td><td style="text-align: right">All of the above</td><td style="text-align: right">Maximum flexibility</td></tr></table><div class="admonition is-info" id="Requirements-3cc501b17fdcba04"><header class="admonition-header">Requirements<a class="admonition-anchor" href="#Requirements-3cc501b17fdcba04" title="Permalink"></a></header><div class="admonition-body"><ul><li>Julia 1.10 or later</li><li>For GPU: NVIDIA GPU with CUDA support</li><li>For MPI: OpenMPI or MPICH installed</li></ul></div></div><hr/><h2 id="Contributing"><a class="docs-heading-anchor" href="#Contributing">Contributing</a><a id="Contributing-1"></a><a class="docs-heading-anchor-permalink" href="#Contributing" title="Permalink"></a></h2><p>We welcome contributions! See our <a href="https://github.com/subhk/SHTnsKit.jl">GitHub repository</a> for:</p><ul><li>Bug reports and feature requests</li><li>Documentation improvements</li><li>Pull requests</li></ul><hr/><h2 id="Citation"><a class="docs-heading-anchor" href="#Citation">Citation</a><a id="Citation-1"></a><a class="docs-heading-anchor-permalink" href="#Citation" title="Permalink"></a></h2><p>If you use SHTnsKit.jl in your research, please cite:</p><pre><code class="language-bibtex hljs">@software{shtnskit,
+  author = {Kar, Subhajit},
+  title = {SHTnsKit.jl: High-Performance Spherical Harmonic Transforms},
+  url = {https://github.com/subhk/SHTnsKit.jl},
+  year = {2024}
+}</code></pre><hr/><h2 id="License"><a class="docs-heading-anchor" href="#License">License</a><a id="License-1"></a><a class="docs-heading-anchor-permalink" href="#License" title="Permalink"></a></h2><p>SHTnsKit.jl is released under the <strong>GNU General Public License v3.0</strong>.</p><div style="text-align: center; margin-top: 2rem; padding: 1.5rem; background: #f8fafc; border-radius: 8px;">
+    <p style="margin: 0; color: #64748b;">
+        Made for the scientific computing community
+    </p>
+</div></article><nav class="docs-footer"><a class="docs-footer-nextpage" href="installation/">Installation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 22:00">Sunday 18 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

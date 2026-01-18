@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Quick Start · SHTnsKit.jl</title><meta name="title" content="Quick Start · SHTnsKit.jl"/><meta property="og:title" content="Quick Start · SHTnsKit.jl"/><meta property="twitter:title" content="Quick Start · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/quickstart/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/quickstart/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/quickstart/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../installation/">Installation</a></li><li class="is-active"><a class="tocitem" href>Quick Start</a><ul class="internal"><li><a class="tocitem" href="#Installation"><span>Installation</span></a></li><li><a class="tocitem" href="#Core-Concepts"><span>Core Concepts</span></a></li><li><a class="tocitem" href="#Your-First-Transform"><span>Your First Transform</span></a></li><li><a class="tocitem" href="#Common-Workflows"><span>Common Workflows</span></a></li><li><a class="tocitem" href="#GPU-Acceleration"><span>GPU Acceleration</span></a></li><li><a class="tocitem" href="#Vector-Fields"><span>Vector Fields</span></a></li><li><a class="tocitem" href="#Grid-Types"><span>Grid Types</span></a></li><li><a class="tocitem" href="#Performance-Tips"><span>Performance Tips</span></a></li><li><a class="tocitem" href="#Unified-Loop-Abstraction"><span>Unified Loop Abstraction</span></a></li><li><a class="tocitem" href="#Quick-Reference"><span>Quick Reference</span></a></li><li><a class="tocitem" href="#Next-Steps"><span>Next Steps</span></a></li></ul></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../gpu/">GPU Acceleration</a></li><li><a class="tocitem" href="../distributed/">Distributed Computing</a></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../examples/">Examples Gallery</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Getting Started</a></li><li class="is-active"><a href>Quick Start</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Quick Start</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/quickstart.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Quick-Start-Guide"><a class="docs-heading-anchor" href="#Quick-Start-Guide">Quick Start Guide</a><a id="Quick-Start-Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Start-Guide" title="Permalink"></a></h1><div style="background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Get Started in 5 Minutes</h2>
+    <p style="margin: 0; opacity: 0.9;">From installation to your first spherical harmonic transform</p>
+</div><p>Get up and running with SHTnsKit.jl in minutes. This guide covers the essential concepts and common workflows.</p><hr/><h2 id="Installation"><a class="docs-heading-anchor" href="#Installation">Installation</a><a id="Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Installation" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Pkg
+Pkg.add(&quot;SHTnsKit&quot;)</code></pre><p>For GPU support, also add:</p><pre><code class="language-julia hljs">Pkg.add([&quot;CUDA&quot;, &quot;KernelAbstractions&quot;])</code></pre><hr/><h2 id="Core-Concepts"><a class="docs-heading-anchor" href="#Core-Concepts">Core Concepts</a><a id="Core-Concepts-1"></a><a class="docs-heading-anchor-permalink" href="#Core-Concepts" title="Permalink"></a></h2><h3 id="Two-Representations-of-Data"><a class="docs-heading-anchor" href="#Two-Representations-of-Data">Two Representations of Data</a><a id="Two-Representations-of-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Two-Representations-of-Data" title="Permalink"></a></h3><p>Spherical harmonics provide two ways to represent functions on a sphere:</p><table><tr><th style="text-align: right">Domain</th><th style="text-align: right">Description</th><th style="text-align: right">Array Shape</th><th style="text-align: right">Best For</th></tr><tr><td style="text-align: right"><strong>Spatial</strong></td><td style="text-align: right">Values at grid points</td><td style="text-align: right"><code>(nlat, nlon)</code></td><td style="text-align: right">Visualization, physical intuition</td></tr><tr><td style="text-align: right"><strong>Spectral</strong></td><td style="text-align: right">Coefficient amplitudes</td><td style="text-align: right"><code>(lmax+1, mmax+1)</code></td><td style="text-align: right">Analysis, filtering, derivatives</td></tr></table><p><strong>Think of it like audio:</strong></p><ul><li><strong>Spatial</strong> = the sound wave (amplitude over time)</li><li><strong>Spectral</strong> = frequency components (which notes are playing)</li></ul><h3 id="Key-Parameters"><a class="docs-heading-anchor" href="#Key-Parameters">Key Parameters</a><a id="Key-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Key-Parameters" title="Permalink"></a></h3><table><tr><th style="text-align: right">Parameter</th><th style="text-align: right">Meaning</th><th style="text-align: right">Typical Values</th></tr><tr><td style="text-align: right"><code>lmax</code></td><td style="text-align: right">Maximum spherical harmonic degree</td><td style="text-align: right">32, 64, 128, 256</td></tr><tr><td style="text-align: right"><code>mmax</code></td><td style="text-align: right">Maximum azimuthal order (usually = lmax)</td><td style="text-align: right">Same as lmax</td></tr><tr><td style="text-align: right"><code>nlat</code></td><td style="text-align: right">Number of latitude points</td><td style="text-align: right">lmax + 2 or more</td></tr><tr><td style="text-align: right"><code>nlon</code></td><td style="text-align: right">Number of longitude points</td><td style="text-align: right">2*lmax + 1 or more</td></tr></table><hr/><h2 id="Your-First-Transform"><a class="docs-heading-anchor" href="#Your-First-Transform">Your First Transform</a><a id="Your-First-Transform-1"></a><a class="docs-heading-anchor-permalink" href="#Your-First-Transform" title="Permalink"></a></h2><pre><code class="language-julia hljs">using SHTnsKit
+
+# 1. Create configuration
+lmax = 32
+cfg = create_gauss_config(lmax, lmax + 2)
+
+# 2. Create a simple pattern (P_2 Legendre polynomial)
+spatial = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat
+    x = cfg.x[i]  # cos(θ) at this latitude
+    spatial[i, :] .= (3*x^2 - 1) / 2
+end
+
+# 3. Analysis: spatial → spectral
+Alm = analysis(cfg, spatial)
+
+# 4. Synthesis: spectral → spatial
+recovered = synthesis(cfg, Alm)
+
+# 5. Check accuracy
+error = maximum(abs.(spatial - recovered))
+println(&quot;Roundtrip error: $error&quot;)  # Should be ~1e-14</code></pre><p><strong>Output:</strong></p><pre><code class="nohighlight hljs">Roundtrip error: 8.881784197001252e-15</code></pre><hr/><h2 id="Common-Workflows"><a class="docs-heading-anchor" href="#Common-Workflows">Common Workflows</a><a id="Common-Workflows-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Workflows" title="Permalink"></a></h2><h3 id="Creating-Test-Fields"><a class="docs-heading-anchor" href="#Creating-Test-Fields">Creating Test Fields</a><a id="Creating-Test-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-Test-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(64, 66)
+
+# Method 1: From spherical harmonic coefficients
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[1, 1] = 1.0    # l=0, m=0: constant (mean value)
+Alm[3, 1] = 0.5    # l=2, m=0: latitude variation
+Alm[3, 3] = 0.3im  # l=2, m=2: longitude variation
+spatial = synthesis(cfg, Alm)
+
+# Method 2: From analytical function
+spatial2 = zeros(cfg.nlat, cfg.nlon)
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ = acos(cfg.x[i])           # Colatitude
+    φ = 2π * (j-1) / cfg.nlon    # Longitude
+    spatial2[i, j] = cos(θ) * sin(2φ)  # Some pattern
+end</code></pre><h3 id="Spectral-Filtering"><a class="docs-heading-anchor" href="#Spectral-Filtering">Spectral Filtering</a><a id="Spectral-Filtering-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Filtering" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(64, 66)
+spatial = rand(cfg.nlat, cfg.nlon)
+
+# Transform to spectral space
+Alm = analysis(cfg, spatial)
+
+# Low-pass filter: keep only l ≤ 10
+l_cutoff = 10
+for l in (l_cutoff+1):cfg.lmax
+    for m in 0:min(l, cfg.mmax)
+        Alm[l+1, m+1] = 0
+    end
+end
+
+# Transform back
+smoothed = synthesis(cfg, Alm)</code></pre><h3 id="Computing-Derivatives"><a class="docs-heading-anchor" href="#Computing-Derivatives">Computing Derivatives</a><a id="Computing-Derivatives-1"></a><a class="docs-heading-anchor-permalink" href="#Computing-Derivatives" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(32, 34)
+
+# Create test function
+Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+Alm[5, 3] = 1.0  # Y_4^2
+
+# Apply Laplacian: Δ Y_l^m = -l(l+1) Y_l^m
+Alm_laplacian = copy(Alm)
+for l in 0:cfg.lmax
+    for m in 0:min(l, cfg.mmax)
+        Alm_laplacian[l+1, m+1] *= -l * (l + 1)
+    end
+end
+
+laplacian_field = synthesis(cfg, Alm_laplacian)</code></pre><hr/><h2 id="GPU-Acceleration"><a class="docs-heading-anchor" href="#GPU-Acceleration">GPU Acceleration</a><a id="GPU-Acceleration-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Acceleration" title="Permalink"></a></h2><p>For large problems, use GPU acceleration:</p><pre><code class="language-julia hljs">using SHTnsKit, CUDA
+
+# Check GPU availability
+println(&quot;GPU available: &quot;, CUDA.functional())
+
+cfg = create_gauss_config(128, 130)
+spatial = rand(cfg.nlat, cfg.nlon)
+
+# GPU transforms
+Alm = gpu_analysis(cfg, spatial)
+recovered = gpu_synthesis(cfg, Alm)
+
+# Safe version (auto-fallback to CPU if GPU fails)
+Alm_safe = gpu_analysis_safe(cfg, spatial)</code></pre><h3 id="When-to-Use-GPU"><a class="docs-heading-anchor" href="#When-to-Use-GPU">When to Use GPU</a><a id="When-to-Use-GPU-1"></a><a class="docs-heading-anchor-permalink" href="#When-to-Use-GPU" title="Permalink"></a></h3><p>GPU acceleration is most beneficial for larger problems. As a general guideline:</p><ul><li><strong>lmax &lt; 32</strong>: CPU is typically faster due to data transfer overhead</li><li><strong>lmax 32-128</strong>: GPU becomes beneficial</li><li><strong>lmax &gt; 128</strong>: GPU strongly recommended</li></ul><hr/><h2 id="Vector-Fields"><a class="docs-heading-anchor" href="#Vector-Fields">Vector Fields</a><a id="Vector-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Fields" title="Permalink"></a></h2><p>Decompose vector fields into spheroidal (divergent) and toroidal (rotational) components:</p><pre><code class="language-julia hljs">cfg = create_gauss_config(32, 34)
+
+# Create vector field (θ and φ components)
+vθ = rand(cfg.nlat, cfg.nlon)
+vφ = rand(cfg.nlat, cfg.nlon)
+
+# Decompose: spatial → spectral
+Slm, Tlm = spat_to_SHsphtor(cfg, vθ, vφ)
+
+# Reconstruct: spectral → spatial
+vθ_out, vφ_out = SHsphtor_to_spat(cfg, Slm, Tlm)
+
+# Check accuracy
+println(&quot;θ error: &quot;, maximum(abs.(vθ - vθ_out)))
+println(&quot;φ error: &quot;, maximum(abs.(vφ - vφ_out)))</code></pre><h3 id="Physical-Meaning"><a class="docs-heading-anchor" href="#Physical-Meaning">Physical Meaning</a><a id="Physical-Meaning-1"></a><a class="docs-heading-anchor-permalink" href="#Physical-Meaning" title="Permalink"></a></h3><table><tr><th style="text-align: right">Component</th><th style="text-align: right">Physical Meaning</th><th style="text-align: right">Examples</th></tr><tr><td style="text-align: right"><strong>Spheroidal (S)</strong></td><td style="text-align: right">Divergent/compressible flow</td><td style="text-align: right">Pressure gradients, density waves</td></tr><tr><td style="text-align: right"><strong>Toroidal (T)</strong></td><td style="text-align: right">Rotational/incompressible flow</td><td style="text-align: right">Vortices, circulation patterns</td></tr></table><hr/><h2 id="Grid-Types"><a class="docs-heading-anchor" href="#Grid-Types">Grid Types</a><a id="Grid-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Types" title="Permalink"></a></h2><h3 id="Gauss-Legendre-Grid-(Recommended)"><a class="docs-heading-anchor" href="#Gauss-Legendre-Grid-(Recommended)">Gauss-Legendre Grid (Recommended)</a><a id="Gauss-Legendre-Grid-(Recommended)-1"></a><a class="docs-heading-anchor-permalink" href="#Gauss-Legendre-Grid-(Recommended)" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_gauss_config(lmax, nlat)</code></pre><ul><li><strong>Points</strong>: Non-uniform spacing (denser near poles)</li><li><strong>Accuracy</strong>: Optimal for spectral transforms</li><li><strong>Use for</strong>: Most scientific applications</li></ul><h3 id="Regular-(Equiangular)-Grid"><a class="docs-heading-anchor" href="#Regular-(Equiangular)-Grid">Regular (Equiangular) Grid</a><a id="Regular-(Equiangular)-Grid-1"></a><a class="docs-heading-anchor-permalink" href="#Regular-(Equiangular)-Grid" title="Permalink"></a></h3><pre><code class="language-julia hljs">cfg = create_regular_config(lmax, nlat)</code></pre><ul><li><strong>Points</strong>: Uniform spacing in θ and φ</li><li><strong>Accuracy</strong>: Slightly lower than Gauss</li><li><strong>Use for</strong>: Visualization, interfacing with GIS data</li></ul><hr/><h2 id="Performance-Tips"><a class="docs-heading-anchor" href="#Performance-Tips">Performance Tips</a><a id="Performance-Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Tips" title="Permalink"></a></h2><h3 id="1.-Preallocate-Arrays"><a class="docs-heading-anchor" href="#1.-Preallocate-Arrays">1. Preallocate Arrays</a><a id="1.-Preallocate-Arrays-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Preallocate-Arrays" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Allocate once, reuse
+spatial_buffer = zeros(cfg.nlat, cfg.nlon)
+Alm_buffer = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+
+# Multiple transforms without allocation
+for i in 1:100
+    fill!(spatial_buffer, 0)
+    # ... fill with data ...
+    Alm_buffer .= analysis(cfg, spatial_buffer)
+end</code></pre><h3 id="2.-Use-In-Place-Operations"><a class="docs-heading-anchor" href="#2.-Use-In-Place-Operations">2. Use In-Place Operations</a><a id="2.-Use-In-Place-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Use-In-Place-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Out-of-place (allocates new array)
+Alm = analysis(cfg, spatial)
+
+# In-place (writes to existing array)
+analysis!(cfg, spatial, Alm)</code></pre><h3 id="3.-Choose-Appropriate-Resolution"><a class="docs-heading-anchor" href="#3.-Choose-Appropriate-Resolution">3. Choose Appropriate Resolution</a><a id="3.-Choose-Appropriate-Resolution-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Choose-Appropriate-Resolution" title="Permalink"></a></h3><p>Rule of thumb for accuracy:</p><ul><li><code>nlat ≥ lmax + 2</code> (minimum)</li><li><code>nlat ≈ 3/2 * lmax</code> (comfortable margin)</li><li><code>nlon ≥ 2*lmax + 1</code> (Nyquist for longitude)</li></ul><hr/><h2 id="Unified-Loop-Abstraction"><a class="docs-heading-anchor" href="#Unified-Loop-Abstraction">Unified Loop Abstraction</a><a id="Unified-Loop-Abstraction-1"></a><a class="docs-heading-anchor-permalink" href="#Unified-Loop-Abstraction" title="Permalink"></a></h2><p>For custom operations that need to work on both CPU and GPU:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+A = rand(100, 100)
+B = similar(A)
+
+# Works on CPU arrays (uses SIMD)
+@sht_loop B[I] = sin(A[I]) over I ∈ CartesianIndices(A)
+
+# Same code works on GPU arrays (uses CUDA kernels)
+using CUDA
+A_gpu = CuArray(A)
+B_gpu = similar(A_gpu)
+@sht_loop B_gpu[I] = sin(A_gpu[I]) over I ∈ CartesianIndices(A_gpu)</code></pre><h3 id="Helper-Functions"><a class="docs-heading-anchor" href="#Helper-Functions">Helper Functions</a><a id="Helper-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Helper-Functions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Iterate over spectral coefficients
+for idx in spectral_range(lmax, mmax)
+    l, m = idx[1] - 1, idx[2] - 1
+    # ... work with Alm[l+1, m+1] ...
+end
+
+# Iterate over spatial grid
+for idx in spatial_range(nlat, nlon)
+    i_lat, i_lon = idx[1], idx[2]
+    # ... work with field[i_lat, i_lon] ...
+end</code></pre><hr/><h2 id="Quick-Reference"><a class="docs-heading-anchor" href="#Quick-Reference">Quick Reference</a><a id="Quick-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Reference" title="Permalink"></a></h2><h3 id="Configuration"><a class="docs-heading-anchor" href="#Configuration">Configuration</a><a id="Configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Configuration" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Gauss-Legendre grid (recommended)
+cfg = create_gauss_config(lmax, nlat; nlon=nlon, mmax=mmax)
+
+# Regular grid
+cfg = create_regular_config(lmax, nlat; nlon=nlon)</code></pre><h3 id="Scalar-Transforms"><a class="docs-heading-anchor" href="#Scalar-Transforms">Scalar Transforms</a><a id="Scalar-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Scalar-Transforms" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Forward (spectral → spatial)
+spatial = synthesis(cfg, Alm)
+spatial = synthesis(cfg, Alm; real_output=false)  # Complex output
+
+# Backward (spatial → spectral)
+Alm = analysis(cfg, spatial)</code></pre><h3 id="Vector-Transforms"><a class="docs-heading-anchor" href="#Vector-Transforms">Vector Transforms</a><a id="Vector-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Transforms" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Spheroidal-Toroidal decomposition
+Slm, Tlm = spat_to_SHsphtor(cfg, vθ, vφ)
+vθ, vφ = SHsphtor_to_spat(cfg, Slm, Tlm)
+
+# Gradient
+dθ, dφ = SH_to_grad_spat(cfg, Alm)</code></pre><h3 id="GPU-Transforms"><a class="docs-heading-anchor" href="#GPU-Transforms">GPU Transforms</a><a id="GPU-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Transforms" title="Permalink"></a></h3><pre><code class="language-julia hljs">Alm = gpu_analysis(cfg, spatial)
+spatial = gpu_synthesis(cfg, Alm)
+Alm = gpu_analysis_safe(cfg, spatial)  # With CPU fallback</code></pre><h3 id="Operators"><a class="docs-heading-anchor" href="#Operators">Operators</a><a id="Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Operators" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Laplacian in spectral space: Δf_lm = -l(l+1) f_lm
+for l in 0:cfg.lmax, m in 0:min(l, cfg.mmax)
+    Alm[l+1, m+1] *= -l * (l + 1)
+end</code></pre><hr/><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><strong><a href="../gpu/">GPU Guide</a></strong>: Detailed GPU acceleration documentation</li><li><strong><a href="../distributed/">Distributed Guide</a></strong>: MPI parallelization</li><li><strong><a href="../api/">API Reference</a></strong>: Complete function documentation</li><li><strong><a href="../examples/">Examples</a></strong>: Real-world applications</li><li><strong><a href="../performance/">Performance Guide</a></strong>: Optimization strategies</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../installation/">« Installation</a><a class="docs-footer-nextpage" href="../gpu/">GPU Acceleration »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 22:00">Sunday 18 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

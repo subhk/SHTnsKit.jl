@@ -4,9 +4,8 @@ loop.jl - Unified CPU/GPU Loop Abstraction for Spherical Harmonic Operations
 ================================================================================
 
 This file provides a @sht_loop macro that enables unified execution across CPU
-(with SIMD), GPU (with KernelAbstractions), and distributed arrays (PencilArrays).
-The pattern is inspired by BioFlow.jl's @loop macro, adapted for runtime array
-type detection.
+(with SIMD) and distributed arrays (PencilArrays). GPU support is added when
+the GPU extension is loaded (requires KernelAbstractions).
 
 WHY A UNIFIED LOOP ABSTRACTION?
 -------------------------------
@@ -22,11 +21,8 @@ selects the appropriate backend based on the array type.
 HOW IT WORKS
 ------------
 1. For regular CPU Arrays: Uses @simd with @fastmath @inbounds for vectorization
-2. For GPU arrays (CuArray): Generates a KernelAbstractions @kernel and launches it
+2. For GPU arrays (CuArray): Uses KernelAbstractions @kernel (when GPU extension loaded)
 3. For PencilArrays: Operates on local data via parent(), uses SIMD
-
-The macro detects the backend from the first array in the expression using
-`get_backend()` from KernelAbstractions.
 
 PENCILARRAY SUPPORT
 -------------------
@@ -66,10 +62,14 @@ SHTnsKit.loop_backend()  # Returns "auto" or "SIMD"
 ================================================================================
 =#
 
-using KernelAbstractions: get_backend, @index, @kernel, synchronize, CPU
-
 # Backend preference: "auto" for automatic detection, "SIMD" to force CPU
 const _LOOP_BACKEND = Ref{String}("auto")
+
+# GPU support flag - set to true when GPU extension is loaded
+const _GPU_LOOP_AVAILABLE = Ref{Bool}(false)
+
+# GPU kernel launcher callback - set by GPU extension
+const _GPU_KERNEL_LAUNCHER = Ref{Any}(nothing)
 
 """
     loop_backend()
@@ -97,11 +97,20 @@ end
 const _WORKGROUP_SIZE = 64
 
 """
-    _is_cpu_backend(arr)
+    _is_cpu_array(arr)
 
-Check if the array's backend is CPU.
+Check if the array is a standard CPU array (not GPU).
+Uses duck typing to detect GPU arrays without requiring GPU packages.
 """
-_is_cpu_backend(arr::AbstractArray) = get_backend(arr) isa CPU
+function _is_cpu_array(arr::AbstractArray)
+    T = typeof(arr)
+    type_name = string(T)
+    # Check for common GPU array types
+    return !occursin("CuArray", type_name) &&
+           !occursin("ROCArray", type_name) &&
+           !occursin("MtlArray", type_name) &&
+           !occursin("oneArray", type_name)
+end
 
 """
     _is_pencil_array(arr)
@@ -130,10 +139,20 @@ function _get_local_data(arr::AbstractArray)
 end
 
 """
+    _enable_gpu_loops!(launcher)
+
+Called by GPU extension to enable GPU loop support.
+"""
+function _enable_gpu_loops!(launcher)
+    _GPU_LOOP_AVAILABLE[] = true
+    _GPU_KERNEL_LAUNCHER[] = launcher
+end
+
+"""
     @sht_loop <expr> over <I ∈ R>
 
 Macro to automate fast loops using @simd when running on CPU,
-or KernelAbstractions when running on GPU.
+or KernelAbstractions when running on GPU (requires GPU extension).
 
 The macro extracts all symbols from the expression, creates kernel functions
 for both CPU and GPU paths, and dispatches based on the array backend at runtime.
@@ -148,8 +167,8 @@ for both CPU and GPU paths, and dispatches based on the array backend at runtime
 ```
 
 # Notes
-- Uses `get_backend()` on the first variable to detect CPU vs GPU
-- GPU path uses KernelAbstractions with work-group size of 64 threads
+- Detects CPU vs GPU from the first array in the expression
+- GPU path requires GPU extension (CUDA.jl + KernelAbstractions)
 - CPU path uses @simd @fastmath @inbounds for vectorization
 - Set `SHTnsKit.set_loop_backend("SIMD")` to force CPU path
 """
@@ -163,16 +182,9 @@ macro sht_loop(args...)
     symT = [gensym() for _ in 1:length(sym)]  # Generate type parameters
     symWtypes = joinsymtype(rep.(sym), symT)  # Symbols with types: [a::A, b::B, ...]
 
-    @gensym kern_cpu kern_gpu kern_gpu_ dispatch_kern
+    @gensym kern_cpu dispatch_kern
 
     return quote
-        # GPU kernel definition (only compiled when needed)
-        @kernel function $kern_gpu_($(symWtypes...), @Const(I0)) where {$(symT...)}
-            $I = @index(Global, Cartesian)
-            $I += I0
-            @fastmath @inbounds $ex
-        end
-
         # CPU path: SIMD loop
         function $kern_cpu($(symWtypes...), R) where {$(symT...)}
             @simd for $I ∈ R
@@ -189,15 +201,16 @@ macro sht_loop(args...)
                 # For PencilArrays, get local data and run SIMD
                 # Note: Caller must handle MPI communication separately
                 $kern_cpu($(sym...), R)
-            elseif $_LOOP_BACKEND[] == "SIMD" || $_is_cpu_backend(first_arr)
+            elseif $_LOOP_BACKEND[] == "SIMD" || $_is_cpu_array(first_arr)
                 # Regular CPU array - use SIMD
                 $kern_cpu($(sym...), R)
+            elseif $_GPU_LOOP_AVAILABLE[]
+                # GPU array - use GPU extension's kernel launcher
+                $_GPU_KERNEL_LAUNCHER[]($(sym...), R, $I -> $ex)
             else
-                # GPU array - launch kernel
-                backend = get_backend(first_arr)
-                kernel = $kern_gpu_(backend, $_WORKGROUP_SIZE)
-                kernel($(sym...), R[1] - oneunit(R[1]), ndrange=size(R))
-                synchronize(backend)
+                # GPU array but extension not loaded - fall back to CPU
+                @warn "GPU array detected but GPU extension not loaded. Using CPU fallback." maxlog=1
+                $kern_cpu($(sym...), R)
             end
         end
 

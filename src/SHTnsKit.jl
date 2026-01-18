@@ -119,7 +119,6 @@ module SHTnsKit
 using LinearAlgebra  # For linear algebra operations
 using FFTW          # For Fast Fourier Transform operations
 using Base.Threads  # For multi-threading support
-using KernelAbstractions  # For unified CPU/GPU loop abstraction
 
 # Runtime knob for inverse-FFT φ scaling during synthesis.
 # Defaults: Gauss grids use "dft" (nlon), regular/equiangular use "quad" (nlon/(2π)).

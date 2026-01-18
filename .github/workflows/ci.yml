@@ -212,8 +212,16 @@ jobs:
           julia --project=. -e '
             using SHTnsKit
             using BenchmarkTools
-            using LoopVectorization  # Load extension for turbo benchmarks
-            
+
+            # Try to load LoopVectorization extension (optional)
+            loopvec_available = try
+              using LoopVectorization
+              true
+            catch
+              println("LoopVectorization not available - turbo benchmarks will be skipped")
+              false
+            end
+
             println(" Running performance benchmarks...")
             
             # Different problem sizes
@@ -246,12 +254,16 @@ jobs:
               end
               
               # Turbo benchmark if LoopVectorization is available
-              try
-                alm_copy = copy(alm)
-                t_turbo = @belapsed turbo_apply_laplacian!($cfg, $alm_copy)
-                println("Turbo Laplacian: $(t_turbo*1000)ms")
-              catch
-                println("Turbo Laplacian: not available (LoopVectorization extension not loaded)")
+              if loopvec_available
+                try
+                  alm_copy = copy(alm)
+                  t_turbo = @belapsed turbo_apply_laplacian!($cfg, $alm_copy)
+                  println("Turbo Laplacian: $(t_turbo*1000)ms")
+                catch e
+                  println("Turbo Laplacian: error - $e")
+                end
+              else
+                println("Turbo Laplacian: skipped (LoopVectorization not installed)")
               end
             end
             

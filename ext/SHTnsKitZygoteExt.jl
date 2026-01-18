@@ -287,20 +287,24 @@ Zygote.@adjoint function SHTnsKit.SH_mul_mx(cfg::SHTnsKit.SHTConfig, mx::Abstrac
         lmax = cfg.lmax; mres = cfg.mres
         Q̄ = zeros(eltype(Qlm), length(Qlm))
         mx̄ = zeros(eltype(mx), length(mx))
+        # Forward pass: R[lm0+1] = mx[2*lm_prev+2]*Q[lm_prev+1] + mx[2*lm_next+1]*Q[lm_next+1]
+        # where lm_prev = LM_index(l-1,m), lm_next = LM_index(l+1,m)
         @inbounds for lm0 in 0:(cfg.nlm-1)
             l = cfg.li[lm0+1]; m = cfg.mi[lm0+1]
-            c_minus = mx[2*lm0 + 1]
-            c_plus  = mx[2*lm0 + 2]
             rbar = ȳ[lm0 + 1]
+            # Contribution from lower neighbor Y_{l-1}^m
             if l > m && l > 0
                 lm_prev = SHTnsKit.LM_index(lmax, mres, l-1, m)
-                Q̄[lm_prev + 1] += conj(c_minus) * rbar
-                mx̄[2*lm0 + 1] += real(conj(rbar) * Qlm[lm_prev + 1])
+                c_from_below = mx[2*lm_prev + 2]  # b_{l-1}^m coefficient
+                Q̄[lm_prev + 1] += c_from_below * rbar  # mx is real, so conj not needed
+                mx̄[2*lm_prev + 2] += real(conj(rbar) * Qlm[lm_prev + 1])
             end
+            # Contribution from upper neighbor Y_{l+1}^m
             if l < lmax
                 lm_next = SHTnsKit.LM_index(lmax, mres, l+1, m)
-                Q̄[lm_next + 1] += conj(c_plus) * rbar
-                mx̄[2*lm0 + 2] += real(conj(rbar) * Qlm[lm_next + 1])
+                c_from_above = mx[2*lm_next + 1]  # a_{l+1}^m coefficient
+                Q̄[lm_next + 1] += c_from_above * rbar  # mx is real, so conj not needed
+                mx̄[2*lm_next + 1] += real(conj(rbar) * Qlm[lm_next + 1])
             end
         end
         return (nothing, mx̄, Q̄, nothing)

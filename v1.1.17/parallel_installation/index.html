@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Parallel Computing Installation Guide · SHTnsKit.jl</title><meta name="title" content="Parallel Computing Installation Guide · SHTnsKit.jl"/><meta property="og:title" content="Parallel Computing Installation Guide · SHTnsKit.jl"/><meta property="twitter:title" content="Parallel Computing Installation Guide · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/parallel_installation/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/parallel_installation/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/parallel_installation/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../gpu/">GPU Acceleration</a></li><li><a class="tocitem" href="../distributed/">Distributed Computing</a></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../examples/">Examples Gallery</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Parallel Computing Installation Guide</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Parallel Computing Installation Guide</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/parallel_installation.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Parallel-Computing-Installation-Guide"><a class="docs-heading-anchor" href="#Parallel-Computing-Installation-Guide">Parallel Computing Installation Guide</a><a id="Parallel-Computing-Installation-Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Computing-Installation-Guide" title="Permalink"></a></h1><p>This comprehensive guide covers installing and configuring SHTnsKit.jl for high-performance parallel computing with MPI, PencilArrays, PencilFFTs, and SIMD optimizations.</p><h2 id="Overview"><a class="docs-heading-anchor" href="#Overview">Overview</a><a id="Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Overview" title="Permalink"></a></h2><p>SHTnsKit.jl supports multiple levels of performance optimization:</p><ol><li><strong>Serial</strong>: Basic Julia threading and FFTW optimization</li><li><strong>SIMD</strong>: Enhanced vectorization with LoopVectorization.jl  </li><li><strong>MPI Parallel</strong>: Distributed computing with domain decomposition</li><li><strong>Full Stack</strong>: Combined MPI + SIMD + threading for maximum performance</li></ol><h2 id="System-Requirements"><a class="docs-heading-anchor" href="#System-Requirements">System Requirements</a><a id="System-Requirements-1"></a><a class="docs-heading-anchor-permalink" href="#System-Requirements" title="Permalink"></a></h2><h3 id="Package-Version-Compatibility"><a class="docs-heading-anchor" href="#Package-Version-Compatibility">Package Version Compatibility</a><a id="Package-Version-Compatibility-1"></a><a class="docs-heading-anchor-permalink" href="#Package-Version-Compatibility" title="Permalink"></a></h3><p>SHTnsKit.jl&#39;s distributed extension requires specific minimum versions due to API changes:</p><table><tr><th style="text-align: right">Package</th><th style="text-align: right">Minimum Version</th><th style="text-align: right">Notes</th></tr><tr><td style="text-align: right"><strong>MPI.jl</strong></td><td style="text-align: right">v0.20+</td><td style="text-align: right">Uses <code>Allgatherv!</code> with <code>VBuffer</code> API</td></tr><tr><td style="text-align: right"><strong>PencilArrays.jl</strong></td><td style="text-align: right">v0.19+</td><td style="text-align: right">Uses <code>range_local</code>, <code>size_local</code>, <code>get_comm</code> API</td></tr><tr><td style="text-align: right"><strong>PencilFFTs.jl</strong></td><td style="text-align: right">v0.15+</td><td style="text-align: right">Compatible distributed FFT support</td></tr><tr><td style="text-align: right"><strong>Julia</strong></td><td style="text-align: right">1.9+</td><td style="text-align: right">1.11+ recommended for best performance</td></tr></table><p><strong>Important</strong>: Older versions of PencilArrays (&lt; v0.19) used different APIs (<code>communicator</code>, <code>globalindices</code>) that are no longer supported.</p><h3 id="Minimum-Requirements"><a class="docs-heading-anchor" href="#Minimum-Requirements">Minimum Requirements</a><a id="Minimum-Requirements-1"></a><a class="docs-heading-anchor-permalink" href="#Minimum-Requirements" title="Permalink"></a></h3><ul><li><strong>Operating System</strong>: Linux, macOS, or Windows with WSL</li><li><strong>Julia</strong>: Version 1.9+ (1.11+ recommended)</li><li><strong>Memory</strong>: 8GB RAM (32GB+ for large parallel problems)</li><li><strong>Network</strong>: Fast interconnect recommended for multi-node MPI</li></ul><h3 id="Recommended-Hardware"><a class="docs-heading-anchor" href="#Recommended-Hardware">Recommended Hardware</a><a id="Recommended-Hardware-1"></a><a class="docs-heading-anchor-permalink" href="#Recommended-Hardware" title="Permalink"></a></h3><ul><li><strong>CPU</strong>: Modern multi-core processor with AVX2/AVX512 support</li><li><strong>Network</strong>: InfiniBand or 10+ Gbps Ethernet for multi-node scaling</li><li><strong>Storage</strong>: NFS or parallel filesystem for multi-node jobs</li></ul><h2 id="Installation-Steps"><a class="docs-heading-anchor" href="#Installation-Steps">Installation Steps</a><a id="Installation-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Installation-Steps" title="Permalink"></a></h2><h3 id="Step-1:-Basic-SHTnsKit-Installation"><a class="docs-heading-anchor" href="#Step-1:-Basic-SHTnsKit-Installation">Step 1: Basic SHTnsKit Installation</a><a id="Step-1:-Basic-SHTnsKit-Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Step-1:-Basic-SHTnsKit-Installation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.add(&quot;SHTnsKit&quot;)</code></pre><h3 id="Step-2:-MPI-Setup"><a class="docs-heading-anchor" href="#Step-2:-MPI-Setup">Step 2: MPI Setup</a><a id="Step-2:-MPI-Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Step-2:-MPI-Setup" title="Permalink"></a></h3><p><strong>Linux (Ubuntu/Debian):</strong></p><pre><code class="language-bash hljs"># Install MPI library
+sudo apt-get update
+sudo apt-get install libopenmpi-dev openmpi-bin
+
+# Optional: Install development tools
+sudo apt-get install build-essential gfortran</code></pre><p><strong>Linux (CentOS/RHEL):</strong></p><pre><code class="language-bash hljs">sudo yum install openmpi-devel
+# or for newer systems:
+sudo dnf install openmpi-devel
+
+# Load MPI module
+module load mpi/openmpi-x86_64</code></pre><p><strong>macOS:</strong></p><pre><code class="language-bash hljs"># Install via Homebrew
+brew install open-mpi
+
+# Optional: Install via MacPorts
+# sudo port install openmpi</code></pre><h3 id="Step-3:-Julia-MPI-Configuration"><a class="docs-heading-anchor" href="#Step-3:-Julia-MPI-Configuration">Step 3: Julia MPI Configuration</a><a id="Step-3:-Julia-MPI-Configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Step-3:-Julia-MPI-Configuration" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+
+# Install MPI.jl
+Pkg.add(&quot;MPI&quot;)
+
+# Build MPI with system library
+Pkg.build(&quot;MPI&quot;)
+
+# Verify installation
+using MPI
+MPI.Init()
+println(&quot;MPI initialized successfully&quot;)
+MPI.Finalize()</code></pre><h3 id="Step-4:-Parallel-Computing-Packages"><a class="docs-heading-anchor" href="#Step-4:-Parallel-Computing-Packages">Step 4: Parallel Computing Packages</a><a id="Step-4:-Parallel-Computing-Packages-1"></a><a class="docs-heading-anchor-permalink" href="#Step-4:-Parallel-Computing-Packages" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+
+# Install complete parallel stack
+Pkg.add([
+    &quot;MPI&quot;,           # Message Passing Interface
+    &quot;PencilArrays&quot;,  # Domain decomposition
+    &quot;PencilFFTs&quot;,    # Distributed FFTs
+    &quot;LoopVectorization&quot;  # SIMD enhancements
+])
+
+# Optional performance packages
+Pkg.add([
+    &quot;BenchmarkTools&quot;,
+    &quot;Profile&quot;,
+    &quot;ProfileView&quot;
+])</code></pre><h3 id="Step-5:-Verification"><a class="docs-heading-anchor" href="#Step-5:-Verification">Step 5: Verification</a><a id="Step-5:-Verification-1"></a><a class="docs-heading-anchor-permalink" href="#Step-5:-Verification" title="Permalink"></a></h3><p><strong>Test MPI functionality:</strong></p><pre><code class="language-julia hljs"># Save as test_mpi.jl
+using MPI
+MPI.Init()
+
+comm = MPI.COMM_WORLD
+rank = Comm_rank(comm)
+size = Comm_size(comm)
+
+println(&quot;Hello from process $rank of $size&quot;)
+
+MPI.Finalize()</code></pre><pre><code class="language-bash hljs"># Run with multiple processes
+mpiexec -n 4 julia test_mpi.jl</code></pre><p><strong>Test SHTnsKit parallel functionality:</strong></p><p>Save as <code>test_parallel.jl</code>:</p><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+
+if rank == 0
+    println(&quot;Testing with $nprocs MPI processes&quot;)
+end
+
+# Create configuration
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data (Y_2^0)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Test distributed transforms
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+# Verify accuracy
+max_err = maximum(abs.(parent(fθφ_out) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, MPI.COMM_WORLD)
+
+if rank == 0
+    println(&quot;Roundtrip error: $global_max_err&quot;)
+    println(global_max_err &lt; 1e-10 ? &quot;SUCCESS!&quot; : &quot;FAILED&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><pre><code class="language-bash hljs"># Test parallel mode
+mpiexec -n 2 julia --project test_parallel.jl</code></pre><p><strong>Run the built-in parallel testset (includes PencilArrays/PencilFFTs):</strong></p><pre><code class="language-bash hljs">SHTNSKIT_RUN_MPI_TESTS=1 JULIA_NUM_THREADS=1 \
+    mpiexec -n 2 julia --project -e &#39;using Pkg; Pkg.test()&#39;</code></pre><p>This exercises distributed analysis/synthesis, vector/QST transforms, rotations, and diagnostics across ranks using PencilArrays and PencilFFTs.</p><h2 id="Advanced-Configuration"><a class="docs-heading-anchor" href="#Advanced-Configuration">Advanced Configuration</a><a id="Advanced-Configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Configuration" title="Permalink"></a></h2><h3 id="Environment-Variables"><a class="docs-heading-anchor" href="#Environment-Variables">Environment Variables</a><a id="Environment-Variables-1"></a><a class="docs-heading-anchor-permalink" href="#Environment-Variables" title="Permalink"></a></h3><p><strong>MPI tuning:</strong></p><pre><code class="language-bash hljs"># Reduce MPI warnings
+export OMPI_MCA_mpi_warn_on_fork=0
+
+# Network interface selection
+export OMPI_MCA_btl_tcp_if_include=eth0
+
+# Memory pinning
+export OMPI_MCA_mpi_leave_pinned=1
+
+# Collective algorithm selection
+export OMPI_MCA_coll_hcoll_enable=1</code></pre><p><strong>Julia optimization:</strong></p><pre><code class="language-bash hljs"># Threading
+export JULIA_NUM_THREADS=8
+export OPENBLAS_NUM_THREADS=1
+export FFTW_NUM_THREADS=4
+
+# Memory
+export JULIA_GC_ALLOC_POOL_GROW_THRESHOLD=0.1</code></pre><h3 id="Performance-Tuning"><a class="docs-heading-anchor" href="#Performance-Tuning">Performance Tuning</a><a id="Performance-Tuning-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Tuning" title="Permalink"></a></h3><p><strong>Process binding (recommended):</strong></p><pre><code class="language-bash hljs"># Bind to cores
+mpiexec --bind-to core -n 8 julia script.jl
+
+# NUMA-aware binding
+mpiexec --map-by socket --bind-to core -n 16 julia script.jl</code></pre><p><strong>Large problem optimization:</strong></p><pre><code class="language-bash hljs"># Increase memory limits
+ulimit -s unlimited
+ulimit -v unlimited
+
+# Run with large heap
+mpiexec -n 8 julia --heap-size-hint=32G script.jl</code></pre><h2 id="Container-Deployment"><a class="docs-heading-anchor" href="#Container-Deployment">Container Deployment</a><a id="Container-Deployment-1"></a><a class="docs-heading-anchor-permalink" href="#Container-Deployment" title="Permalink"></a></h2><h3 id="Docker"><a class="docs-heading-anchor" href="#Docker">Docker</a><a id="Docker-1"></a><a class="docs-heading-anchor-permalink" href="#Docker" title="Permalink"></a></h3><p><strong>Basic parallel container:</strong></p><pre><code class="language-dockerfile hljs">FROM julia:1.11
+
+# Install MPI
+RUN apt-get update &amp;&amp; \
+    apt-get install -y libopenmpi-dev openmpi-bin &amp;&amp; \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Julia packages
+RUN julia -e &#39;using Pkg; \
+              Pkg.add([&quot;SHTnsKit&quot;, &quot;MPI&quot;, &quot;PencilArrays&quot;, &quot;PencilFFTs&quot;, &quot;LoopVectorization&quot;]); \
+              using MPI; \
+              MPI.install_mpiexecjl()&#39;
+
+# Precompile
+RUN julia -e &#39;using SHTnsKit, MPI, PencilArrays, PencilFFTs&#39;
+
+WORKDIR /app
+COPY . .
+
+# Run with: docker run --rm -it image mpiexecjl -n 4 julia script.jl</code></pre><h3 id="Singularity/Apptainer"><a class="docs-heading-anchor" href="#Singularity/Apptainer">Singularity/Apptainer</a><a id="Singularity/Apptainer-1"></a><a class="docs-heading-anchor-permalink" href="#Singularity/Apptainer" title="Permalink"></a></h3><p><strong>HPC-ready container:</strong></p><pre><code class="language-singularity hljs">Bootstrap: docker
+From: julia:1.11
+
+%post
+    apt-get update
+    apt-get install -y libopenmpi-dev openmpi-bin
+    
+    julia -e &#39;using Pkg; 
+              Pkg.add([&quot;SHTnsKit&quot;, &quot;MPI&quot;, &quot;PencilArrays&quot;, &quot;PencilFFTs&quot;, &quot;LoopVectorization&quot;]); 
+              using MPI; MPI.install_mpiexecjl()&#39;
+    
+    julia -e &#39;using SHTnsKit, MPI, PencilArrays, PencilFFTs&#39;
+
+%runscript
+    exec julia &quot;$@&quot;</code></pre><pre><code class="language-bash hljs"># Build and run
+singularity build shtns.sif shtns.def
+mpirun -n 8 singularity exec shtns.sif julia script.jl</code></pre><h2 id="HPC-Cluster-Setup"><a class="docs-heading-anchor" href="#HPC-Cluster-Setup">HPC Cluster Setup</a><a id="HPC-Cluster-Setup-1"></a><a class="docs-heading-anchor-permalink" href="#HPC-Cluster-Setup" title="Permalink"></a></h2><h3 id="SLURM-Job-Script"><a class="docs-heading-anchor" href="#SLURM-Job-Script">SLURM Job Script</a><a id="SLURM-Job-Script-1"></a><a class="docs-heading-anchor-permalink" href="#SLURM-Job-Script" title="Permalink"></a></h3><pre><code class="language-bash hljs">#!/bin/bash
+#SBATCH --job-name=shtns_parallel
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=16
+#SBATCH --time=01:00:00
+#SBATCH --partition=compute
+
+# Load modules
+module load julia/1.11
+module load openmpi/4.1.0
+
+# Set environment
+export JULIA_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=1
+
+# Run parallel job
+mpirun julia --project=. parallel_example.jl --benchmark</code></pre><h3 id="PBS/Torque-Script"><a class="docs-heading-anchor" href="#PBS/Torque-Script">PBS/Torque Script</a><a id="PBS/Torque-Script-1"></a><a class="docs-heading-anchor-permalink" href="#PBS/Torque-Script" title="Permalink"></a></h3><pre><code class="language-bash hljs">#!/bin/bash
+#PBS -N shtns_job
+#PBS -l nodes=4:ppn=8
+#PBS -l walltime=02:00:00
+#PBS -q normal
+
+cd $PBS_O_WORKDIR
+
+# Load modules
+module load julia/1.11
+module load openmpi/3.1.4
+
+# Run job
+mpirun -np 32 julia --project=. examples/parallel_example.jl</code></pre><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><h3 id="Common-Issues"><a class="docs-heading-anchor" href="#Common-Issues">Common Issues</a><a id="Common-Issues-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Issues" title="Permalink"></a></h3><p><strong>1. MPI library mismatch:</strong></p><pre><code class="nohighlight hljs">ERROR: MPI library not found</code></pre><p><strong>Solution:</strong></p><pre><code class="language-julia hljs"># Force MPI.jl to use system MPI
+ENV[&quot;JULIA_MPI_BINARY&quot;] = &quot;system&quot;
+using Pkg; Pkg.build(&quot;MPI&quot;)</code></pre><p><strong>2. PencilArrays compilation errors:</strong></p><pre><code class="nohighlight hljs">ERROR: LoadError: FFTW not found</code></pre><p><strong>Solution:</strong></p><pre><code class="language-julia hljs"># Install FFTW explicitly
+using Pkg
+Pkg.add(&quot;FFTW&quot;)
+Pkg.build(&quot;FFTW&quot;)
+Pkg.build(&quot;PencilFFTs&quot;)</code></pre><p><strong>3. Process binding warnings:</strong></p><pre><code class="nohighlight hljs">WARNING: A process refused to die!</code></pre><p><strong>Solution:</strong></p><pre><code class="language-bash hljs"># Use proper MPI cleanup
+export OMPI_MCA_orte_tmpdir_base=/tmp
+mpiexec --mca orte_base_help_aggregate 0 -n 4 julia script.jl</code></pre><p><strong>4. PencilArrays API errors (version mismatch):</strong></p><pre><code class="nohighlight hljs">ERROR: MethodError: no method matching communicator(::Pencil{...})
+ERROR: MethodError: no method matching globalindices(::PencilArray{...})</code></pre><p><strong>Cause:</strong> You have an older version of PencilArrays (&lt; v0.19) that uses different API names.</p><p><strong>Solution:</strong></p><pre><code class="language-julia hljs"># Update to PencilArrays v0.19+
+using Pkg
+Pkg.update(&quot;PencilArrays&quot;)
+Pkg.update(&quot;PencilFFTs&quot;)
+
+# Verify version
+Pkg.status(&quot;PencilArrays&quot;)  # Should show v0.19+</code></pre><p>The new PencilArrays v0.19+ API uses:</p><ul><li><code>get_comm(pen)</code> instead of <code>communicator(pen)</code></li><li><code>range_local(pen)</code> instead of <code>globalindices(arr, dim)</code></li><li><code>size_local(pen)</code> instead of other size functions</li></ul><p><strong>5. Precompilation cache conflicts with MPI:</strong></p><pre><code class="nohighlight hljs">ERROR: Permission denied @ mkdir_pid_file
+ERROR: InexactError: ... (random memory errors)</code></pre><p><strong>Cause:</strong> Multiple MPI processes trying to write to the same precompilation cache simultaneously.</p><p><strong>Solution:</strong></p><pre><code class="language-bash hljs"># Use a fresh depot for MPI runs
+JULIA_DEPOT_PATH=/tmp/fresh_depot:$HOME/.julia mpiexec -n 4 julia script.jl
+
+# Or precompile in serial first
+julia --project -e &#39;using SHTnsKit, MPI, PencilArrays, PencilFFTs&#39;
+mpiexec -n 4 julia --project script.jl</code></pre><h3 id="Performance-Issues"><a class="docs-heading-anchor" href="#Performance-Issues">Performance Issues</a><a id="Performance-Issues-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Issues" title="Permalink"></a></h3><p><strong>Slow initialization:</strong></p><ul><li>Precompile packages: <code>julia -e &#39;using SHTnsKit, MPI, PencilArrays, PencilFFTs&#39;</code></li><li>Use system image: <code>julia --sysimage=shtns_parallel.so script.jl</code></li></ul><p><strong>Poor scaling:</strong></p><ul><li>Check network bandwidth: <code>iperf3</code> between nodes</li><li>Verify process binding: <code>numactl --show</code></li><li>Monitor MPI communication: <code>mpiP</code> profiling</li></ul><p><strong>Memory errors:</strong></p><ul><li>Increase system limits: <code>ulimit -v unlimited</code></li><li>Use memory-efficient transforms: <code>memory_efficient_parallel_transform!()</code></li><li>Process data in chunks for very large problems</li></ul><h2 id="Validation-and-Testing"><a class="docs-heading-anchor" href="#Validation-and-Testing">Validation and Testing</a><a id="Validation-and-Testing-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-and-Testing" title="Permalink"></a></h2><h3 id="Comprehensive-Test-Script"><a class="docs-heading-anchor" href="#Comprehensive-Test-Script">Comprehensive Test Script</a><a id="Comprehensive-Test-Script-1"></a><a class="docs-heading-anchor-permalink" href="#Comprehensive-Test-Script" title="Permalink"></a></h3><p>Save as <code>test_complete_setup.jl</code>:</p><pre><code class="language-julia hljs">using Test
+using SHTnsKit
+using LinearAlgebra
+
+@testset &quot;Complete Setup Verification&quot; begin
+    # Test basic functionality
+    lmax = 16
+    cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+    @test cfg.nlm &gt; 0
+
+    # Test parallel packages availability
+    @testset &quot;Package Loading&quot; begin
+        @test_nowarn using MPI
+        @test_nowarn using PencilArrays
+        @test_nowarn using PencilFFTs
+    end
+
+    # Test basic transforms
+    @testset &quot;Transform Accuracy&quot; begin
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for i in 1:cfg.nlat
+            x = cfg.x[i]
+            spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0
+        end
+
+        Alm = analysis(cfg, spatial)
+        recovered = synthesis(cfg, Alm)
+        @test norm(spatial - recovered) &lt; 1e-12
+    end
+
+    destroy_config(cfg)
+end
+
+println(&quot;All tests passed!&quot;)</code></pre><pre><code class="language-bash hljs"># Run validation
+julia --project test_complete_setup.jl</code></pre><h3 id="Performance-Benchmarking"><a class="docs-heading-anchor" href="#Performance-Benchmarking">Performance Benchmarking</a><a id="Performance-Benchmarking-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Benchmarking" title="Permalink"></a></h3><pre><code class="language-julia hljs"># benchmark_setup.jl
+using SHTnsKit, BenchmarkTools
+
+function run_benchmarks()
+    println(&quot;SHTnsKit.jl Performance Benchmark&quot;)
+    println(&quot;=&quot; ^ 50)
+
+    # Test different problem sizes
+    for lmax in [16, 32, 64]
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        # Create test data
+        spatial = zeros(cfg.nlat, cfg.nlon)
+        for i in 1:cfg.nlat
+            x = cfg.x[i]
+            spatial[i, :] .= (3*x^2 - 1)/2
+        end
+
+        println(&quot;\nlmax = $lmax ($(cfg.nlm) coefficients, $(nlat)×$(nlon) grid)&quot;)
+
+        # Serial transform benchmarks
+        t_analysis = @belapsed analysis($cfg, $spatial)
+        Alm = analysis(cfg, spatial)
+        t_synthesis = @belapsed synthesis($cfg, $Alm)
+
+        println(&quot;  Analysis: $(t_analysis*1000) ms&quot;)
+        println(&quot;  Synthesis: $(t_synthesis*1000) ms&quot;)
+
+        destroy_config(cfg)
+    end
+end
+
+run_benchmarks()</code></pre><p>Your parallel SHTnsKit.jl installation is now complete and optimized for high-performance computing!</p></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Tuesday 20 January 2026 13:08">Tuesday 20 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -189,7 +189,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_fus
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # Use precomputed tables - most efficient path
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
@@ -206,7 +206,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_fus
         # Compute Legendre polynomials on the fly
         # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -266,7 +266,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
@@ -282,7 +282,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     else
         # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -338,7 +338,7 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
@@ -354,7 +354,7 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
     else
         # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -429,7 +429,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
@@ -445,7 +445,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     else
         # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -525,7 +525,7 @@ function spat_to_SHsphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3
 
     # Process each field using existing spat_to_SHsphtor
     # This can be further optimized by sharing Legendre computations
-    @threads for k in 1:nfields
+    @threads :static for k in 1:nfields
         Vt = view(Vt_batch, :, :, k)
         Vp = view(Vp_batch, :, :, k)
         Slm, Tlm = spat_to_SHsphtor(cfg, Vt, Vp)
@@ -564,7 +564,7 @@ function SHsphtor_to_spat_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Compl
         Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
     end
 
-    @threads for k in 1:nfields
+    @threads :static for k in 1:nfields
         Slm = view(Slm_batch, :, :, k)
         Tlm = view(Tlm_batch, :, :, k)
         Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=real_output)
@@ -601,7 +601,7 @@ function spat_to_SHqst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
     Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
 
-    @threads for k in 1:nfields
+    @threads :static for k in 1:nfields
         Vr = view(Vr_batch, :, :, k)
         Vt = view(Vt_batch, :, :, k)
         Vp = view(Vp_batch, :, :, k)
@@ -646,7 +646,7 @@ function SHqst_to_spat_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,
         Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
     end
 
-    @threads for k in 1:nfields
+    @threads :static for k in 1:nfields
         Qlm = view(Qlm_batch, :, :, k)
         Slm = view(Slm_batch, :, :, k)
         Tlm = view(Tlm_batch, :, :, k)

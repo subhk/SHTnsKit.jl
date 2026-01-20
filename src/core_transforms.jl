@@ -154,7 +154,7 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{
     # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
 
-    @threads for m in 0:mmax
+    @threads :static for m in 0:mmax
         col = m + 1
         P = thread_local_P[Threads.threadid()]
         if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
@@ -196,7 +196,7 @@ function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatri
     # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
 
-    @threads for m in 0:mmax
+    @threads :static for m in 0:mmax
         col = m + 1
         P = thread_local_P[Threads.threadid()]
         if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
@@ -239,7 +239,7 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for i in 1:nlat
@@ -253,7 +253,7 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
     else
         # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
             for i in 1:nlat
@@ -280,7 +280,7 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for i in 1:nlat
@@ -294,7 +294,7 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
     else
         # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
             for i in 1:nlat
@@ -370,7 +370,7 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
 
     # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-    @threads for m in 0:mmax
+    @threads :static for m in 0:mmax
         col = m + 1
         P = thread_local_P[Threads.threadid()]
         if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
@@ -420,7 +420,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for i in 1:nlat, l in m:lmax
@@ -430,7 +430,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     else
         # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
-        @threads for m in 0:mmax
+        @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
             for i in 1:nlat

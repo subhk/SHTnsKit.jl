@@ -159,7 +159,8 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     inv_scaleφ = phi_inv_scale(cfg)
 
     # Process each azimuthal mode m in parallel
-    @threads for m in 0:mmax
+    # Use :static scheduling to ensure thread IDs are in 1:nthreads() (required for Julia 1.12+)
+    @threads :static for m in 0:mmax
         col = m + 1
         for i in 1:nlat
             x = cfg.x[i]
@@ -266,7 +267,7 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
     thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
 
-    @threads for m in 0:mmax
+    @threads :static for m in 0:mmax
         col = m + 1
         tid = Threads.threadid()
         

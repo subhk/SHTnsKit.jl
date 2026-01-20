@@ -150,8 +150,8 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     fill!(Fθ, 0); fill!(Fφ, 0)
 
     # Thread-local working arrays for Legendre polynomial computation
-    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-    nthreads = Threads.nthreads()
+    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    nthreads = Threads.maxthreadid()
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     
@@ -159,7 +159,7 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     inv_scaleφ = phi_inv_scale(cfg)
 
     # Process each azimuthal mode m in parallel
-    # Use :static scheduling to ensure thread IDs are in 1:nthreads() (required for Julia 1.12+)
+    # Use :static scheduling for consistent load distribution
     @threads :static for m in 0:mmax
         col = m + 1
         for i in 1:nlat
@@ -260,8 +260,8 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
               length(cfg.dplm_tables) == mmax + 1 &&
               !isempty(cfg.plm_tables)
 
-    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-    nthreads = Threads.nthreads()
+    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    nthreads = Threads.maxthreadid()
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]

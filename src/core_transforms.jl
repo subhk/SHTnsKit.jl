@@ -151,8 +151,8 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{
     fill!(alm, 0)
     scaleφ = cfg.cphi
 
-    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
     @threads :static for m in 0:mmax
         col = m + 1
@@ -193,8 +193,8 @@ function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatri
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
 
-    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
     @threads :static for m in 0:mmax
         col = m + 1
@@ -368,8 +368,8 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
     fill!(Fφ, zero(CT))
     inv_scaleφ = phi_inv_scale(cfg)
 
-    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     @threads :static for m in 0:mmax
         col = m + 1
         P = thread_local_P[Threads.threadid()]

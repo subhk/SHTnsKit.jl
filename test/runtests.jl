@@ -590,10 +590,64 @@ function parseval_vector_test(lmax::Int)
     @test isapprox(E_vec, E_grid; rtol=1e-9, atol=1e-11)
 end
 
+"""
+    vector_coefficient_roundtrip_test(lmax::Int)
+
+Test that vector spherical harmonic coefficients can be recovered after
+synthesis → analysis roundtrip. This verifies that the spheroidal-toroidal
+decomposition is correctly inverted.
+"""
+function vector_coefficient_roundtrip_test(lmax::Int)
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
+
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(31)
+
+    # Generate random spheroidal and toroidal coefficients
+    Slm_orig = zeros(ComplexF64, lmax+1, lmax+1)
+    Tlm_orig = zeros(ComplexF64, lmax+1, lmax+1)
+
+    # Fill only valid coefficients (l >= m, and l >= 1 for S/T)
+    for m in 0:lmax
+        for l in max(1, m):lmax
+            Slm_orig[l+1, m+1] = randn(rng) + im * randn(rng)
+            Tlm_orig[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        # m=0 must be real for real-valued fields
+        if m == 0
+            for l in 1:lmax
+                Slm_orig[l+1, 1] = real(Slm_orig[l+1, 1])
+                Tlm_orig[l+1, 1] = real(Tlm_orig[l+1, 1])
+            end
+        end
+    end
+
+    # Synthesize to spatial domain
+    Vt, Vp = SHsphtor_to_spat(cfg, Slm_orig, Tlm_orig; real_output=true)
+
+    # Analyze back to spectral domain
+    Slm_recov, Tlm_recov = spat_to_SHsphtor(cfg, Vt, Vp)
+
+    # Compare recovered coefficients
+    S_err = maximum(abs.(Slm_recov - Slm_orig))
+    T_err = maximum(abs.(Tlm_recov - Tlm_orig))
+    VERBOSE && @info "Vector roundtrip" lmax S_max_err=S_err T_max_err=T_err
+
+    # Check that coefficients are recovered accurately
+    @test isapprox(Slm_recov, Slm_orig; rtol=1e-9, atol=1e-11)
+    @test isapprox(Tlm_recov, Tlm_orig; rtol=1e-9, atol=1e-11)
+end
+
 # ===== CORE MATHEMATICAL PROPERTY TESTS =====
 @testset "Parseval identities" begin
     parseval_scalar_test(10)  # Test scalar energy conservation
     parseval_vector_test(10)  # Test vector energy conservation
+end
+
+@testset "Vector coefficient roundtrip" begin
+    vector_coefficient_roundtrip_test(8)   # Test at moderate resolution
+    vector_coefficient_roundtrip_test(16)  # Test at higher resolution
 end
 
 # ===== AUTOMATIC DIFFERENTIATION TESTS =====

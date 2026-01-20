@@ -151,7 +151,8 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{
     fill!(alm, 0)
     scaleφ = cfg.cphi
 
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
 
     @threads for m in 0:mmax
         col = m + 1
@@ -192,7 +193,8 @@ function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatri
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
 
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
 
     @threads for m in 0:mmax
         col = m + 1
@@ -249,7 +251,8 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -289,7 +292,8 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -364,7 +368,8 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
     fill!(Fφ, zero(CT))
     inv_scaleφ = phi_inv_scale(cfg)
 
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
     @threads for m in 0:mmax
         col = m + 1
         P = thread_local_P[Threads.threadid()]
@@ -423,7 +428,8 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]

@@ -150,8 +150,10 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     fill!(Fθ, 0); fill!(Fφ, 0)
 
     # Thread-local working arrays for Legendre polynomial computation
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+    nthreads = Threads.nthreads()
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     
     # Scale continuous Fourier coefficients to DFT bins for ifft (factor nlon or nlon/(2π))
     inv_scaleφ = phi_inv_scale(cfg)
@@ -257,11 +259,12 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
               length(cfg.dplm_tables) == mmax + 1 &&
               !isempty(cfg.plm_tables)
 
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-    
-    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-    thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-    thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+    nthreads = Threads.nthreads()
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
 
     @threads for m in 0:mmax
         col = m + 1
@@ -543,43 +546,58 @@ end
     spat_to_SHsphtor_ml(cfg, im, Vt_m, Vp_m, ltr) -> (Sl, Tl)
 
 Mode-limited transform for specific azimuthal mode im.
-Input vectors contain spatial values for that mode at all latitudes.
+Input vectors contain Fourier coefficients for mode m at all latitudes.
+Implements the proper spheroidal-toroidal decomposition using the adjoint of
+the synthesis formulas:
+    Vθ = ∂S/∂θ - (im/sinθ) * T
+    Vφ = (im/sinθ) * S + ∂T/∂θ
 """
 function spat_to_SHsphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     length(Vt_m) == nlat || throw(DimensionMismatch("Vt_m length must be nlat"))
     length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat"))
-    
-    # Simplified mode-specific analysis
-    # Full implementation would properly handle vector mode decomposition
-    
+
     num_l = ltr - im + 1
-    Sl = Vector{ComplexF64}(undef, num_l)  
+    Sl = Vector{ComplexF64}(undef, num_l)
     Tl = Vector{ComplexF64}(undef, num_l)
-    fill!(Sl, 0.0)
-    fill!(Tl, 0.0)
-    
+    fill!(Sl, 0.0 + 0.0im)
+    fill!(Tl, 0.0 + 0.0im)
+
     P = Vector{Float64}(undef, ltr + 1)
-    
-    # Integrate using Legendre polynomials
+    dPdx = Vector{Float64}(undef, ltr + 1)
+    scaleφ = cfg.cphi
+
+    # Integrate using Legendre polynomials and derivatives
     for i in 1:nlat
         x = cfg.x[i]
-        Plm_row!(P, x, ltr, im)
-        
-        wVt = Vt_m[i] * cfg.wlat[i]
-        wVp = Vp_m[i] * cfg.wlat[i]
-        
-        @inbounds for l in im:ltr
-            # Simplified vector mode analysis
+        sθ = sqrt(max(0.0, 1 - x*x))
+        inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+        wi = cfg.w[i]
+        Fθ = Vt_m[i]
+        Fφ = Vp_m[i]
+
+        # Handle Robert form scaling if needed
+        if cfg.robert_form && sθ > 0
+            Fθ = Fθ / sθ
+            Fφ = Fφ / sθ
+        end
+
+        Plm_and_dPdx_row!(P, dPdx, x, ltr, im)
+
+        @inbounds for l in max(1, im):ltr
+            N = cfg.Nlm[l+1, im+1]
+            dθY = -sθ * N * dPdx[l+1]
+            Y = N * P[l+1]
             ll1 = l * (l + 1)
-            if ll1 > 0
-                scale = cfg.cphi / sqrt(ll1)
-                Sl[l-im+1] += wVt * P[l+1] * scale
-                Tl[l-im+1] += wVp * P[l+1] * scale
-            end
+            coeff = wi * scaleφ / ll1
+            term = (0 + 1im) * im * inv_sθ * Y
+
+            # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
+            Sl[l-im+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
+            Tl[l-im+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
         end
     end
-    
+
     return Sl, Tl
 end
 
@@ -587,38 +605,55 @@ end
     SHsphtor_to_spat_ml(cfg, im, Sl, Tl, ltr) -> (Vt_m, Vp_m)
 
 Mode-limited synthesis for specific azimuthal mode im.
+Implements the proper spheroidal-toroidal synthesis formulas:
+    Vθ = ∂S/∂θ - (im/sinθ) * T
+    Vφ = (im/sinθ) * S + ∂T/∂θ
 """
 function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     expected_len = ltr - im + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
     length(Tl) == expected_len || throw(DimensionMismatch("Tl length mismatch"))
-    
+
     Vt_m = Vector{ComplexF64}(undef, nlat)
     Vp_m = Vector{ComplexF64}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
-    
+    dPdx = Vector{Float64}(undef, ltr + 1)
+
     # Synthesize vector components for this mode
     for i in 1:nlat
         x = cfg.x[i]
-        Plm_row!(P, x, ltr, im)
-        
-        vt_sum = 0.0 + 0.0im
-        vp_sum = 0.0 + 0.0im
-        
+        sθ = sqrt(max(0.0, 1 - x*x))
+        inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+
+        Plm_and_dPdx_row!(P, dPdx, x, ltr, im)
+
+        gθ = 0.0 + 0.0im
+        gφ = 0.0 + 0.0im
+
         @inbounds for l in im:ltr
-            ll1 = l * (l + 1)
-            if ll1 > 0
-                scale = sqrt(ll1)
-                vt_sum += Sl[l-im+1] * P[l+1] * scale
-                vp_sum += Tl[l-im+1] * P[l+1] * scale  
-            end
+            N = cfg.Nlm[l+1, im+1]
+            dθY = -sθ * N * dPdx[l+1]
+            Y = N * P[l+1]
+            S_coef = Sl[l-im+1]
+            T_coef = Tl[l-im+1]
+
+            # Vθ = ∂S/∂θ - (im/sinθ) * T
+            gθ += dθY * S_coef - (0 + 1im) * im * inv_sθ * Y * T_coef
+            # Vφ = (im/sinθ) * S + ∂T/∂θ
+            gφ += (0 + 1im) * im * inv_sθ * Y * S_coef + dθY * T_coef
         end
-        
-        Vt_m[i] = vt_sum
-        Vp_m[i] = vp_sum
+
+        # Apply Robert form scaling if needed
+        if cfg.robert_form
+            gθ *= sθ
+            gφ *= sθ
+        end
+
+        Vt_m[i] = gθ
+        Vp_m[i] = gφ
     end
-    
+
     return Vt_m, Vp_m
 end
 

@@ -204,7 +204,8 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_fus
         end
     else
         # Compute Legendre polynomials on the fly
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -279,7 +280,8 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -350,7 +352,8 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -440,7 +443,8 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
             end
         end
     else
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
         @threads for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]

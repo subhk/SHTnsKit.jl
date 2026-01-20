@@ -211,14 +211,14 @@ function validate_vector_spatial_dimensions(Vr::AbstractMatrix, Vt::AbstractMatr
 end
 
 """
-    thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.nthreads()) -> Vector{Vector{Float64}}
+    thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.maxthreadid()) -> Vector{Vector{Float64}}
 
 Create thread-local Legendre polynomial buffers to avoid allocations and race conditions.
-Returns vector of buffers, one per thread.
+Returns vector of buffers, one per thread ID up to maxthreadid().
 
-Note: Uses `Threads.nthreads()` instead of `Threads.maxthreadid()` to avoid BoundsError
-with Julia's task-based threading model where thread IDs are guaranteed to be in 1:nthreads().
+Note: Uses `Threads.maxthreadid()` to handle all possible thread IDs with static scheduling,
+since threadid() can return values larger than nthreads() in some threading scenarios.
 """
-function thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.nthreads())
+function thread_local_legendre_buffers(lmax::Int, nthreads::Int=Threads.maxthreadid())
     return [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
 end

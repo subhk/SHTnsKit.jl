@@ -251,8 +251,8 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
             end
         end
     else
-        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -292,8 +292,8 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
             end
         end
     else
-        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -428,8 +428,8 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
             end
         end
     else
-        # Use nthreads() instead of maxthreadid() to avoid BoundsError with task-based threading
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.nthreads()]
+        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]

@@ -93,13 +93,13 @@ function spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, lmax, 0)  # m=0 case (axisymmetric)
-        
+
         weighted_Vr = Vr[i] * cfg.wlat[i]
-        for l in 0:lmax
-            Ql[l+1] += weighted_Vr * P[l+1]
+        @inbounds for l in 0:lmax
+            Ql[l+1] += weighted_Vr * cfg.Nlm[l+1, 1] * P[l+1]
         end
     end
-    
+
     return Ql .* cfg.cphi  # Apply longitude scaling
 end
 
@@ -206,14 +206,14 @@ function SH_to_spat_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, lmax, 0)  # m=0 case
-        
+
         val = 0.0
-        for l in 0:lmax
-            val += real(Qlm[l+1] * P[l+1])  # Take real part for spatial field
+        @inbounds for l in 0:lmax
+            val += real(Qlm[l+1] * cfg.Nlm[l+1, 1] * P[l+1])  # Take real part for spatial field
         end
         Vr[i] = val
     end
-    
+
     return Vr
 end
 
@@ -235,13 +235,13 @@ function spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::In
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, ltr, 0)
-        
+
         weighted_Vr = Vr[i] * cfg.wlat[i]
-        for l in 0:ltr
-            Ql[l+1] += weighted_Vr * P[l+1]
+        @inbounds for l in 0:ltr
+            Ql[l+1] += weighted_Vr * cfg.Nlm[l+1, 1] * P[l+1]
         end
     end
-    
+
     return Ql .* cfg.cphi
 end
 
@@ -262,14 +262,14 @@ function SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, ltr, 0)
-        
+
         val = 0.0
-        for l in 0:ltr
-            val += real(Qlm[l+1] * P[l+1])
+        @inbounds for l in 0:ltr
+            val += real(Qlm[l+1] * cfg.Nlm[l+1, 1] * P[l+1])
         end
         Vr[i] = val
     end
-    
+
     return Vr
 end
 
@@ -297,13 +297,13 @@ function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex},
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, ltr, im)
-        
+
         weighted_Vr = Vr_m[i] * cfg.wlat[i]
-        for l in im:ltr
-            Ql[l-im+1] += weighted_Vr * P[l+1]
+        @inbounds for l in im:ltr
+            Ql[l-im+1] += weighted_Vr * cfg.Nlm[l+1, im+1] * P[l+1]
         end
     end
-    
+
     return Ql .* cfg.cphi
 end
 
@@ -330,14 +330,14 @@ function SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, l
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, ltr, im)
-        
+
         val = 0.0 + 0.0im
-        for l in im:ltr
-            val += Ql[l-im+1] * P[l+1]
+        @inbounds for l in im:ltr
+            val += Ql[l-im+1] * cfg.Nlm[l+1, im+1] * P[l+1]
         end
         Vr_m[i] = val
     end
-    
+
     return Vr_m
 end
 
@@ -346,31 +346,26 @@ end
 
 Evaluate spherical harmonic expansion at a single point (θ,φ).
 `cost` = cos(θ), `phi` is the azimuthal angle.
-`Qlm` should contain all coefficients in (l+1,m+1) indexing.
+`Qlm` should be a matrix of size (lmax+1, mmax+1) with standard indexing.
 Returns the field value at the specified point.
 """
-function SH_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real, phi::Real)
-    lmax = cfg.lmax
-    length(Qlm) == (lmax+1)^2 || throw(DimensionMismatch("Qlm must have length (lmax+1)^2"))
-    
+function SH_to_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    size(Qlm, 1) == lmax + 1 || throw(DimensionMismatch("Qlm first dim must be lmax+1"))
+    size(Qlm, 2) == mmax + 1 || throw(DimensionMismatch("Qlm second dim must be mmax+1"))
+
     result = 0.0 + 0.0im
     P = Vector{Float64}(undef, lmax + 1)
-    
+
     # Process each azimuthal mode
-    idx = 1
-    for l in 0:lmax, m in 0:l
-        if m == 0
-            # m=0 case: only real part, no φ dependence
-            Plm_row!(P, cost, l, 0)
-            result += Qlm[idx] * P[l+1]
-        else
-            # m>0 case: include e^(imφ) factor
-            Plm_row!(P, cost, l, m)
-            phase = cos(m * phi) + im * sin(m * phi)  # e^(imφ)
-            result += Qlm[idx] * P[l+1] * phase
+    for m in 0:mmax
+        Plm_row!(P, cost, lmax, m)
+        phase = m == 0 ? 1.0 + 0.0im : cos(m * phi) + im * sin(m * phi)  # e^(imφ)
+
+        @inbounds for l in m:lmax
+            result += Qlm[l+1, m+1] * cfg.Nlm[l+1, m+1] * P[l+1] * phase
         end
-        idx += 1
     end
-    
+
     return result
 end

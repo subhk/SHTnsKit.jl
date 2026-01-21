@@ -193,10 +193,11 @@ function shtns_rotation_set_angle_axis(r::SHTRotation, theta::Real, Vx::Real, Vy
     R33 = c + t*kz*kz
     
     # Extract ZYZ Euler angles
+    # For R = Rz(α)Ry(β)Rz(γ): R13 = cα*sβ, R23 = sα*sβ, R31 = -sβ*cγ, R32 = sβ*sγ
     β = acos(clamp(R33, -1.0, 1.0))
     if abs(sin(β)) > 1e-12
-        α = atan(R13, -R23)   # atan(y, x) = atan2(y,x)
-        γ = atan(R31, R32)
+        α = atan(R23, R13)    # atan2(sα*sβ, cα*sβ) = α
+        γ = atan(R32, -R31)   # atan2(sβ*sγ, sβ*cγ) = γ
     else
         # β ~ 0 or π: set γ = 0 and α from R11,R21
         α = atan(R21, R11)
@@ -347,7 +348,7 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
         fill!(c, 0.0 + 0.0im)
         # c_m = sum_{m'} d_{m m'} b_{m'}
         for mi in -l:l
-            acc = 0.0
+            acc = 0.0 + 0.0im
             for mp in -l:l
                 acc += dl[mi + l + 1, mp + l + 1] * b[mp + l + 1]
             end

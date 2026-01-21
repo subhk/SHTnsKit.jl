@@ -1,6 +1,6 @@
 #=
 ================================================================================
-specialized_transforms.jl - Specialized Spherical Harmonic Transform Functions
+transforms.jl - Specialized Spherical Harmonic Transform Functions
 ================================================================================
 
 This file provides specialized transform variants for cases where full 2D

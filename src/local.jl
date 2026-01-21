@@ -159,9 +159,10 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
         dθY = -sθ * N * dPdx[l+1]
         vr += Y   * aQ
         vt += dθY * aS
-        vp += (sθ * N * dPdx[l+1]) * aT
+        # Vφ = (im/sinθ)*Y*S + dθY*T, for m=0 the first term is zero
+        vp += dθY * aT
     end
-    
+
     # m>0
     for m in 1:mmax
         (m % cfg.mres == 0) || continue
@@ -183,8 +184,10 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
             Y = N * P[l+1]
             dθY = -sθ * N * dPdx[l+1]
             gvr += Y   * aQ
-            gvt += dθY * aS + (0 + 1im) * m * inv_sθ * Y * aT
-            gvp += (0 + 1im) * m * inv_sθ * Y * aS + (sθ * N * dPdx[l+1]) * aT
+            # Vθ = dθY*S - (im/sinθ)*Y*T
+            gvt += dθY * aS - (0 + 1im) * m * inv_sθ * Y * aT
+            # Vφ = (im/sinθ)*Y*S + dθY*T
+            gvp += (0 + 1im) * m * inv_sθ * Y * aS + dθY * aT
         end
         ph = cis(m * phi)
         vr += 2 * real(gvr * ph)
@@ -251,7 +254,8 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
         dθY = -sθ * N * dPdx[l+1]
         g0  += Y * aQ
         gθ0 += dθY * aS
-        gφ0 += (sθ * N * dPdx[l+1]) * aT
+        # Vφ = (im/sinθ)*Y*S + dθY*T, for m=0 the first term is zero
+        gφ0 += dθY * aT
     end
     @inbounds for j in 1:nphi
         Vr[j] += real(g0); Vt[j] += real(gθ0); Vp[j] += real(gφ0)
@@ -280,8 +284,10 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
             Y = N * P[l+1]
             dθY = -sθ * N * dPdx[l+1]
             g  += Y   * aQ
-            gθ += dθY * aS + (0 + 1im) * m * inv_sθ * Y * aT
-            gφ += (0 + 1im) * m * inv_sθ * Y * aS + (sθ * N * dPdx[l+1]) * aT
+            # Vθ = dθY*S - (im/sinθ)*Y*T
+            gθ += dθY * aS - (0 + 1im) * m * inv_sθ * Y * aT
+            # Vφ = (im/sinθ)*Y*S + dθY*T
+            gφ += (0 + 1im) * m * inv_sθ * Y * aS + dθY * aT
         end
         for j in 0:(nphi-1)
             phase = cis(2π * m * j / nphi)

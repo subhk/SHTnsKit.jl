@@ -176,8 +176,8 @@ macro sht_loop(args...)
     ex, _, itr = args
     _, I, R = itr.args
     sym = Symbol[]
-    grab!(sym, ex)          # Extract all symbols from expression
-    setdiff!(sym, [I])      # Don't pass loop index as argument
+    grab!(sym, ex)                          # Extract all symbols from expression
+    setdiff!(sym, _loop_index_symbols(I))   # Don't pass loop indices as arguments
 
     symT = [gensym() for _ in 1:length(sym)]  # Generate type parameters
     symWtypes = joinsymtype(rep.(sym), symT)  # Symbols with types: [a::A, b::B, ...]
@@ -220,6 +220,31 @@ macro sht_loop(args...)
 end
 
 # Helper functions for macro symbol extraction (matching BioFlow.jl pattern)
+
+"""
+    _loop_index_symbols(I)
+
+Extract all symbols from a loop index pattern. Handles both single symbols
+and tuple destructuring patterns like `(i, j)` or `(l, m)`.
+
+# Examples
+```julia
+_loop_index_symbols(:I)           # Returns [:I]
+_loop_index_symbols(:(i, j))      # Returns [:i, :j]
+_loop_index_symbols(:(l, m, n))   # Returns [:l, :m, :n]
+```
+"""
+function _loop_index_symbols(I)
+    if I isa Symbol
+        return [I]
+    elseif I isa Expr && I.head == :tuple
+        # Tuple destructuring like (i, j) - extract all symbol arguments
+        return Symbol[arg for arg in I.args if arg isa Symbol]
+    else
+        # Unknown pattern - return empty (conservative)
+        return Symbol[]
+    end
+end
 
 """
     grab!(sym, ex)

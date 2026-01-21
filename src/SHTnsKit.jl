@@ -153,7 +153,7 @@ end
 include("buffer_utils.jl")                   # Common buffer allocation patterns
 include("plan.jl")                           # Transform planning and optimization
 include("core_transforms.jl")                # Core 2D grid ↔ spectral transforms
-include("specialized_transforms.jl")         # Vector and point transforms
+include("transforms.jl")                     # Vector and point transforms
 include("complex_packed.jl")                  # Complex number packing utilities
 include("qst_transforms.jl")                  # QST (3D) vector field operations
 include("sphtor_transforms.jl")               # Spheroidal/toroidal (2D) vector operations

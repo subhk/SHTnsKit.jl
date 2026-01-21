@@ -306,6 +306,8 @@ export dist_SH_rotate_euler                                             # Distri
 export dist_spatial_divergence, dist_spatial_vorticity                  # Distributed vector invariants
 export dist_scalar_laplacian, dist_scalar_laplacian!                    # Distributed scalar Laplacian
 export dist_SH_Zrotate_packed, dist_SH_Yrotate_packed, dist_SH_Yrotate90_packed, dist_SH_Xrotate90_packed
+export create_spectral_pencil, create_spectral_array                        # Distributed spectral array creation
+export matrix_to_spectral_pencil, spectral_pencil_to_matrix                 # Distributed spectral conversion
 
 # ===== EXTENSION FALLBACK FUNCTIONS =====
 # These provide informative error messages when extension packages are not loaded
@@ -443,6 +445,10 @@ dist_scalar_laplacian(::SHTConfig, ::Any; kwargs...) = error("Parallel extension
 dist_scalar_laplacian!(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_apply_laplacian!(::SHTConfig, ::Any) = error("Parallel extension not loaded")
 dist_SH_mul_mx!(::SHTConfig, ::Any, ::Any, ::Any) = error("Parallel extension not loaded")
+create_spectral_pencil(::SHTConfig; kwargs...) = error("Parallel extension not loaded")
+create_spectral_array(::SHTConfig; kwargs...) = error("Parallel extension not loaded")
+matrix_to_spectral_pencil(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
+spectral_pencil_to_matrix(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
 
 # ===== PARALLEL ROTATION FUNCTIONS =====
 # Parallel rotations fallbacks (PencilArray-based)

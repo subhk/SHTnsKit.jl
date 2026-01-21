@@ -684,7 +684,7 @@ function _dist_analysis_fused_cache_blocked_legacy(cfg::SHTnsKit.SHTConfig, fθ�
     end
     
     # Table view cache for optimal memory access
-    table_view_cache = use_tbl ? Dict{Tuple{Int,Int}, SubArray}() : nothing
+    table_view_cache = use_tbl ? Dict{Tuple{Int,Int}, Any}() : nothing
     
     # FUSED STEP 3+4: Combined cache-blocked analysis with integrated normalization
     cache_size_kb = get(ENV, "SHTNSKIT_CACHE_SIZE", "32") |> x -> parse(Int, x)
@@ -817,6 +817,7 @@ function _dist_analysis_cache_blocked_legacy(cfg::SHTnsKit.SHTConfig, fθφ::Pen
     end
     
     # Use packed storage for better memory efficiency
+    storage_info = use_packed_storage ? create_packed_storage_info(cfg) : nothing
     if use_packed_storage
         Alm_local = zeros(ComplexF64, cfg.nlm)
         temp_dense = nothing
@@ -824,9 +825,9 @@ function _dist_analysis_cache_blocked_legacy(cfg::SHTnsKit.SHTConfig, fθφ::Pen
         Alm_local = zeros(ComplexF64, lmax+1, mmax+1)
         temp_dense = Alm_local
     end
-    
+
     θrange = axes(Fθm, 1); mrange = axes(Fθm, 2)
-    
+
     # Enhanced plm_tables integration for cache-blocked analysis
     use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
     
@@ -855,7 +856,7 @@ function _dist_analysis_cache_blocked_legacy(cfg::SHTnsKit.SHTConfig, fθφ::Pen
     end
     
     # Pre-allocate table view cache for cache-blocked access
-    table_view_cache = use_tbl ? Dict{Tuple{Int,Int}, SubArray}() : Dict{Tuple{Int,Int}, SubArray}()
+    table_view_cache = Dict{Tuple{Int,Int}, Any}()
     
     # CACHE BLOCKING: Process m-modes in cache-friendly blocks
     cache_size_kb = get(ENV, "SHTNSKIT_CACHE_SIZE", "32") |> x -> parse(Int, x)  # L1 cache size in KB
@@ -1489,16 +1490,14 @@ function SHTnsKit.dist_SHsphtor_to_spat!(plan::DistSphtorPlan, Vtθφ_out::Penci
     end
 end
 
-# Helper function that uses pre-allocated scratch buffers
-function _dist_SHsphtor_to_spat_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, 
+# Helper function stub for scratch buffer optimization
+# NOTE: Currently falls back to standard implementation. The scratch buffers (Fθk, Fφk)
+# are accepted for API compatibility but not used. A full implementation would inline
+# the synthesis logic to reuse these buffers and eliminate allocations.
+function _dist_SHsphtor_to_spat_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                                              Fθk::PencilArray, Fφk::PencilArray, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray;
                                              prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    # Reuse the existing algorithm but with pre-allocated scratch buffers
-    fill!(Fθk, 0); fill!(Fφk, 0)
-    
-    # ... rest of synthesis logic using Fθk, Fφk as scratch ...
-    # (This would contain the core synthesis logic from the original function)
-    # For brevity, just calling the original function for now but with optimized memory usage
+    # Fallback: call standard implementation (scratch buffers not used)
     Vt, Vp = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft)
     copyto!(Vtθφ_out, Vt); copyto!(Vpθφ_out, Vp)
 end
@@ -1613,8 +1612,8 @@ function create_distributed_spectral_plan(lmax::Int, mmax::Int, comm::MPI.Comm)
         if l % nprocs == rank  # This process owns this l
             for m in 0:min(l, mmax)
                 push!(local_lm_indices, (l, m))
-                # Compute packed index for this coefficient
-                packed_idx = SHTnsKit.lm_index(l, m, lmax, 1)  # Using 1-based indexing
+                # Compute packed index for this coefficient (LM_index returns 0-based, add 1)
+                packed_idx = SHTnsKit.LM_index(lmax, 1, l, m) + 1
                 push!(local_packed_indices, packed_idx)
             end
         end

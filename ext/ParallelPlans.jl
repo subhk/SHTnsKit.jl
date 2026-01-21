@@ -44,8 +44,8 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
             # Storage for spectral coefficients
             temp_dense = zeros(ComplexF64, lmax+1, mmax+1),
 
-            # Table view cache for plm_tables optimization
-            table_view_cache = Dict{Tuple{Int,Int}, SubArray}(),
+            # Table view cache for plm_tables optimization (lazily populated during transforms)
+            table_view_cache = Dict{Tuple{Int,Int}, Any}(),
 
             # Valid m-value information cache
             valid_m_cache = Tuple{Int, Int, Int}[],
@@ -87,18 +87,27 @@ struct DistSphtorPlan
     prototype_θφ::PencilArray
     use_rfft::Bool
     with_spatial_scratch::Bool
-    spatial_scratch::Union{Nothing,Tuple{Matrix{ComplexF64},Matrix{ComplexF64}}}
+    spatial_scratch::Union{Nothing,NamedTuple{(:Fθ, :Fφ, :Vtθ, :Vpθ, :P, :dPdx),
+                                              Tuple{Matrix{ComplexF64}, Matrix{ComplexF64},
+                                                    Matrix{Float64}, Matrix{Float64},
+                                                    Vector{Float64}, Vector{Float64}}}}
 end
 
 function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; with_spatial_scratch::Bool=false, use_rfft::Bool=false)
     scratch = if with_spatial_scratch
-        # Pre-allocate complex spatial scratch buffers for IFFT operations
+        # Pre-allocate all scratch buffers needed for synthesis
         θ_globals = collect(globalindices(prototype_θφ, 1))
         nθ_local = length(θ_globals)
         nlon = cfg.nlon
-        scratch_θ = Matrix{ComplexF64}(undef, nθ_local, nlon)
-        scratch_φ = Matrix{ComplexF64}(undef, nθ_local, nlon)
-        (scratch_θ, scratch_φ)
+        lmax = cfg.lmax
+        (
+            Fθ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vθ
+            Fφ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vφ
+            Vtθ = Matrix{Float64}(undef, nθ_local, nlon),     # Real output for Vθ
+            Vpθ = Matrix{Float64}(undef, nθ_local, nlon),     # Real output for Vφ
+            P = Vector{Float64}(undef, lmax + 1),             # Legendre polynomial buffer
+            dPdx = Vector{Float64}(undef, lmax + 1),          # Legendre derivative buffer
+        )
     else
         nothing
     end

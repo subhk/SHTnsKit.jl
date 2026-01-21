@@ -8,15 +8,11 @@ function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
     return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output)
 end
 
-function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; 
-                    return_type::Symbol=:matrix, prototype_θφ=nothing)
-
-    Alm = SHTnsKit.dist_analysis(cfg, fθφ)
-
-    return return_type === :pencil ? PencilArray(Alm) : Alm
+function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                           use_rfft::Bool=false)
+    return SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)
 end
 
-# Convenience: synthesis dispatch sugar from dense Alm to PencilArray
 ##########
 # Vector/QST dispatch for PencilArrays
 ##########

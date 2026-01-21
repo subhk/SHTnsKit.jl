@@ -83,14 +83,14 @@ function SHTnsKit.fdgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, fθφ::AbstractA
     g = ForwardDiff.gradient(loss_flat, vec(Array(fθφ)))
     gl = reshape(g, nlat, nlon)
     
-    # Copy result back to distributed array format if possible; otherwise return Array
-    try
-        gout = similar(fθφ, eltype(gl))
-        copyto!(gout, gl)
-        return gout
-    catch
+    # Copy result back to distributed array format if supported
+    if typeof(fθφ) <: AbstractMatrix
         return gl
     end
+    # For distributed arrays (e.g., PencilArrays), try to preserve the container type
+    gout = similar(fθφ, eltype(gl))
+    copyto!(gout, gl)
+    return gout
 end
 
 # ===== VECTOR FIELD GRADIENT COMPUTATION =====
@@ -116,8 +116,10 @@ Returns:
 - Tuple of gradient arrays (∂E/∂Vt, ∂E/∂Vp) with same types as inputs
 """
 function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::AbstractArray, Vpθφ::AbstractArray)
+    # Validate dimensions match
+    size(Vtθφ) == size(Vpθφ) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     nlat = length(axes(Vtθφ, 1)); nlon = length(axes(Vtθφ, 2))
-    
+
     # Define vector energy functional for combined state vector [Vt; Vp]
     function loss_flat(z)
         Xt = reshape(view(z, 1:nlat*nlon), nlat, nlon)           # Extract Vt component
@@ -130,18 +132,18 @@ function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::Abstract
     z0 = vcat(vec(Array(Vtθφ)), vec(Array(Vpθφ)))              # Concatenate components
     g = ForwardDiff.gradient(loss_flat, z0)                    # Compute full gradient
     
-    # Split gradient back into component gradients
-    gVt = reshape(view(g, 1:nlat*nlon), nlat, nlon)            # ∂E/∂Vt component
-    gVp = reshape(view(g, nlat*nlon+1:2*nlat*nlon), nlat, nlon) # ∂E/∂Vp component
-    
-    # Copy back to distributed array format if supported; otherwise return Arrays
-    try
-        GVt = similar(Vtθφ, eltype(gVt)); GVp = similar(Vpθφ, eltype(gVp))
-        copyto!(GVt, gVt); copyto!(GVp, gVp)
-        return GVt, GVp
-    catch
+    # Split gradient back into component gradients (make copies for consistent behavior)
+    gVt = reshape(g[1:nlat*nlon], nlat, nlon)                  # ∂E/∂Vt component
+    gVp = reshape(g[nlat*nlon+1:2*nlat*nlon], nlat, nlon)      # ∂E/∂Vp component
+
+    # Copy back to distributed array format if supported
+    if typeof(Vtθφ) <: AbstractMatrix
         return gVt, gVp
     end
+    # For distributed arrays (e.g., PencilArrays), preserve the container type
+    GVt = similar(Vtθφ, eltype(gVt)); GVp = similar(Vpθφ, eltype(gVp))
+    copyto!(GVt, gVt); copyto!(GVp, gVp)
+    return GVt, GVp
 end
 
 """
@@ -165,8 +167,10 @@ Returns:
 - Tuple of gradient matrices (∂E/∂Vt, ∂E/∂Vp)
 """
 function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    # Validate dimensions match
+    size(Vt) == size(Vp) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     nlat, nlon = size(Vt)
-    
+
     # Define vector energy functional for matrix inputs
     function loss_flat(z)
         Xt = reshape(view(z, 1:nlat*nlon), nlat, nlon)           # Extract Vt component
@@ -179,9 +183,9 @@ function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatr
     z0 = vcat(vec(Vt), vec(Vp))                                 # Concatenate vector components
     g = ForwardDiff.gradient(loss_flat, z0)                    # Compute gradient
     
-    # Split result into component gradients
-    gVt = reshape(view(g, 1:nlat*nlon), nlat, nlon)            # ∂E/∂Vt
-    gVp = reshape(view(g, nlat*nlon+1:2*nlat*nlon), nlat, nlon) # ∂E/∂Vp
+    # Split result into component gradients (copies for safety)
+    gVt = reshape(g[1:nlat*nlon], nlat, nlon)                  # ∂E/∂Vt
+    gVp = reshape(g[nlat*nlon+1:2*nlat*nlon], nlat, nlon)      # ∂E/∂Vp
     return gVt, gVp
 end
 

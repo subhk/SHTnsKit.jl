@@ -173,8 +173,8 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
             if cfg.use_plm_tables && length(cfg.plm_tables) == mmax+1 && length(cfg.dplm_tables) == mmax+1
                 tblP = cfg.plm_tables[m+1]
                 tbld = cfg.dplm_tables[m+1]
-                
-                @inbounds for l in m:lmax
+
+                @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
                     dθY = -sθ * N * tbld[l+1, i]
                     Y = N * tblP[l+1, i]
@@ -189,8 +189,8 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
                 P = thread_local_P[Threads.threadid()]
                 dPdx = thread_local_dPdx[Threads.threadid()]
                 Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
-                
-                @inbounds for l in m:lmax
+
+                @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
                     dθY = -sθ * N * dPdx[l+1]
                     Y = N * P[l+1]
@@ -632,7 +632,7 @@ function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
         gθ = 0.0 + 0.0im
         gφ = 0.0 + 0.0im
 
-        @inbounds for l in im:ltr
+        @inbounds for l in max(1, im):ltr
             N = cfg.Nlm[l+1, im+1]
             dθY = -sθ * N * dPdx[l+1]
             Y = N * P[l+1]

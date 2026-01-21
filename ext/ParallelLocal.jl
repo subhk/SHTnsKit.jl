@@ -53,7 +53,6 @@ function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArra
             vals_local[j+1] += 2 * real(gm * cis(2π * mval * j / nphi))
         end
     end
-    vals = similar(vals_local)
     MPI.Allreduce!(vals_local, +, comm)
     return real_output ? real.(vals_local) : vals_local
 end

@@ -20,9 +20,11 @@ end
     dist_SH_mul_mx!(cfg, mx, Alm_pencil::PencilArray, R_pencil::PencilArray)
 
 Apply 3-diagonal operator to distributed Alm pencils using per-m Allgatherv of l-columns.
+Forward pass: R[l,m] = mx[2*lm_prev+2]*Q[l-1,m] + mx[2*lm_next+1]*Q[l+1,m]
+where lm_prev = LM_index(l-1,m) and lm_next = LM_index(l+1,m).
 """
 function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Alm_pencil::PencilArray, R_pencil::PencilArray)
-    lmax, mmax = cfg.lmax, cfg.mmax
+    lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
     comm = communicator(Alm_pencil)
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
     gl_l = globalindices(Alm_pencil, 1)
@@ -38,14 +40,18 @@ function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:
         Allgatherv!(col_local, VBuffer(col_full, counts), comm)
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
-            idx = SHTnsKit.LM_index(lmax, cfg.mres, lval, mval)
-            c_minus = mx[2*idx + 1]; c_plus = mx[2*idx + 2]
             acc = 0.0 + 0.0im
+            # Contribution from lower neighbor Y_{l-1}^m (uses mx[2*lm_prev + 2])
             if lval > mval && lval > 0
-                acc += c_minus * col_full[lval]
+                lm_prev = SHTnsKit.LM_index(lmax, mres, lval - 1, mval)
+                c_from_below = mx[2*lm_prev + 2]  # b_{l-1}^m coefficient
+                acc += c_from_below * col_full[lval]  # col_full[lval] = Q[l-1,m]
             end
+            # Contribution from upper neighbor Y_{l+1}^m (uses mx[2*lm_next + 1])
             if lval < lmax
-                acc += c_plus * col_full[lval + 2]
+                lm_next = SHTnsKit.LM_index(lmax, mres, lval + 1, mval)
+                c_from_above = mx[2*lm_next + 1]  # a_{l+1}^m coefficient
+                acc += c_from_above * col_full[lval + 2]  # col_full[lval+2] = Q[l+1,m]
             end
             R_pencil[il, jm] = acc
         end

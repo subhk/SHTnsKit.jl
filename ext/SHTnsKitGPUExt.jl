@@ -994,10 +994,12 @@ end
 
 Get CUDA memory information. The `device` argument is accepted for API compatibility
 but currently only returns info for the active CUDA device.
+Returns a named tuple with `free` and `total` fields (in bytes).
 """
 function gpu_memory_info(; device=nothing)
     if CUDA.functional()
-        return CUDA.MemoryInfo()
+        mem = CUDA.MemoryInfo()
+        return (free=mem.free_bytes, total=mem.total_bytes)
     else
         return (free=Sys.free_memory(), total=Sys.total_memory())
     end
@@ -1130,9 +1132,24 @@ end
     create_latitude_subset_config(base_cfg, lat_indices, gpu_device::Symbol)
 
 Create a temporary SHTConfig for a subset of latitude points.
+Properly subsets plm_tables and dplm_tables if they exist.
 """
 function create_latitude_subset_config(base_cfg, lat_indices, gpu_device::Symbol)
     chunk_nlat = length(lat_indices)
+
+    # Subset plm_tables if they exist: tables are [m+1][l+1, lat_idx]
+    subset_plm_tables = if base_cfg.use_plm_tables && !isempty(base_cfg.plm_tables)
+        [tbl[:, lat_indices] for tbl in base_cfg.plm_tables]
+    else
+        Matrix{Float64}[]
+    end
+
+    subset_dplm_tables = if base_cfg.use_plm_tables && !isempty(base_cfg.dplm_tables)
+        [tbl[:, lat_indices] for tbl in base_cfg.dplm_tables]
+    else
+        Matrix{Float64}[]
+    end
+
     return SHTnsKit.SHTConfig(
         lmax=base_cfg.lmax, mmax=base_cfg.mmax, mres=base_cfg.mres,
         nlat=chunk_nlat, nlon=base_cfg.nlon, grid_type=base_cfg.grid_type,
@@ -1146,6 +1163,9 @@ function create_latitude_subset_config(base_cfg, lat_indices, gpu_device::Symbol
         norm=base_cfg.norm, cs_phase=base_cfg.cs_phase,
         real_norm=base_cfg.real_norm, robert_form=base_cfg.robert_form,
         phi_scale=base_cfg.phi_scale,
+        use_plm_tables=base_cfg.use_plm_tables,
+        plm_tables=subset_plm_tables,
+        dplm_tables=subset_dplm_tables,
         compute_device=gpu_device,
         device_preference=[gpu_device]
     )

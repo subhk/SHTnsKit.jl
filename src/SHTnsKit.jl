@@ -36,7 +36,7 @@ PACKAGE STRUCTURE
 Core files:
 - SHTnsKit.jl        : Main module, exports, and file includes
 - config.jl          : SHTConfig struct and configuration functions
-- legendre.jl        : Legendre polynomial computation (Plm_row!, etc.)
+- legendre.jl        : Legendre polynomials and Gauss-Legendre quadrature
 - core_transforms.jl : Basic analysis/synthesis implementations
 - plan.jl            : SHTPlan for optimized repeated transforms
 
@@ -45,7 +45,6 @@ Vector transforms:
 - qst_transforms.jl    : QST (3D) vector field transforms
 
 Utilities:
-- gausslegendre.jl   : Gauss-Legendre quadrature points and weights
 - normalization.jl   : Spherical harmonic normalization conventions
 - fftutils.jl        : FFT wrappers and utilities
 - rotations.jl       : Rotation of spherical harmonic coefficients
@@ -130,8 +129,7 @@ include("loop.jl")                           # Unified CPU/GPU loop abstraction
 include("fftutils.jl")                      # FFT utility functions and helpers
 include("layout.jl")                        # Data layout and memory organization
 include("mathutils.jl")                      # Mathematical utility functions
-include("gausslegendre.jl")                  # Gauss-Legendre quadrature implementation
-include("legendre.jl")                       # Legendre polynomial computations
+include("legendre.jl")                       # Legendre polynomials and Gauss-Legendre quadrature
 include("normalization.jl")                  # Spherical harmonic normalization
 include("config.jl")                         # Configuration and setup functions
 

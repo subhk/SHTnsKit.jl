@@ -463,37 +463,29 @@ function compute_optimal_padding(nlat::Int, nlon::Int; sizeof_real::Int=8)
     end
 
     stride_bytes = nlat * sizeof_real
-    pad_bytes = 0
+    min_pad_bytes = 8 * sizeof_real  # Minimum 8 elements padding
 
-    # Base case: add 8 elements padding minimum
-    pad_bytes = 8 * sizeof_real
+    # Compute alignment-based padding
+    # Check if full data fits in L2 cache (~8MB typical)
+    # Use 64-byte alignment for L2-resident data, 32-byte otherwise
+    estimated_total = nlon * (stride_bytes + min_pad_bytes)
+    alignment = estimated_total < 8192 * 1024 ? 64 : 32
 
-    # Ensure 32-byte alignment
-    if stride_bytes % 32 != 0
-        pad_bytes = 32 - (stride_bytes % 32)
-    end
+    # Compute padding needed for alignment
+    alignment_remainder = stride_bytes % alignment
+    alignment_pad = alignment_remainder == 0 ? 0 : (alignment - alignment_remainder)
+
+    # Use the larger of minimum padding and alignment padding
+    pad_bytes = max(min_pad_bytes, alignment_pad)
 
     # Avoid multiples of 8KB (cache bank conflicts)
     if (stride_bytes + pad_bytes) % 8192 == 0
         pad_bytes += 64
     end
 
-    # Check if full data fits in L2 cache (~8MB typical)
-    total_size = nlon * (stride_bytes + pad_bytes)
-    if total_size < 8192 * 1024  # Fits in L2
-        # Use 64-byte alignment for better cache line utilization
-        if stride_bytes % 64 != 0
-            pad_bytes = 64 - (stride_bytes % 64)
-        end
-        # Avoid L2 cache bank conflicts (128-byte alignment issues)
-        if (stride_bytes + pad_bytes) % 128 == 0
-            pad_bytes += 64
-        end
-    else
-        # For larger data, use 32-byte alignment
-        if (stride_bytes + pad_bytes) % 128 == 0
-            pad_bytes += 32
-        end
+    # Avoid 128-byte alignment issues (L2 cache bank conflicts)
+    if (stride_bytes + pad_bytes) % 128 == 0
+        pad_bytes += alignment == 64 ? 64 : 32
     end
 
     # Convert to number of elements

@@ -1477,9 +1477,8 @@ end
 function SHTnsKit.dist_SHsphtor_to_spat!(plan::DistSphtorPlan, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
                                          Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     if plan.with_spatial_scratch && plan.spatial_scratch !== nothing
-        # Use pre-allocated scratch buffers for better memory efficiency
-        Fθk, Fφk = plan.spatial_scratch
-        _dist_SHsphtor_to_spat_with_scratch!(plan.cfg, Slm, Tlm, Fθk, Fφk, Vtθφ_out, Vpθφ_out; 
+        # Use pre-allocated scratch buffers for zero-allocation synthesis
+        _dist_SHsphtor_to_spat_with_scratch!(plan.cfg, Slm, Tlm, plan.spatial_scratch, Vtθφ_out, Vpθφ_out;
                                             prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
         return Vtθφ_out, Vpθφ_out
     else
@@ -1490,16 +1489,129 @@ function SHTnsKit.dist_SHsphtor_to_spat!(plan::DistSphtorPlan, Vtθφ_out::Penci
     end
 end
 
-# Helper function stub for scratch buffer optimization
-# NOTE: Currently falls back to standard implementation. The scratch buffers (Fθk, Fφk)
-# are accepted for API compatibility but not used. A full implementation would inline
-# the synthesis logic to reuse these buffers and eliminate allocations.
+# Full implementation using pre-allocated scratch buffers to eliminate allocations
 function _dist_SHsphtor_to_spat_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix,
-                                             Fθk::PencilArray, Fφk::PencilArray, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray;
+                                             scratch::NamedTuple, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray;
                                              prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    # Fallback: call standard implementation (scratch buffers not used)
-    Vt, Vp = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft)
-    copyto!(Vtθφ_out, Vt); copyto!(Vpθφ_out, Vp)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlon = cfg.nlon
+
+    size(Slm, 1) == lmax + 1 && size(Slm, 2) == mmax + 1 || throw(DimensionMismatch("Slm dims"))
+    size(Tlm, 1) == lmax + 1 && size(Tlm, 2) == mmax + 1 || throw(DimensionMismatch("Tlm dims"))
+
+    # Convert incoming coefficients to internal normalization if needed
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        S2 = similar(Slm)
+        T2 = similar(Tlm)
+        SHTnsKit.convert_alm_norm!(S2, Slm, cfg; to_internal = true)
+        SHTnsKit.convert_alm_norm!(T2, Tlm, cfg; to_internal = true)
+        Slm = S2
+        Tlm = T2
+    end
+
+    # Get the local portion info from the prototype
+    θ_globals = collect(globalindices(prototype_θφ, 1))
+    nθ_local = length(θ_globals)
+    nlon_local = size(parent(prototype_θφ), 2)
+    φ_is_local = (nlon_local == nlon)
+
+    # Extract and zero the scratch buffers
+    Fθm = scratch.Fθ
+    Fφm = scratch.Fφ
+    P = scratch.P
+    dPdx = scratch.dPdx
+    fill!(Fθm, zero(ComplexF64))
+    fill!(Fφm, zero(ComplexF64))
+
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+
+    # Synthesis loop - accumulate Fourier coefficients
+    for mval in 0:mmax
+        col = mval + 1
+
+        for (ii, iglobθ) in enumerate(θ_globals)
+            x = cfg.x[iglobθ]
+            sθ = sqrt(max(0.0, 1 - x * x))
+            inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+
+            gθ = 0.0 + 0.0im
+            gφ = 0.0 + 0.0im
+
+            if cfg.use_plm_tables && !isempty(cfg.plm_tables) && !isempty(cfg.dplm_tables)
+                tblP = cfg.plm_tables[col]
+                tbld = cfg.dplm_tables[col]
+
+                @inbounds for l in max(1, mval):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = -sθ * N * tbld[l+1, iglobθ]
+                    Y = N * tblP[l+1, iglobθ]
+                    Sl = Slm[l+1, col]
+                    Tl = Tlm[l+1, col]
+                    # Vθ = ∂S/∂θ - (im/sinθ) * T
+                    gθ += dθY * Sl - (0 + 1im) * mval * inv_sθ * Y * Tl
+                    # Vφ = (im/sinθ) * S + ∂T/∂θ
+                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
+                end
+            else
+                # Fallback: compute Legendre polynomials and derivatives on-demand
+                SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
+
+                @inbounds for l in max(1, mval):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = -sθ * N * dPdx[l+1]
+                    Y = N * P[l+1]
+                    Sl = Slm[l+1, col]
+                    Tl = Tlm[l+1, col]
+                    # Vθ = ∂S/∂θ - (im/sinθ) * T
+                    gθ += dθY * Sl - (0 + 1im) * mval * inv_sθ * Y * Tl
+                    # Vφ = (im/sinθ) * S + ∂T/∂θ
+                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
+                end
+            end
+
+            # Store Fourier coefficient
+            Fθm[ii, mval + 1] = inv_scaleφ * gθ
+            Fφm[ii, mval + 1] = inv_scaleφ * gφ
+
+            # Hermitian conjugate for negative m to ensure real output
+            if real_output && mval > 0
+                conj_index = nlon - mval + 1
+                Fθm[ii, conj_index] = conj(Fθm[ii, mval + 1])
+                Fφm[ii, conj_index] = conj(Fφm[ii, mval + 1])
+            end
+        end
+    end
+
+    # Perform inverse FFT along φ using scratch output buffers
+    Vtθφ_local = scratch.Vtθ
+    Vpθφ_local = scratch.Vpθ
+    SHTnsKitParallelExt.ifft_along_dim2!(Vtθφ_local, Fθm)
+    SHTnsKitParallelExt.ifft_along_dim2!(Vpθφ_local, Fφm)
+
+    # Apply Robert form scaling if enabled
+    if cfg.robert_form
+        @inbounds for (ii, iglobθ) in enumerate(θ_globals)
+            x = cfg.x[iglobθ]
+            sθ = sqrt(max(0.0, 1 - x * x))
+            for j in 1:nlon
+                Vtθφ_local[ii, j] *= sθ
+                Vpθφ_local[ii, j] *= sθ
+            end
+        end
+    end
+
+    # Copy to output PencilArrays, extracting local φ portion if needed
+    if φ_is_local
+        copyto!(parent(Vtθφ_out), Vtθφ_local)
+        copyto!(parent(Vpθφ_out), Vpθφ_local)
+    else
+        φ_globals = collect(globalindices(prototype_θφ, 2))
+        local_φ_range = first(φ_globals):last(φ_globals)
+        copyto!(parent(Vtθφ_out), view(Vtθφ_local, :, local_φ_range))
+        copyto!(parent(Vpθφ_out), view(Vpθφ_local, :, local_φ_range))
+    end
+
+    return Vtθφ_out, Vpθφ_out
 end
 
 # QST distributed implementations by composition

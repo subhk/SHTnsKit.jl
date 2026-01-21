@@ -31,7 +31,6 @@ function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:
     gl_m = globalindices(Alm_pencil, 2)
     nl_local = length(lloc)
     counts = Allgather(nl_local, comm)
-    displs = cumsum([0; counts[1:end-1]])
     col_full = Vector{ComplexF64}(undef, lmax + 1)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1

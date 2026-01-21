@@ -126,7 +126,7 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
             dθY = -sθ * N * dPdx[lval+1]
             vr_local += Y   * Q_p[il, mloc[j0]]
             vt_local += dθY * S_p[il, mloc[j0]]
-            vp_local += (sθ * N * dPdx[lval+1]) * T_p[il, mloc[j0]]
+            vp_local += dθY * T_p[il, mloc[j0]]  # Vφ = dθY * T for m=0
         end
     end
     # m>0
@@ -144,8 +144,10 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
                 Y = N * P[lval+1]
                 dθY = -sθ * N * dPdx[lval+1]
                 gvr += Y   * Q_p[il, jm]
-                gvt += dθY * S_p[il, jm] + (0 + 1im) * mval * inv_sθ * Y * T_p[il, jm]
-                gvp += (0 + 1im) * mval * inv_sθ * Y * S_p[il, jm] + (sθ * N * dPdx[lval+1]) * T_p[il, jm]
+                # Vθ = ∂S/∂θ - (im/sinθ) * T
+                gvt += dθY * S_p[il, jm] - (0 + 1im) * mval * inv_sθ * Y * T_p[il, jm]
+                # Vφ = (im/sinθ) * S + ∂T/∂θ
+                gvp += (0 + 1im) * mval * inv_sθ * Y * S_p[il, jm] + dθY * T_p[il, jm]
             end
         end
         ph = cis(mval * phi)
@@ -190,7 +192,7 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
                 dθY = -sθ * N * dPdx[lval+1]
                 g0  += Y * Q_p[il, mloc[j0]]
                 gθ0 += dθY * S_p[il, mloc[j0]]
-                gφ0 += (sθ * N * dPdx[lval+1]) * T_p[il, mloc[j0]]
+                gφ0 += dθY * T_p[il, mloc[j0]]  # Vφ = dθY * T for m=0
             end
         end
         Vr_local .+= g0; Vt_local .+= gθ0; Vp_local .+= gφ0
@@ -210,8 +212,10 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
                 Y = N * P[lval+1]
                 dθY = -sθ * N * dPdx[lval+1]
                 g  += Y   * Q_p[il, jm]
-                gθ += dθY * S_p[il, jm] + (0 + 1im) * mval * inv_sθ * Y * T_p[il, jm]
-                gφ += (0 + 1im) * mval * inv_sθ * Y * S_p[il, jm] + (sθ * N * dPdx[lval+1]) * T_p[il, jm]
+                # Vθ = ∂S/∂θ - (im/sinθ) * T
+                gθ += dθY * S_p[il, jm] - (0 + 1im) * mval * inv_sθ * Y * T_p[il, jm]
+                # Vφ = (im/sinθ) * S + ∂T/∂θ
+                gφ += (0 + 1im) * mval * inv_sθ * Y * S_p[il, jm] + dθY * T_p[il, jm]
             end
         end
         @inbounds for j in 0:(nphi-1)

@@ -375,7 +375,7 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
         P = thread_local_P[Threads.threadid()]
         if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
             tbl = cfg.plm_tables[m+1]
-            for i in 1:nlat
+            @inbounds for i in 1:nlat
                 acc = zero(CT)
                 for l in m:lmax
                     acc += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm[l+1, col]
@@ -383,7 +383,7 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
                 Fφ[i, col] = inv_scaleφ * acc
             end
         else
-            for i in 1:nlat
+            @inbounds for i in 1:nlat
                 x = cfg.x[i]
                 Plm_row!(P, x, lmax, m)
                 acc = zero(CT)
@@ -444,7 +444,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
             end
         end
     end
-    @inbounds for i in 1:nlat, j in 1:nlon
+    @inbounds for j in 1:nlon, i in 1:nlat
         Fφ[i, j] *= inv_scaleφ
     end
     if real_output

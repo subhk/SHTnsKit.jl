@@ -398,6 +398,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
 end
 
 # Operator application: SH_mul_mx(cfg, mx, Qlm, Rlm)
+# Forward: R[lm0] = mx[2*lm_prev+2]*Q[lm_prev] + mx[2*lm_next+1]*Q[lm_next]
+# where lm_prev = LM_index(l-1,m) and lm_next = LM_index(l+1,m)
 function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_mul_mx), cfg::SHTnsKit.SHTConfig, mx, Qlm, Rlm)
     y = SHTnsKit.SH_mul_mx(cfg, mx, Qlm, Rlm)
     function pullback(ȳ)
@@ -406,20 +408,20 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_mul_mx), cfg::SHTnsKit.SHTCon
         mx̄ = zeros(eltype(mx), length(mx))
         @inbounds for lm0 in 0:(cfg.nlm-1)
             l = cfg.li[lm0+1]; m = cfg.mi[lm0+1]
-            c_minus = mx[2*lm0 + 1]
-            c_plus  = mx[2*lm0 + 2]
             rbar = ȳ[lm0 + 1]
-            # Accumulate gradients wrt Q neighbors
+            # Contribution from lower neighbor Y_{l-1}^m (uses mx[2*lm_prev + 2])
             if l > m && l > 0
                 lm_prev = LM_index(lmax, mres, l-1, m)
-                Q̄[lm_prev + 1] += conj(c_minus) * rbar
-                # grad wrt c_minus is Re(conj(rbar) * Q_prev)
-                mx̄[2*lm0 + 1] += real(conj(rbar) * Qlm[lm_prev + 1])
+                c_from_below = mx[2*lm_prev + 2]  # b_{l-1}^m coefficient
+                Q̄[lm_prev + 1] += c_from_below * rbar  # mx is real, no conj needed
+                mx̄[2*lm_prev + 2] += real(conj(rbar) * Qlm[lm_prev + 1])
             end
+            # Contribution from upper neighbor Y_{l+1}^m (uses mx[2*lm_next + 1])
             if l < lmax
                 lm_next = LM_index(lmax, mres, l+1, m)
-                Q̄[lm_next + 1] += conj(c_plus) * rbar
-                mx̄[2*lm0 + 2] += real(conj(rbar) * Qlm[lm_next + 1])
+                c_from_above = mx[2*lm_next + 1]  # a_{l+1}^m coefficient
+                Q̄[lm_next + 1] += c_from_above * rbar  # mx is real, no conj needed
+                mx̄[2*lm_next + 1] += real(conj(rbar) * Qlm[lm_next + 1])
             end
         end
         return NoTangent(), NoTangent(), mx̄, Q̄, ZeroTangent()

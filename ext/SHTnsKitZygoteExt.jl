@@ -89,6 +89,8 @@ Returns:
 - Tuple of gradient arrays (∂E/∂Vt, ∂E/∂Vp) with same structure as inputs
 """
 function SHTnsKit.zgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::AbstractArray, Vpθφ::AbstractArray)
+    # Validate dimensions match
+    size(Vtθφ) == size(Vpθφ) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     # Define vector energy functional for two-argument case
     loss(Xt, Xp) = begin
         Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)      # Spheroidal/toroidal analysis
@@ -104,6 +106,8 @@ end
     zgrad_vector_energy(cfg, Vt, Vp) -> (∂E/∂Vt, ∂E/∂Vp)
 """
 function SHTnsKit.zgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    # Validate dimensions match
+    size(Vt) == size(Vp) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     loss(Xt, Xp) = begin
         Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)
         SHTnsKit.energy_vector(cfg, Slm, Tlm)

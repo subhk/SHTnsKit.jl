@@ -260,7 +260,6 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
                 gα += real(conj(ȳ[idx]) * ((0 - 1im) * m * Rm))
             end
             # γ-grad: sum_m conj(ȳ_m) * phaseL * d * (-i m') b_{m'}
-            tmp = dl * ([(0 - 1im) * (mp - l - 1) for mp in -l:l]) # not correct; compute properly below
             gγ_l = 0.0
             for m in -mm:mm
                 idxm = LM_cplx_index(lmax, mmax, l, m) + 1
@@ -315,13 +314,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                 # negative m gets zero from packing adjoint
             end
         end
-        # Apply complex adjoint rotation
-        Z̄ = similar(Zbar_full)
-        SHTnsKit.shtns_rotation_apply_cplx(r, Zbar_full, Z̄)  # Note: this is not adjoint; reuse rule below
-        # Instead call the adjoint directly via pullback of cplx rrule:
-        # Workaround: recompute adjoint locally since above would rotate forward.
-        # We'll inline adjoint here for clarity.
-        fill!(Z̄, zero(eltype(Z̄)))
+        # Compute adjoint of complex rotation (transpose of Wigner-d matrix)
+        Z̄ = zeros(eltype(Zbar_full), length(Zbar_full))
         α, β, γ = r.α, r.β, r.γ
         for l in 0:lmax
             mm = min(l, mmax)

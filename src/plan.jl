@@ -248,8 +248,9 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
                 dθY = -sθ * N * plan.dPdx[l+1]
                 Y = N * plan.P[l+1]
                 coeff = wi * scaleφ / (l*(l+1))
+                # Adjoint: S gets -term*Vφ, T gets +dθY*Vφ
                 Slm_out[l+1, col] += -coeff * ((0 + 1im) * m * inv_sθ * Y * Fφ_i)
-                Tlm_out[l+1, col] += coeff * (Fφ_i * (+sθ * N * plan.dPdx[l+1]))
+                Tlm_out[l+1, col] += coeff * (Fφ_i * dθY)
             end
         end
     end
@@ -302,7 +303,8 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
                 N = cfg.Nlm[l+1, col]
                 dθY = -sθ * N * plan.dPdx[l+1]
                 Y = N * plan.P[l+1]
-                g += dθY * Slm_int[l+1, col] + (0 + 1im) * m * inv_sθ * Y * Tlm_int[l+1, col]
+                # Vθ = ∂S/∂θ - (im/sinθ) * T
+                g += dθY * Slm_int[l+1, col] - (0 + 1im) * m * inv_sθ * Y * Tlm_int[l+1, col]
             end
             plan.G[i] = g
         end
@@ -359,7 +361,8 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
                 N = cfg.Nlm[l+1, col]
                 dθY = -sθ * N * plan.dPdx[l+1]
                 Y = N * plan.P[l+1]
-                g += (0 + 1im) * m * inv_sθ * Y * Slm_int[l+1, col] + (sθ * N * plan.dPdx[l+1]) * Tlm_int[l+1, col]
+                # Vφ = (im/sinθ) * S + ∂T/∂θ
+                g += (0 + 1im) * m * inv_sθ * Y * Slm_int[l+1, col] + dθY * Tlm_int[l+1, col]
             end
             plan.G[i] = g
         end

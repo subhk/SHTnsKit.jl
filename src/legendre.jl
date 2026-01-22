@@ -152,38 +152,222 @@ argument x = cos(θ), not with respect to the angle θ itself.
 The derivative calculation uses the standard recurrence relation:
 dP_l^m/dx = [l*x*P_l^m - (l+m)*P_{l-1}^m] / (x²-1)
 
+At poles (x = ±1), special handling is used to avoid division by zero:
+- For m = 0: dP_l^0/dx|_{x=±1} = (±1)^{l+1} * l(l+1)/2 (known analytical result)
+- For m > 0: derivatives are set to 0 (P_l^m(±1) = 0 for m > 0, and the vector
+  transform code handles the 0/0 limit via Plm_and_dPdtheta_row!)
+
 This is essential for computing gradients and differential operators on the sphere.
 """
 function Plm_and_dPdx_row!(P::AbstractVector{T}, dPdx::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
     # First compute the Legendre polynomials
     Plm_row!(P, x, lmax, m)
-    
+
     @inbounds begin
         # Initialize derivative array
         fill!(dPdx, zero(T))
-        
+
         # Early return if no valid polynomials
         if lmax < m
             return P, dPdx
         end
-        
+
         # Precompute common factor (x² - 1) for derivative formula
         x2m1 = x*x - one(T)
-        
+
+        # Handle poles (x = ±1) where x² - 1 = 0 causes division by zero
+        if abs(x2m1) < 100 * eps(T)
+            if m == 0
+                # For m = 0: dP_l^0/dx|_{x=±1} = (±1)^{l+1} * l(l+1)/2
+                # This is the well-known analytical result for Legendre polynomial derivatives at endpoints
+                for l in 1:lmax
+                    sign_factor = x > 0 ? T((-1)^(l+1)) : one(T)
+                    dPdx[l+1] = sign_factor * T(l * (l + 1)) / 2
+                end
+            else
+                # For m > 0: P_l^m(±1) = 0 (because of sin^m factor)
+                # The derivative exists but requires L'Hôpital's rule
+                # For vector transforms, use Plm_and_dPdtheta_row! which handles this properly
+                # Here we set to 0 as a safe fallback
+                fill!(dPdx, zero(T))
+            end
+            return P, dPdx
+        end
+
+        # Standard case: not at a pole
         # Handle l = m case (base case for derivatives)
         l = m
         dPdx[l+1] = (l == 0) ? zero(T) : (m * x * P[l+1]) / x2m1
-        
+
         # Compute derivatives for l ≥ m+1 using recurrence relation - SAFE to vectorize!
         # Each dPdx[l+1] depends only on already-computed P[l+1] and P[l], no iteration dependencies
         @simd ivdep for l in (m+1):lmax
-            # Standard derivative recurrence: 
+            # Standard derivative recurrence:
             # dP_l^m/dx = [l*x*P_l^m - (l+m)*P_{l-1}^m] / (x²-1)
             dPdx[l+1] = (l * x * P[l+1] - (l + m) * P[l]) / x2m1
         end
     end
-    
+
     return P, dPdx
+end
+
+"""
+    Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+
+Compute associated Legendre polynomials P_l^m(x) and their θ-derivatives dP_l^m/dθ.
+
+This function computes dP/dθ directly (not dP/dx), which is singularity-free at poles.
+The relationship is: dP/dθ = -sin(θ) * dP/dx = -√(1-x²) * dP/dx
+
+For m > 0, this uses the recurrence relation in a form that avoids the pole singularity:
+    dP_l^m/dθ = l*cos(θ)*P_l^m/sin(θ) - (l+m)*P_{l-1}^m/sin(θ)
+              = l*x*P_l^m/√(1-x²) - (l+m)*P_{l-1}^m/√(1-x²)
+
+At poles (θ=0 or π, x=±1):
+- For m = 0: dP_l^0/dθ = 0 (by symmetry)
+- For m = 1: dP_l^1/dθ has a finite nonzero limit
+- For m > 1: dP_l^m/dθ = 0 (P_l^m vanishes faster than linearly)
+
+This is the preferred function for vector spherical harmonic transforms.
+"""
+function Plm_and_dPdtheta_row!(P::AbstractVector{T}, dPdtheta::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
+    # First compute the Legendre polynomials
+    Plm_row!(P, x, lmax, m)
+
+    @inbounds begin
+        # Initialize derivative array
+        fill!(dPdtheta, zero(T))
+
+        # Early return if no valid polynomials
+        if lmax < m
+            return P, dPdtheta
+        end
+
+        # Compute sin(θ) = √(1-x²)
+        sinth = sqrt(max(zero(T), one(T) - x*x))
+
+        # Handle poles (x = ±1) where sin(θ) = 0
+        if sinth < 100 * eps(T)
+            # At poles, dP/dθ has special values:
+            # - For m = 0: dP_l^0/dθ = 0 (symmetry)
+            # - For m = 1: dP_l^1/dθ|_{θ=0} = -√(l(l+1)/2) (with normalization)
+            #              dP_l^1/dθ|_{θ=π} = (-1)^l * √(l(l+1)/2)
+            # - For m > 1: dP_l^m/dθ = 0 (P_l^m ~ sin^m, so derivative ~ sin^{m-1} → 0)
+
+            if m == 0
+                # dP_l^0/dθ = 0 at poles
+                fill!(dPdtheta, zero(T))
+            elseif m == 1
+                # For m = 1, use the analytical limit
+                # P_l^1 = -sin(θ) * dP_l^0/dx (Condon-Shortley phase)
+                # dP_l^1/dθ = -cos(θ)*dP_l^0/dx + sin²(θ)*d²P_l^0/dx²
+                # At north pole (θ=0, x=1): dP_l^1/dθ = -1*P'_l(1) = -l(l+1)/2
+                # At south pole (θ=π, x=-1): dP_l^1/dθ = +1*P'_l(-1) = (-1)^{l+1}*l(l+1)/2
+                for l in 1:lmax
+                    if x > 0  # North pole (θ = 0)
+                        # dP_l^1/dθ|_{θ=0} = -l(l+1)/2 (always negative, no sign alternation)
+                        dPdtheta[l+1] = -T(l * (l + 1)) / 2
+                    else  # South pole (θ = π)
+                        # dP_l^1/dθ|_{θ=π} = (-1)^{l+1} * l(l+1)/2
+                        dPdtheta[l+1] = T((-1)^(l+1)) * T(l * (l + 1)) / 2
+                    end
+                end
+            else
+                # For m > 1, dP_l^m/dθ = 0 at poles
+                fill!(dPdtheta, zero(T))
+            end
+            return P, dPdtheta
+        end
+
+        # Standard case: not at a pole
+        # Use: dP/dθ = -sin(θ) * dP/dx = -sin(θ) * [l*x*P - (l+m)*P_{l-1}] / (x²-1)
+        #            = -sin(θ) * [l*x*P - (l+m)*P_{l-1}] / (-sin²θ)
+        #            = [l*x*P - (l+m)*P_{l-1}] / sin(θ)
+        inv_sinth = one(T) / sinth
+
+        # Handle l = m case
+        l = m
+        if l == 0
+            dPdtheta[l+1] = zero(T)  # dP_0^0/dθ = 0
+        else
+            # dP_m^m/dθ = m*x*P_m^m/sin(θ) (since P_{m-1}^m = 0)
+            dPdtheta[l+1] = m * x * P[l+1] * inv_sinth
+        end
+
+        # Compute derivatives for l ≥ m+1
+        @simd ivdep for l in (m+1):lmax
+            # dP_l^m/dθ = [l*x*P_l^m - (l+m)*P_{l-1}^m] / sin(θ)
+            dPdtheta[l+1] = (l * x * P[l+1] - (l + m) * P[l]) * inv_sinth
+        end
+    end
+
+    return P, dPdtheta
+end
+
+"""
+    Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+
+Compute P_l^m(x) and P_l^m(x)/sin(θ) with proper pole handling.
+
+For m > 0, P_l^m(x)/sin(θ) has a finite limit at poles because P_l^m ~ sin^m(θ).
+This function computes that limit correctly, avoiding the 0/0 indeterminate form.
+
+At poles (x = ±1):
+- For m = 0: Not applicable (m must be > 0 for this to be meaningful in vector transforms)
+- For m = 1: P_l^1/sin(θ) → finite limit related to dP_l^0/dx
+- For m > 1: P_l^m/sin(θ) → 0 (numerator has higher order zero)
+
+This is essential for vector spherical harmonic transforms which require (im/sinθ)*Y terms.
+"""
+function Plm_over_sinth_row!(P::AbstractVector{T}, P_over_sinth::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
+    # First compute the Legendre polynomials
+    Plm_row!(P, x, lmax, m)
+
+    @inbounds begin
+        # Initialize output array
+        fill!(P_over_sinth, zero(T))
+
+        # Early return if no valid polynomials
+        if lmax < m
+            return P, P_over_sinth
+        end
+
+        # Compute sin(θ) = √(1-x²)
+        sinth = sqrt(max(zero(T), one(T) - x*x))
+
+        # Handle poles (x = ±1) where sin(θ) = 0
+        if sinth < 100 * eps(T)
+            if m == 0
+                # P_l^0/sin(θ) is genuinely singular for m=0, but this case
+                # shouldn't be used in vector transforms (m=0 terms don't have 1/sinθ factor)
+                fill!(P_over_sinth, zero(T))
+            elseif m == 1
+                # For m = 1: P_l^1 = -sin(θ) * dP_l^0/dx (Condon-Shortley)
+                # So P_l^1/sin(θ) = -dP_l^0/dx
+                # At x = 1 (north pole): dP_l^0/dx = l(l+1)/2, so P_l^1/sinθ = -l(l+1)/2
+                # At x = -1 (south pole): dP_l^0/dx = (-1)^{l+1}*l(l+1)/2, so P_l^1/sinθ = (-1)^l*l(l+1)/2
+                for l in 1:lmax
+                    if x > 0  # North pole
+                        P_over_sinth[l+1] = -T(l * (l + 1)) / 2
+                    else  # South pole
+                        P_over_sinth[l+1] = T((-1)^l) * T(l * (l + 1)) / 2
+                    end
+                end
+            else
+                # For m > 1: P_l^m ~ sin^m(θ), so P_l^m/sin(θ) ~ sin^{m-1}(θ) → 0
+                fill!(P_over_sinth, zero(T))
+            end
+            return P, P_over_sinth
+        end
+
+        # Standard case: not at a pole
+        inv_sinth = one(T) / sinth
+        for l in m:lmax
+            P_over_sinth[l+1] = P[l+1] * inv_sinth
+        end
+    end
+
+    return P, P_over_sinth
 end
 
 """
@@ -335,6 +519,10 @@ end
 
 Return `θ` and `φ` arrays where `θ ∈ [0, π]` (Gauss–Legendre nodes mapped) and
 `φ ∈ [0, 2π)` equally spaced longitudes suitable for FFT-based azimuthal transforms.
+
+Note: The returned arrays follow the gausslegendre ordering (south-to-north, x from -1 to +1).
+For north-to-south ordering compatible with SHTns conventions, the caller should reverse
+the arrays after calling this function (as done in api_compat.jl for shtns_set_grid).
 """
 function thetaphi_from_nodes(nlat::Int, nlon::Int)
     x, w = gausslegendre(nlat)

@@ -751,10 +751,10 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
         :regular
     end
 
-    # Regular/equiangular grids use "quad" scaling (nlon/(2π)) for proper roundtrip
-    # This matches the spherical quadrature convention where the φ integral is
-    # normalized by 1/(2π) rather than using DFT normalization
-    phi_scale = :quad
+    # Regular/equiangular grids use the same DFT scaling as Gauss grids
+    # The phi integral is handled via FFT, which requires inv_scaleφ = nlon
+    # to properly compensate for IFFT's 1/nlon normalization
+    phi_scale = :dft
 
     cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
                     θ, φ, x, w, wlat = w, Nlm,

@@ -180,7 +180,7 @@ function SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVect
     @inbounds for lm0 in 0:(cfg.nlm-1)
         l = cfg.li[lm0+1]; m = cfg.mi[lm0+1]  # Get (l,m) for this packed index
 
-        acc = 0.0 + 0.0im  # Accumulator for the result
+        acc = zero(ComplexF64)  # Accumulator for the result
 
         # Contribution from lower degree neighbor Y_{l-1}^m
         # Y_{l-1}^m couples upward to Y_l^m via b_{l-1}^m

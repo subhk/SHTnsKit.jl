@@ -116,11 +116,13 @@ FFTs and real-optimized FFTs (RFFT) depending on the use case.
 struct SHTPlan
     cfg::SHTConfig                # Configuration parameters
     P::Vector{Float64}            # Working array for Legendre polynomials P_l^m(x)
-    dPdx::Vector{Float64}         # Working array for derivatives dP_l^m/dx  
+    dPdx::Vector{Float64}         # Working array for derivatives dP_l^m/dx (legacy, kept for compatibility)
+    dPdtheta::Vector{Float64}     # Working array for pole-safe derivatives dP_l^m/dθ
+    P_over_sinth::Vector{Float64} # Working array for pole-safe P_l^m/sin(θ)
     G::Vector{ComplexF64}         # Temporary array for latitudinal profiles
     Fθk::Matrix{ComplexF64}       # Fourier coefficient matrix [latitude × longitude]
     fft_plan::Any                 # Pre-optimized forward FFT plan (or nothing for RFFT)
-    ifft_plan::Any                # Pre-optimized inverse FFT plan (or nothing for RFFT)  
+    ifft_plan::Any                # Pre-optimized inverse FFT plan (or nothing for RFFT)
     use_rfft::Bool                # Flag: true = use real FFT optimization, false = complex FFT
 end
 
@@ -152,9 +154,11 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
     end
 
     # Allocate working arrays for Legendre polynomial computation
-    P = Vector{Float64}(undef, cfg.lmax + 1)     # P_l^m(cos θ) values
-    dPdx = Vector{Float64}(undef, cfg.lmax + 1)  # dP_l^m/d(cos θ) derivatives
-    G = Vector{ComplexF64}(undef, cfg.nlat)      # Temporary latitudinal profiles
+    P = Vector{Float64}(undef, cfg.lmax + 1)            # P_l^m(cos θ) values
+    dPdx = Vector{Float64}(undef, cfg.lmax + 1)         # dP_l^m/d(cos θ) derivatives (legacy)
+    dPdtheta = Vector{Float64}(undef, cfg.lmax + 1)     # dP_l^m/dθ pole-safe derivatives
+    P_over_sinth = Vector{Float64}(undef, cfg.lmax + 1) # P_l^m/sin(θ) pole-safe
+    G = Vector{ComplexF64}(undef, cfg.nlat)             # Temporary latitudinal profiles
 
     # Full complex FFT path
     Fθk = Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon)
@@ -165,7 +169,7 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
     fft_plan = FFTW.plan_fft!(Fθk, 2)   # Forward FFT along longitude (dim 2)
     ifft_plan = FFTW.plan_ifft!(Fθk, 2) # Inverse FFT along longitude (dim 2)
 
-    return SHTPlan(cfg, P, dPdx, G, Fθk, fft_plan, ifft_plan, false)
+    return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, G, Fθk, fft_plan, ifft_plan, false)
 end
 
 """
@@ -202,25 +206,29 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
     end
     
     plan.fft_plan * plan.Fθk
-    
+
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
-            Plm_and_dPdx_row!(plan.P, plan.dPdx, cfg.x[i], lmax, m)
+            # Use pole-safe functions
+            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
+            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
             Fθ_i = plan.Fθk[i, col]
             wi = cfg.w[i]
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2)); inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
             @inbounds for l in max(1,m):lmax
                 N = cfg.Nlm[l+1, col]
-                dθY = -sθ * N * plan.dPdx[l+1]
+                dθY = N * plan.dPdtheta[l+1]
                 Y = N * plan.P[l+1]
+                Y_over_sθ = N * plan.P_over_sinth[l+1]
                 coeff = wi * scaleφ / (l*(l+1))
-                Tlm_out[l+1, col] += coeff * ((0 + 1im) * m * inv_sθ * Y * Fθ_i)
+                # From synthesis Vθ = dθY*S - (im*m/sinθ)*T, the adjoint contribution
+                # from Vθ to T has negative sign
+                Tlm_out[l+1, col] += coeff * (-1.0im * m * Y_over_sθ * Fθ_i)
                 Slm_out[l+1, col] += coeff * (Fθ_i * dθY)
             end
         end
     end
-    
+
     # Second pass: FFT(Vp) -> add remaining contributions using Fφ
     @inbounds for i in 1:nlat, j in 1:nlon
         plan.Fθk[i,j] = Vp[i,j]
@@ -233,23 +241,25 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             end
         end
     end
-    
+
     plan.fft_plan * plan.Fθk
-    
+
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
-            Plm_and_dPdx_row!(plan.P, plan.dPdx, cfg.x[i], lmax, m)
+            # Use pole-safe functions
+            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
+            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
             Fφ_i = plan.Fθk[i, col]
             wi = cfg.w[i]
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2)); inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
             @inbounds for l in max(1,m):lmax
                 N = cfg.Nlm[l+1, col]
-                dθY = -sθ * N * plan.dPdx[l+1]
+                dθY = N * plan.dPdtheta[l+1]
                 Y = N * plan.P[l+1]
+                Y_over_sθ = N * plan.P_over_sinth[l+1]
                 coeff = wi * scaleφ / (l*(l+1))
                 # Adjoint: S gets -term*Vφ, T gets +dθY*Vφ
-                Slm_out[l+1, col] += -coeff * ((0 + 1im) * m * inv_sθ * Y * Fφ_i)
+                Slm_out[l+1, col] += -coeff * (1.0im * m * Y_over_sθ * Fφ_i)
                 Tlm_out[l+1, col] += coeff * (Fφ_i * dθY)
             end
         end
@@ -296,23 +306,25 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
-            Plm_and_dPdx_row!(plan.P, plan.dPdx, cfg.x[i], lmax, m)
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2)); inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
-            g = 0.0 + 0.0im
+            # Use pole-safe functions
+            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
+            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
+            g = zero(ComplexF64)
             @inbounds for l in max(1,m):lmax
                 N = cfg.Nlm[l+1, col]
-                dθY = -sθ * N * plan.dPdx[l+1]
+                dθY = N * plan.dPdtheta[l+1]
                 Y = N * plan.P[l+1]
+                Y_over_sθ = N * plan.P_over_sinth[l+1]
                 # Vθ = ∂S/∂θ - (im/sinθ) * T
-                g += dθY * Slm_int[l+1, col] - (0 + 1im) * m * inv_sθ * Y * Tlm_int[l+1, col]
+                g += dθY * Slm_int[l+1, col] - 1.0im * m * Y_over_sθ * Tlm_int[l+1, col]
             end
             plan.G[i] = g
         end
-        
+
         @inbounds for i in 1:nlat
             plan.Fθk[i, col] = inv_scaleφ * plan.G[i]
         end
-        
+
         if real_output && m > 0
             conj_index = nlon - m + 1
             @inbounds for i in 1:nlat
@@ -320,7 +332,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             end
         end
     end
-    
+
     if plan.use_rfft && real_output
         Vt_tmp = FFTW.irfft(plan.Fθk, nlon, 2)
         @inbounds for i in 1:nlat, j in 1:nlon
@@ -329,7 +341,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     else
         plan.ifft_plan * plan.Fθk
     end
-    
+
     if cfg.robert_form
         @inbounds for i in 1:nlat
             sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
@@ -338,7 +350,7 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             end
         end
     end
-    
+
     if real_output
         @inbounds for i in 1:nlat, j in 1:nlon
             Vt_out[i,j] = real(plan.Fθk[i,j])
@@ -348,21 +360,23 @@ function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             Vt_out[i,j] = plan.Fθk[i,j]
         end
     end
-    
+
     # Synthesize Vp similarly
     fill!(plan.Fθk, 0)
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
-            Plm_and_dPdx_row!(plan.P, plan.dPdx, cfg.x[i], lmax, m)
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2)); inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
-            g = 0.0 + 0.0im
+            # Use pole-safe functions
+            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
+            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
+            g = zero(ComplexF64)
             @inbounds for l in max(1,m):lmax
                 N = cfg.Nlm[l+1, col]
-                dθY = -sθ * N * plan.dPdx[l+1]
+                dθY = N * plan.dPdtheta[l+1]
                 Y = N * plan.P[l+1]
+                Y_over_sθ = N * plan.P_over_sinth[l+1]
                 # Vφ = (im/sinθ) * S + ∂T/∂θ
-                g += (0 + 1im) * m * inv_sθ * Y * Slm_int[l+1, col] + dθY * Tlm_int[l+1, col]
+                g += 1.0im * m * Y_over_sθ * Slm_int[l+1, col] + dθY * Tlm_int[l+1, col]
             end
             plan.G[i] = g
         end
@@ -488,7 +502,7 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         # Build Gm(θ)
         for i in 1:nlat
             Plm_row!(plan.P, cfg.x[i], lmax, m)
-            g = 0.0 + 0.0im
+            g = zero(ComplexF64)
             @inbounds for l in m:lmax
                 g += (cfg.Nlm[l+1, col] * plan.P[l+1]) * alm_int[l+1, col]
             end

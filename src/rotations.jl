@@ -337,7 +337,7 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
         # Build input vector b_m' = e^{-i m' γ} A_{m'} for m' in [-mm..mm]
         ncols = 2*mm + 1
         b = Vector{ComplexF64}(undef, 2l + 1)
-        fill!(b, 0.0 + 0.0im)
+        fill!(b, zero(ComplexF64))
         for mp in -mm:mm
             idx = LM_cplx_index(r.lmax, r.mmax, l, mp) + 1
             b[mp + l + 1] = Zlm[idx] * cis(-mp * γ)
@@ -345,10 +345,10 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
         # Multiply with d^l(β)
         dl = wigner_d_matrix(l, β)
         c = Vector{ComplexF64}(undef, 2l + 1)
-        fill!(c, 0.0 + 0.0im)
+        fill!(c, zero(ComplexF64))
         # c_m = sum_{m'} d_{m m'} b_{m'}
         for mi in -l:l
-            acc = 0.0 + 0.0im
+            acc = zero(ComplexF64)
             for mp in -l:l
                 acc += dl[mi + l + 1, mp + l + 1] * b[mp + l + 1]
             end
@@ -376,7 +376,7 @@ function shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex
     Z = Vector{ComplexF64}(undef, nlm_cplx_calc(r.lmax, r.mmax, 1))
     
     # initialize zeros
-    fill!(Z, 0.0 + 0.0im)
+    fill!(Z, zero(ComplexF64))
     for l in 0:r.lmax
         mm = min(l, r.mmax)
         # m = 0

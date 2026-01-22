@@ -86,7 +86,7 @@ function spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     
     Ql = Vector{ComplexF64}(undef, lmax + 1)
-    fill!(Ql, 0.0 + 0.0im)
+    fill!(Ql, zero(ComplexF64))
     
     P = Vector{Float64}(undef, lmax + 1)
     
@@ -100,7 +100,7 @@ function spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
         end
     end
 
-    return Ql .* cfg.cphi  # Apply longitude scaling
+    return Ql  # No phi scaling needed for single-mode transform (proper inverse of SH_to_spat_axisym)
 end
 
 """
@@ -228,7 +228,7 @@ function spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::In
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
     
     Ql = Vector{ComplexF64}(undef, ltr + 1)
-    fill!(Ql, 0.0 + 0.0im)
+    fill!(Ql, zero(ComplexF64))
     
     P = Vector{Float64}(undef, ltr + 1)
     
@@ -242,7 +242,7 @@ function spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::In
         end
     end
 
-    return Ql .* cfg.cphi
+    return Ql  # No phi scaling needed for single-mode transform (proper inverse of SH_to_spat_l_axisym)
 end
 
 """
@@ -290,7 +290,7 @@ function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex},
     
     num_l = ltr - im + 1
     Ql = Vector{ComplexF64}(undef, num_l)
-    fill!(Ql, 0.0 + 0.0im)
+    fill!(Ql, zero(ComplexF64))
     
     P = Vector{Float64}(undef, ltr + 1)
     
@@ -304,7 +304,7 @@ function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex},
         end
     end
 
-    return Ql .* cfg.cphi
+    return Ql  # No phi scaling needed for single-mode transform (proper inverse of SH_to_spat_ml)
 end
 
 """
@@ -331,7 +331,7 @@ function SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, l
         x = cfg.x[i]
         Plm_row!(P, x, ltr, im)
 
-        val = 0.0 + 0.0im
+        val = zero(ComplexF64)
         @inbounds for l in im:ltr
             val += Ql[l-im+1] * cfg.Nlm[l+1, im+1] * P[l+1]
         end
@@ -354,13 +354,13 @@ function SH_to_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real,
     size(Qlm, 1) == lmax + 1 || throw(DimensionMismatch("Qlm first dim must be lmax+1"))
     size(Qlm, 2) == mmax + 1 || throw(DimensionMismatch("Qlm second dim must be mmax+1"))
 
-    result = 0.0 + 0.0im
+    result = zero(ComplexF64)
     P = Vector{Float64}(undef, lmax + 1)
 
     # Process each azimuthal mode
     for m in 0:mmax
         Plm_row!(P, cost, lmax, m)
-        phase = m == 0 ? 1.0 + 0.0im : cos(m * phi) + im * sin(m * phi)  # e^(imφ)
+        phase = m == 0 ? one(ComplexF64) : cos(m * phi) + 1.0im * sin(m * phi)  # e^(imφ)
 
         @inbounds for l in m:lmax
             result += Qlm[l+1, m+1] * cfg.Nlm[l+1, m+1] * P[l+1] * phase

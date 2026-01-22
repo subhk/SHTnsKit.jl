@@ -76,7 +76,7 @@ function dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Al
     # - Y_{l-1}^m contributes to Y_l^m via b_{l-1}^m (the upward coefficient from l-1)
     # - Y_{l+1}^m contributes to Y_l^m via a_{l+1}^m (the downward coefficient from l+1)
     @inbounds for m in 0:mmax, l in m:lmax
-        acc = 0.0 + 0.0im
+        acc = zero(ComplexF64)
         # Contribution from lower degree neighbor Y_{l-1}^m
         if l > m && l > 0
             idx_prev = SHTnsKit.LM_index(lmax, cfg.mres, l-1, m)

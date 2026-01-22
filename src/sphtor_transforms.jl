@@ -88,7 +88,8 @@ DEBUGGING TIPS
 
 3. Check pole behavior - sin θ → 0 at poles:
    - V_φ term (1/sinθ)∂S/∂φ can be singular
-   - Implementation guards against this via inv_sθ = sθ == 0 ? 0.0 : 1/sθ
+   - Implementation uses pole-safe functions (Plm_and_dPdtheta_row!, Plm_over_sinth_row!)
+     that compute analytical limits at poles instead of dividing by zero
 
 4. Robert form scaling:
    - If cfg.robert_form = true, outputs are scaled by sin(θ)
@@ -120,6 +121,59 @@ The corresponding scalar invariants are:
 - Vorticity:  ζ = (∇×V)·r̂ = -∑_{l,m} l(l+1) T_lm Y_l^m
 so spheroidal/toroidal spectra are directly tied to divergence and vorticity.
 """
+
+# Helper functions for pole handling (when precomputed tables are used)
+# These compute the analytical limits at poles where sin(θ) = 0
+
+"""
+    _dPdtheta_at_pole(l, m, x, N)
+
+Compute dP_l^m/dθ * N at a pole (x = ±1) using analytical limits.
+"""
+@inline function _dPdtheta_at_pole(l::Int, m::Int, x::Float64, N::Float64)
+    if m == 0
+        # dP_l^0/dθ = 0 at poles
+        return 0.0
+    elseif m == 1
+        # dP_l^1/dθ at poles has finite nonzero limit
+        # P_l^1 = -sin(θ) * dP_l^0/dx (Condon-Shortley phase)
+        # dP_l^1/dθ = -cos(θ)*dP_l^0/dx + sin²(θ)*d²P_l^0/dx²
+        # At x = +1 (north pole, θ = 0): dP_l^1/dθ = -l(l+1)/2 (always negative)
+        # At x = -1 (south pole, θ = π): dP_l^1/dθ = (-1)^{l+1} * l(l+1)/2
+        if x > 0
+            return N * (-Float64(l * (l + 1)) / 2)
+        else
+            return N * Float64((-1)^(l+1)) * l * (l + 1) / 2
+        end
+    else
+        # For m > 1, dP_l^m/dθ = 0 at poles
+        return 0.0
+    end
+end
+
+"""
+    _P_over_sinth_at_pole(l, m, x, N)
+
+Compute P_l^m/sin(θ) * N at a pole (x = ±1) using analytical limits.
+"""
+@inline function _P_over_sinth_at_pole(l::Int, m::Int, x::Float64, N::Float64)
+    if m == 0
+        # P_l^0/sin(θ) is singular, but m=0 terms don't have 1/sinθ factor in transforms
+        return 0.0
+    elseif m == 1
+        # P_l^1/sin(θ) = -dP_l^0/dx (since P_l^1 = -sin(θ)*dP_l^0/dx)
+        # At x = 1 (north pole): dP_l^0/dx = l(l+1)/2, so P_l^1/sinθ = -l(l+1)/2
+        # At x = -1 (south pole): dP_l^0/dx = (-1)^{l+1}*l(l+1)/2, so P_l^1/sinθ = (-1)^l*l(l+1)/2
+        if x > 0
+            return N * (-Float64(l * (l + 1)) / 2)
+        else
+            return N * Float64((-1)^l) * l * (l + 1) / 2
+        end
+    else
+        # For m > 1, P_l^m/sin(θ) → 0 at poles
+        return 0.0
+    end
+end
 
 """
     SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true) -> (Vt, Vp)
@@ -153,8 +207,9 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     # Use maxthreadid() to handle all possible thread IDs with static scheduling
     nthreads = Threads.maxthreadid()
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    
+    thread_local_dPdtheta = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_local_P_over_sinth = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+
     # Scale continuous Fourier coefficients to DFT bins for ifft (factor nlon or nlon/(2π))
     inv_scaleφ = phi_inv_scale(cfg)
 
@@ -165,41 +220,61 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
         for i in 1:nlat
             x = cfg.x[i]
             sθ = sqrt(max(0.0, 1 - x*x))
-            inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
-            
-            gθ = 0.0 + 0.0im
-            gφ = 0.0 + 0.0im
-            
+
+            gθ = zero(ComplexF64)
+            gφ = zero(ComplexF64)
+
             if cfg.use_plm_tables && length(cfg.plm_tables) == mmax+1 && length(cfg.dplm_tables) == mmax+1
+                # Using precomputed tables - note: tables store dP/dx, convert to dP/dθ
                 tblP = cfg.plm_tables[m+1]
                 tbld = cfg.dplm_tables[m+1]
 
+                # Handle poles carefully
+                is_pole = sθ < 100 * eps(Float64)
+                inv_sθ = is_pole ? 0.0 : 1.0 / sθ
+
                 @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
-                    dθY = -sθ * N * tbld[l+1, i]
+                    # Convert dP/dx to dP/dθ: dP/dθ = -sin(θ) * dP/dx
+                    # At poles, this is handled by the pole-safe code in Plm_and_dPdtheta_row!
+                    if is_pole
+                        # At poles, use analytical limits
+                        dθY = _dPdtheta_at_pole(l, m, x, N)
+                        Y_over_sθ = _P_over_sinth_at_pole(l, m, x, N)
+                    else
+                        dθY = -sθ * N * tbld[l+1, i]
+                        Y_over_sθ = N * tblP[l+1, i] * inv_sθ
+                    end
                     Y = N * tblP[l+1, i]
                     Sl = Slm_int[l+1, col]
                     Tl = Tlm_int[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
-                    gθ += dθY * Sl - (0 + 1im) * m * inv_sθ * Y * Tl
+                    gθ += dθY * Sl - 1.0im * m * Y_over_sθ * Tl
                     # Vφ = (im/sinθ) * S + ∂T/∂θ
-                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + dθY * Tl
+                    gφ += 1.0im * m * Y_over_sθ * Sl + dθY * Tl
                 end
             else
+                # Compute Legendre polynomials on the fly using pole-safe functions
                 P = thread_local_P[Threads.threadid()]
-                dPdx = thread_local_dPdx[Threads.threadid()]
-                Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
+                dPdtheta = thread_local_dPdtheta[Threads.threadid()]
+                P_over_sinth = thread_local_P_over_sinth[Threads.threadid()]
+
+                # Use pole-safe derivative computation
+                Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+                # Also compute P/sin(θ) with proper pole handling
+                Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
 
                 @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
-                    dθY = -sθ * N * dPdx[l+1]
+                    dθY = N * dPdtheta[l+1]  # Already dP/dθ, not dP/dx
                     Y = N * P[l+1]
+                    Y_over_sθ = N * P_over_sinth[l+1]
                     Sl = Slm_int[l+1, col]
                     Tl = Tlm_int[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
-                    gθ += dθY * Sl - (0 + 1im) * m * inv_sθ * Y * Tl
+                    gθ += dθY * Sl - 1.0im * m * Y_over_sθ * Tl
                     # Vφ = (im/sinθ) * S + ∂T/∂θ
-                    gφ += (0 + 1im) * m * inv_sθ * Y * Sl + dθY * Tl
+                    gφ += 1.0im * m * Y_over_sθ * Sl + dθY * Tl
                 end
             end
             Fθ[i, col] = inv_scaleφ * gθ
@@ -263,21 +338,21 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
     # Use maxthreadid() to handle all possible thread IDs with static scheduling
     nthreads = Threads.maxthreadid()
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_dPdx = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_local_dPdtheta = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_local_P_over_sinth = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
 
     @threads :static for m in 0:mmax
         col = m + 1
         tid = Threads.threadid()
-        
-        Sacc = thread_local_Sacc[tid]; fill!(Sacc, 0.0 + 0.0im)
-        Tacc = thread_local_Tacc[tid]; fill!(Tacc, 0.0 + 0.0im)
+
+        Sacc = thread_local_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
+        Tacc = thread_local_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
 
         for i in 1:nlat
             x = cfg.x[i]
             sθ = sqrt(max(0.0, 1 - x*x))
-            inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
             wi = cfg.w[i]
             Fθ = Ftθm[i, col]
             Fφ = Fpθm[i, col]
@@ -287,29 +362,43 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
                 Fφ /= sθ
             end
 
+            # Handle poles carefully
+            is_pole = sθ < 100 * eps(Float64)
+
             if use_tbl
                 tblP = cfg.plm_tables[col]
                 tbld = cfg.dplm_tables[col]
                 @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
-                    dθY = -sθ * N * tbld[l+1, i]
+                    # Use pole-safe computation
+                    if is_pole
+                        dθY = _dPdtheta_at_pole(l, m, x, N)
+                        Y_over_sθ = _P_over_sinth_at_pole(l, m, x, N)
+                    else
+                        dθY = -sθ * N * tbld[l+1, i]
+                        Y_over_sθ = N * tblP[l+1, i] / sθ
+                    end
                     Y = N * tblP[l+1, i]
                     coeff = wi * scaleφ / (l * (l + 1))
-                    term = (0 + 1im) * m * inv_sθ * Y
+                    term = 1.0im * m * Y_over_sθ
                     # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
                     Sacc[l+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
                     Tacc[l+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
                 end
             else
                 P = thread_local_P[tid]
-                dPdx = thread_local_dPdx[tid]
-                Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
+                dPdtheta = thread_local_dPdtheta[tid]
+                P_over_sinth = thread_local_P_over_sinth[tid]
+                # Use pole-safe functions
+                Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+                Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
                 @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
-                    dθY = -sθ * N * dPdx[l+1]
+                    dθY = N * dPdtheta[l+1]  # Already dP/dθ, not dP/dx
                     Y = N * P[l+1]
+                    Y_over_sθ = N * P_over_sinth[l+1]
                     coeff = wi * scaleφ / (l * (l + 1))
-                    term = (0 + 1im) * m * inv_sθ * Y
+                    term = 1.0im * m * Y_over_sθ
                     # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
                     Sacc[l+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
                     Tacc[l+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
@@ -561,18 +650,18 @@ function spat_to_SHsphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Com
     num_l = ltr - im + 1
     Sl = Vector{ComplexF64}(undef, num_l)
     Tl = Vector{ComplexF64}(undef, num_l)
-    fill!(Sl, 0.0 + 0.0im)
-    fill!(Tl, 0.0 + 0.0im)
+    fill!(Sl, zero(ComplexF64))
+    fill!(Tl, zero(ComplexF64))
 
     P = Vector{Float64}(undef, ltr + 1)
-    dPdx = Vector{Float64}(undef, ltr + 1)
+    dPdtheta = Vector{Float64}(undef, ltr + 1)
+    P_over_sinth = Vector{Float64}(undef, ltr + 1)
     scaleφ = cfg.cphi
 
-    # Integrate using Legendre polynomials and derivatives
+    # Integrate using Legendre polynomials and derivatives (pole-safe)
     for i in 1:nlat
         x = cfg.x[i]
         sθ = sqrt(max(0.0, 1 - x*x))
-        inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
         wi = cfg.w[i]
         Fθ = Vt_m[i]
         Fφ = Vp_m[i]
@@ -583,15 +672,18 @@ function spat_to_SHsphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Com
             Fφ = Fφ / sθ
         end
 
-        Plm_and_dPdx_row!(P, dPdx, x, ltr, im)
+        # Use pole-safe functions
+        Plm_and_dPdtheta_row!(P, dPdtheta, x, ltr, im)
+        Plm_over_sinth_row!(P, P_over_sinth, x, ltr, im)
 
         @inbounds for l in max(1, im):ltr
             N = cfg.Nlm[l+1, im+1]
-            dθY = -sθ * N * dPdx[l+1]
+            dθY = N * dPdtheta[l+1]
             Y = N * P[l+1]
+            Y_over_sθ = N * P_over_sinth[l+1]
             ll1 = l * (l + 1)
             coeff = wi * scaleφ / ll1
-            term = (0 + 1im) * im * inv_sθ * Y
+            term = 1.0im * im * Y_over_sθ
 
             # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
             Sl[l-im+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
@@ -619,30 +711,33 @@ function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     Vt_m = Vector{ComplexF64}(undef, nlat)
     Vp_m = Vector{ComplexF64}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
-    dPdx = Vector{Float64}(undef, ltr + 1)
+    dPdtheta = Vector{Float64}(undef, ltr + 1)
+    P_over_sinth = Vector{Float64}(undef, ltr + 1)
 
-    # Synthesize vector components for this mode
+    # Synthesize vector components for this mode using pole-safe functions
     for i in 1:nlat
         x = cfg.x[i]
         sθ = sqrt(max(0.0, 1 - x*x))
-        inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
 
-        Plm_and_dPdx_row!(P, dPdx, x, ltr, im)
+        # Use pole-safe functions
+        Plm_and_dPdtheta_row!(P, dPdtheta, x, ltr, im)
+        Plm_over_sinth_row!(P, P_over_sinth, x, ltr, im)
 
-        gθ = 0.0 + 0.0im
-        gφ = 0.0 + 0.0im
+        gθ = zero(ComplexF64)
+        gφ = zero(ComplexF64)
 
         @inbounds for l in max(1, im):ltr
             N = cfg.Nlm[l+1, im+1]
-            dθY = -sθ * N * dPdx[l+1]
+            dθY = N * dPdtheta[l+1]
             Y = N * P[l+1]
+            Y_over_sθ = N * P_over_sinth[l+1]
             S_coef = Sl[l-im+1]
             T_coef = Tl[l-im+1]
 
             # Vθ = ∂S/∂θ - (im/sinθ) * T
-            gθ += dθY * S_coef - (0 + 1im) * im * inv_sθ * Y * T_coef
+            gθ += dθY * S_coef - 1.0im * im * Y_over_sθ * T_coef
             # Vφ = (im/sinθ) * S + ∂T/∂θ
-            gφ += (0 + 1im) * im * inv_sθ * Y * S_coef + dθY * T_coef
+            gφ += 1.0im * im * Y_over_sθ * S_coef + dθY * T_coef
         end
 
         # Apply Robert form scaling if needed

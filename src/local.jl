@@ -21,7 +21,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
 
     # m=0 contribution
     Plm_row!(P, x, lmax, 0)
-    g0 = 0.0 + 0.0im
+    g0 = zero(ComplexF64)
     
     @inbounds for l in 0:ltr
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
@@ -42,7 +42,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     for m in 1:mtr
         (m % cfg.mres == 0) || continue
         Plm_row!(P, x, lmax, m)
-        gm = 0.0 + 0.0im
+        gm = zero(ComplexF64)
         col = m + 1
         
         @inbounds for l in m:min(ltr, lmax)
@@ -74,10 +74,10 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     x = float(cost)
     P = Vector{Float64}(undef, lmax + 1)
     vals = Vector{ComplexF64}(undef, nphi)
-    fill!(vals, 0.0 + 0.0im)
+    fill!(vals, zero(ComplexF64))
     # m=0
     Plm_row!(P, x, lmax, 0)
-    g0 = 0.0 + 0.0im
+    g0 = zero(ComplexF64)
     
     @inbounds for l in 0:min(ltr, lmax)
         idx = LM_cplx_index(lmax, mmax, l, 0) + 1
@@ -98,7 +98,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     for m in 1:mmax
         Plm_row!(P, x, lmax, m)
         col = m + 1
-        gm = 0.0 + 0.0im; gn = 0.0 + 0.0im
+        gm = zero(ComplexF64); gn = zero(ComplexF64)
         @inbounds for l in m:min(ltr, lmax)
             Ylm = cfg.Nlm[l+1, col] * P[l+1]
             # positive m
@@ -135,16 +135,16 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     x = float(cost)
     lmax = cfg.lmax; mmax = cfg.mmax
     P = Vector{Float64}(undef, lmax + 1)
-    dPdx = Vector{Float64}(undef, lmax + 1)
+    dPdtheta = Vector{Float64}(undef, lmax + 1)
+    P_over_sinth = Vector{Float64}(undef, lmax + 1)
     sθ = sqrt(max(0.0, 1 - x*x))
-    inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
     CT = promote_type(eltype(Qlm), eltype(Slm), eltype(Tlm))
     vr = zero(CT)
     vt = zero(CT)
     vp = zero(CT)
-    
-    # m=0
-    Plm_and_dPdx_row!(P, dPdx, x, lmax, 0)
+
+    # m=0 (no 1/sinθ terms)
+    Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
     for l in 0:lmax
         N = cfg.Nlm[l+1, 1]
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
@@ -156,17 +156,19 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
             aQ *= s; aS *= s; aT *= s
         end
         Y = N * P[l+1]
-        dθY = -sθ * N * dPdx[l+1]
+        dθY = N * dPdtheta[l+1]
         vr += Y   * aQ
         vt += dθY * aS
         # Vφ = (im/sinθ)*Y*S + dθY*T, for m=0 the first term is zero
         vp += dθY * aT
     end
 
-    # m>0
+    # m>0 (need pole-safe 1/sinθ handling)
     for m in 1:mmax
         (m % cfg.mres == 0) || continue
-        Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
+        # Use pole-safe functions
+        Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+        Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
         gvr = zero(CT)
         gvt = zero(CT)
         gvp = zero(CT)
@@ -182,12 +184,13 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
                 aQ *= s; aS *= s; aT *= s
             end
             Y = N * P[l+1]
-            dθY = -sθ * N * dPdx[l+1]
+            dθY = N * dPdtheta[l+1]
+            Y_over_sθ = N * P_over_sinth[l+1]
             gvr += Y   * aQ
             # Vθ = dθY*S - (im/sinθ)*Y*T
-            gvt += dθY * aS - (0 + 1im) * m * inv_sθ * Y * aT
+            gvt += dθY * aS - 1.0im * m * Y_over_sθ * aT
             # Vφ = (im/sinθ)*Y*S + dθY*T
-            gvp += (0 + 1im) * m * inv_sθ * Y * aS + dθY * aT
+            gvp += 1.0im * m * Y_over_sθ * aS + dθY * aT
         end
         ph = cis(m * phi)
         vr += 2 * real(gvr * ph)
@@ -227,19 +230,19 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     x = float(cost)
     lmax = cfg.lmax
     P = Vector{Float64}(undef, lmax + 1)
-    dPdx = Vector{Float64}(undef, lmax + 1)
+    dPdtheta = Vector{Float64}(undef, lmax + 1)
+    P_over_sinth = Vector{Float64}(undef, lmax + 1)
     Vr = Vector{Float64}(undef, nphi)
     Vt = Vector{Float64}(undef, nphi)
     Vp = Vector{Float64}(undef, nphi)
     fill!(Vr, 0.0); fill!(Vt, 0.0); fill!(Vp, 0.0)
 
-    # m=0
-    Plm_and_dPdx_row!(P, dPdx, x, lmax, 0)
-    g0 = 0.0 + 0.0im
-    gθ0 = 0.0 + 0.0im
-    gφ0 = 0.0 + 0.0im
-    sθ = sqrt(max(0.0, 1 - x*x))
-    
+    # m=0 (no 1/sinθ terms)
+    Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
+    g0 = zero(ComplexF64)
+    gθ0 = zero(ComplexF64)
+    gφ0 = zero(ComplexF64)
+
     @inbounds for l in 0:ltr
         N = cfg.Nlm[l+1, 1]
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
@@ -251,7 +254,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
             aQ *= s; aS *= s; aT *= s
         end
         Y = N * P[l+1]
-        dθY = -sθ * N * dPdx[l+1]
+        dθY = N * dPdtheta[l+1]
         g0  += Y * aQ
         gθ0 += dθY * aS
         # Vφ = (im/sinθ)*Y*S + dθY*T, for m=0 the first term is zero
@@ -261,16 +264,17 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
         Vr[j] += real(g0); Vt[j] += real(gθ0); Vp[j] += real(gφ0)
     end
 
-    # m>0
+    # m>0 (need pole-safe 1/sinθ handling)
     for m in 1:mtr
         (m % cfg.mres == 0) || continue
-        Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
-        g  = 0.0 + 0.0im
-        gθ = 0.0 + 0.0im
-        gφ = 0.0 + 0.0im
-        inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
+        # Use pole-safe functions
+        Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+        Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+        g  = zero(ComplexF64)
+        gθ = zero(ComplexF64)
+        gφ = zero(ComplexF64)
         col = m + 1
-        
+
         @inbounds for l in m:min(ltr, lmax)
             N = cfg.Nlm[l+1, col]
             lm = LM_index(lmax, cfg.mres, l, m) + 1
@@ -282,12 +286,13 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
                 aQ *= s; aS *= s; aT *= s
             end
             Y = N * P[l+1]
-            dθY = -sθ * N * dPdx[l+1]
+            dθY = N * dPdtheta[l+1]
+            Y_over_sθ = N * P_over_sinth[l+1]
             g  += Y   * aQ
             # Vθ = dθY*S - (im/sinθ)*Y*T
-            gθ += dθY * aS - (0 + 1im) * m * inv_sθ * Y * aT
+            gθ += dθY * aS - 1.0im * m * Y_over_sθ * aT
             # Vφ = (im/sinθ)*Y*S + dθY*T
-            gφ += (0 + 1im) * m * inv_sθ * Y * aS + dθY * aT
+            gφ += 1.0im * m * Y_over_sθ * aS + dθY * aT
         end
         for j in 0:(nphi-1)
             phase = cis(2π * m * j / nphi)

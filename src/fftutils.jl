@@ -178,15 +178,8 @@ function fft_phi(A::AbstractMatrix)
         _FFT_BACKEND[] = :fftw
         return Y
     catch
-        # Check if we need DFT fallback for special number types (like ForwardDiff.Dual)
-        T = eltype(A)
-        needs_dft_fallback = !(T <: Union{Float32, Float64, ComplexF32, ComplexF64}) ||
-                           contains(string(T), "ForwardDiff.Dual")
-        
-        if get(ENV, "SHTNSKIT_FORCE_FFTW", "0") == "1" && !needs_dft_fallback
-            error("FFTW unavailable but SHTNSKIT_FORCE_FFTW=1; refusing DFT fallback")
-        end
         # Fallback path: use pure Julia DFT for AD compatibility or when FFTW fails
+        # (FFTW only supports Float32/Float64/ComplexF32/ComplexF64)
         local Y = _dft_phi(A, -1)  # Forward transform uses -1 direction
         _FFT_BACKEND[] = :dft
         return Y
@@ -250,15 +243,8 @@ function ifft_phi(A::AbstractMatrix)
         _FFT_BACKEND[] = :fftw
         return y
     catch
-        # Check if we need DFT fallback for special number types (like ForwardDiff.Dual)
-        T = eltype(A)
-        needs_dft_fallback = !(T <: Union{Float32, Float64, ComplexF32, ComplexF64}) ||
-                           contains(string(T), "ForwardDiff.Dual")
-        
-        if get(ENV, "SHTNSKIT_FORCE_FFTW", "0") == "1" && !needs_dft_fallback
-            error("FFTW unavailable but SHTNSKIT_FORCE_FFTW=1; refusing DFT fallback")
-        end
-        # Fallback path: use pure Julia inverse DFT with proper scaling  
+        # Fallback path: use pure Julia inverse DFT with proper scaling
+        # (FFTW only supports Float32/Float64/ComplexF32/ComplexF64)
         local y = (1/nlon) * _dft_phi(A, +1)  # Inverse transform uses +1 direction
         _FFT_BACKEND[] = :dft
         return y

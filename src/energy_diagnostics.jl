@@ -160,7 +160,7 @@ function grad_energy_scalar_alm(cfg::SHTConfig, alm::AbstractMatrix; real_field:
     
     grad = similar(alm)
     for m in 0:mmax, l in m:lmax
-        grad[l+1, m+1] = wm[m+1] * alm[l+1, m+1]
+        grad[l+1, m+1] = wm[m+1] * conj(alm[l+1, m+1])
     end
     return grad
 end
@@ -192,7 +192,7 @@ function grad_energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex
     grad = similar(Qlm)
     @inbounds for k in eachindex(Qlm)
         m = cfg.mi[k]
-        grad[k] = wm[m+1] * Qlm[k]
+        grad[k] = wm[m+1] * conj(Qlm[k])
     end
     return grad
 end
@@ -213,8 +213,8 @@ function grad_energy_vector_Slm_Tlm(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::Ab
     for m in 0:mmax, l in max(1,m):lmax
         ll1 = l * (l + 1)
         w = wm[m+1] * ll1
-        grad_S[l+1, m+1] = w * Slm[l+1, m+1]
-        grad_T[l+1, m+1] = w * Tlm[l+1, m+1]
+        grad_S[l+1, m+1] = w * conj(Slm[l+1, m+1])
+        grad_T[l+1, m+1] = w * conj(Tlm[l+1, m+1])
     end
     return grad_S, grad_T
 end
@@ -231,7 +231,7 @@ function grad_grid_energy_scalar_field(cfg::SHTConfig, f::AbstractMatrix)
     
     grad = similar(f)
     for j in 1:nlon, i in 1:nlat
-        grad[i, j] = scale * wlat[i] * f[i, j]
+        grad[i, j] = scale * wlat[i] * conj(f[i, j])
     end
     return grad
 end
@@ -250,8 +250,8 @@ function grad_grid_energy_vector_fields(cfg::SHTConfig, Vt::AbstractMatrix, Vp::
     
     for j in 1:nlon, i in 1:nlat
         w = scale * wlat[i]
-        grad_Vt[i, j] = w * Vt[i, j]
-        grad_Vp[i, j] = w * Vp[i, j]
+        grad_Vt[i, j] = w * conj(Vt[i, j])
+        grad_Vp[i, j] = w * conj(Vp[i, j])
     end
     return grad_Vt, grad_Vp
 end
@@ -300,8 +300,8 @@ function grad_energy_vector_packed(cfg::SHTConfig,
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1
             w = wm[m+1] * (l * (l + 1))
-            grad_S[k] = w * Spacked[k]
-            grad_T[k] = w * Tpacked[k]
+            grad_S[k] = w * conj(Spacked[k])
+            grad_T[k] = w * conj(Tpacked[k])
         end
     end
     return grad_S, grad_T

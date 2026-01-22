@@ -46,37 +46,6 @@ DEVICE TYPES
 =#
 
 # ============================================================================
-# Device Types
-# ============================================================================
-
-"""
-    SHTBackend
-
-Enum representing supported compute backends for SHTnsKit operations.
-
-# Values
-- `CPU`: Standard CPU computation (always available)
-- `GPU`: GPU acceleration (requires CUDA.jl for NVIDIA GPUs)
-"""
-@enum SHTBackend begin
-    CPU
-    GPU
-end
-
-# Convert Symbol to SHTBackend
-function _symbol_to_backend(s::Symbol)::SHTBackend
-    s == :cpu && return CPU
-    s == :gpu && return GPU
-    throw(ArgumentError("Unknown backend: $s. Valid options: :cpu, :gpu"))
-end
-
-# Convert SHTBackend to Symbol
-function _backend_to_symbol(b::SHTBackend)::Symbol
-    b == CPU && return :cpu
-    b == GPU && return :gpu
-end
-
-# ============================================================================
 # Global Backend State
 # ============================================================================
 
@@ -320,6 +289,9 @@ function to_device(arr::AbstractArray, backend::Symbol=current_backend())
 end
 
 # CPU transfer - always available
+# Specialization for Array to avoid unnecessary copy
+_to_cpu(arr::Array) = arr
+
 function _to_cpu(arr::AbstractArray)
     return Array(arr)
 end

@@ -327,14 +327,13 @@ function set_south_pole_first!(cfg::SHTConfig)
         return cfg  # Already in south-pole-first mode
     end
 
-    # Reverse latitude-dependent arrays
-    cfg.θ = reverse(cfg.θ)
-    cfg.w = reverse(cfg.w)
-    cfg.x = reverse(cfg.x)
-    cfg.wlat = cfg.w  # wlat is an alias for w
-    cfg.ct = cos.(cfg.θ)
-    cfg.st = sin.(cfg.θ)
-    cfg.sintheta = cfg.st
+    # Reverse latitude-dependent arrays in-place (avoids allocations)
+    reverse!(cfg.θ)
+    reverse!(cfg.w)
+    reverse!(cfg.x)
+    reverse!(cfg.ct)
+    reverse!(cfg.st)
+    # wlat and sintheta are aliases pointing to w and st, already updated
 
     # Mark as south-pole-first
     cfg.south_pole_first = true
@@ -370,14 +369,13 @@ function set_north_pole_first!(cfg::SHTConfig)
         return cfg  # Already in north-pole-first mode
     end
 
-    # Reverse latitude-dependent arrays back to north-pole-first
-    cfg.θ = reverse(cfg.θ)
-    cfg.w = reverse(cfg.w)
-    cfg.x = reverse(cfg.x)
-    cfg.wlat = cfg.w
-    cfg.ct = cos.(cfg.θ)
-    cfg.st = sin.(cfg.θ)
-    cfg.sintheta = cfg.st
+    # Reverse latitude-dependent arrays in-place (avoids allocations)
+    reverse!(cfg.θ)
+    reverse!(cfg.w)
+    reverse!(cfg.x)
+    reverse!(cfg.ct)
+    reverse!(cfg.st)
+    # wlat and sintheta are aliases pointing to w and st, already updated
 
     # Mark as north-pole-first
     cfg.south_pole_first = false

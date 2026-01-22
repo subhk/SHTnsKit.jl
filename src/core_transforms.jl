@@ -342,10 +342,12 @@ function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; 
     size(Fφ,1) == cfg.nlat && size(Fφ,2) == cfg.nlon || throw(DimensionMismatch("fft_scratch wrong size"))
     fill!(Fφ, 0)
     if use_fused_loops
-        synthesis_fused(cfg, alm; real_output=false, fft_scratch=Fφ)
+        synthesis_fused(cfg, alm; real_output=real_output, fft_scratch=Fφ)
     else
-        synthesis_unfused(cfg, alm; real_output=false, fft_scratch=Fφ)
+        synthesis_unfused(cfg, alm; real_output=real_output, fft_scratch=Fφ)
     end
+    # After conjugate symmetry + IFFT, Fφ contains the result
+    # For real_output=true, imaginary part should be ~0 due to Hermitian symmetry
     if real_output
         @inbounds for j in 1:cfg.nlon, i in 1:cfg.nlat
             f_out[i, j] = real(Fφ[i, j])

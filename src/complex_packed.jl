@@ -97,7 +97,7 @@ function SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm_packed)
     Fφ = Matrix{CT}(undef, nlat, nlon)
-    fill!(Fφ, 0.0 + 0.0im)
+    fill!(Fφ, zero(CT))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     P = Vector{Float64}(undef, lmax + 1)
@@ -112,7 +112,7 @@ function SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
         if am > lmax; continue; end
         for i in 1:nlat
             Plm_row!(P, cfg.x[i], lmax, am)
-            g = 0.0 + 0.0im
+            g = zero(CT)
             @inbounds for l in am:lmax
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
                 a = alm_packed[idx]
@@ -150,7 +150,7 @@ function spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     lmax, mmax = cfg.lmax, cfg.mmax
     CT = eltype(z)
     alm = Vector{CT}(undef, nlm_cplx_calc(lmax, mmax, 1))
-    fill!(alm, 0.0 + 0.0im)
+    fill!(alm, zero(CT))
 
     # FFT along φ
     Fφ = fft_phi(complex.(z))
@@ -190,13 +190,14 @@ function SH_to_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::
     length(alm) == expected || throw(DimensionMismatch("alm length mismatch"))
     x = float(cost)
     lmax, mmax = cfg.lmax, cfg.mmax
+    CT = eltype(alm)
     P = Vector{Float64}(undef, lmax + 1)
-    acc = 0.0 + 0.0im
+    acc = zero(CT)
     # m from -mmax..mmax
     for m in -mmax:mmax
         am = abs(m)
         Plm_row!(P, x, lmax, am)
-        gm = 0.0 + 0.0im
+        gm = zero(CT)
         @inbounds for l in am:lmax
             idx = LM_cplx_index(lmax, mmax, l, m) + 1
             gm += cfg.Nlm[l+1, am+1] * P[l+1] * alm[idx]

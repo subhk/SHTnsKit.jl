@@ -168,7 +168,7 @@ Batch processing is more efficient than processing fields individually because:
 2. FFT plans are shared
 3. Better cache utilization from contiguous memory access patterns
 """
-function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_fused_loops::Bool=true)
+function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3})
     nlat, nlon, nfields = size(fields)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
@@ -243,7 +243,7 @@ end
 In-place batch forward transform.
 """
 function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
-                         fields::AbstractArray{<:Real,3}; use_fused_loops::Bool=true)
+                         fields::AbstractArray{<:Real,3})
     nlat, nlon, nfields = size(fields)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
@@ -325,7 +325,7 @@ Batch inverse transform for multiple spectral coefficient sets.
 - 3D array of shape `(nlat, nlon, nfields)` with spatial data
 """
 function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
-                         real_output::Bool=true, use_fused_loops::Bool=true)
+                         real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
@@ -412,7 +412,7 @@ In-place batch inverse transform.
 """
 function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                           alm_batch::AbstractArray{<:Complex,3};
-                          real_output::Bool=true, use_fused_loops::Bool=true)
+                          real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))

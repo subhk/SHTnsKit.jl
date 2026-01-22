@@ -152,6 +152,10 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
   
     if grid_type == 0 || grid_type == 1 || grid_type == 6  # gauss, auto, gauss_fly
         x, w = gausslegendre(nlat)
+        # gausslegendre returns nodes from -1 to +1 (south to north)
+        # Reverse to get standard north-to-south ordering (x from +1 to -1)
+        reverse!(x)
+        reverse!(w)
         θ = acos.(x)
     elseif grid_type == 2 || grid_type == 3 || grid_type == 4  # reg_fast, reg_dct, quick_init
         # equiangular midpoints (no poles)
@@ -567,12 +571,12 @@ function load_config(filename::String)
     end
 
     # Create base configuration
-    grid_type = get(params, :grid_type, :gauss)
+    grid_type = get(params, "grid_type", :gauss)
     if grid_type == :gauss
         cfg = create_gauss_config(
             params["lmax"], params["nlat"];
             mmax=params["mmax"], mres=params["mres"], nlon=params["nlon"],
-            norm=get(params, :norm, :orthonormal),
+            norm=get(params, "norm", :orthonormal),
             cs_phase=get(params, "cs_phase", true),
             real_norm=get(params, "real_norm", false),
             robert_form=get(params, "robert_form", false)
@@ -582,7 +586,7 @@ function load_config(filename::String)
         cfg = create_regular_config(
             params["lmax"], params["nlat"];
             mmax=params["mmax"], mres=params["mres"], nlon=params["nlon"],
-            norm=get(params, :norm, :orthonormal),
+            norm=get(params, "norm", :orthonormal),
             cs_phase=get(params, "cs_phase", true),
             real_norm=get(params, "real_norm", false),
             robert_form=get(params, "robert_form", false),

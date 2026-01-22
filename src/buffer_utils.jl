@@ -69,15 +69,16 @@ This is a common operation for degree-limited transforms.
 """
 function zero_high_degree_modes!(arrays::Tuple, cfg::SHTConfig, ltr::Int)
     lmax, mmax = cfg.lmax, cfg.mmax
-    
+
     for array in arrays
+        z = zero(eltype(array))
         @inbounds for m in 0:mmax, l in (ltr+1):lmax
             if l >= m  # Only valid (l,m) combinations
-                array[l+1, m+1] = 0.0
+                array[l+1, m+1] = z
             end
         end
     end
-    
+
     return arrays
 end
 

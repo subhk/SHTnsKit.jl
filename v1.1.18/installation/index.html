@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Installation · SHTnsKit.jl</title><meta name="title" content="Installation · SHTnsKit.jl"/><meta property="og:title" content="Installation · SHTnsKit.jl"/><meta property="twitter:title" content="Installation · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/installation/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/installation/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/installation/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li class="is-active"><a class="tocitem" href>Installation</a><ul class="internal"><li><a class="tocitem" href="#Quick-Installation"><span>Quick Installation</span></a></li><li><a class="tocitem" href="#Prerequisites"><span>Prerequisites</span></a></li><li><a class="tocitem" href="#Installing-SHTnsKit.jl"><span>Installing SHTnsKit.jl</span></a></li><li><a class="tocitem" href="#GPU-Setup"><span>GPU Setup</span></a></li><li><a class="tocitem" href="#Parallel-Computing-Setup"><span>Parallel Computing Setup</span></a></li><li><a class="tocitem" href="#Verification"><span>Verification</span></a></li><li><a class="tocitem" href="#Troubleshooting"><span>Troubleshooting</span></a></li><li><a class="tocitem" href="#Performance-Optimization"><span>Performance Optimization</span></a></li><li><a class="tocitem" href="#Docker-Installation"><span>Docker Installation</span></a></li><li><a class="tocitem" href="#Getting-Help"><span>Getting Help</span></a></li></ul></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../gpu/">GPU Acceleration</a></li><li><a class="tocitem" href="../distributed/">Distributed Computing</a></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../examples/">Examples Gallery</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Getting Started</a></li><li class="is-active"><a href>Installation</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Installation</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/installation.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Installation-Guide"><a class="docs-heading-anchor" href="#Installation-Guide">Installation Guide</a><a id="Installation-Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Installation-Guide" title="Permalink"></a></h1><div style="background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Installation</h2>
+    <p style="margin: 0; opacity: 0.9;">Get SHTnsKit.jl up and running in your Julia environment</p>
+</div><p>This guide provides detailed instructions for installing SHTnsKit.jl and its dependencies.</p><h2 id="Quick-Installation"><a class="docs-heading-anchor" href="#Quick-Installation">Quick Installation</a><a id="Quick-Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Installation" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Pkg
+Pkg.add(&quot;SHTnsKit&quot;)</code></pre><h2 id="Prerequisites"><a class="docs-heading-anchor" href="#Prerequisites">Prerequisites</a><a id="Prerequisites-1"></a><a class="docs-heading-anchor-permalink" href="#Prerequisites" title="Permalink"></a></h2><h3 id="System-Requirements"><a class="docs-heading-anchor" href="#System-Requirements">System Requirements</a><a id="System-Requirements-1"></a><a class="docs-heading-anchor-permalink" href="#System-Requirements" title="Permalink"></a></h3><ul><li><strong>Operating System</strong>: Linux, macOS, or Windows with WSL</li><li><strong>Julia</strong>: Version 1.9 or later (1.11+ recommended)</li><li><strong>Memory</strong>: At least 4GB RAM (16GB+ for large parallel problems)</li><li><strong>Storage</strong>: 2GB free space for dependencies (including MPI)</li><li><strong>MPI Library</strong>: OpenMPI or MPICH for parallel functionality</li></ul><h3 id="Required-Dependencies"><a class="docs-heading-anchor" href="#Required-Dependencies">Required Dependencies</a><a id="Required-Dependencies-1"></a><a class="docs-heading-anchor-permalink" href="#Required-Dependencies" title="Permalink"></a></h3><p>SHTnsKit.jl is pure Julia and does not require an external C library. Core functionality uses Julia&#39;s standard libraries and FFTW.jl (installed automatically). Parallel features require additional packages.</p><h2 id="Installing-SHTnsKit.jl"><a class="docs-heading-anchor" href="#Installing-SHTnsKit.jl">Installing SHTnsKit.jl</a><a id="Installing-SHTnsKit.jl-1"></a><a class="docs-heading-anchor-permalink" href="#Installing-SHTnsKit.jl" title="Permalink"></a></h2><h3 id="Basic-Installation-(Serial-Only)"><a class="docs-heading-anchor" href="#Basic-Installation-(Serial-Only)">Basic Installation (Serial Only)</a><a id="Basic-Installation-(Serial-Only)-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Installation-(Serial-Only)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.add(&quot;SHTnsKit&quot;)</code></pre><h3 id="With-GPU-Support"><a class="docs-heading-anchor" href="#With-GPU-Support">With GPU Support</a><a id="With-GPU-Support-1"></a><a class="docs-heading-anchor-permalink" href="#With-GPU-Support" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.add([&quot;SHTnsKit&quot;, &quot;CUDA&quot;, &quot;GPUArrays&quot;, &quot;KernelAbstractions&quot;])</code></pre><h3 id="With-MPI-Support-(Parallel)"><a class="docs-heading-anchor" href="#With-MPI-Support-(Parallel)">With MPI Support (Parallel)</a><a id="With-MPI-Support-(Parallel)-1"></a><a class="docs-heading-anchor-permalink" href="#With-MPI-Support-(Parallel)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.add([&quot;SHTnsKit&quot;, &quot;MPI&quot;, &quot;PencilArrays&quot;, &quot;PencilFFTs&quot;])</code></pre><h3 id="Full-Installation-(GPU-Parallel-SIMD)"><a class="docs-heading-anchor" href="#Full-Installation-(GPU-Parallel-SIMD)">Full Installation (GPU + Parallel + SIMD)</a><a id="Full-Installation-(GPU-Parallel-SIMD)-1"></a><a class="docs-heading-anchor-permalink" href="#Full-Installation-(GPU-Parallel-SIMD)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.add([
+    &quot;SHTnsKit&quot;,
+    &quot;CUDA&quot;, &quot;GPUArrays&quot;, &quot;KernelAbstractions&quot;,           # GPU
+    &quot;MPI&quot;, &quot;PencilArrays&quot;, &quot;PencilFFTs&quot;,                 # Distributed
+    &quot;LoopVectorization&quot;,                                  # SIMD optimization
+    &quot;ForwardDiff&quot;, &quot;Zygote&quot;                              # Auto-differentiation
+])</code></pre><h3 id="Development-Installation"><a class="docs-heading-anchor" href="#Development-Installation">Development Installation</a><a id="Development-Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Development-Installation" title="Permalink"></a></h3><p>For the latest features or contributing:</p><pre><code class="language-julia hljs">using Pkg
+Pkg.add(url=&quot;https://github.com/username/SHTnsKit.jl.git&quot;)</code></pre><h3 id="Local-Development-Setup"><a class="docs-heading-anchor" href="#Local-Development-Setup">Local Development Setup</a><a id="Local-Development-Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Local-Development-Setup" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.develop(path=&quot;/path/to/SHTnsKit.jl&quot;)</code></pre><h2 id="GPU-Setup"><a class="docs-heading-anchor" href="#GPU-Setup">GPU Setup</a><a id="GPU-Setup-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Setup" title="Permalink"></a></h2><h3 id="Requirements"><a class="docs-heading-anchor" href="#Requirements">Requirements</a><a id="Requirements-1"></a><a class="docs-heading-anchor-permalink" href="#Requirements" title="Permalink"></a></h3><ul><li>NVIDIA GPU with CUDA Compute Capability 5.0+ (Maxwell or newer)</li><li>CUDA Toolkit (automatically installed via CUDA.jl)</li><li>4GB+ GPU memory recommended</li></ul><h3 id="Installation"><a class="docs-heading-anchor" href="#Installation">Installation</a><a id="Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Installation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.add([&quot;CUDA&quot;, &quot;GPUArrays&quot;, &quot;KernelAbstractions&quot;])</code></pre><h3 id="Verify-GPU-Installation"><a class="docs-heading-anchor" href="#Verify-GPU-Installation">Verify GPU Installation</a><a id="Verify-GPU-Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Verify-GPU-Installation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using CUDA
+
+println(&quot;CUDA functional: &quot;, CUDA.functional())
+println(&quot;CUDA version: &quot;, CUDA.version())
+println(&quot;GPU: &quot;, CUDA.name(CUDA.device()))
+println(&quot;Memory: &quot;, CUDA.available_memory() / 1e9, &quot; GB available&quot;)</code></pre><h3 id="Test-GPU-Transforms"><a class="docs-heading-anchor" href="#Test-GPU-Transforms">Test GPU Transforms</a><a id="Test-GPU-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Test-GPU-Transforms" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit, CUDA
+
+# Create configuration
+cfg = create_gauss_config(32, 34)
+
+# Create test data
+spatial = rand(cfg.nlat, cfg.nlon)
+
+# GPU transform
+Alm = gpu_analysis(cfg, spatial)
+recovered = gpu_synthesis(cfg, Alm)
+
+# Verify
+error = maximum(abs.(spatial - recovered))
+println(&quot;GPU roundtrip error: $error&quot;)
+println(error &lt; 1e-10 ? &quot;GPU SUCCESS!&quot; : &quot;Check GPU installation&quot;)</code></pre><h3 id="Troubleshooting-GPU"><a class="docs-heading-anchor" href="#Troubleshooting-GPU">Troubleshooting GPU</a><a id="Troubleshooting-GPU-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting-GPU" title="Permalink"></a></h3><p><strong>&quot;CUDA not available&quot;</strong></p><pre><code class="language-julia hljs"># Check CUDA installation
+using CUDA
+println(CUDA.versioninfo())
+
+# Rebuild if needed
+using Pkg
+Pkg.build(&quot;CUDA&quot;)</code></pre><p><strong>&quot;Out of GPU memory&quot;</strong></p><ul><li>Use <code>gpu_analysis_safe()</code> for automatic CPU fallback</li><li>Reduce problem size</li><li>Call <code>gpu_clear_cache!()</code> to free memory</li></ul><hr/><h2 id="Parallel-Computing-Setup"><a class="docs-heading-anchor" href="#Parallel-Computing-Setup">Parallel Computing Setup</a><a id="Parallel-Computing-Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Computing-Setup" title="Permalink"></a></h2><h3 id="MPI-Installation"><a class="docs-heading-anchor" href="#MPI-Installation">MPI Installation</a><a id="MPI-Installation-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Installation" title="Permalink"></a></h3><p><strong>Linux (Ubuntu/Debian):</strong></p><pre><code class="language-bash hljs">sudo apt-get update
+sudo apt-get install libopenmpi-dev openmpi-bin</code></pre><p><strong>macOS:</strong></p><pre><code class="language-bash hljs">brew install open-mpi</code></pre><p><strong>Configure Julia MPI:</strong></p><pre><code class="language-julia hljs">using Pkg
+Pkg.add(&quot;MPI&quot;)
+Pkg.build(&quot;MPI&quot;)</code></pre><h3 id="Verify-MPI-Installation"><a class="docs-heading-anchor" href="#Verify-MPI-Installation">Verify MPI Installation</a><a id="Verify-MPI-Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Verify-MPI-Installation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+rank = Comm_rank(COMM_WORLD)
+size = Comm_size(COMM_WORLD)
+println(&quot;Process $rank of $size&quot;)
+MPI.Finalize()</code></pre><h3 id="Optional-Performance-Packages"><a class="docs-heading-anchor" href="#Optional-Performance-Packages">Optional Performance Packages</a><a id="Optional-Performance-Packages-1"></a><a class="docs-heading-anchor-permalink" href="#Optional-Performance-Packages" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+Pkg.add([&quot;LoopVectorization&quot;, &quot;BenchmarkTools&quot;])</code></pre><h2 id="Verification"><a class="docs-heading-anchor" href="#Verification">Verification</a><a id="Verification-1"></a><a class="docs-heading-anchor-permalink" href="#Verification" title="Permalink"></a></h2><h3 id="Basic-Functionality-Test"><a class="docs-heading-anchor" href="#Basic-Functionality-Test">Basic Functionality Test</a><a id="Basic-Functionality-Test-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Functionality-Test" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit
+
+# Create simple configuration
+cfg = create_gauss_config(8, 8)
+println(&quot;lmax: &quot;, get_lmax(cfg))
+println(&quot;nlat: &quot;, cfg.nlat)  
+println(&quot;nphi: &quot;, cfg.nlon)
+
+# Test basic transform
+# Create bandlimited test coefficients (avoids high-frequency errors)
+sh = zeros(cfg.nlm)
+sh[1] = 1.0
+if cfg.nlm &gt; 3
+    sh[3] = 0.5
+end
+spat = synthesis(cfg, sh)
+println(&quot;Transform successful: &quot;, size(spat))
+
+destroy_config(cfg)
+println(&quot;SHTnsKit.jl installation verified!&quot;)</code></pre><h3 id="Parallel-Functionality-Test"><a class="docs-heading-anchor" href="#Parallel-Functionality-Test">Parallel Functionality Test</a><a id="Parallel-Functionality-Test-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Functionality-Test" title="Permalink"></a></h3><p>Save this as <code>test_mpi.jl</code> and run with <code>mpiexec -n 2 julia --project test_mpi.jl</code>:</p><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+# Create configuration
+lmax = 16
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data (Y_2^0 pattern)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Distributed roundtrip test
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+# Verify accuracy
+max_err = maximum(abs.(parent(fθφ_recovered) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, MPI.COMM_WORLD)
+
+if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+    println(&quot;Parallel roundtrip error: $global_max_err&quot;)
+    println(global_max_err &lt; 1e-10 ? &quot;SUCCESS!&quot; : &quot;FAILED&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><h3 id="Extended-Verification"><a class="docs-heading-anchor" href="#Extended-Verification">Extended Verification</a><a id="Extended-Verification-1"></a><a class="docs-heading-anchor-permalink" href="#Extended-Verification" title="Permalink"></a></h3><pre><code class="language-julia hljs">using SHTnsKit, Test, LinearAlgebra
+
+@testset &quot;Installation Verification&quot; begin
+    # Basic functionality
+    lmax = 16
+    cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
+    # Create bandlimited test pattern
+    spatial = zeros(cfg.nlat, cfg.nlon)
+    for i in 1:cfg.nlat
+        x = cfg.x[i]
+        spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0
+    end
+
+    # Roundtrip test
+    Alm = analysis(cfg, spatial)
+    recovered = synthesis(cfg, Alm)
+    @test norm(spatial - recovered) &lt; 1e-12
+
+    # Memory management
+    destroy_config(cfg)
+    @test true  # No crash
+end</code></pre><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><h3 id="Common-Issues"><a class="docs-heading-anchor" href="#Common-Issues">Common Issues</a><a id="Common-Issues-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Issues" title="Permalink"></a></h3><p><strong>1. Array size mismatch:</strong></p><pre><code class="nohighlight hljs">ERROR: DimensionMismatch: spatial_data size (X, Y) must be (nlat, nlon)</code></pre><p><strong>Fix:</strong> Ensure <code>size(Alm) == (cfg.lmax+1, cfg.mmax+1)</code> and <code>size(spatial) == (cfg.nlat, cfg.nlon)</code>.</p><p><strong>2. Memory issues:</strong></p><pre><code class="nohighlight hljs">ERROR: Out of memory</code></pre><p><strong>Solutions:</strong></p><ul><li>Reduce problem size (lmax)</li><li>Increase system swap space</li><li>Reuse allocations with in‑place APIs (<code>synthesis!</code>, <code>analysis!</code>)</li></ul><h3 id="Advanced-Debugging"><a class="docs-heading-anchor" href="#Advanced-Debugging">Advanced Debugging</a><a id="Advanced-Debugging-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Debugging" title="Permalink"></a></h3><p><strong>Julia environment check:</strong></p><pre><code class="language-julia hljs">using Libdl
+println(Libdl.dllist())  # List all loaded libraries</code></pre><h2 id="Performance-Optimization"><a class="docs-heading-anchor" href="#Performance-Optimization">Performance Optimization</a><a id="Performance-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Optimization" title="Permalink"></a></h2><h3 id="System-Level-Optimizations"><a class="docs-heading-anchor" href="#System-Level-Optimizations">System-Level Optimizations</a><a id="System-Level-Optimizations-1"></a><a class="docs-heading-anchor-permalink" href="#System-Level-Optimizations" title="Permalink"></a></h3><p>Threading and memory tips:</p><pre><code class="language-julia hljs"># Enable SHTnsKit internal threading and FFTW threads
+set_optimal_threads!()
+println((threads=get_threading(), fft_threads=get_fft_threads()))
+
+# Prevent oversubscription with BLAS/FFTW (optional)
+ENV[&quot;OPENBLAS_NUM_THREADS&quot;] = &quot;1&quot;</code></pre><h3 id="Julia-Specific"><a class="docs-heading-anchor" href="#Julia-Specific">Julia-Specific</a><a id="Julia-Specific-1"></a><a class="docs-heading-anchor-permalink" href="#Julia-Specific" title="Permalink"></a></h3><p><strong>Precompilation:</strong></p><pre><code class="language-julia hljs">using PackageCompiler
+create_sysimage([:SHTnsKit]; sysimage_path=&quot;shtns_sysimage.so&quot;)</code></pre><p><strong>Memory:</strong></p><pre><code class="language-bash hljs">julia --heap-size-hint=8G script.jl</code></pre><h2 id="Docker-Installation"><a class="docs-heading-anchor" href="#Docker-Installation">Docker Installation</a><a id="Docker-Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Docker-Installation" title="Permalink"></a></h2><p>For containerized environments:</p><pre><code class="language-dockerfile hljs">FROM julia:1.11
+
+# Install Julia packages
+RUN julia -e &#39;using Pkg; Pkg.add([&quot;SHTnsKit&quot;])&#39;
+
+# Verify installation
+RUN julia -e &#39;using SHTnsKit; cfg = create_gauss_config(8,8); destroy_config(cfg)&#39;</code></pre><h2 id="Getting-Help"><a class="docs-heading-anchor" href="#Getting-Help">Getting Help</a><a id="Getting-Help-1"></a><a class="docs-heading-anchor-permalink" href="#Getting-Help" title="Permalink"></a></h2><ul><li><strong>Documentation</strong>: <a href="https://subhk.github.io/SHTnsKit.jl/">SHTnsKit.jl Docs</a></li><li><strong>Issues</strong>: <a href="https://github.com/subhk/SHTnsKit.jl/issues">GitHub Issues</a></li><li><strong>Julia Discourse</strong>: <a href="https://discourse.julialang.org/">Julia Community</a></li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../quickstart/">Quick Start »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 22 January 2026 07:31">Thursday 22 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

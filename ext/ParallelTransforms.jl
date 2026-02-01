@@ -1647,8 +1647,11 @@ end
 function SHTnsKit.dist_scalar_roundtrip!(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray)
     comm = communicator(fθφ)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ)
-    fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
-    # Convert to regular arrays for comparison (matches pattern in working tests)
+    f_matrix = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+    # Copy result into a PencilArray (matches working test pattern)
+    fθφ_out = similar(fθφ)
+    copyto!(fθφ_out, f_matrix)
+    # Convert both PencilArrays to regular arrays for comparison
     fout = Array(fθφ_out)
     f0 = Array(fθφ)
     # Local and global relative errors
@@ -1664,10 +1667,13 @@ end
 function SHTnsKit.dist_vector_roundtrip!(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray)
     comm = communicator(Vtθφ)
     Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ)
-    Vt2, Vp2 = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vtθφ, real_output=true)
-    # Convert to regular arrays for comparison (matches pattern in working tests)
-    vt_out = Array(Vt2); vt_ref = Array(Vtθφ)
-    vp_out = Array(Vp2); vp_ref = Array(Vpθφ)
+    Vt2_matrix, Vp2_matrix = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vtθφ, real_output=true)
+    # Copy results into PencilArrays (matches working test pattern)
+    Vt_out = similar(Vtθφ); Vp_out = similar(Vpθφ)
+    copyto!(Vt_out, Vt2_matrix); copyto!(Vp_out, Vp2_matrix)
+    # Convert all PencilArrays to regular arrays for comparison
+    vt_out = Array(Vt_out); vt_ref = Array(Vtθφ)
+    vp_out = Array(Vp_out); vp_ref = Array(Vpθφ)
     # Local errors
     lt_d2 = sum(abs2, vt_out .- vt_ref)
     lt_r2 = sum(abs2, vt_ref)

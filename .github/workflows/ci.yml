@@ -31,6 +31,7 @@ jobs:
           - '1.11'  # Stable
           - '1.12'  # Latest
         os:
+          - ubuntu-latest
           - macOS-latest
           - windows-latest
         arch:
@@ -53,8 +54,22 @@ jobs:
           # Key on OS + Julia + Project/Manifest hash + commit to avoid stale caches
           key: ${{ runner.os }}-julia-${{ matrix.version }}-${{ hashFiles('Project.toml') }}-${{ hashFiles('Manifest.toml') }}-${{ github.sha }}
       
-      # Linux deps step removed since Ubuntu is not in the test matrix
-          
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpich libmpich-dev libfftw3-dev
+
+      - name: Install MPI packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          julia --project=. -e '
+            using Pkg
+            Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
+            ENV["JULIA_MPI_BINARY"] = "system"
+            Pkg.build("MPI")
+          '
+
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -84,7 +99,8 @@ jobs:
           # Advanced features testing
           SHTNSKIT_TEST_ADVANCED: "true"
           SHTNSKIT_TEST_AD: "true"
-          SHTNSKIT_TEST_PARALLEL: "false"  # Disable MPI tests in CI
+          SHTNSKIT_TEST_PARALLEL: "true"   # Enable parallel tests
+          SHTNSKIT_RUN_MPI_TESTS: "1"      # Enable MPI tests (Linux only)
           SHTNSKIT_TEST_PERFORMANCE: "true"
           # JET.jl type stability tests
           SHTNSKIT_RUN_JET_TESTS: "1"

@@ -1648,15 +1648,12 @@ function SHTnsKit.dist_scalar_roundtrip!(cfg::SHTnsKit.SHTConfig, fθφ::PencilA
     comm = communicator(fθφ)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ)
     f_matrix = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
-    # Copy result into a PencilArray (matches working test pattern)
-    fθφ_out = similar(fθφ)
-    copyto!(fθφ_out, f_matrix)
-    # Convert both PencilArrays to regular arrays for comparison
-    fout = Array(fθφ_out)
-    f0 = Array(fθφ)
+    # Compare synthesis result directly with local PencilArray data
+    # (matching test_mpi_pencil.jl pattern which works correctly)
+    f_local_ref = parent(fθφ)  # The underlying local array
     # Local and global relative errors
-    local_diff2 = sum(abs2, fout .- f0)
-    local_ref2 = sum(abs2, f0)
+    local_diff2 = sum(abs2, f_matrix .- f_local_ref)
+    local_ref2 = sum(abs2, f_local_ref)
     global_diff2 = MPI.Allreduce(local_diff2, +, comm)
     global_ref2 = MPI.Allreduce(local_ref2, +, comm)
     rel_local = sqrt(local_diff2 / (local_ref2 + eps()))
@@ -1668,16 +1665,14 @@ function SHTnsKit.dist_vector_roundtrip!(cfg::SHTnsKit.SHTConfig, Vtθφ::Pencil
     comm = communicator(Vtθφ)
     Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ)
     Vt2_matrix, Vp2_matrix = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vtθφ, real_output=true)
-    # Copy results into PencilArrays (matches working test pattern)
-    Vt_out = similar(Vtθφ); Vp_out = similar(Vpθφ)
-    copyto!(Vt_out, Vt2_matrix); copyto!(Vp_out, Vp2_matrix)
-    # Convert all PencilArrays to regular arrays for comparison
-    vt_out = Array(Vt_out); vt_ref = Array(Vtθφ)
-    vp_out = Array(Vp_out); vp_ref = Array(Vpθφ)
+    # Compare synthesis results directly with local PencilArray data
+    # (matching test_mpi_pencil.jl pattern which works correctly)
+    vt_ref = parent(Vtθφ)
+    vp_ref = parent(Vpθφ)
     # Local errors
-    lt_d2 = sum(abs2, vt_out .- vt_ref)
+    lt_d2 = sum(abs2, Vt2_matrix .- vt_ref)
     lt_r2 = sum(abs2, vt_ref)
-    lp_d2 = sum(abs2, vp_out .- vp_ref)
+    lp_d2 = sum(abs2, Vp2_matrix .- vp_ref)
     lp_r2 = sum(abs2, vp_ref)
     # Global errors via MPI reduction
     gt_d2 = MPI.Allreduce(lt_d2, +, comm); gt_r2 = MPI.Allreduce(lt_r2, +, comm)

@@ -479,9 +479,12 @@ end
                 # Vector roundtrip with rfft + spatial scratch (allocates (:θ,:k) buffers)
                 Vt = PencilArrays.PencilArray{Float64}(undef, topo)
                 Vp = PencilArrays.PencilArray{Float64}(undef, topo)
-                for (iθ, iφ) in zip(eachindex(axes(Vt,1)), eachindex(axes(Vt,2)))
-                    Vt[iθ, iφ] = 0.2*(iθ+1) * sin(0.1*(iφ+1))
-                    Vp[iθ, iφ] = 0.15*(iφ+1) * cos(0.12*(iθ+1))
+                # Use global indices for consistent field across processes
+                for (iθ_local, iθ_global) in enumerate(gl_θ)
+                    for (iφ_local, iφ_global) in enumerate(gl_φ)
+                        Vt[iθ_local, iφ_local] = 0.2*iθ_global * sin(0.1*iφ_global)
+                        Vp[iθ_local, iφ_local] = 0.15*iφ_global * cos(0.12*iθ_global)
+                    end
                 end
 
                 vplan = SHTnsKit.DistSphtorPlan(cfg, Vt; use_rfft=true, with_spatial_scratch=true)
@@ -536,8 +539,13 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-                fθφ[iθ, iφ] = sin(0.21*(iθ+1)) * cos(0.17*(iφ+1))
+            # Use global indices for consistent field across processes
+            gl_θ = PencilArrays.globalindices(fθφ, 1)
+            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            for (iθ_local, iθ_global) in enumerate(gl_θ)
+                for (iφ_local, iφ_global) in enumerate(gl_φ)
+                    fθφ[iθ_local, iφ_local] = sin(0.21*iθ_global) * cos(0.17*iφ_global)
+                end
             end
 
             # Analysis
@@ -903,16 +911,20 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
 
-            # Build simple fields
+            # Build simple fields using global indices for consistency across processes
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             Vtθφ = PencilArrays.PencilArray{Float64}(undef, P)
             Vpθφ = PencilArrays.PencilArray{Float64}(undef, P)
             Vrθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-                fθφ[iθ, iφ] = sin(0.11*(iθ+1)) + cos(0.07*(iφ+1))
-                Vrθφ[iθ, iφ] = 0.3*cos(0.09*(iθ+1))
-                Vtθφ[iθ, iφ] = 0.2*sin(0.15*(iφ+1))
-                Vpθφ[iθ, iφ] = 0.1*cos(0.21*(iφ+1))
+            gl_θ = PencilArrays.globalindices(fθφ, 1)
+            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            for (iθ_local, iθ_global) in enumerate(gl_θ)
+                for (iφ_local, iφ_global) in enumerate(gl_φ)
+                    fθφ[iθ_local, iφ_local] = sin(0.11*iθ_global) + cos(0.07*iφ_global)
+                    Vrθφ[iθ_local, iφ_local] = 0.3*cos(0.09*iθ_global)
+                    Vtθφ[iθ_local, iφ_local] = 0.2*sin(0.15*iφ_global)
+                    Vpθφ[iθ_local, iφ_local] = 0.1*cos(0.21*iφ_global)
+                end
             end
 
             # Scalar local eval: point/lat
@@ -979,8 +991,13 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-                fθφ[iθ, iφ] = sin(0.19*(iθ+1)) * cos(0.13*(iφ+1))
+            # Use global indices for consistent field across processes
+            gl_θ = PencilArrays.globalindices(fθφ, 1)
+            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            for (iθ_local, iθ_global) in enumerate(gl_θ)
+                for (iφ_local, iφ_global) in enumerate(gl_φ)
+                    fθφ[iθ_local, iφ_local] = sin(0.19*iθ_global) * cos(0.13*iφ_global)
+                end
             end
 
             # Dense analysis
@@ -1040,8 +1057,13 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-                fθφ[iθ, iφ] = sin(0.23*(iθ+1)) + cos(0.29*(iφ+1))
+            # Use global indices for consistent field across processes
+            gl_θ = PencilArrays.globalindices(fθφ, 1)
+            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            for (iθ_local, iθ_global) in enumerate(gl_θ)
+                for (iφ_local, iφ_global) in enumerate(gl_φ)
+                    fθφ[iθ_local, iφ_local] = sin(0.23*iθ_global) + cos(0.29*iφ_global)
+                end
             end
 
             # Analysis
@@ -1095,8 +1117,13 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-                fθφ[iθ, iφ] = 0.3*sin(0.1*(iθ+1)) + 0.8*cos(0.07*(iφ+1))
+            # Use global indices for consistent field across processes
+            gl_θ = PencilArrays.globalindices(fθφ, 1)
+            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            for (iθ_local, iθ_global) in enumerate(gl_θ)
+                for (iφ_local, iφ_global) in enumerate(gl_φ)
+                    fθφ[iθ_local, iφ_local] = 0.3*sin(0.1*iθ_global) + 0.8*cos(0.07*iφ_global)
+                end
             end
 
             # Analysis
@@ -1152,8 +1179,13 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-                fθφ[iθ, iφ] = sin(0.31*(iθ+1)) + cos(0.23*(iφ+1))
+            # Use global indices for consistent field across processes
+            gl_θ = PencilArrays.globalindices(fθφ, 1)
+            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            for (iθ_local, iθ_global) in enumerate(gl_θ)
+                for (iφ_local, iφ_global) in enumerate(gl_φ)
+                    fθφ[iθ_local, iφ_local] = sin(0.31*iθ_global) + cos(0.23*iφ_global)
+                end
             end
 
             # Scalar energy: spectral vs grid

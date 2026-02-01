@@ -258,12 +258,14 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)  # Distributed spatial array
 
-            # Fill with simple test pattern using GLOBAL indices for consistency across processes
+            # Fill with Y_2^0 = (3cos²θ - 1)/2 pattern (same as test_mpi_pencil.jl which works)
             gl_θ = _get_global_indices(fθφ, 1)
             gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
-                for (iφ_local, iφ_global) in enumerate(gl_φ)
-                    fθφ[iθ_local, iφ_local] = sin(0.1*iθ_global) + cos(0.2*iφ_global)
+                x = cfg.x[iθ_global]  # cos(θ)
+                val = (3 * x^2 - 1) / 2  # Y_2^0 normalized
+                for (iφ_local, _) in enumerate(gl_φ)
+                    fθφ[iθ_local, iφ_local] = val
                 end
             end
             
@@ -274,11 +276,13 @@ end
             # Test vector field roundtrip
             Vt = PencilArrays.PencilArray{Float64}(undef, P)  # θ-component
             Vp = PencilArrays.PencilArray{Float64}(undef, P)  # φ-component
-            # Use global indices for consistent field across processes
+            # Use Y_2^0-like pattern for vector components (based on cos(θ))
             for (iθ_local, iθ_global) in enumerate(gl_θ)
-                for (iφ_local, iφ_global) in enumerate(gl_φ)
-                    Vt[iθ_local, iφ_local] = 0.1*iθ_global     # Meridional velocity
-                    Vp[iθ_local, iφ_local] = 0.05*iφ_global    # Zonal velocity
+                x = cfg.x[iθ_global]  # cos(θ)
+                sθ = sqrt(max(0.0, 1 - x*x))  # sin(θ)
+                for (iφ_local, _) in enumerate(gl_φ)
+                    Vt[iθ_local, iφ_local] = x * sθ      # Meridional: cos(θ)*sin(θ)
+                    Vp[iθ_local, iφ_local] = sθ          # Zonal: sin(θ)
                 end
             end
 

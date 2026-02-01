@@ -237,15 +237,15 @@ end
             @eval using PencilArrays  # Distributed array framework
             @eval using PencilFFTs    # Distributed FFT operations
 
-            # Access the extension's globalindices function (it handles all API versions)
-            @eval begin
-                _ext = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
-                if _ext !== nothing
-                    _get_global_indices = _ext.globalindices
-                else
-                    # Fallback if extension not loaded
-                    _get_global_indices(A, dim) = axes(A, dim)
-                end
+            # Import internal PencilArrays functions (same as extension does)
+            @eval import PencilArrays: pencil, range_local
+
+            # Define globalindices helper (same logic as extension)
+            @eval function _get_global_indices(A, dim)
+                # Use pencil() and range_local() - the standard internal API
+                pen = pencil(A)
+                ranges = range_local(pen)
+                return ranges[dim]
             end
 
             MPI.Initialized() || MPI.Init()  # Initialize MPI environment

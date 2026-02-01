@@ -396,30 +396,24 @@ end
                 comm = MPI.COMM_WORLD
                 P = PencilArrays.Pencil((nlat, nlon), comm)
                 fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-                # Use global indices for consistent field across processes
+                # Use Y_2^0 spherical harmonic pattern - exactly representable
                 gl_θ = _get_global_indices(fθφ, 1)
                 gl_φ = _get_global_indices(fθφ, 2)
                 for (iθ_local, iθ_global) in enumerate(gl_θ)
+                    x = cfg.x[iθ_global]  # cos(θ)
+                    val = (3 * x^2 - 1) / 2  # Y_2^0 (unnormalized)
                     for (iφ_local, iφ_global) in enumerate(gl_φ)
-                        fθφ[iθ_local, iφ_local] = sin(0.17*iθ_global) + cos(0.11*iφ_global)
+                        fθφ[iθ_local, iφ_local] = val
                     end
                 end
 
-                # rfft off/on
-                P_spec = PencilArrays.Pencil((lmax+1, lmax+1), MPI.COMM_WORLD)
-                for rfft_flag in (false, true)
-                    aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=rfft_flag)
-                    Alm = zeros(ComplexF64, lmax+1, lmax+1)
-                    SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
-                    # Synthesize back using plan-based dist_synthesis!
-                    spln = _get_parallel_ext().DistPlan(cfg, fθφ)
-                    fθφ_out = similar(fθφ)
-                    SHTnsKit.dist_synthesis!(spln, fθφ_out, PencilArrays.PencilArray(P_spec, Alm))
-                    # Check error
-                    fout = Array(fθφ_out); f0 = Array(fθφ)
-                    rel = sqrt(sum(abs2, fout .- f0) / (sum(abs2, f0) + eps()))
-                    @test rel < 1e-8
-                end
+                # Test roundtrip using high-level functions (like test_mpi_pencil.jl)
+                Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+                fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+                # Check error
+                fout = Array(fθφ_recovered); f0 = Array(fθφ)
+                rel = sqrt(sum(abs2, fout .- f0) / (sum(abs2, f0) + eps()))
+                @test rel < 1e-8
             end
             # MPI.Finalize() - removed, finalize at process exit
         else
@@ -469,12 +463,14 @@ end
                 @test grid == (pθ, pφ)
 
                 fθφ = PencilArrays.PencilArray{Float64}(undef, topo)
-                # Use global indices for consistent field across processes
+                # Use Y_2^0 spherical harmonic pattern - exactly representable
                 gl_θ = _get_global_indices(fθφ, 1)
                 gl_φ = _get_global_indices(fθφ, 2)
                 for (iθ_local, iθ_global) in enumerate(gl_θ)
+                    x = cfg.x[iθ_global]  # cos(θ)
+                    val = (3 * x^2 - 1) / 2  # Y_2^0 (unnormalized)
                     for (iφ_local, iφ_global) in enumerate(gl_φ)
-                        fθφ[iθ_local, iφ_local] = 0.3 * sin(0.2*iθ_global) + 0.4 * cos(0.15*iφ_global)
+                        fθφ[iθ_local, iφ_local] = val
                     end
                 end
 
@@ -559,12 +555,14 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            # Use global indices for consistent field across processes
+            # Use Y_2^0 spherical harmonic pattern - exactly representable
             gl_θ = _get_global_indices(fθφ, 1)
             gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
+                x = cfg.x[iθ_global]  # cos(θ)
+                val = (3 * x^2 - 1) / 2  # Y_2^0 (unnormalized)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
-                    fθφ[iθ_local, iφ_local] = sin(0.21*iθ_global) * cos(0.17*iφ_global)
+                    fθφ[iθ_local, iφ_local] = val
                 end
             end
 

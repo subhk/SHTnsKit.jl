@@ -2,14 +2,17 @@
 # PencilArray rotations
 ##########
 
-function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig, 
+function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
                             Alm_pencil::PencilArray, alpha::Real)
+    lloc = axes(Alm_pencil, 1)
     mloc = axes(Alm_pencil, 2)
     gl_m = globalindices(Alm_pencil, 2)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         phase = cis(mval * alpha)
-        Alm_pencil[:, jm] .*= phase
+        for il in lloc
+            Alm_pencil[il, jm] *= phase
+        end
     end
 
     return Alm_pencil

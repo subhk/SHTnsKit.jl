@@ -47,7 +47,7 @@ function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:
                 acc += c_from_below * col_full[lval]  # col_full[lval] = Q[l-1,m]
             end
             # Contribution from upper neighbor Y_{l+1}^m (uses mx[2*lm_next + 1])
-            if lval < lmax
+            if lval < lmax && lval + 1 >= mval
                 lm_next = SHTnsKit.LM_index(lmax, mres, lval + 1, mval)
                 c_from_above = mx[2*lm_next + 1]  # a_{l+1}^m coefficient
                 acc += c_from_above * col_full[lval + 2]  # col_full[lval+2] = Q[l+1,m]

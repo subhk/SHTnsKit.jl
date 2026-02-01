@@ -809,7 +809,7 @@ end
                 idx = LM_index(cfg.lmax, cfg.mres, l, m) + 1
                 Qv[idx] = Q[l+1, m+1]; Sv[idx] = S[l+1, m+1]; Tv[idx] = T[l+1, m+1]
             end
-            vr_r, vt_r, vp_r = SHqst_to_point(cfg, Qv, Sv, Tv, cost, phi)
+            vr_r, vt_r, vp_r = SHTnsKit.SHqst_to_point(cfg, Qv, Sv, Tv, cost, phi)
             @test isapprox(vr_d, vr_r; rtol=1e-9, atol=1e-11)
             @test isapprox(vt_d, vt_r; rtol=1e-9, atol=1e-11)
             @test isapprox(vp_d, vp_r; rtol=1e-9, atol=1e-11)

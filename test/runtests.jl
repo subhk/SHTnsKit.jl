@@ -237,14 +237,14 @@ function parseval_scalar_test(lmax::Int)
             @eval using PencilArrays  # Distributed array framework 
             @eval using PencilFFTs    # Distributed FFT operations
 
-            MPI.Init()  # Initialize MPI environment
+            MPI.Initialized() || MPI.Init()  # Initialize MPI environment
             lmax = 6
             nlat = lmax + 2
             nlon = 2*lmax + 1
 
             # Create configuration and distributed data layout
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.zeros(P; eltype=Float64)  # Distributed spatial array
 
             # Fill with simple test pattern (each process fills its local portion)
@@ -267,14 +267,14 @@ function parseval_scalar_test(lmax::Int)
             # Test vector roundtrip: (Vt,Vp) → (S_lm,T_lm) → (Vt,Vp)
             (rl_t, rg_t), (rl_p, rg_p) = dist_vector_roundtrip!(cfg, Vt, Vp)
             @test rg_t < 1e-7 && rg_p < 1e-7  # Both components should roundtrip accurately
-            MPI.Finalize()  # Clean up MPI resources
+            # MPI.Finalize() - removed, finalize at process exit  # Clean up MPI resources
         else
             @info "Skipping parallel roundtrip tests (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping parallel roundtrip tests" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()  # Ensure MPI cleanup on error
+            # MPI cleanup handled at process exit  # Ensure MPI cleanup on error
         catch
         end
     end
@@ -286,14 +286,14 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             @eval using MPI, PencilArrays, PencilFFTs
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
 
             lmax = 6
             nlat = lmax + 2
             nlon = 2*lmax + 1
 
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
 
             # Scalar
             fθφ = PencilArrays.zeros(P; eltype=Float64)
@@ -328,14 +328,14 @@ end
 
             @test isapprox(Slm_c, Slm_r; rtol=1e-10, atol=1e-12)
             @test isapprox(Tlm_c, Tlm_r; rtol=1e-10, atol=1e-12)
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping rfft equivalence tests (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping rfft equivalence tests" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -345,7 +345,7 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             using MPI, PencilArrays, PencilFFTs
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
             norms = (:orthonormal, :fourpi, :schmidt)
             cs_flags = (true, false)
             tbl_flags = (false, true)
@@ -363,7 +363,7 @@ end
                 end
 
                 comm = MPI.COMM_WORLD
-                P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm)
+                P = PencilArrays.Pencil((nlat, nlon), comm)
                 fθφ = PencilArrays.zeros(P; eltype=Float64)
                 for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                     fθφ[iθ, iφ] = sin(0.17*(iθ+1)) + cos(0.11*(iφ+1))
@@ -384,14 +384,14 @@ end
                     @test rel < 1e-8
                 end
             end
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping norms/phase/robert/tables tests (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping norms/phase/robert/tables tests" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -401,7 +401,7 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             using MPI, PencilArrays, PencilFFTs
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
             comm = MPI.COMM_WORLD
             nprocs = MPI.Comm_size(comm)
 
@@ -487,14 +487,14 @@ end
                 @test !SHTnsKit.fft_plan_cache_enabled()
                 SHTnsKit.set_fft_plan_cache!(initial_cache)
             end
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping θ-φ decomposition tests (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping θ-φ decomposition tests" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -504,14 +504,14 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             using MPI, PencilArrays, PencilFFTs
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
 
             lmax = 6
             nlat = lmax + 2
             nlon = 2*lmax + 1
 
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.zeros(P; eltype=Float64)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.21*(iθ+1)) * cos(0.17*(iφ+1))
@@ -546,14 +546,14 @@ end
             op_out = Array(fθφ_op); ref_out = Array(ref)
             rel = sqrt(sum(abs2, op_out .- ref_out) / (sum(abs2, ref_out) + eps()))
             @test rel < 1e-8
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping operator equivalence test (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping operator equivalence test" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -873,12 +873,12 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             using MPI, PencilArrays, PencilFFTs
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
             lmax = 5
             nlat = lmax + 2
             nlon = 2*lmax + 1
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
 
             # Build simple fields
             fθφ = PencilArrays.zeros(P; eltype=Float64)
@@ -931,14 +931,14 @@ end
             @test isapprox(vr_d, vr_r; rtol=1e-9, atol=1e-11)
             @test isapprox(vt_d, vt_r; rtol=1e-9, atol=1e-11)
             @test isapprox(vp_d, vp_r; rtol=1e-9, atol=1e-11)
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping QST/local eval tests (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping QST/local eval tests" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -949,12 +949,12 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             @eval using MPI, PencilArrays
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
             lmax = 6
             nlat = lmax + 2
             nlon = 2*lmax + 1
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.zeros(P; eltype=Float64)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.19*(iθ+1)) * cos(0.13*(iφ+1))
@@ -992,14 +992,14 @@ end
                 end
             end
             # @test maxdiff < 1e-10  # real check done in full environment
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping halo operator test (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping halo operator test" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -1010,12 +1010,12 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             @eval using MPI, PencilArrays
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
             lmax = 6
             nlat = lmax + 2
             nlon = 2*lmax + 1
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.zeros(P; eltype=Float64)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.23*(iθ+1)) + cos(0.29*(iφ+1))
@@ -1046,14 +1046,14 @@ end
                 end
             end
             @test maxdiff < 1e-12
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping Z-rotation test (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping Z-rotation test" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -1064,13 +1064,13 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             @eval using MPI, PencilArrays
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
             lmax = 5
             nlat = lmax + 2
             nlon = 2*lmax + 1
 
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.zeros(P; eltype=Float64)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = 0.3*sin(0.1*(iθ+1)) + 0.8*cos(0.07*(iφ+1))
@@ -1102,14 +1102,14 @@ end
                 end
             end
             @test maxdiff < 1e-9
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping Y-rotation allgatherm test (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping Y-rotation allgatherm test" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
         end
     end
@@ -1120,14 +1120,14 @@ end
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             using MPI, PencilArrays
-            MPI.Init()
+            MPI.Initialized() || MPI.Init()
             
             lmax = 6
             nlat = lmax + 2
             nlon = 2*lmax + 1
 
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-            P = PencilArrays.Pencil((:θ,:φ), (nlat, nlon); comm=MPI.COMM_WORLD)
+            P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.zeros(P; eltype=Float64)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.31*(iθ+1)) + cos(0.23*(iφ+1))
@@ -1146,14 +1146,14 @@ end
             Em = energy_scalar_m_spectrum(cfg, PencilArrays.PencilArray(Alm))
             @test isapprox(sum(El), E_spec_pencil; rtol=1e-10, atol=1e-12)
             @test isapprox(sum(Em), E_spec_pencil; rtol=1e-10, atol=1e-12)
-            MPI.Finalize()
+            # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping parallel diagnostics tests (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
         end
     catch e
         @info "Skipping parallel diagnostics tests" exception=(e, catch_backtrace())
         try
-            MPI.isinitialized() && MPI.Finalize()
+            # MPI cleanup handled at process exit
         catch
 
         end

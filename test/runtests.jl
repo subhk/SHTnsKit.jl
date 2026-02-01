@@ -1154,8 +1154,15 @@ end
         @info "Skipping parallel diagnostics tests" exception=(e, catch_backtrace())
         try
             MPI.isinitialized() && MPI.Finalize()
-        catch   
-            
+        catch
+
         end
     end
+end
+
+# JET.jl type stability tests (optional)
+if get(ENV, "SHTNSKIT_RUN_JET_TESTS", "0") == "1"
+    include("test_jet.jl")
+else
+    @info "Skipping JET type stability tests (set SHTNSKIT_RUN_JET_TESTS=1 to enable)"
 end

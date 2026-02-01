@@ -1,6 +1,8 @@
 # SHTnsKit.jl
 
 [![Build Status](https://github.com/subhk/SHTnsKit.jl/workflows/CI/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions)
+[![MPI Examples](https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml)
+[![JET](https://img.shields.io/badge/tested%20with-JET.jl-9cf)](https://github.com/aviatesk/JET.jl)
 
 <!-- Badges -->
  <p align="left">
@@ -11,10 +13,6 @@
         <img alt="latest docs" src="https://img.shields.io/badge/documentation-dev%20-orange">
     </a>
 </p>
-
-<a href="https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml">
-  <img alt="MPI Examples" src="https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml/badge.svg">
-</a>
 
 **High-Performance Spherical Harmonic Transforms in Julia**
 

@@ -12,6 +12,7 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [weakdeps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
 GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
@@ -38,6 +39,7 @@ FFTW = "1.8"
 ForwardDiff = "0.10, 1"
 GPUArrays = "10, 11"
 GPUArraysCore = "0.1, 0.2"
+JET = "0.8, 0.9"
 KernelAbstractions = "0.9"
 LinearAlgebra = "1"
 LoopVectorization = "0.12"
@@ -49,10 +51,12 @@ Zygote = "0.6, 0.7"
 julia = "1.10, 1.11, 1.12"
 
 [extras]
+ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [targets]
-test = ["Test", "Random", "ForwardDiff", "Zygote"]
+test = ["Test", "Random", "ForwardDiff", "Zygote", "JET", "ChainRulesCore"]

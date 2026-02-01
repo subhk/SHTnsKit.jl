@@ -86,6 +86,8 @@ jobs:
           SHTNSKIT_TEST_AD: "true"
           SHTNSKIT_TEST_PARALLEL: "false"  # Disable MPI tests in CI
           SHTNSKIT_TEST_PERFORMANCE: "true"
+          # JET.jl type stability tests
+          SHTNSKIT_RUN_JET_TESTS: "1"
           
           # SHTns testing with fallback handling
           SHTNSKIT_GRACEFUL_FALLBACK: "true"

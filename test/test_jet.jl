@@ -11,6 +11,12 @@ using JET
 using SHTnsKit
 using LinearAlgebra
 
+# Filter deprecation warning from JET's use of JuliaInterpreter
+# (JET calls deprecated @lookup macro - this is an upstream issue)
+using Logging
+global_logger(ConsoleLogger(stderr, Logging.Warn; meta_formatter=(level, _module, group, id, file, line) ->
+    (occursin("@lookup", string(id)) || occursin("lookup", string(file))) ? Logging.LogLevel(Logging.Warn + 1) : level))
+
 # Test configuration parameters
 const JET_LMAX = 4
 const JET_NLAT = JET_LMAX + 2

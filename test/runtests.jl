@@ -306,8 +306,6 @@ end
     end
 end
 
-end
-
 @testset "Parallel rfft equivalence (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"

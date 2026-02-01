@@ -11,6 +11,11 @@ using SHTnsKit         # The package being tested
 using Zygote          # For automatic differentiation tests
 
 const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
+
+# Helper to get plan types from the parallel extension when loaded
+function _get_parallel_ext()
+    return Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+end
 try
     @eval using FFTW
     VERBOSE && @info "FFTW available for tests"
@@ -327,8 +332,8 @@ end
 
             Alm_c = zeros(ComplexF64, lmax+1, lmax+1)
             Alm_r = similar(Alm_c)
-            plan_c = SHTnsKit.DistAnalysisPlan(cfg, fθφ; use_rfft=false)
-            plan_r = SHTnsKit.DistAnalysisPlan(cfg, fθφ; use_rfft=true)
+            plan_c = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=false)
+            plan_r = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=true)
             SHTnsKit.dist_analysis!(plan_c, Alm_c, fθφ)
             SHTnsKit.dist_analysis!(plan_r, Alm_r, fθφ)
             @test isapprox(Alm_c, Alm_r; rtol=1e-10, atol=1e-12)
@@ -347,8 +352,8 @@ end
             Tlm_c = zeros(ComplexF64, lmax+1, lmax+1)
             Slm_r = similar(Slm_c)
             Tlm_r = similar(Tlm_c)
-            vplan_c = SHTnsKit.DistSphtorPlan(cfg, Vt; use_rfft=false)
-            vplan_r = SHTnsKit.DistSphtorPlan(cfg, Vt; use_rfft=true)
+            vplan_c = _get_parallel_ext().DistSphtorPlan(cfg, Vt; use_rfft=false)
+            vplan_r = _get_parallel_ext().DistSphtorPlan(cfg, Vt; use_rfft=true)
             SHTnsKit.dist_spat_to_SHsphtor!(vplan_c, Slm_c, Tlm_c, Vt, Vp)
             SHTnsKit.dist_spat_to_SHsphtor!(vplan_r, Slm_r, Tlm_r, Vt, Vp)
 
@@ -403,11 +408,11 @@ end
                 # rfft off/on
                 P_spec = PencilArrays.Pencil((lmax+1, lmax+1), MPI.COMM_WORLD)
                 for rfft_flag in (false, true)
-                    aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ; use_rfft=rfft_flag)
+                    aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=rfft_flag)
                     Alm = zeros(ComplexF64, lmax+1, lmax+1)
                     SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
                     # Synthesize back using plan-based dist_synthesis!
-                    spln = SHTnsKit.DistPlan(cfg, fθφ)
+                    spln = _get_parallel_ext().DistPlan(cfg, fθφ)
                     fθφ_out = similar(fθφ)
                     SHTnsKit.dist_synthesis!(spln, fθφ_out, PencilArrays.PencilArray(P_spec, Alm))
                     # Check error
@@ -474,13 +479,13 @@ end
                 end
 
                 # Scalar plan with scratch buffers exercises allocate(dims=(:θ,:m)) path
-                aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ; use_rfft=true, with_spatial_scratch=true)
+                aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=true, with_spatial_scratch=true)
                 Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
                 SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 
                 P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), comm)
                 Alm_p = PencilArrays.PencilArray(P_spec, Alm)
-                spln = SHTnsKit.DistPlan(cfg, fθφ; use_rfft=true)
+                spln = _get_parallel_ext().DistPlan(cfg, fθφ; use_rfft=true)
                 fθφ_back = PencilArrays.PencilArray{Float64}(undef, topo)
                 SHTnsKit.dist_synthesis!(spln, fθφ_back, Alm_p)
 
@@ -502,7 +507,7 @@ end
                     end
                 end
 
-                vplan = SHTnsKit.DistSphtorPlan(cfg, Vt; use_rfft=true, with_spatial_scratch=true)
+                vplan = _get_parallel_ext().DistSphtorPlan(cfg, Vt; use_rfft=true, with_spatial_scratch=true)
                 Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
                 Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
                 SHTnsKit.dist_spat_to_SHsphtor!(vplan, Slm, Tlm, Vt, Vp)
@@ -564,7 +569,7 @@ end
             end
 
             # Analysis
-            aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ)
+            aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ)
             Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
             SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 
@@ -575,7 +580,7 @@ end
             SHTnsKit.dist_SH_mul_mx!(cfg, mx, Alm, Rlm)
 
             # Synthesize
-            spln = SHTnsKit.DistPlan(cfg, fθφ)
+            spln = _get_parallel_ext().DistPlan(cfg, fθφ)
             fθφ_op = similar(fθφ)
             P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), MPI.COMM_WORLD)
             SHTnsKit.dist_synthesis!(spln, fθφ_op, PencilArrays.PencilArray(P_spec, Rlm))
@@ -1019,7 +1024,7 @@ end
             end
 
             # Dense analysis
-            aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ)
+            aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ)
             Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
             SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 
@@ -1086,7 +1091,7 @@ end
             end
 
             # Analysis
-            aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ)
+            aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ)
             Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
             SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 
@@ -1147,7 +1152,7 @@ end
             end
 
             # Analysis
-            aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ)
+            aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ)
             Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
             SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 

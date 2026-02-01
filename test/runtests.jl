@@ -237,18 +237,15 @@ end
             @eval using PencilArrays  # Distributed array framework
             @eval using PencilFFTs    # Distributed FFT operations
 
-            # Helper function to get global indices (defined after PencilArrays is loaded)
-            @eval function _get_global_indices(A, dim)
-                try
-                    pen = PencilArrays.pencil(A)
-                    ranges = PencilArrays.range_local(pen)
-                    return ranges[dim]
-                catch; end
-                try
-                    return PencilArrays.globalindices(A, dim)
-                catch; end
-                @warn "Could not determine global indices for dim $dim"
-                return axes(A, dim)
+            # Access the extension's globalindices function (it handles all API versions)
+            @eval begin
+                _ext = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+                if _ext !== nothing
+                    _get_global_indices = _ext.globalindices
+                else
+                    # Fallback if extension not loaded
+                    _get_global_indices(A, dim) = axes(A, dim)
+                end
             end
 
             MPI.Initialized() || MPI.Init()  # Initialize MPI environment
@@ -369,7 +366,7 @@ end
 @testset "Parallel norms/phase/robert/tables (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
-            using MPI, PencilArrays, PencilFFTs
+            @eval using MPI, PencilArrays, PencilFFTs
             MPI.Initialized() || MPI.Init()
             norms = (:orthonormal, :fourpi, :schmidt)
             cs_flags = (true, false)
@@ -430,7 +427,7 @@ end
 @testset "Pencil θ-φ decomposition (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
-            using MPI, PencilArrays, PencilFFTs
+            @eval using MPI, PencilArrays, PencilFFTs
             MPI.Initialized() || MPI.Init()
             comm = MPI.COMM_WORLD
             nprocs = MPI.Comm_size(comm)
@@ -541,7 +538,7 @@ end
 @testset "Parallel operator equivalence (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
-            using MPI, PencilArrays, PencilFFTs
+            @eval using MPI, PencilArrays, PencilFFTs
             MPI.Initialized() || MPI.Init()
 
             lmax = 6
@@ -915,7 +912,7 @@ end
 @testset "Parallel QST + local evals (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
-            using MPI, PencilArrays, PencilFFTs
+            @eval using MPI, PencilArrays, PencilFFTs
             MPI.Initialized() || MPI.Init()
             lmax = 5
             nlat = lmax + 2
@@ -1181,7 +1178,7 @@ end
 @testset "Parallel diagnostics (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
-            using MPI, PencilArrays
+            @eval using MPI, PencilArrays
             MPI.Initialized() || MPI.Init()
             
             lmax = 6

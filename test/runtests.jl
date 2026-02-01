@@ -953,10 +953,10 @@ end
             # Create spectral Pencil for coefficient arrays
             P_spec = PencilArrays.Pencil((lmax+1, lmax+1), MPI.COMM_WORLD)
             val_dist = SHTnsKit.dist_SH_to_point(cfg, PencilArrays.PencilArray(P_spec, Alm), cost, phi)
-            val_ref = SH_to_point(cfg, Qlm, cost, phi)
+            val_ref = SH_to_point(cfg, Alm, cost, phi)
             @test isapprox(val_dist, val_ref; rtol=1e-10, atol=1e-12)
             lat_dist = SHTnsKit.dist_SH_to_lat(cfg, PencilArrays.PencilArray(P_spec, Alm), cost)
-            lat_ref = SH_to_lat(cfg, Qlm, cost)
+            lat_ref = SH_to_lat(cfg, Alm, cost)
             @test isapprox(lat_dist, lat_ref; rtol=1e-10, atol=1e-12)
 
             # QST analysis/synthesis
@@ -1200,12 +1200,14 @@ end
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            # Use global indices for consistent field across processes
+            # Use Y_2^0 spherical harmonic pattern - exactly representable in spectral space
             gl_θ = _get_global_indices(fθφ, 1)
             gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
+                x = cfg.x[iθ_global]  # cos(θ)
+                val = (3 * x^2 - 1) / 2  # Y_2^0 (unnormalized)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
-                    fθφ[iθ_local, iφ_local] = sin(0.31*iθ_global) + cos(0.23*iφ_global)
+                    fθφ[iθ_local, iφ_local] = val
                 end
             end
 

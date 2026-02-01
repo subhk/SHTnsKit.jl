@@ -706,6 +706,12 @@ include("ParallelOpsPencil.jl")       # Parallel differential operators using Pe
 include("ParallelRotationsPencil.jl") # Parallel spherical rotation operations
 include("ParallelLocal.jl")            # Local (per-process) operations and utilities
 
+# Export plan types to SHTnsKit module so they're accessible via SHTnsKit.DistAnalysisPlan etc.
+@eval SHTnsKit const DistAnalysisPlan = $DistAnalysisPlan
+@eval SHTnsKit const DistPlan = $DistPlan
+@eval SHTnsKit const DistSphtorPlan = $DistSphtorPlan
+@eval SHTnsKit const DistQstPlan = $DistQstPlan
+
 # Optimized communication patterns for large spectral arrays
 function efficient_spectral_reduce!(local_data::AbstractMatrix, comm)
     # Delegate to adaptive strategy which selects among sparse, segmented,

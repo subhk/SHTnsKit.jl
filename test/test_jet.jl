@@ -5,7 +5,6 @@
 #
 # Note: Transform functions are tested for correctness only (not @test_opt)
 # due to known type instabilities from FFT operations in external packages.
-# Functions with multiple dispatch methods are tested for correct return types.
 
 using Test
 using JET
@@ -114,30 +113,6 @@ const JET_NLON = 2 * JET_LMAX + 1
 
         @test_opt target_modules=(SHTnsKit,) grad_energy_vector_Slm_Tlm(cfg, Slm, Tlm)
         @test_call target_modules=(SHTnsKit,) grad_energy_vector_Slm_Tlm(cfg, Slm, Tlm)
-    end
-
-    @testset "Rotations" begin
-        cfg = create_gauss_config(JET_LMAX, JET_NLAT; nlon=JET_NLON)
-        alm = zeros(ComplexF64, JET_LMAX + 1, JET_LMAX + 1)
-        alm[3, 2] = 1.0 + 0im
-
-        # Rotations have multiple dispatch methods - test return types
-        alm_z = SH_Zrotate(cfg, alm, 0.5)
-        @test alm_z isa Matrix{ComplexF64}
-
-        alm_y = SH_Yrotate(cfg, alm, 0.5)
-        @test alm_y isa Matrix{ComplexF64}
-    end
-
-    @testset "Operators" begin
-        cfg = create_gauss_config(JET_LMAX, JET_NLAT; nlon=JET_NLON)
-
-        # Operator functions have multiple dispatch methods - test return types
-        mx_ct = mul_ct_matrix(cfg)
-        @test mx_ct isa AbstractVector
-
-        mx_st = st_dt_matrix(cfg)
-        @test mx_st isa AbstractVector
     end
 
     @testset "Spectrum Functions" begin

@@ -93,10 +93,10 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
             end
         end
         ph = cis(mval * phi)
-        s_local += gm * ph + conj(gm) * conj(ph)
+        s_local += gm * ph  # Match serial SH_to_point: no conjugate term
     end
     s = MPI.Allreduce(s_local, +, comm)
-    return real(s)
+    return s  # Return complex to match serial SH_to_point
 end
 
 """

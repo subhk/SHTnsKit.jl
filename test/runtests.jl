@@ -791,7 +791,7 @@ end
             val_ref = SH_to_point(cfg, Alm, cost, phi)
             @test isapprox(val_dist, val_ref; rtol=1e-10, atol=1e-12)
             lat_dist = SHTnsKit.dist_SH_to_lat(cfg, PencilArrays.PencilArray(P_spec, Alm), cost)
-            lat_ref = SH_to_lat(cfg, Alm, cost)
+            lat_ref = SH_to_lat(cfg, Qlm, cost)  # SH_to_lat expects Vector (packed) form
             @test isapprox(lat_dist, lat_ref; rtol=1e-10, atol=1e-12)
 
             # QST analysis only (roundtrip skipped - dist_SHqst_to_spat has known issues in single-process MPI)

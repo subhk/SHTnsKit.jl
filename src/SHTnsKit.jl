@@ -443,10 +443,12 @@ dist_scalar_laplacian(::SHTConfig, ::Any; kwargs...) = error("Parallel extension
 dist_scalar_laplacian!(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_apply_laplacian!(::SHTConfig, ::Any) = error("Parallel extension not loaded")
 dist_SH_mul_mx!(::SHTConfig, ::Any, ::Any, ::Any) = error("Parallel extension not loaded")
-create_spectral_pencil(::SHTConfig; kwargs...) = error("Parallel extension not loaded")
-create_spectral_array(::SHTConfig; kwargs...) = error("Parallel extension not loaded")
-matrix_to_spectral_pencil(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
-spectral_pencil_to_matrix(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
+# Note: These stubs use untyped first argument to be less specific than extension methods.
+# Extensions with typed (cfg::SHTConfig) signature will take precedence in dispatch.
+create_spectral_pencil(cfg; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+create_spectral_array(cfg; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+matrix_to_spectral_pencil(cfg, Alm; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+spectral_pencil_to_matrix(cfg, Alm_p; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
 
 # ===== PARALLEL ROTATION FUNCTIONS =====
 # Parallel rotations fallbacks (PencilArray-based)

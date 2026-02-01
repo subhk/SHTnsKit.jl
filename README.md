@@ -1,6 +1,7 @@
 # SHTnsKit.jl
 
 [![Build Status](https://github.com/subhk/SHTnsKit.jl/workflows/CI/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions)
+[![Coverage](https://codecov.io/gh/subhk/SHTnsKit.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/subhk/SHTnsKit.jl)
 [![MPI Examples](https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml)
 [![JET](https://img.shields.io/badge/tested%20with-JET.jl-9cf)](https://github.com/aviatesk/JET.jl)
 [![Aqua](https://img.shields.io/badge/tested%20with-Aqua.jl-aqua)](https://github.com/JuliaTesting/Aqua.jl)

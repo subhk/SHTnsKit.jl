@@ -245,7 +245,7 @@ function parseval_scalar_test(lmax::Int)
             # Create configuration and distributed data layout
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
-            fθφ = PencilArrays.zeros(P; eltype=Float64)  # Distributed spatial array
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)  # Distributed spatial array
 
             # Fill with simple test pattern (each process fills its local portion)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
@@ -257,8 +257,8 @@ function parseval_scalar_test(lmax::Int)
             @test rel_global < 1e-8  # Check global error across all processes
 
             # Test vector field roundtrip
-            Vt = PencilArrays.zeros(P; eltype=Float64)  # θ-component
-            Vp = PencilArrays.zeros(P; eltype=Float64)  # φ-component
+            Vt = PencilArrays.PencilArray{Float64}(undef, P)  # θ-component
+            Vp = PencilArrays.PencilArray{Float64}(undef, P)  # φ-component
             for (iθ, iφ) in zip(eachindex(axes(Vt,1)), eachindex(axes(Vt,2)))
                 Vt[iθ, iφ] = 0.1*(iθ+1)     # Meridional velocity
                 Vp[iθ, iφ] = 0.05*(iφ+1)    # Zonal velocity
@@ -296,7 +296,7 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
 
             # Scalar
-            fθφ = PencilArrays.zeros(P; eltype=Float64)
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.13*(iθ+1)) + cos(0.07*(iφ+1))
             end
@@ -310,8 +310,8 @@ end
             @test isapprox(Alm_c, Alm_r; rtol=1e-10, atol=1e-12)
 
             # Vector
-            Vt = PencilArrays.zeros(P; eltype=Float64)
-            Vp = PencilArrays.zeros(P; eltype=Float64)
+            Vt = PencilArrays.PencilArray{Float64}(undef, P)
+            Vp = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(Vt,1)), eachindex(axes(Vt,2)))
                 Vt[iθ, iφ] = 0.1*(iθ+1) + 0.05*(iφ+1)
                 Vp[iθ, iφ] = 0.2*sin(0.1*(iθ+1))
@@ -364,7 +364,7 @@ end
 
                 comm = MPI.COMM_WORLD
                 P = PencilArrays.Pencil((nlat, nlon), comm)
-                fθφ = PencilArrays.zeros(P; eltype=Float64)
+                fθφ = PencilArrays.PencilArray{Float64}(undef, P)
                 for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                     fθφ[iθ, iφ] = sin(0.17*(iθ+1)) + cos(0.11*(iφ+1))
                 end
@@ -431,7 +431,7 @@ end
                 grid = SHTnsKit.suggest_pencil_grid(comm, cfg.nlat, cfg.nlon; allow_one_dim=false)
                 @test grid == (pθ, pφ)
 
-                fθφ = PencilArrays.zeros(topo; eltype=Float64)
+                fθφ = PencilArrays.PencilArray{Float64}(undef, topo)
                 for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                     fθφ[iθ, iφ] = 0.3 * sin(0.2*(iθ+1)) + 0.4 * cos(0.15*(iφ+1))
                 end
@@ -443,7 +443,7 @@ end
 
                 Alm_p = PencilArrays.PencilArray(Alm)
                 spln = SHTnsKit.DistPlan(cfg, fθφ; use_rfft=true)
-                fθφ_back = PencilArrays.zeros(topo; eltype=Float64)
+                fθφ_back = PencilArrays.PencilArray{Float64}(undef, topo)
                 SHTnsKit.dist_synthesis!(spln, fθφ_back, Alm_p)
 
                 loc_diff = sum(abs2, Array(fθφ_back) .- Array(fθφ))
@@ -454,8 +454,8 @@ end
                 @test rel < 1e-8
 
                 # Vector roundtrip with rfft + spatial scratch (allocates (:θ,:k) buffers)
-                Vt = PencilArrays.zeros(topo; eltype=Float64)
-                Vp = PencilArrays.zeros(topo; eltype=Float64)
+                Vt = PencilArrays.PencilArray{Float64}(undef, topo)
+                Vp = PencilArrays.PencilArray{Float64}(undef, topo)
                 for (iθ, iφ) in zip(eachindex(axes(Vt,1)), eachindex(axes(Vt,2)))
                     Vt[iθ, iφ] = 0.2*(iθ+1) * sin(0.1*(iφ+1))
                     Vp[iθ, iφ] = 0.15*(iφ+1) * cos(0.12*(iθ+1))
@@ -466,8 +466,8 @@ end
                 Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
                 SHTnsKit.dist_spat_to_SHsphtor!(vplan, Slm, Tlm, Vt, Vp)
 
-                Vt_back = PencilArrays.zeros(topo; eltype=Float64)
-                Vp_back = PencilArrays.zeros(topo; eltype=Float64)
+                Vt_back = PencilArrays.PencilArray{Float64}(undef, topo)
+                Vp_back = PencilArrays.PencilArray{Float64}(undef, topo)
                 SHTnsKit.dist_SHsphtor_to_spat!(vplan, Vt_back, Vp_back, Slm, Tlm)
 
                 vt_diff = sum(abs2, Array(Vt_back) .- Array(Vt))
@@ -512,7 +512,7 @@ end
 
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
-            fθφ = PencilArrays.zeros(P; eltype=Float64)
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.21*(iθ+1)) * cos(0.17*(iφ+1))
             end
@@ -881,10 +881,10 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
 
             # Build simple fields
-            fθφ = PencilArrays.zeros(P; eltype=Float64)
-            Vtθφ = PencilArrays.zeros(P; eltype=Float64)
-            Vpθφ = PencilArrays.zeros(P; eltype=Float64)
-            Vrθφ = PencilArrays.zeros(P; eltype=Float64)
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)
+            Vtθφ = PencilArrays.PencilArray{Float64}(undef, P)
+            Vpθφ = PencilArrays.PencilArray{Float64}(undef, P)
+            Vrθφ = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.11*(iθ+1)) + cos(0.07*(iφ+1))
                 Vrθφ[iθ, iφ] = 0.3*cos(0.09*(iθ+1))
@@ -955,7 +955,7 @@ end
             nlon = 2*lmax + 1
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
-            fθφ = PencilArrays.zeros(P; eltype=Float64)
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.19*(iθ+1)) * cos(0.13*(iφ+1))
             end
@@ -1016,7 +1016,7 @@ end
             nlon = 2*lmax + 1
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
-            fθφ = PencilArrays.zeros(P; eltype=Float64)
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.23*(iθ+1)) + cos(0.29*(iφ+1))
             end
@@ -1071,7 +1071,7 @@ end
 
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
-            fθφ = PencilArrays.zeros(P; eltype=Float64)
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = 0.3*sin(0.1*(iθ+1)) + 0.8*cos(0.07*(iφ+1))
             end
@@ -1128,7 +1128,7 @@ end
 
             cfg = create_gauss_config(lmax, nlat; nlon=nlon)
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
-            fθφ = PencilArrays.zeros(P; eltype=Float64)
+            fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
                 fθφ[iθ, iφ] = sin(0.31*(iθ+1)) + cos(0.23*(iφ+1))
             end

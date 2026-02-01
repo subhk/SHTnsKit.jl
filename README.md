@@ -3,6 +3,7 @@
 [![Build Status](https://github.com/subhk/SHTnsKit.jl/workflows/CI/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions)
 [![MPI Examples](https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions/workflows/mpi-examples.yml)
 [![JET](https://img.shields.io/badge/tested%20with-JET.jl-9cf)](https://github.com/aviatesk/JET.jl)
+[![Aqua](https://img.shields.io/badge/tested%20with-Aqua.jl-aqua)](https://github.com/JuliaTesting/Aqua.jl)
 
 <!-- Badges -->
  <p align="left">

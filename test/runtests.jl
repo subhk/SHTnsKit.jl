@@ -1166,3 +1166,10 @@ if get(ENV, "SHTNSKIT_RUN_JET_TESTS", "0") == "1"
 else
     @info "Skipping JET type stability tests (set SHTNSKIT_RUN_JET_TESTS=1 to enable)"
 end
+
+# Aqua.jl quality assurance tests (optional)
+if get(ENV, "SHTNSKIT_RUN_AQUA_TESTS", "0") == "1"
+    include("test_aqua.jl")
+else
+    @info "Skipping Aqua quality assurance tests (set SHTNSKIT_RUN_AQUA_TESTS=1 to enable)"
+end

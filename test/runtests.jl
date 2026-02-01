@@ -401,6 +401,7 @@ end
                 end
 
                 # rfft off/on
+                P_spec = PencilArrays.Pencil((lmax+1, lmax+1), MPI.COMM_WORLD)
                 for rfft_flag in (false, true)
                     aplan = SHTnsKit.DistAnalysisPlan(cfg, fθφ; use_rfft=rfft_flag)
                     Alm = zeros(ComplexF64, lmax+1, lmax+1)
@@ -408,7 +409,7 @@ end
                     # Synthesize back using plan-based dist_synthesis!
                     spln = SHTnsKit.DistPlan(cfg, fθφ)
                     fθφ_out = similar(fθφ)
-                    SHTnsKit.dist_synthesis!(spln, fθφ_out, PencilArrays.PencilArray(Alm))
+                    SHTnsKit.dist_synthesis!(spln, fθφ_out, PencilArrays.PencilArray(P_spec, Alm))
                     # Check error
                     fout = Array(fθφ_out); f0 = Array(fθφ)
                     rel = sqrt(sum(abs2, fout .- f0) / (sum(abs2, f0) + eps()))
@@ -477,7 +478,8 @@ end
                 Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
                 SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 
-                Alm_p = PencilArrays.PencilArray(Alm)
+                P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), comm)
+                Alm_p = PencilArrays.PencilArray(P_spec, Alm)
                 spln = SHTnsKit.DistPlan(cfg, fθφ; use_rfft=true)
                 fθφ_back = PencilArrays.PencilArray{Float64}(undef, topo)
                 SHTnsKit.dist_synthesis!(spln, fθφ_back, Alm_p)
@@ -575,7 +577,8 @@ end
             # Synthesize
             spln = SHTnsKit.DistPlan(cfg, fθφ)
             fθφ_op = similar(fθφ)
-            SHTnsKit.dist_synthesis!(spln, fθφ_op, PencilArrays.PencilArray(Rlm))
+            P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), MPI.COMM_WORLD)
+            SHTnsKit.dist_synthesis!(spln, fθφ_op, PencilArrays.PencilArray(P_spec, Rlm))
 
             # Grid-space reference
             ref = similar(fθφ)
@@ -947,10 +950,12 @@ end
                 Qlm[LM_index(cfg.lmax, cfg.mres, l, m) + 1] = Alm[l+1, m+1]
             end
             cost = 0.3; phi = 1.2
-            val_dist = SHTnsKit.dist_SH_to_point(cfg, PencilArrays.PencilArray(Alm), cost, phi)
+            # Create spectral Pencil for coefficient arrays
+            P_spec = PencilArrays.Pencil((lmax+1, lmax+1), MPI.COMM_WORLD)
+            val_dist = SHTnsKit.dist_SH_to_point(cfg, PencilArrays.PencilArray(P_spec, Alm), cost, phi)
             val_ref = SH_to_point(cfg, Qlm, cost, phi)
             @test isapprox(val_dist, val_ref; rtol=1e-10, atol=1e-12)
-            lat_dist = SHTnsKit.dist_SH_to_lat(cfg, PencilArrays.PencilArray(Alm), cost)
+            lat_dist = SHTnsKit.dist_SH_to_lat(cfg, PencilArrays.PencilArray(P_spec, Alm), cost)
             lat_ref = SH_to_lat(cfg, Qlm, cost)
             @test isapprox(lat_dist, lat_ref; rtol=1e-10, atol=1e-12)
 
@@ -963,10 +968,10 @@ end
             pdiff = sqrt(sum(abs2, Array(Vp2) .- Array(Vpθφ)) / (sum(abs2, Array(Vpθφ)) + eps()))
             @test ldiff < 1e-8 && tdiff < 1e-8 && pdiff < 1e-8
 
-            # QST point/lat evals
-            Qp = PencilArrays.PencilArray(Q)
-            Sp = PencilArrays.PencilArray(S)
-            Tp = PencilArrays.PencilArray(T)
+            # QST point/lat evals (use spectral Pencil from earlier)
+            Qp = PencilArrays.PencilArray(P_spec, Q)
+            Sp = PencilArrays.PencilArray(P_spec, S)
+            Tp = PencilArrays.PencilArray(P_spec, T)
             vr_d, vt_d, vp_d = SHTnsKit.dist_SHqst_to_point(cfg, Qp, Sp, Tp, cost, phi)
 
             # Build packed references
@@ -1019,8 +1024,9 @@ end
             SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 
             # Pencil versions
-            Alm_p = PencilArrays.PencilArray(Alm)  # dims (:l,:m)
-            R_p = PencilArrays.allocate(Alm_p; dims=(:l,:m), eltype=ComplexF64)
+            P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), MPI.COMM_WORLD)
+            Alm_p = PencilArrays.PencilArray(P_spec, Alm)
+            R_p = PencilArrays.PencilArray{ComplexF64}(undef, P_spec)
 
             # Operator coefficients
             mx = zeros(Float64, 2*cfg.nlm)
@@ -1089,7 +1095,8 @@ end
             Rlm = similar(Alm)
             SHTnsKit.dist_SH_Zrotate(cfg, Alm, α, Rlm)
             # Pencil variant should match
-            Alm_p = PencilArrays.PencilArray(Alm)
+            P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), MPI.COMM_WORLD)
+            Alm_p = PencilArrays.PencilArray(P_spec, Alm)
             SHTnsKit.dist_SH_Zrotate(cfg, Alm_p, α)
 
             # Compare
@@ -1145,8 +1152,9 @@ end
             SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 
             # Allgatherm rotation
-            Alm_p = PencilArrays.PencilArray(Alm)
-            R_p = PencilArrays.allocate(Alm_p; dims=(:l,:m), eltype=ComplexF64)
+            P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), MPI.COMM_WORLD)
+            Alm_p = PencilArrays.PencilArray(P_spec, Alm)
+            R_p = PencilArrays.PencilArray{ComplexF64}(undef, P_spec)
             β = 0.41
             SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg, Alm_p, β, R_p)
 
@@ -1203,15 +1211,16 @@ end
 
             # Scalar energy: spectral vs grid
             Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+            P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), MPI.COMM_WORLD)
             E_spec_dense = energy_scalar(cfg, Alm)
-            E_spec_pencil = energy_scalar(cfg, PencilArrays.PencilArray(Alm))
+            E_spec_pencil = energy_scalar(cfg, PencilArrays.PencilArray(P_spec, Alm))
             E_grid = grid_energy_scalar(cfg, fθφ)
             @test isapprox(E_spec_dense, E_spec_pencil; rtol=1e-10, atol=1e-12)
             @test isapprox(E_spec_pencil, E_grid; rtol=1e-8, atol=1e-10)
 
             # Spectra sum equals total
-            El = energy_scalar_l_spectrum(cfg, PencilArrays.PencilArray(Alm))
-            Em = energy_scalar_m_spectrum(cfg, PencilArrays.PencilArray(Alm))
+            El = energy_scalar_l_spectrum(cfg, PencilArrays.PencilArray(P_spec, Alm))
+            Em = energy_scalar_m_spectrum(cfg, PencilArrays.PencilArray(P_spec, Alm))
             @test isapprox(sum(El), E_spec_pencil; rtol=1e-10, atol=1e-12)
             @test isapprox(sum(Em), E_spec_pencil; rtol=1e-10, atol=1e-12)
             # MPI.Finalize() - removed, finalize at process exit

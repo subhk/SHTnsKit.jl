@@ -222,19 +222,38 @@ function parseval_scalar_test(lmax::Int)
     E_grid = grid_energy_scalar(cfg, f)
     VERBOSE && @info "Parseval scalar" lmax E_spec E_grid rel=abs(E_spec - E_grid)/(abs(E_grid)+eps())
     @test isapprox(E_spec, E_grid; rtol=1e-10, atol=1e-12)
- 
+end
 
 
 # ===== PARALLEL/DISTRIBUTED TESTS =====
 # These tests validate the MPI-parallel spherical harmonic transforms
 # They are optional and only run when SHTNSKIT_RUN_MPI_TESTS=1
 
+# Helper function to get global indices for PencilArrays (works across versions)
+function _get_global_indices(A, dim)
+    # Use range_local on the pencil (PencilArrays v0.19+)
+    try
+        pen = PencilArrays.pencil(A)
+        ranges = PencilArrays.range_local(pen)
+        if dim <= length(ranges)
+            return ranges[dim]
+        end
+    catch
+    end
+    # Fallback: try globalindices if available
+    if isdefined(PencilArrays, :globalindices)
+        return PencilArrays.globalindices(A, dim)
+    end
+    # Last resort: assume local = global for that dimension
+    return axes(A, dim)
+end
+
 @testset "Parallel roundtrip (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             @info "Attempting optional parallel roundtrip tests"
             @eval using MPI           # Message Passing Interface for parallelization
-            @eval using PencilArrays  # Distributed array framework 
+            @eval using PencilArrays  # Distributed array framework
             @eval using PencilFFTs    # Distributed FFT operations
 
             MPI.Initialized() || MPI.Init()  # Initialize MPI environment
@@ -248,8 +267,8 @@ function parseval_scalar_test(lmax::Int)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)  # Distributed spatial array
 
             # Fill with simple test pattern using GLOBAL indices for consistency across processes
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = sin(0.1*iθ_global) + cos(0.2*iφ_global)
@@ -304,8 +323,8 @@ end
 
             # Scalar - use global indices for consistent field across processes
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = sin(0.13*iθ_global) + cos(0.07*iφ_global)
@@ -379,8 +398,8 @@ end
                 P = PencilArrays.Pencil((nlat, nlon), comm)
                 fθφ = PencilArrays.PencilArray{Float64}(undef, P)
                 # Use global indices for consistent field across processes
-                gl_θ = PencilArrays.globalindices(fθφ, 1)
-                gl_φ = PencilArrays.globalindices(fθφ, 2)
+                gl_θ = _get_global_indices(fθφ, 1)
+                gl_φ = _get_global_indices(fθφ, 2)
                 for (iθ_local, iθ_global) in enumerate(gl_θ)
                     for (iφ_local, iφ_global) in enumerate(gl_φ)
                         fθφ[iθ_local, iφ_local] = sin(0.17*iθ_global) + cos(0.11*iφ_global)
@@ -451,8 +470,8 @@ end
 
                 fθφ = PencilArrays.PencilArray{Float64}(undef, topo)
                 # Use global indices for consistent field across processes
-                gl_θ = PencilArrays.globalindices(fθφ, 1)
-                gl_φ = PencilArrays.globalindices(fθφ, 2)
+                gl_θ = _get_global_indices(fθφ, 1)
+                gl_φ = _get_global_indices(fθφ, 2)
                 for (iθ_local, iθ_global) in enumerate(gl_θ)
                     for (iφ_local, iφ_global) in enumerate(gl_φ)
                         fθφ[iθ_local, iφ_local] = 0.3 * sin(0.2*iθ_global) + 0.4 * cos(0.15*iφ_global)
@@ -540,8 +559,8 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             # Use global indices for consistent field across processes
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = sin(0.21*iθ_global) * cos(0.17*iφ_global)
@@ -568,7 +587,7 @@ end
             ref = similar(fθφ)
             θloc = axes(fθφ, 1)
             for (ii,iθ) in enumerate(θloc)
-                iglobθ = PencilArrays.globalindices(fθφ, 1)[ii]
+                iglobθ = _get_global_indices(fθφ, 1)[ii]
                 ct = cos(cfg.θ[iglobθ])
                 ref[iθ, :] .= ct .* fθφ[iθ, :]
             end
@@ -916,8 +935,8 @@ end
             Vtθφ = PencilArrays.PencilArray{Float64}(undef, P)
             Vpθφ = PencilArrays.PencilArray{Float64}(undef, P)
             Vrθφ = PencilArrays.PencilArray{Float64}(undef, P)
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = sin(0.11*iθ_global) + cos(0.07*iφ_global)
@@ -992,8 +1011,8 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             # Use global indices for consistent field across processes
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = sin(0.19*iθ_global) * cos(0.13*iφ_global)
@@ -1022,8 +1041,8 @@ end
 
             # Compare local pencil to dense (placeholder computation)
             lloc = axes(R_p, 1); mloc = axes(R_p, 2)
-            gl_l = PencilArrays.globalindices(R_p, 1)
-            gl_m = PencilArrays.globalindices(R_p, 2)
+            gl_l = _get_global_indices(R_p, 1)
+            gl_m = _get_global_indices(R_p, 2)
             maxdiff = 0.0
             for (ii, il) in enumerate(lloc)
                 for (jj, jm) in enumerate(mloc)
@@ -1058,8 +1077,8 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             # Use global indices for consistent field across processes
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = sin(0.23*iθ_global) + cos(0.29*iφ_global)
@@ -1081,8 +1100,8 @@ end
 
             # Compare
             lloc = axes(Alm_p, 1); mloc = axes(Alm_p, 2)
-            gl_l = PencilArrays.globalindices(Alm_p, 1)
-            gl_m = PencilArrays.globalindices(Alm_p, 2)
+            gl_l = _get_global_indices(Alm_p, 1)
+            gl_m = _get_global_indices(Alm_p, 2)
             maxdiff = 0.0
             for (ii, il) in enumerate(lloc)
                 for (jj, jm) in enumerate(mloc)
@@ -1118,8 +1137,8 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             # Use global indices for consistent field across processes
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = 0.3*sin(0.1*iθ_global) + 0.8*cos(0.07*iφ_global)
@@ -1143,8 +1162,8 @@ end
 
             # Compare
             lloc = axes(R_p, 1); mloc = axes(R_p, 2)
-            gl_l = PencilArrays.globalindices(R_p, 1)
-            gl_m = PencilArrays.globalindices(R_p, 2)
+            gl_l = _get_global_indices(R_p, 1)
+            gl_m = _get_global_indices(R_p, 2)
             maxdiff = 0.0
             for (ii, il) in enumerate(lloc)
                 for (jj, jm) in enumerate(mloc)
@@ -1180,8 +1199,8 @@ end
             P = PencilArrays.Pencil((nlat, nlon), MPI.COMM_WORLD)
             fθφ = PencilArrays.PencilArray{Float64}(undef, P)
             # Use global indices for consistent field across processes
-            gl_θ = PencilArrays.globalindices(fθφ, 1)
-            gl_φ = PencilArrays.globalindices(fθφ, 2)
+            gl_θ = _get_global_indices(fθφ, 1)
+            gl_φ = _get_global_indices(fθφ, 2)
             for (iθ_local, iθ_global) in enumerate(gl_θ)
                 for (iφ_local, iφ_global) in enumerate(gl_φ)
                     fθφ[iθ_local, iφ_local] = sin(0.31*iθ_global) + cos(0.23*iφ_global)

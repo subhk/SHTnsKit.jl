@@ -450,8 +450,13 @@ end
                 @test grid == (pθ, pφ)
 
                 fθφ = PencilArrays.PencilArray{Float64}(undef, topo)
-                for (iθ, iφ) in zip(eachindex(axes(fθφ,1)), eachindex(axes(fθφ,2)))
-                    fθφ[iθ, iφ] = 0.3 * sin(0.2*(iθ+1)) + 0.4 * cos(0.15*(iφ+1))
+                # Use global indices for consistent field across processes
+                gl_θ = PencilArrays.globalindices(fθφ, 1)
+                gl_φ = PencilArrays.globalindices(fθφ, 2)
+                for (iθ_local, iθ_global) in enumerate(gl_θ)
+                    for (iφ_local, iφ_global) in enumerate(gl_φ)
+                        fθφ[iθ_local, iφ_local] = 0.3 * sin(0.2*iθ_global) + 0.4 * cos(0.15*iφ_global)
+                    end
                 end
 
                 # Scalar plan with scratch buffers exercises allocate(dims=(:θ,:m)) path

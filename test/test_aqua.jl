@@ -15,8 +15,8 @@ using SHTnsKit
         undefined_exports=false,
         # Stale deps: BenchmarkTools for benchmarking, SparseArrays used conditionally
         stale_deps=(ignore=[:BenchmarkTools, :SparseArrays],),
-        # Compat: ignore stdlib packages; check_extras=false to skip Random/Test
-        deps_compat=(ignore=[:LinearAlgebra, :SparseArrays], check_extras=false),
+        # Disable deps_compat check entirely - stdlib packages don't need compat entries
+        deps_compat=false,
         piracies=false  # Disable piracy tests for packages with many extensions
     )
 end

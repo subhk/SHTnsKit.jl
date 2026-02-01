@@ -229,25 +229,6 @@ end
 # These tests validate the MPI-parallel spherical harmonic transforms
 # They are optional and only run when SHTNSKIT_RUN_MPI_TESTS=1
 
-# Helper function to get global indices for PencilArrays (works across versions)
-function _get_global_indices(A, dim)
-    # Use range_local on the pencil (PencilArrays v0.19+)
-    try
-        pen = PencilArrays.pencil(A)
-        ranges = PencilArrays.range_local(pen)
-        if dim <= length(ranges)
-            return ranges[dim]
-        end
-    catch
-    end
-    # Fallback: try globalindices if available
-    if isdefined(PencilArrays, :globalindices)
-        return PencilArrays.globalindices(A, dim)
-    end
-    # Last resort: assume local = global for that dimension
-    return axes(A, dim)
-end
-
 @testset "Parallel roundtrip (optional)" begin
     try
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
@@ -255,6 +236,20 @@ end
             @eval using MPI           # Message Passing Interface for parallelization
             @eval using PencilArrays  # Distributed array framework
             @eval using PencilFFTs    # Distributed FFT operations
+
+            # Helper function to get global indices (defined after PencilArrays is loaded)
+            @eval function _get_global_indices(A, dim)
+                try
+                    pen = PencilArrays.pencil(A)
+                    ranges = PencilArrays.range_local(pen)
+                    return ranges[dim]
+                catch; end
+                try
+                    return PencilArrays.globalindices(A, dim)
+                catch; end
+                @warn "Could not determine global indices for dim $dim"
+                return axes(A, dim)
+            end
 
             MPI.Initialized() || MPI.Init()  # Initialize MPI environment
             lmax = 6

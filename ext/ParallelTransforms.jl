@@ -1648,13 +1648,12 @@ function SHTnsKit.dist_scalar_roundtrip!(cfg::SHTnsKit.SHTConfig, fθφ::PencilA
     comm = communicator(fθφ)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ)
     fθφ_out = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+    # Convert to regular arrays for comparison (matches pattern in working tests)
+    fout = Array(fθφ_out)
+    f0 = Array(fθφ)
     # Local and global relative errors
-    local_diff2 = 0.0; local_ref2 = 0.0
-    for i in axes(fθφ,1), j in axes(fθφ,2)
-        d = fθφ_out[i,j] - fθφ[i,j]
-        local_diff2 += abs2(d)
-        local_ref2 += abs2(fθφ[i,j])
-    end
+    local_diff2 = sum(abs2, fout .- f0)
+    local_ref2 = sum(abs2, f0)
     global_diff2 = MPI.Allreduce(local_diff2, +, comm)
     global_ref2 = MPI.Allreduce(local_ref2, +, comm)
     rel_local = sqrt(local_diff2 / (local_ref2 + eps()))
@@ -1666,14 +1665,15 @@ function SHTnsKit.dist_vector_roundtrip!(cfg::SHTnsKit.SHTConfig, Vtθφ::Pencil
     comm = communicator(Vtθφ)
     Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ)
     Vt2, Vp2 = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vtθφ, real_output=true)
-    # θ component
-    lt_d2 = 0.0; lt_r2 = 0.0
-    lp_d2 = 0.0; lp_r2 = 0.0
-    for i in axes(Vtθφ,1), j in axes(Vtθφ,2)
-        dt = Vt2[i,j] - Vtθφ[i,j]; dp = Vp2[i,j] - Vpθφ[i,j]
-        lt_d2 += abs2(dt); lt_r2 += abs2(Vtθφ[i,j])
-        lp_d2 += abs2(dp); lp_r2 += abs2(Vpθφ[i,j])
-    end
+    # Convert to regular arrays for comparison (matches pattern in working tests)
+    vt_out = Array(Vt2); vt_ref = Array(Vtθφ)
+    vp_out = Array(Vp2); vp_ref = Array(Vpθφ)
+    # Local errors
+    lt_d2 = sum(abs2, vt_out .- vt_ref)
+    lt_r2 = sum(abs2, vt_ref)
+    lp_d2 = sum(abs2, vp_out .- vp_ref)
+    lp_r2 = sum(abs2, vp_ref)
+    # Global errors via MPI reduction
     gt_d2 = MPI.Allreduce(lt_d2, +, comm); gt_r2 = MPI.Allreduce(lt_r2, +, comm)
     gp_d2 = MPI.Allreduce(lp_d2, +, comm); gp_r2 = MPI.Allreduce(lp_r2, +, comm)
     rl_t = sqrt(lt_d2 / (lt_r2 + eps())); rg_t = sqrt(gt_d2 / (gt_r2 + eps()))

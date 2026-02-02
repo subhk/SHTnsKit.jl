@@ -81,6 +81,27 @@ Fields
 - `x, w`: Gauss–Legendre nodes and weights for numerical integration (x = cos(θ))
 - `Nlm`: normalization factors matrix indexed as (l+1, m+1)
 - `cphi`: longitude step size (2π / nlon) for FFT operations
+
+# Thread Safety
+
+**WARNING:** SHTConfig objects should be treated as **immutable during parallel operations**.
+Do not modify config fields (`use_plm_tables`, `plm_tables`, `on_the_fly`, etc.) while
+transforms are executing in `@threads` blocks. Create a new config or complete all
+parallel work before modifying. Violating this can cause race conditions.
+
+Safe pattern:
+```julia
+cfg = create_gauss_config(32, 34)
+prepare_plm_tables!(cfg)  # OK: modify before parallel work
+
+# Now cfg is "frozen" for parallel use
+@threads for i in 1:100
+    alm = analysis(cfg, fields[i])  # OK: read-only access
+end
+
+# After parallel work, modifications are safe again
+set_on_the_fly!(cfg)
+```
 """
 Base.@kwdef mutable struct SHTConfig
     # Core spherical harmonic parameters
@@ -951,3 +972,99 @@ get_config_device(cfg::SHTConfig) = cfg.compute_device
 
 """Check if a configuration is set up for GPU computing."""
 is_gpu_config(cfg::SHTConfig) = cfg.compute_device != :cpu
+
+# ============================================================================
+# THREADING CONFIGURATION FUNCTIONS
+# ============================================================================
+
+"""
+    configure_threading!(; fftw_threads::Int=1, blas_threads::Int=1)
+
+Configure external library threading to avoid contention with Julia's `@threads`.
+
+When using SHTnsKit with multi-threaded transforms (`Threads.nthreads() > 1`),
+FFTW and BLAS may also use multiple threads internally, causing thread pool
+contention and performance degradation. This function disables nested threading
+in these libraries.
+
+# Arguments
+- `fftw_threads::Int=1`: Number of FFTW threads (1 = disable FFTW threading)
+- `blas_threads::Int=1`: Number of BLAS threads (1 = disable BLAS threading)
+
+# Returns
+A named tuple with the configured thread counts: `(fftw=..., blas=...)`
+
+# Example
+```julia
+using SHTnsKit, FFTW, LinearAlgebra
+
+# Disable nested threading before running parallel transforms
+SHTnsKit.configure_threading!()
+
+# Now run transforms with Julia threading only (no contention)
+cfg = create_gauss_config(64, 66)
+alm = analysis(cfg, field)
+```
+
+# Why This Matters
+Julia's `@threads` parallelizes over m-modes in SHT. If FFTW or BLAS also spawn
+threads internally, you get nested parallelism where `nthreads × library_threads`
+threads compete for CPU cores, causing:
+- Thread pool contention and context switching overhead
+- Cache thrashing from excessive threads
+- Potential performance degradation of 2-10x
+
+Setting `fftw_threads=1` and `blas_threads=1` ensures only Julia's thread pool
+is active during transforms.
+
+See also: [`check_thread_utilization`](@ref)
+"""
+function configure_threading!(; fftw_threads::Int=1, blas_threads::Int=1)
+    fftw_set = false
+    blas_set = false
+
+    # Configure FFTW threading if the module is loaded
+    # FFTW.set_num_threads is only available if FFTW was compiled with threading
+    try
+        # Check if FFTW is loaded in Main or current module scope
+        fftw_mod = nothing
+        if isdefined(Main, :FFTW)
+            fftw_mod = getfield(Main, :FFTW)
+        elseif @isdefined(FFTW)
+            fftw_mod = FFTW
+        end
+
+        if fftw_mod !== nothing && isdefined(fftw_mod, :set_num_threads)
+            fftw_mod.set_num_threads(fftw_threads)
+            fftw_set = true
+        end
+    catch e
+        # FFTW may not be loaded or may not have threading support
+        @debug "Could not configure FFTW threading" exception=e
+    end
+
+    # Configure BLAS threading via LinearAlgebra
+    try
+        # LinearAlgebra.BLAS.set_num_threads works with most BLAS implementations
+        la_mod = nothing
+        if isdefined(Main, :LinearAlgebra)
+            la_mod = getfield(Main, :LinearAlgebra)
+        else
+            # Try to load it
+            la_mod = Base.require(Base.PkgId(Base.UUID("37e2e46d-f89d-539d-b4ee-838fcccc9c8e"), "LinearAlgebra"))
+        end
+
+        if la_mod !== nothing && isdefined(la_mod, :BLAS)
+            blas_mod = getfield(la_mod, :BLAS)
+            if isdefined(blas_mod, :set_num_threads)
+                blas_mod.set_num_threads(blas_threads)
+                blas_set = true
+            end
+        end
+    catch e
+        @debug "Could not configure BLAS threading" exception=e
+    end
+
+    return (fftw=fftw_set ? fftw_threads : nothing,
+            blas=blas_set ? blas_threads : nothing)
+end

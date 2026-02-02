@@ -108,6 +108,60 @@ Condon–Shortley phase are used internally; normalization conversion is handled
 by higher-level helpers when needed.
 """
 
+# ============================================================================
+# THREAD UTILIZATION DIAGNOSTICS
+# ============================================================================
+
+"""
+    check_thread_utilization(cfg::SHTConfig; warn::Bool=true) -> NamedTuple
+
+Check if threading configuration is optimal for this transform configuration.
+Returns utilization statistics and optionally warns about suboptimal setups.
+
+SHTnsKit parallelizes transforms over m-modes (azimuthal order) using
+`@threads :static`. If `mmax + 1 < nthreads`, some threads will be idle.
+
+# Arguments
+- `cfg::SHTConfig`: The transform configuration to check
+- `warn::Bool=true`: If true, emit a warning when utilization is below 50%
+
+# Returns
+A named tuple with:
+- `nthreads`: Number of Julia threads available
+- `mmax`: Maximum azimuthal order from config
+- `active_threads`: Number of threads that will actually do work
+- `utilization`: Fraction of threads utilized (0.0 to 1.0)
+
+# Example
+```julia
+cfg = create_gauss_config(8, 10)  # Small problem with mmax=8
+stats = check_thread_utilization(cfg)
+# If running with 16 threads, this warns about only 9 active threads (56%)
+
+# For better utilization, either:
+# 1. Use fewer threads: julia -t 8
+# 2. Use larger mmax: cfg = create_gauss_config(32, 34)
+```
+
+See also: [`configure_threading!`](@ref)
+"""
+function check_thread_utilization(cfg::SHTConfig; warn::Bool=true)
+    nthreads = Threads.nthreads()
+    mmax = cfg.mmax
+
+    # With @threads :static for m in 0:mmax, we have (mmax + 1) work items
+    work_items = mmax + 1
+    active_threads = min(nthreads, work_items)
+    utilization = nthreads > 0 ? active_threads / nthreads : 1.0
+
+    if warn && utilization < 0.5 && nthreads > 1
+        @warn "Thread underutilization detected" mmax=mmax nthreads=nthreads active_threads=active_threads utilization_pct=round(utilization*100, digits=1) suggestion="Consider using fewer threads (julia -t $(work_items)) or larger mmax"
+    end
+
+    return (nthreads=nthreads, mmax=mmax, active_threads=active_threads,
+            utilization=utilization)
+end
+
 """
     analysis(cfg::SHTConfig, f::AbstractMatrix) -> Matrix{ComplexF64}
 

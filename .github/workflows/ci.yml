@@ -106,15 +106,26 @@ jobs:
           SHTNSKIT_RUN_JET_TESTS: "1"
           # Aqua.jl quality assurance tests
           SHTNSKIT_RUN_AQUA_TESTS: "1"
-          
+
           # SHTns testing with fallback handling
           SHTNSKIT_GRACEFUL_FALLBACK: "true"
-          
+
           # Resource limits for CI stability
           OMP_NUM_THREADS: 2
           OPENBLAS_NUM_THREADS: 1
           JULIA_NUM_THREADS: 2
-          
+
+      - name: Run comprehensive serial tests
+        run: |
+          julia --project=. -e '
+            println("Running comprehensive serial test suite...")
+            include("test/test_serial.jl")
+            println("Serial test suite complete!")
+          '
+        env:
+          SHTNSKIT_TEST_VERBOSE: "1"
+          JULIA_NUM_THREADS: 2
+
       - name: Test advanced optimizations (if available)
         run: |
           julia --project=. -e '

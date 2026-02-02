@@ -620,7 +620,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_synth(alm .+ ϵ.*h) - loss_synth(alm .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(g) .* h))
+        dfdξ_ad = real(sum(g .* h))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
     catch e
         @info "Skipping Zygote scalar synthesis test" exception=(e, catch_backtrace())
@@ -663,7 +663,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_sphtor_S(Slm .+ ϵ.*hS) - loss_sphtor_S(Slm .- ϵ.*hS)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gS) .* hS))
+        dfdξ_ad = real(sum(gS .* hS))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test 2: Gradient of vector synthesis w.r.t. Tlm
@@ -680,7 +680,7 @@ end
         hT[:, 1] .= real.(hT[:, 1])
 
         dfdξ_fd = (loss_sphtor_T(Tlm .+ ϵ.*hT) - loss_sphtor_T(Tlm .- ϵ.*hT)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gT) .* hT))
+        dfdξ_ad = real(sum(gT .* hT))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test 3: Gradient of vector analysis w.r.t. spatial fields
@@ -738,7 +738,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_energy_S(Slm .+ ϵ.*hS) - loss_energy_S(Slm .- ϵ.*hS)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gS) .* hS))
+        dfdξ_ad = real(sum(gS .* hS))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test: Gradient of vector energy w.r.t. Tlm
@@ -754,7 +754,7 @@ end
         hT[:, 1] .= real.(hT[:, 1])
 
         dfdξ_fd = (loss_energy_T(Tlm .+ ϵ.*hT) - loss_energy_T(Tlm .- ϵ.*hT)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gT) .* hT))
+        dfdξ_ad = real(sum(gT .* hT))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test: Gradient of grid energy w.r.t. spatial field
@@ -808,7 +808,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_div(Slm .+ ϵ.*hS) - loss_div(Slm .- ϵ.*hS)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gS) .* hS))
+        dfdξ_ad = real(sum(gS .* hS))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Random toroidal coefficients
@@ -834,7 +834,7 @@ end
         hT[:, 1] .= real.(hT[:, 1])
 
         dfdξ_fd = (loss_vort(Tlm .+ ϵ.*hT) - loss_vort(Tlm .- ϵ.*hT)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gT) .* hT))
+        dfdξ_ad = real(sum(gT .* hT))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
     catch e
         @info "Skipping Zygote divergence/vorticity tests" exception=(e, catch_backtrace())
@@ -872,7 +872,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_grad(alm .+ ϵ.*h) - loss_grad(alm .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(g) .* h))
+        dfdξ_ad = real(sum(g .* h))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
     catch e
         @info "Skipping Zygote gradient transform tests" exception=(e, catch_backtrace())
@@ -911,7 +911,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_synth_l(alm .+ ϵ.*h) - loss_synth_l(alm .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(g) .* h))
+        dfdξ_ad = real(sum(g .* h))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test: Gradient of truncated analysis
@@ -974,7 +974,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_qst_Q(Qlm .+ ϵ.*hQ) - loss_qst_Q(Qlm .- ϵ.*hQ)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gQ) .* hQ))
+        dfdξ_ad = real(sum(gQ .* hQ))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test: Gradient of QST analysis w.r.t. spatial field
@@ -1027,7 +1027,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_cplx_synth(alm .+ ϵ.*h) - loss_cplx_synth(alm .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(g) .* h))
+        dfdξ_ad = real(sum(g .* h))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test: Gradient of complex analysis
@@ -1042,7 +1042,7 @@ end
         hf = randn(rng, ComplexF64, nlat, nlon)
 
         dfdξ_fd = (loss_cplx_analysis(f0_cplx .+ ϵ.*hf) - loss_cplx_analysis(f0_cplx .- ϵ.*hf)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(gf) .* hf))
+        dfdξ_ad = real(sum(gf .* hf))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
     catch e
         @info "Skipping Zygote complex transform tests" exception=(e, catch_backtrace())
@@ -1080,7 +1080,7 @@ end
 
         ϵ = 1e-6
         dfdξ_fd = (loss_laplacian(alm .+ ϵ.*h) - loss_laplacian(alm .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(g) .* h))
+        dfdξ_ad = real(sum(g .* h))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
         # Test: Gradient of inverse Laplacian
@@ -1091,7 +1091,7 @@ end
 
         g_inv = Zygote.gradient(loss_inv_laplacian, alm)[1]
         dfdξ_fd = (loss_inv_laplacian(alm .+ ϵ.*h) - loss_inv_laplacian(alm .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = real(sum(conj(g_inv) .* h))
+        dfdξ_ad = real(sum(g_inv .* h))
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
     catch e
         @info "Skipping Zygote Laplacian tests" exception=(e, catch_backtrace())

@@ -1,0 +1,210 @@
+# SHTnsKit.jl - Vector Transform Tests (Spheroidal-Toroidal)
+# Tests for 2D vector field spherical harmonic transforms
+
+using Test
+using Random
+using SHTnsKit
+
+const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
+
+@testset "Vector Transforms (Spheroidal-Toroidal)" begin
+    @testset "Sphtor roundtrip" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(50)
+
+        # Random S and T coefficients
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+
+        for m in 0:lmax
+            for l in max(1, m):lmax  # l >= 1 for vector fields
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+            if m == 0
+                Slm[:, 1] .= real.(Slm[:, 1])
+                Tlm[:, 1] .= real.(Tlm[:, 1])
+            end
+        end
+
+        # Synthesis
+        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+
+        # Analysis
+        Slm_rec, Tlm_rec = spat_to_SHsphtor(cfg, Vt, Vp)
+
+        @test isapprox(Slm_rec, Slm; rtol=1e-9, atol=1e-11)
+        @test isapprox(Tlm_rec, Tlm; rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "Individual S and T components" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+
+        # Only S component
+        Slm[4, 2] = 1.0 + 0.5im  # l=3, m=1
+        Vt_s, Vp_s = SHsph_to_spat(cfg, Slm)
+        Vt_full, Vp_full = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=false)
+        @test isapprox(Vt_s, Vt_full; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_s, Vp_full; rtol=1e-10, atol=1e-12)
+
+        # Only T component
+        fill!(Slm, 0)
+        Tlm[5, 3] = 0.8 - 0.3im  # l=4, m=2
+        Vt_t, Vp_t = SHtor_to_spat(cfg, Tlm)
+        Vt_full2, Vp_full2 = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=false)
+        @test isapprox(Vt_t, Vt_full2; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_t, Vp_full2; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "Gradient transform" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(52)
+
+        # Random scalar field coefficients
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0.0
+        end
+
+        # Gradient via SH_to_grad_spat should match SHsph_to_spat
+        Gt, Gp = SH_to_grad_spat(cfg, alm)
+        Gt_ref, Gp_ref = SHsph_to_spat(cfg, alm)
+
+        @test isapprox(Gt, Gt_ref; rtol=1e-10, atol=1e-12)
+        @test isapprox(Gp, Gp_ref; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "Truncated vector transforms" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        ltr = lmax - 2
+        rng = MersenneTwister(53)
+
+        Slm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        Tlm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # l=0 row should be zero for vectors
+        Slm[1, :] .= 0
+        Tlm[1, :] .= 0
+
+        # Truncated synthesis
+        Vt_l, Vp_l = SHsphtor_to_spat_l(cfg, Slm, Tlm, ltr)
+
+        # Reference: zero high modes and synthesize
+        Slm_z = copy(Slm); Tlm_z = copy(Tlm)
+        for m in 0:lmax, l in (ltr+1):lmax
+            Slm_z[l+1, m+1] = 0
+            Tlm_z[l+1, m+1] = 0
+        end
+        Vt_ref, Vp_ref = SHsphtor_to_spat(cfg, Slm_z, Tlm_z; real_output=false)
+
+        @test isapprox(Vt_l, Vt_ref; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_l, Vp_ref; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "Mode-limited vector transforms" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(54)
+
+        im = 2  # azimuthal mode
+        ltr = lmax - 1
+        len = ltr - im + 1
+
+        Sl = randn(rng, ComplexF64, len)
+        Tl = randn(rng, ComplexF64, len)
+
+        # Mode-limited synthesis
+        Vt_ml, Vp_ml = SHsphtor_to_spat_ml(cfg, im, Sl, Tl, ltr)
+
+        @test length(Vt_ml) == nlat
+        @test length(Vp_ml) == nlat
+
+        # Individual component mode-limited
+        Vt_s, Vp_s = SHsph_to_spat_ml(cfg, im, Sl, ltr)
+        Vt_t, Vp_t = SHtor_to_spat_ml(cfg, im, Tl, ltr)
+
+        @test length(Vt_s) == nlat
+        @test length(Vt_t) == nlat
+
+        # Combined should match sum
+        @test isapprox(Vt_ml, Vt_s .+ Vt_t; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_ml, Vp_s .+ Vp_t; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "Divergence and vorticity from S/T" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(55)
+
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+
+        for m in 0:lmax
+            for l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # Compute divergence from spheroidal
+        div_lm = divergence_from_spheroidal(cfg, Slm)
+        @test size(div_lm) == size(Slm)
+
+        # Compute vorticity from toroidal
+        vort_lm = vorticity_from_toroidal(cfg, Tlm)
+        @test size(vort_lm) == size(Tlm)
+
+        # Inverse: spheroidal from divergence
+        Slm_rec = spheroidal_from_divergence(cfg, div_lm)
+        @test isapprox(Slm_rec, Slm; rtol=1e-9, atol=1e-11)
+
+        # Inverse: toroidal from vorticity
+        Tlm_rec = toroidal_from_vorticity(cfg, vort_lm)
+        @test isapprox(Tlm_rec, Tlm; rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "Complex vector transforms" begin
+        lmax = 5
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(56)
+
+        # Complex spatial fields
+        Vt = randn(rng, ComplexF64, nlat, nlon)
+        Vp = randn(rng, ComplexF64, nlat, nlon)
+
+        # Analysis
+        Slm, Tlm = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
+
+        # Synthesis
+        Vt_back, Vp_back = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
+
+        @test isapprox(Vt_back, Vt; rtol=1e-9, atol=1e-11)
+        @test isapprox(Vp_back, Vp; rtol=1e-9, atol=1e-11)
+    end
+end

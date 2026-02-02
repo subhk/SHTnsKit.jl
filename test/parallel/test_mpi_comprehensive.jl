@@ -440,9 +440,9 @@ function test_z_rotation(cfg::SHTnsKit.SHTConfig, pen::Pencil)
 
     alpha = 0.5
 
-    # Z-rotation
+    # Z-rotation (use dist_SH_Zrotate for matrix form)
     alm_rot = similar(alm)
-    SHTnsKit.SH_Zrotate!(cfg, alm, alpha, alm_rot)
+    SHTnsKit.dist_SH_Zrotate(cfg, alm, alpha, alm_rot)
 
     # For Z-rotation, |coefficient| should be preserved
     @test isapprox(abs(alm_rot[2, 2]), abs(alm[2, 2]); rtol=1e-10)

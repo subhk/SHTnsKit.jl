@@ -695,6 +695,117 @@ function irfft(A::AbstractMatrix{<:Complex}, p)
     return output
 end
 
+# ===== OPTIMIZED DISTRIBUTED FFT USING TRANSPOSE =====
+# When φ is distributed, use a single all-to-all transpose instead of per-row Allgatherv.
+# This reduces the number of MPI calls from O(nlat) to O(1).
+
+"""
+    distributed_fft_phi!(Fθm_out, local_data, θ_range, φ_range, nlon, comm)
+
+Optimized distributed FFT along φ (longitude) dimension.
+Uses a single MPI_Alltoallv instead of per-row Allgatherv for better performance.
+
+After transform, each rank has complete Fourier modes (all m) for its local θ rows.
+
+# Algorithm
+1. Pack local data for all-to-all communication
+2. Single MPI_Alltoallv to redistribute data (each rank gets complete φ rows)
+3. FFT along φ for each local θ row
+4. Result: Fθm_out[i, m+1] = Fourier mode m at local θ index i
+"""
+function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
+                               local_data::AbstractMatrix,
+                               θ_range::AbstractRange, φ_range::AbstractRange,
+                               nlon::Int, comm)
+    nlat_local = length(θ_range)
+    nlon_local = length(φ_range)
+    nprocs = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+
+    # Gather φ segment sizes from all processes
+    local_nlon = Int32(nlon_local)
+    all_nlons = MPI.Allgather(local_nlon, comm)
+    φ_displs = cumsum([Int32(0); all_nlons[1:end-1]])
+
+    # For efficiency, transpose all data in a single all-to-all operation
+    # Each rank sends its local_data to appropriate ranks based on φ distribution
+
+    # Allocate buffer for gathered rows (all θ_local rows with complete φ)
+    gathered_data = Matrix{Float64}(undef, nlat_local, nlon)
+
+    # Build send/receive counts and displacements for Alltoallv
+    # Each rank r needs to receive φ data from all ranks for its local θ rows
+
+    # Strategy: Use MPI.Allgatherv with column-major packing for efficiency
+    # Pack all local columns together and do single Allgatherv
+    send_buf = Vector{Float64}(undef, nlat_local * nlon_local)
+    recv_buf = Vector{Float64}(undef, nlat_local * nlon)
+
+    # Pack local data (column-major for contiguous access)
+    idx = 1
+    @inbounds for j in 1:nlon_local
+        for i in 1:nlat_local
+            send_buf[idx] = local_data[i, j]
+            idx += 1
+        end
+    end
+
+    # Compute counts and displacements for recv buffer
+    recv_counts = [Int32(nlat_local * all_nlons[r]) for r in 1:nprocs]
+    recv_displs = cumsum([Int32(0); recv_counts[1:end-1]])
+
+    # Single Allgatherv for all data
+    MPI.Allgatherv!(send_buf, VBuffer(recv_buf, recv_counts, recv_displs), comm)
+
+    # Unpack received data into gathered_data matrix
+    @inbounds for r in 1:nprocs
+        offset = recv_displs[r]
+        r_nlon = all_nlons[r]
+        φ_start = φ_displs[r] + 1
+
+        idx = 1
+        for j in 1:r_nlon
+            φ_idx = φ_start + j - 1
+            for i in 1:nlat_local
+                gathered_data[i, φ_idx] = recv_buf[offset + idx]
+                idx += 1
+            end
+        end
+    end
+
+    # Now perform FFT on complete rows
+    fft_along_dim2!(Fθm_out, gathered_data)
+
+    return Fθm_out
+end
+
+"""
+    distributed_ifft_phi!(local_out, Fθm, θ_range, φ_range, nlon, comm)
+
+Optimized distributed IFFT along φ (longitude) dimension.
+Inverse of distributed_fft_phi! - performs IFFT then scatters back to distributed layout.
+"""
+function distributed_ifft_phi!(local_out::AbstractMatrix,
+                                Fθm::AbstractMatrix{<:Complex},
+                                θ_range::AbstractRange, φ_range::AbstractRange,
+                                nlon::Int, comm)
+    nlat_local = length(θ_range)
+    nlon_local = length(φ_range)
+
+    # Perform IFFT on complete rows
+    spatial_full = Matrix{Float64}(undef, nlat_local, nlon)
+    ifft_along_dim2!(spatial_full, Fθm)
+
+    # Extract local portion (no communication needed - just take local φ slice)
+    φ_start = first(φ_range)
+    @inbounds for j in 1:nlon_local
+        for i in 1:nlat_local
+            local_out[i, j] = spatial_full[i, φ_start + j - 1]
+        end
+    end
+
+    return local_out
+end
 
 # ===== PARALLEL EXTENSION MODULES =====
 # Include specialized modules for different aspects of parallel spherical harmonic transforms

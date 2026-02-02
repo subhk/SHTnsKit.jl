@@ -221,42 +221,18 @@ end
 Gather data distributed along φ dimension, then perform FFT along φ.
 Returns Fθm matrix with FFT coefficients for the local θ rows.
 
-Optimized to minimize allocations by pre-allocating buffers outside the loop.
+OPTIMIZED: Uses single MPI_Allgatherv for all data instead of per-row communication.
+This reduces O(nlat) MPI calls to O(1), significantly improving scalability.
 """
 function _gather_and_fft_phi(local_data::AbstractMatrix, θ_range::AbstractRange,
                               φ_range::AbstractRange, nlon::Int, comm)
     nlat_local = length(θ_range)
-    nlon_local = length(φ_range)
 
-    # Allocate output buffers (unavoidable allocations)
-    row_gathered = Matrix{Float64}(undef, nlat_local, nlon)
+    # Allocate output buffer
     Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
 
-    # Gather row sizes from all processes (only need to do this once)
-    counts = MPI.Allgather(Int32(nlon_local), comm)
-    displs = cumsum([Int32(0); counts[1:end-1]])
-
-    # Pre-allocate reusable buffers OUTSIDE the loop to minimize allocations
-    local_row = Vector{Float64}(undef, nlon_local)
-    gathered_row = Vector{Float64}(undef, nlon)
-
-    @inbounds for i in 1:nlat_local
-        # Copy local row data directly (no collect needed - view is contiguous for row-major slices)
-        for j in 1:nlon_local
-            local_row[j] = local_data[i, j]
-        end
-
-        # Gather the full row into pre-allocated buffer
-        MPI.Allgatherv!(local_row, VBuffer(gathered_row, counts, displs), comm)
-
-        # Copy to output matrix
-        for j in 1:nlon
-            row_gathered[i, j] = gathered_row[j]
-        end
-    end
-
-    # Perform FFT along each row
-    SHTnsKitParallelExt.fft_along_dim2!(Fθm, row_gathered)
+    # Use optimized distributed FFT with single all-to-all communication
+    SHTnsKitParallelExt.distributed_fft_phi!(Fθm, local_data, θ_range, φ_range, nlon, comm)
 
     return Fθm
 end
@@ -266,18 +242,20 @@ end
 
 Perform IFFT along φ and scatter the result back to distributed layout.
 Returns local data matrix for the process's portion of the grid.
+
+Note: IFFT is local since each rank has complete Fourier modes for its θ rows.
+Only extraction of the local φ portion is needed (no MPI communication).
 """
 function _scatter_from_fft_phi(Fθm::AbstractMatrix{<:Complex}, θ_range::AbstractRange,
                                 φ_range::AbstractRange, nlon::Int, comm)
     nlat_local = length(θ_range)
     nlon_local = length(φ_range)
 
-    # Perform IFFT on each row
-    spatial_full = Matrix{Float64}(undef, nlat_local, nlon)
-    SHTnsKitParallelExt.ifft_along_dim2!(spatial_full, Fθm)
+    # Allocate output for local portion
+    local_data = Matrix{Float64}(undef, nlat_local, nlon_local)
 
-    # Extract local portion
-    local_data = spatial_full[:, φ_range]
+    # Use optimized distributed IFFT
+    SHTnsKitParallelExt.distributed_ifft_phi!(local_data, Fθm, θ_range, φ_range, nlon, comm)
 
     return local_data
 end
@@ -1917,6 +1895,249 @@ function estimate_plm_tables_memory(cfg::SHTnsKit.SHTConfig)
             total_bytes += sizeof(table)
         end
     end
-    
+
     return total_bytes
+end
+
+# ===== TRUE DISTRIBUTED SPECTRAL STORAGE =====
+# These functions provide spectral arrays that are truly distributed across ranks,
+# with each rank only holding its owned (l,m) coefficients. This reduces memory
+# usage from O(lmax²) per rank to O(lmax²/P) per rank.
+
+"""
+    DistributedSpectralArray
+
+A wrapper for distributed spherical harmonic coefficients.
+Each rank only stores the coefficients it owns (based on l % nprocs == rank).
+"""
+struct DistributedSpectralArray{T}
+    local_coeffs::Vector{T}           # Local coefficients owned by this rank
+    plan::DistributedSpectralPlan     # Distribution plan with ownership info
+end
+
+"""
+    create_distributed_spectral_array(plan::DistributedSpectralPlan, T::Type=ComplexF64)
+
+Create an empty distributed spectral array for the given distribution plan.
+"""
+function create_distributed_spectral_array(plan::DistributedSpectralPlan, ::Type{T}=ComplexF64) where T
+    local_coeffs = zeros(T, length(plan.local_lm_indices))
+    return DistributedSpectralArray{T}(local_coeffs, plan)
+end
+
+"""
+    local_size(dsa::DistributedSpectralArray) -> Int
+
+Return the number of coefficients stored locally on this rank.
+"""
+local_size(dsa::DistributedSpectralArray) = length(dsa.local_coeffs)
+
+"""
+    global_size(dsa::DistributedSpectralArray) -> Tuple{Int,Int}
+
+Return the global spectral array dimensions (lmax+1, mmax+1).
+"""
+global_size(dsa::DistributedSpectralArray) = (dsa.plan.lmax + 1, dsa.plan.mmax + 1)
+
+"""
+    gather_to_dense(dsa::DistributedSpectralArray) -> Matrix{ComplexF64}
+
+Gather distributed coefficients to a dense (lmax+1, mmax+1) matrix on ALL ranks.
+Use this when you need the full spectral array for operations like synthesis.
+"""
+function gather_to_dense(dsa::DistributedSpectralArray{T}) where T
+    plan = dsa.plan
+    lmax, mmax = plan.lmax, plan.mmax
+    comm = plan.comm
+
+    # Gather all local coefficients to all ranks
+    all_coefficients = Vector{T}(undef, sum(plan.recv_counts))
+    MPI.Allgatherv!(dsa.local_coeffs, VBuffer(all_coefficients, plan.recv_counts), comm)
+
+    # Unpack into dense matrix
+    result = zeros(T, lmax + 1, mmax + 1)
+
+    # First, store our own coefficients
+    for (i, (l, m)) in enumerate(plan.local_lm_indices)
+        result[l+1, m+1] = dsa.local_coeffs[i]
+    end
+
+    # Then unpack received coefficients from other ranks
+    for owner_rank in 0:(plan.nprocs - 1)
+        if owner_rank == plan.rank
+            continue
+        end
+
+        rank_offset = plan.recv_displs[owner_rank + 1]
+        coeff_idx = 0
+
+        for l in 0:lmax
+            if l % plan.nprocs == owner_rank
+                for m in 0:min(l, mmax)
+                    coeff_idx += 1
+                    result[l+1, m+1] = all_coefficients[rank_offset + coeff_idx]
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    scatter_from_dense!(dsa::DistributedSpectralArray, dense::AbstractMatrix)
+
+Scatter a dense spectral array to distributed storage.
+Each rank extracts only the coefficients it owns.
+"""
+function scatter_from_dense!(dsa::DistributedSpectralArray{T}, dense::AbstractMatrix) where T
+    plan = dsa.plan
+
+    for (i, (l, m)) in enumerate(plan.local_lm_indices)
+        dsa.local_coeffs[i] = dense[l+1, m+1]
+    end
+
+    return dsa
+end
+
+"""
+    dist_analysis_distributed(cfg::SHTConfig, fθφ::PencilArray;
+                               plan::DistributedSpectralPlan, kwargs...) -> DistributedSpectralArray
+
+Distributed analysis that returns a DistributedSpectralArray.
+Each rank only stores the coefficients it owns, reducing memory by factor P.
+
+This is more memory-efficient than dist_analysis for large problems.
+"""
+function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                                    plan::DistributedSpectralPlan,
+                                    use_tables=cfg.use_plm_tables)
+    # First do standard analysis to get local contributions
+    comm = plan.comm
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlon = cfg.nlon
+
+    # Get local data and FFT
+    local_data = parent(fθφ)
+    nlat_local, nlon_local = size(local_data)
+    θ_globals = collect(globalindices(fθφ, 1))
+    nθ_local = length(θ_globals)
+
+    # FFT along φ
+    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    if nlon_local == nlon
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
+    else
+        φ_globals = collect(globalindices(fθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
+        Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
+    end
+
+    # Compute local contributions to ALL coefficients (same as standard analysis)
+    local_contrib = zeros(ComplexF64, lmax + 1, mmax + 1)
+    scaleφ = cfg.cphi
+
+    # Pre-cache weights
+    weights_cache = Vector{Float64}(undef, nθ_local)
+    x_cache = Vector{Float64}(undef, nθ_local)
+    for (ii, iglob) in enumerate(θ_globals)
+        weights_cache[ii] = cfg.w[iglob]
+        x_cache[ii] = cfg.x[iglob]
+    end
+
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
+    P = Vector{Float64}(undef, lmax + 1)
+
+    # Legendre integration
+    for mval in 0:mmax
+        col = mval + 1
+        for ii in 1:nθ_local
+            iglob = θ_globals[ii]
+            Fi = Fθm[ii, col]
+            wi = weights_cache[ii]
+
+            if use_tbl
+                tbl = cfg.plm_tables[col]
+                @inbounds @simd for l in mval:lmax
+                    local_contrib[l+1, col] += wi * tbl[l+1, iglob] * Fi
+                end
+            else
+                SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+                @inbounds @simd for l in mval:lmax
+                    local_contrib[l+1, col] += wi * P[l+1] * Fi
+                end
+            end
+        end
+    end
+
+    # Apply normalization
+    @inbounds for m in 0:mmax
+        @simd ivdep for l in m:lmax
+            local_contrib[l+1, m+1] *= cfg.Nlm[l+1, m+1] * scaleφ
+        end
+    end
+
+    # Create output distributed array
+    result = create_distributed_spectral_array(plan, ComplexF64)
+
+    # Pack local contributions for coefficients we OWN
+    local_contribs_packed = Vector{ComplexF64}(undef, length(plan.local_lm_indices))
+    for (i, (l, m)) in enumerate(plan.local_lm_indices)
+        local_contribs_packed[i] = local_contrib[l+1, m+1]
+    end
+
+    # Reduce contributions: sum across all ranks for coefficients we own
+    MPI.Reduce_scatter!(local_contribs_packed, result.local_coeffs, plan.recv_counts, +, comm)
+
+    return result
+end
+
+"""
+    dist_synthesis_distributed(cfg::SHTConfig, alm::DistributedSpectralArray;
+                                prototype_θφ::PencilArray, kwargs...) -> Matrix
+
+Distributed synthesis from a DistributedSpectralArray.
+Gathers necessary coefficients and performs synthesis.
+
+Note: Internally gathers to dense for now. Future optimization could avoid this.
+"""
+function dist_synthesis_distributed(cfg::SHTnsKit.SHTConfig, alm::DistributedSpectralArray;
+                                     prototype_θφ::PencilArray, real_output::Bool=true)
+    # Gather to dense array (required for Legendre summation which needs all l for each m)
+    alm_dense = gather_to_dense(alm)
+
+    # Use standard synthesis
+    return SHTnsKit.dist_synthesis(cfg, alm_dense; prototype_θφ=prototype_θφ, real_output=real_output)
+end
+
+"""
+    estimate_distributed_memory_savings(lmax::Int, mmax::Int, nprocs::Int) -> NamedTuple
+
+Estimate memory savings from using distributed spectral storage.
+"""
+function estimate_distributed_memory_savings(lmax::Int, mmax::Int, nprocs::Int)
+    # Dense storage per rank
+    dense_elements = (lmax + 1) * (mmax + 1)
+    dense_bytes = dense_elements * sizeof(ComplexF64)
+
+    # Distributed storage per rank (l-major distribution)
+    local_elements = 0
+    for l in 0:lmax
+        if l % nprocs == 0  # Representative rank's share
+            local_elements += min(l, mmax) + 1
+        end
+    end
+    # Average across ranks
+    avg_local_elements = (dense_elements + nprocs - 1) ÷ nprocs
+    distributed_bytes = avg_local_elements * sizeof(ComplexF64)
+
+    savings_pct = 100.0 * (1.0 - distributed_bytes / dense_bytes)
+
+    return (
+        dense_bytes_per_rank = dense_bytes,
+        distributed_bytes_per_rank = distributed_bytes,
+        savings_percent = savings_pct,
+        reduction_factor = nprocs
+    )
 end

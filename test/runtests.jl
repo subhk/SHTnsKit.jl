@@ -1021,7 +1021,7 @@ end
         if get(ENV, "SHTNSKIT_RUN_MPI_TESTS", "0") == "1"
             @eval using MPI, PencilArrays
             MPI.Initialized() || MPI.Init()
-            
+
             lmax = 6
             nlat = lmax + 2
             nlon = 2*lmax + 1
@@ -1067,6 +1067,9 @@ end
         end
     end
 end
+
+# Serial transform tests (exercises single-processor transform functions)
+include("serial/runtests.jl")
 
 # JET.jl type stability tests (optional)
 if get(ENV, "SHTNSKIT_RUN_JET_TESTS", "0") == "1"

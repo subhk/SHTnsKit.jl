@@ -1063,6 +1063,9 @@ end
 # Serial transform tests (exercises single-processor transform functions)
 include("serial/runtests.jl")
 
+# Parallel grid resolution tests (tests across multiple lat/lon configurations)
+include("parallel/runtests.jl")
+
 # JET.jl type stability tests (optional)
 if get(ENV, "SHTNSKIT_RUN_JET_TESTS", "0") == "1"
     include("test_jet.jl")

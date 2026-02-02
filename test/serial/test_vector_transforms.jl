@@ -381,4 +381,5 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test isapprox(Gt_l, Gt_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Gp_l, Gp_ref; rtol=1e-10, atol=1e-12)
     end
+
 end

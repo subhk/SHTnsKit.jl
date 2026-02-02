@@ -1793,21 +1793,32 @@ function distributed_spectral_reduce!(plan::DistributedSpectralPlan, local_contr
     # Step 4: Distribute final results to all processes using Allgatherv
     # This is more efficient than broadcasting from each owner
     all_coefficients = Vector{ComplexF64}(undef, sum(plan.recv_counts))
-    MPI.Allgatherv!(global_contribs_packed, all_coefficients, plan.recv_counts, comm)
-    
+    MPI.Allgatherv!(global_contribs_packed, VBuffer(all_coefficients, plan.recv_counts), comm)
+
     # Step 5: Unpack received coefficients into result matrix
-    coeff_idx = 1
-    for l in 0:lmax
-        owner_rank = l % plan.nprocs
-        for m in 0:min(l, mmax)
-            if owner_rank != plan.rank
-                # Get coefficient from the owning process's contribution
-                result[l+1, m+1] = all_coefficients[coeff_idx]
+    # Data in all_coefficients is ordered by rank (according to recv_displs/recv_counts).
+    # Each rank's segment contains coefficients for l values where (l % nprocs == rank),
+    # packed in order of increasing l, then increasing m within each l.
+    for owner_rank in 0:(plan.nprocs - 1)
+        if owner_rank == plan.rank
+            continue  # Skip our own coefficients - already stored in Step 3
+        end
+
+        # Calculate starting offset into all_coefficients for this rank's data
+        rank_offset = plan.recv_displs[owner_rank + 1]
+        coeff_idx = 0
+
+        # Iterate through (l,m) pairs owned by this rank (same order as packing)
+        for l in 0:lmax
+            if l % plan.nprocs == owner_rank
+                for m in 0:min(l, mmax)
+                    coeff_idx += 1
+                    result[l+1, m+1] = all_coefficients[rank_offset + coeff_idx]
+                end
             end
-            coeff_idx += 1
         end
     end
-    
+
     return result
 end
 

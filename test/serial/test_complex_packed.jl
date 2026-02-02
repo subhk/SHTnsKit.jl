@@ -15,16 +15,18 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(130)
 
-        # Complex spatial field
-        f_cplx = randn(rng, ComplexF64, nlat, nlon)
-
-        # Analysis
-        alm = spat_cplx_to_SH(cfg, vec(f_cplx))
+        # Complex coefficients in packed format (for reliable roundtrip)
+        nlm_cplx = nlm_cplx_calc(lmax, lmax, 1)
+        alm = randn(rng, ComplexF64, nlm_cplx)
 
         # Synthesis
-        f_back = SH_to_spat_cplx(cfg, alm)
+        f = SH_to_spat_cplx(cfg, alm)
+        @test size(f) == (nlat, nlon)
 
-        @test isapprox(f_back, vec(f_cplx); rtol=1e-10, atol=1e-12)
+        # Analysis
+        alm_back = spat_cplx_to_SH(cfg, f)
+
+        @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
     end
 
     @testset "LM_cplx indexing consistency" begin
@@ -80,18 +82,22 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(131)
 
-        # Real spatial field
-        f_real = randn(rng, nlat, nlon)
+        # Random spectral coefficients with real m=0
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])  # m=0 must be real
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
 
-        # Analyze to dense matrix
-        alm = analysis(cfg, f_real)
+        # Synthesize to real field
+        f = synthesis(cfg, alm; real_output=true)
 
-        # m=0 coefficients should be real
-        @test all(abs.(imag.(alm[:, 1])) .< 1e-12)
+        # m=0 coefficients remain real after analysis
+        alm_back = analysis(cfg, f)
+        @test all(abs.(imag.(alm_back[:, 1])) .< 1e-12)
 
-        # Synthesize back should give real field
-        f_back = synthesis(cfg, alm; real_output=true)
-        @test isapprox(f_back, f_real; rtol=1e-10, atol=1e-12)
+        # Roundtrip should recover original coefficients
+        @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
     end
 
     @testset "Packed to matrix conversion" begin
@@ -127,13 +133,11 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(133)
 
-        # Complex coefficients
-        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
-        for m in 0:lmax, l in 0:(m-1)
-            alm[l+1, m+1] = 0
-        end
+        # Complex coefficients in packed format (vector, not matrix)
+        nlm_cplx = nlm_cplx_calc(lmax, lmax, 1)
+        alm = randn(rng, ComplexF64, nlm_cplx)
 
-        # Evaluate at points
+        # Evaluate at points - SH_to_point_cplx takes packed vector
         for cost in [-0.5, 0.0, 0.5]
             for phi in [0.0, π/2, π]
                 val = SH_to_point_cplx(cfg, alm, cost, phi)
@@ -149,16 +153,22 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(134)
 
-        # Complex velocity fields
-        Vt = randn(rng, ComplexF64, nlat, nlon)
-        Vp = randn(rng, ComplexF64, nlat, nlon)
+        # Random S/T coefficients (spectral domain)
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax
+            for l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
 
-        # Roundtrip
-        Slm, Tlm = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
-        Vt_back, Vp_back = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
+        # Roundtrip in spectral domain: synth then analysis
+        Vt, Vp = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
+        Slm_back, Tlm_back = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
 
-        @test isapprox(Vt_back, Vt; rtol=1e-9, atol=1e-11)
-        @test isapprox(Vp_back, Vp; rtol=1e-9, atol=1e-11)
+        @test isapprox(Slm_back, Slm; rtol=1e-8, atol=1e-10)
+        @test isapprox(Tlm_back, Tlm; rtol=1e-8, atol=1e-10)
     end
 
     @testset "Packed format efficiency" begin

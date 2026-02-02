@@ -35,14 +35,12 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(111)
 
-        Slm = zeros(ComplexF64, lmax+1, lmax+1)
         Tlm = randn(rng, ComplexF64, lmax+1, lmax+1)
         Tlm[:, 1] .= real.(Tlm[:, 1])
         Tlm[1, :] .= 0
 
-        # Grid vorticity from velocity components
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
-        zeta_grid = vorticity_grid(cfg, Vt, Vp)
+        # Grid vorticity from spectral toroidal coefficients
+        zeta_grid = vorticity_grid(cfg, Tlm)
         @test size(zeta_grid) == (nlat, nlon)
     end
 
@@ -53,7 +51,6 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(112)
 
-        Slm = zeros(ComplexF64, lmax+1, lmax+1)
         Tlm = randn(rng, ComplexF64, lmax+1, lmax+1)
         Tlm[:, 1] .= real.(Tlm[:, 1])
         Tlm[1, :] .= 0
@@ -61,9 +58,8 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Spectral vorticity
         zeta_spec = vorticity_spectral(cfg, Tlm)
 
-        # Grid vorticity
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
-        zeta_grid = vorticity_grid(cfg, Vt, Vp)
+        # Grid vorticity from spectral Tlm
+        zeta_grid = vorticity_grid(cfg, Tlm)
 
         # Synthesize spectral vorticity to grid and compare
         zeta_synth = synthesis(cfg, zeta_spec; real_output=true)
@@ -93,7 +89,6 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(114)
 
-        Slm = zeros(ComplexF64, lmax+1, lmax+1)
         Tlm = randn(rng, ComplexF64, lmax+1, lmax+1)
         Tlm[:, 1] .= real.(Tlm[:, 1])
         Tlm[1, :] .= 0
@@ -101,9 +96,9 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Spectral enstrophy
         ens_spec = enstrophy(cfg, Tlm)
 
-        # Grid enstrophy
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
-        ens_grid = grid_enstrophy(cfg, Vt, Vp)
+        # Grid enstrophy: compute vorticity grid first, then integrate
+        zeta_grid = vorticity_grid(cfg, Tlm)
+        ens_grid = grid_enstrophy(cfg, zeta_grid)
 
         @test isapprox(ens_spec, ens_grid; rtol=1e-8, atol=1e-10)
     end

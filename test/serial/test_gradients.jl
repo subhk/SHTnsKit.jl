@@ -21,7 +21,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
             alm[l+1, m+1] = 0
         end
 
-        # Analytic gradient
+        # Analytic gradient: grad = wm * conj(alm)
         grad = grad_energy_scalar_alm(cfg, alm)
 
         # Finite difference validation
@@ -35,7 +35,8 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         E_plus = energy_scalar(cfg, alm .+ ϵ .* h)
         E_minus = energy_scalar(cfg, alm .- ϵ .* h)
         dE_fd = (E_plus - E_minus) / (2ϵ)
-        dE_ad = real(sum(conj(grad) .* h))
+        # Correct directional derivative: Re(Σ alm * wm * conj(h)) = Re(Σ conj(grad) * conj(h))
+        dE_ad = real(sum(conj(grad) .* conj(h)))
 
         @test isapprox(dE_ad, dE_fd; rtol=5e-4, atol=1e-8)
     end
@@ -67,7 +68,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
             E_plus = energy_scalar(cfg, alm .+ ϵ .* h)
             E_minus = energy_scalar(cfg, alm .- ϵ .* h)
             dE_fd = (E_plus - E_minus) / (2ϵ)
-            dE_ad = real(sum(conj(grad) .* h))
+            dE_ad = real(sum(conj(grad) .* conj(h)))
 
             @test isapprox(dE_ad, dE_fd; rtol=5e-4, atol=1e-8)
         end
@@ -100,7 +101,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         E_plus = energy_vector(cfg, Slm .+ ϵ .* hS, Tlm .+ ϵ .* hT)
         E_minus = energy_vector(cfg, Slm .- ϵ .* hS, Tlm .- ϵ .* hT)
         dE_fd = (E_plus - E_minus) / (2ϵ)
-        dE_ad = real(sum(conj(gS) .* hS) + sum(conj(gT) .* hT))
+        dE_ad = real(sum(conj(gS) .* conj(hS)) + sum(conj(gT) .* conj(hT)))
 
         @test isapprox(dE_ad, dE_fd; rtol=5e-4, atol=1e-8)
     end
@@ -153,7 +154,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         E_plus = energy_scalar_packed(cfg, Qlm .+ ϵ .* h)
         E_minus = energy_scalar_packed(cfg, Qlm .- ϵ .* h)
         dE_fd = (E_plus - E_minus) / (2ϵ)
-        dE_ad = real(sum(conj(gQ) .* h))
+        dE_ad = real(sum(conj(gQ) .* conj(h)))
 
         @test isapprox(dE_ad, dE_fd; rtol=5e-4, atol=1e-8)
     end
@@ -184,7 +185,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         E_plus = energy_vector_packed(cfg, Sp .+ ϵ .* hS, Tp .+ ϵ .* hT)
         E_minus = energy_vector_packed(cfg, Sp .- ϵ .* hS, Tp .- ϵ .* hT)
         dE_fd = (E_plus - E_minus) / (2ϵ)
-        dE_ad = real(sum(conj(gS) .* hS) + sum(conj(gT) .* hT))
+        dE_ad = real(sum(conj(gS) .* conj(hS)) + sum(conj(gT) .* conj(hT)))
 
         @test isapprox(dE_ad, dE_fd; rtol=5e-4, atol=1e-8)
     end

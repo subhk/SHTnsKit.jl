@@ -41,22 +41,27 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Create plan
         plan = SHTPlan(cfg)
 
-        # Test with random field
-        f = randn(rng, nlat, nlon)
-        alm = zeros(ComplexF64, lmax+1, lmax+1)
-
-        # In-place analysis
-        analysis!(plan, alm, f)
-
-        # Compare with non-planned version
-        alm_ref = analysis(cfg, f)
-        @test isapprox(alm, alm_ref; rtol=1e-10, atol=1e-12)
+        # Start with spectral coefficients for reliable roundtrip
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])  # m=0 real
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
 
         # In-place synthesis
-        f_back = zeros(nlat, nlon)
-        synthesis!(plan, f_back, alm)
+        f = zeros(nlat, nlon)
+        synthesis!(plan, f, alm)
 
-        @test isapprox(f_back, f; rtol=1e-10, atol=1e-12)
+        # In-place analysis
+        alm_back = zeros(ComplexF64, lmax+1, lmax+1)
+        analysis!(plan, alm_back, f)
+
+        # Compare recovered coefficients
+        @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
+
+        # Also verify plan matches non-planned version
+        alm_ref = analysis(cfg, f)
+        @test isapprox(alm_back, alm_ref; rtol=1e-10, atol=1e-12)
     end
 
     @testset "Packed vector format" begin
@@ -66,19 +71,20 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(44)
 
-        # Random spatial field
-        f = randn(rng, nlat, nlon)
-
-        # Packed analysis
-        Qlm = spat_to_SH(cfg, vec(f))
-        @test length(Qlm) == cfg.nlm
+        # Start with packed spectral coefficients
+        Qlm = randn(rng, ComplexF64, cfg.nlm)
+        Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])  # m=0 real (first lmax+1 indices)
 
         # Packed synthesis
-        f_back = SH_to_spat(cfg, Qlm)
-        @test length(f_back) == nlat * nlon
+        f = SH_to_spat(cfg, Qlm)
+        @test length(f) == nlat * nlon
+
+        # Packed analysis
+        Qlm_back = spat_to_SH(cfg, f)
+        @test length(Qlm_back) == cfg.nlm
 
         # Verify roundtrip
-        @test isapprox(f_back, vec(f); rtol=1e-10, atol=1e-12)
+        @test isapprox(Qlm_back, Qlm; rtol=1e-10, atol=1e-12)
     end
 
     @testset "Single spherical harmonic modes" begin
@@ -108,19 +114,23 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(45)
 
-        # Start with real spatial field
-        f_real = randn(rng, nlat, nlon)
+        # Start with spectral coefficients, real for m=0
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])  # m=0 real
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
 
-        # Analyze
-        alm = analysis(cfg, f_real)
+        # Synthesize to real field
+        f = synthesis(cfg, alm; real_output=true)
 
-        # m=0 coefficients should be real
-        @test all(abs.(imag.(alm[:, 1])) .< 1e-12)
+        # Analyze back
+        alm_back = analysis(cfg, f)
 
-        # Synthesize back
-        f_back = synthesis(cfg, alm; real_output=true)
+        # m=0 coefficients should remain real
+        @test all(abs.(imag.(alm_back[:, 1])) .< 1e-12)
 
-        # Should remain real
-        @test isapprox(f_back, f_real; rtol=1e-10, atol=1e-12)
+        # Roundtrip should preserve coefficients
+        @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
     end
 end

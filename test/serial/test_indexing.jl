@@ -86,10 +86,11 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         mres = 1
 
         # Verify im_from_lm returns correct m for each lm index
+        # Note: im_from_lm signature is (lm, lmax, mres)
         for m in 0:lmax
             for l in m:lmax
                 lm = LM_index(lmax, mres, l, m)
-                m_recovered = im_from_lm(lmax, mres, lm)
+                m_recovered = im_from_lm(lm, lmax, mres)
                 @test m_recovered == m
             end
         end
@@ -100,9 +101,12 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         mres = 1
 
         # LiM_index should give valid indices
+        # Note: LiM_index(lmax, mres, l, im) where l is actual degree and im is reduced m-index
+        # Constraint: im*mres ≤ l ≤ lmax
         for im in 0:lmax
-            for il in 0:(lmax - im)
-                idx = LiM_index(lmax, mres, il, im)
+            m = im * mres
+            for l in m:lmax
+                idx = LiM_index(lmax, mres, l, im)
                 @test idx >= 0
                 @test idx < nlm_calc(lmax, lmax, mres)
             end

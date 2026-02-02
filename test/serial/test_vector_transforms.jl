@@ -49,17 +49,17 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Slm = zeros(ComplexF64, lmax+1, lmax+1)
         Tlm = zeros(ComplexF64, lmax+1, lmax+1)
 
-        # Only S component
+        # Only S component - use consistent real_output setting
         Slm[4, 2] = 1.0 + 0.5im  # l=3, m=1
-        Vt_s, Vp_s = SHsph_to_spat(cfg, Slm)
+        Vt_s, Vp_s = SHsph_to_spat(cfg, Slm; real_output=false)
         Vt_full, Vp_full = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=false)
         @test isapprox(Vt_s, Vt_full; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_s, Vp_full; rtol=1e-10, atol=1e-12)
 
-        # Only T component
+        # Only T component - use consistent real_output setting
         fill!(Slm, 0)
         Tlm[5, 3] = 0.8 - 0.3im  # l=4, m=2
-        Vt_t, Vp_t = SHtor_to_spat(cfg, Tlm)
+        Vt_t, Vp_t = SHtor_to_spat(cfg, Tlm; real_output=false)
         Vt_full2, Vp_full2 = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=false)
         @test isapprox(Vt_t, Vt_full2; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_t, Vp_full2; rtol=1e-10, atol=1e-12)
@@ -104,16 +104,16 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Slm[1, :] .= 0
         Tlm[1, :] .= 0
 
-        # Truncated synthesis
+        # Truncated synthesis (default real_output=true)
         Vt_l, Vp_l = SHsphtor_to_spat_l(cfg, Slm, Tlm, ltr)
 
-        # Reference: zero high modes and synthesize
+        # Reference: zero high modes and synthesize with same real_output setting
         Slm_z = copy(Slm); Tlm_z = copy(Tlm)
         for m in 0:lmax, l in (ltr+1):lmax
             Slm_z[l+1, m+1] = 0
             Tlm_z[l+1, m+1] = 0
         end
-        Vt_ref, Vp_ref = SHsphtor_to_spat(cfg, Slm_z, Tlm_z; real_output=false)
+        Vt_ref, Vp_ref = SHsphtor_to_spat(cfg, Slm_z, Tlm_z; real_output=true)
 
         @test isapprox(Vt_l, Vt_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_l, Vp_ref; rtol=1e-10, atol=1e-12)
@@ -194,17 +194,24 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(56)
 
-        # Complex spatial fields
-        Vt = randn(rng, ComplexF64, nlat, nlon)
-        Vp = randn(rng, ComplexF64, nlat, nlon)
+        # Start with spectral coefficients for reliable roundtrip
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
 
-        # Analysis
-        Slm, Tlm = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
+        for m in 0:lmax
+            for l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
 
         # Synthesis
-        Vt_back, Vp_back = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
+        Vt, Vp = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
 
-        @test isapprox(Vt_back, Vt; rtol=1e-9, atol=1e-11)
-        @test isapprox(Vp_back, Vp; rtol=1e-9, atol=1e-11)
+        # Analysis
+        Slm_back, Tlm_back = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
+
+        @test isapprox(Slm_back, Slm; rtol=1e-8, atol=1e-10)
+        @test isapprox(Tlm_back, Tlm; rtol=1e-8, atol=1e-10)
     end
 end

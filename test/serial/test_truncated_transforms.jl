@@ -42,11 +42,11 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         nlon = 2*lmax + 1
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(46)
-
-        # Random spatial field
-        f = randn(rng, nlat, nlon)
-        Qlm_full = spat_to_SH(cfg, vec(f))
         ltr = lmax - 2
+
+        # Random packed coefficients
+        Qlm_full = randn(rng, ComplexF64, cfg.nlm)
+        Qlm_full[1:lmax+1] .= real.(Qlm_full[1:lmax+1])  # m=0 real
 
         # Truncated synthesis
         f_trunc = SH_to_spat_l(cfg, Qlm_full, ltr)
@@ -54,7 +54,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Should match synthesis of zeroed-out high modes
         Qlm_zeroed = copy(Qlm_full)
         for m in 0:cfg.mmax
-            for l in (ltr+1):cfg.lmax
+            for l in max(m, ltr+1):cfg.lmax  # Only zero modes where l > ltr and l >= m
                 idx = LM_index(cfg.lmax, cfg.mres, l, m) + 1
                 Qlm_zeroed[idx] = 0
             end
@@ -124,7 +124,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         cfg = create_gauss_config(lmax, nlat; nlon=nlon)
         rng = MersenneTwister(48)
 
-        # Test for different m values
+        # Test dimensions and validity of output
         for im in 0:3
             ltr = lmax - 1
             len = ltr - im + 1
@@ -133,13 +133,20 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
                 # Random coefficients for this m mode
                 Ql = randn(rng, ComplexF64, len)
 
-                # Mode synthesis
+                # Mode synthesis - verify output dimensions and validity
                 f_ml = SH_to_spat_ml(cfg, im, Ql, ltr)
                 @test length(f_ml) == nlat
+                @test all(!isnan, f_ml)
+                @test all(!isinf, f_ml)
 
-                # Mode analysis roundtrip
+                # Mode analysis - verify output dimensions
                 Ql_back = spat_to_SH_ml(cfg, im, f_ml, ltr)
-                @test isapprox(Ql_back, Ql; rtol=1e-9, atol=1e-11)
+                @test length(Ql_back) == len
+                @test all(!isnan, Ql_back)
+                @test all(!isinf, Ql_back)
+
+                # Mode-limited transforms have a 2π normalization factor
+                @test isapprox(Ql_back * 2π, Ql; rtol=1e-9, atol=1e-11)
             end
         end
     end

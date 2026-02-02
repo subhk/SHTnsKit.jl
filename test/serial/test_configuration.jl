@@ -50,18 +50,15 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test cfg_nopole.nlat == nlat
     end
 
-    @testset "On-the-fly vs table mode" begin
+    @testset "On-the-fly mode" begin
         lmax = 6
         nlat = lmax + 2
         cfg = create_gauss_config(lmax, nlat)
 
-        # Test toggling on-the-fly mode
-        initial_mode = is_on_the_fly(cfg)
-        set_on_the_fly!(cfg, true)
-        @test is_on_the_fly(cfg) == true
-        set_on_the_fly!(cfg, false)
-        @test is_on_the_fly(cfg) == false
-        set_on_the_fly!(cfg, initial_mode)
+        # Test enabling on-the-fly mode
+        set_on_the_fly!(cfg)
+        @test cfg.on_the_fly == true
+        @test cfg.use_plm_tables == false
     end
 
     @testset "Normalization matrix" begin

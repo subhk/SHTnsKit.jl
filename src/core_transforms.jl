@@ -167,6 +167,8 @@ end
 
 Forward transform on Gauss–Legendre × equiangular grid.
 Returns coefficients `alm[l+1, m+1]` with orthonormal normalization.
+
+Parallelizes over m-modes using static scheduling for consistent performance.
 """
 function analysis(cfg::SHTConfig, f::AbstractMatrix; use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     if use_fused_loops
@@ -193,6 +195,10 @@ function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; u
     end
 end
 
+# ============================================================================
+# M-PARALLEL ANALYSIS (parallelizes over azimuthal modes m)
+# ============================================================================
+
 function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
@@ -205,7 +211,7 @@ function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{
     fill!(alm, 0)
     scaleφ = cfg.cphi
 
-    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    # Use maxthreadid() to handle all possible thread IDs
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
     @threads :static for m in 0:mmax
@@ -247,7 +253,7 @@ function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatri
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
 
-    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    # Use maxthreadid() to handle all possible thread IDs
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
     @threads :static for m in 0:mmax
@@ -293,6 +299,7 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+        # Use dynamic scheduling for better load balance
         @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
@@ -305,8 +312,9 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
             end
         end
     else
-        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use dynamic scheduling for better load balance
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -334,6 +342,7 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+        # Use dynamic scheduling for better load balance
         @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
@@ -346,8 +355,9 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
             end
         end
     else
-        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use dynamic scheduling for better load balance
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -371,6 +381,8 @@ end
 Inverse transform back to a grid `(nlat, nlon)`. If `real_output=true`,
 Hermitian symmetry is enforced before IFFT. Optional `fft_scratch` lets you
 reuse a preallocated `(nlat,nlon)` complex buffer for lower allocations.
+
+Parallelizes over m-modes using static scheduling for consistent performance.
 """
 function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     if use_fused_loops
@@ -412,6 +424,10 @@ function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; 
     return f_out
 end
 
+# ============================================================================
+# M-PARALLEL SYNTHESIS (parallelizes over azimuthal modes m)
+# ============================================================================
+
 function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
@@ -424,7 +440,7 @@ function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Boo
     fill!(Fφ, zero(CT))
     inv_scaleφ = phi_inv_scale(cfg)
 
-    # Use maxthreadid() to handle all possible thread IDs with static scheduling
+    # Use maxthreadid() to handle all possible thread IDs
     thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     @threads :static for m in 0:mmax
         col = m + 1
@@ -476,6 +492,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+        # Use dynamic scheduling for better load balance
         @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
@@ -484,8 +501,9 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
             end
         end
     else
-        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+        # Use dynamic scheduling for better load balance
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]

@@ -145,8 +145,8 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
                 @test all(!isnan, Ql_back)
                 @test all(!isinf, Ql_back)
 
-                # Mode-limited transforms have a 2π normalization factor
-                @test isapprox(Ql_back * 2π, Ql; rtol=1e-9, atol=1e-11)
+                # Scalar mode-limited roundtrip should be exact
+                @test isapprox(Ql_back, Ql; rtol=1e-9, atol=1e-11)
             end
         end
     end

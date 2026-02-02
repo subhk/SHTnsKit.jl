@@ -177,7 +177,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3})
     alm_batch = Array{ComplexF64,3}(undef, lmax + 1, mmax + 1, nfields)
     fill!(alm_batch, zero(ComplexF64))  # Initialize to zero for += accumulation in on-the-fly path
 
-    # Preallocate FFT scratch space for all fields
+    # Allocate FFT scratch buffer
     Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
 
     # Perform FFT on all fields
@@ -204,7 +204,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3})
         end
     else
         # Compute Legendre polynomials on the fly
-        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads :static for m in 0:mmax
             col = m + 1
@@ -255,7 +255,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
 
     fill!(alm_out, zero(eltype(alm_out)))
 
-    # Preallocate FFT scratch space
+    # Allocate FFT scratch buffer
     Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
 
     # Perform FFT on all fields
@@ -280,7 +280,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
             end
         end
     else
-        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads :static for m in 0:mmax
             col = m + 1
@@ -333,8 +333,9 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
     nfields = size(alm_batch, 3)
     nlat, nlon = cfg.nlat, cfg.nlon
 
-    # Allocate Fourier space buffer for all fields
-    Fφ_batch = zeros(ComplexF64, nlat, nlon, nfields)
+    # Allocate FFT scratch buffer
+    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+    fill!(Fφ_batch, zero(ComplexF64))
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
@@ -352,7 +353,7 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
             end
         end
     else
-        # Use maxthreadid() to handle all possible thread IDs with static scheduling
+        # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
         @threads :static for m in 0:mmax
             col = m + 1

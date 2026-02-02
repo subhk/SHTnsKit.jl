@@ -155,14 +155,13 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test all(!isnan, Sl_back) && all(!isinf, Sl_back)
         @test all(!isnan, Tl_back) && all(!isinf, Tl_back)
 
-        # Q component has 2π normalization factor (like scalar mode-limited)
-        @test isapprox(Ql_back * 2π, Ql; rtol=1e-9, atol=1e-11)
+        # Q component (scalar) should roundtrip exactly
+        @test isapprox(Ql_back, Ql; rtol=1e-9, atol=1e-11)
 
-        # S and T components have more complex coupling in mode-limited transforms
-        # so we verify they produce consistent energy instead of direct comparison
-        E_original = sum(abs2.(Sl)) + sum(abs2.(Tl))
+        # S and T components have complex l(l+1) coupling in mode-limited transforms
+        # so we only verify they produce non-trivial output
         E_back = sum(abs2.(Sl_back)) + sum(abs2.(Tl_back))
-        @test E_back > 0  # Non-trivial output
+        @test E_back > 0
     end
 
     @testset "QST decomposition orthogonality" begin

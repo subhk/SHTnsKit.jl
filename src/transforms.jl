@@ -287,13 +287,14 @@ function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex},
     im <= cfg.mmax || throw(ArgumentError("im must be <= mmax=$(cfg.mmax)"))
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
     ltr >= im || throw(ArgumentError("ltr must be >= im=$(im)"))
-    
+
     num_l = ltr - im + 1
     Ql = Vector{ComplexF64}(undef, num_l)
     fill!(Ql, zero(ComplexF64))
-    
+
     P = Vector{Float64}(undef, ltr + 1)
-    
+    scaleφ = cfg.cphi  # Match full transform normalization
+
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, ltr, im)
@@ -304,7 +305,9 @@ function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex},
         end
     end
 
-    return Ql  # No phi scaling needed for single-mode transform (proper inverse of SH_to_spat_ml)
+    # Apply phi scaling to match full transform normalization
+    Ql .*= scaleφ
+    return Ql
 end
 
 """
@@ -320,13 +323,14 @@ function SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, l
     im <= cfg.mmax || throw(ArgumentError("im must be <= mmax=$(cfg.mmax)"))
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
     ltr >= im || throw(ArgumentError("ltr must be >= im=$(im)"))
-    
+
     expected_len = ltr - im + 1
     length(Ql) == expected_len || throw(DimensionMismatch("Ql length must be $(expected_len)"))
-    
+
     Vr_m = Vector{ComplexF64}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
-    
+    inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization
+
     for i in 1:nlat
         x = cfg.x[i]
         Plm_row!(P, x, ltr, im)
@@ -335,7 +339,7 @@ function SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, l
         @inbounds for l in im:ltr
             val += Ql[l-im+1] * cfg.Nlm[l+1, im+1] * P[l+1]
         end
-        Vr_m[i] = val
+        Vr_m[i] = val * inv_scaleφ
     end
 
     return Vr_m

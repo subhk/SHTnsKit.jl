@@ -713,7 +713,6 @@ function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     P = Vector{Float64}(undef, ltr + 1)
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
-
     # Synthesize vector components for this mode using pole-safe functions
     for i in 1:nlat
         x = cfg.x[i]

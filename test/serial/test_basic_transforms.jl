@@ -224,4 +224,57 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Roundtrip should work with PLM tables
         @test isapprox(alm_plm, alm; rtol=1e-10, atol=1e-12)
     end
+
+    @testset "Axisymmetric transforms (analysis_axisym/synthesis_axisym)" begin
+        lmax = 10
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(104)
+
+        # Create random m=0 only coefficients (axisymmetric field)
+        Ql = randn(rng, lmax+1)  # Real coefficients for m=0
+
+        # Axisymmetric synthesis: spectral -> latitude values
+        f_lat = synthesis_axisym(cfg, complex.(Ql))
+
+        @test length(f_lat) == nlat
+        @test eltype(f_lat) <: Real
+
+        # Axisymmetric analysis: latitude values -> spectral
+        Ql_rec = analysis_axisym(cfg, f_lat)
+
+        @test length(Ql_rec) == lmax + 1
+        # m=0 coefficients should be real (imaginary part ~0)
+        @test maximum(abs.(imag.(Ql_rec))) < 1e-10
+        @test isapprox(real.(Ql_rec), Ql; rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "Axisymmetric truncated transforms (analysis_axisym_l/synthesis_axisym_l)" begin
+        lmax = 10
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        ltr = lmax - 3
+        rng = MersenneTwister(105)
+
+        # Create random m=0 only coefficients up to ltr
+        Ql = zeros(lmax+1)
+        Ql[1:ltr+1] = randn(rng, ltr+1)
+
+        # Truncated axisymmetric synthesis
+        f_lat = synthesis_axisym_l(cfg, complex.(Ql), ltr)
+
+        @test length(f_lat) == nlat
+
+        # Reference: full synthesis with zeroed high modes
+        f_ref = synthesis_axisym(cfg, complex.(Ql))
+        @test isapprox(f_lat, f_ref; rtol=1e-10, atol=1e-12)
+
+        # Truncated axisymmetric analysis
+        Ql_rec = analysis_axisym_l(cfg, f_lat, ltr)
+
+        @test length(Ql_rec) == ltr + 1
+        @test isapprox(real.(Ql_rec), Ql[1:ltr+1]; rtol=1e-9, atol=1e-11)
+    end
 end

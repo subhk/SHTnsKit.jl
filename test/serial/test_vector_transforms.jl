@@ -254,4 +254,121 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test isapprox(Slm_back, Slm; rtol=1e-9, atol=1e-11)
         @test isapprox(Tlm_back, Tlm; rtol=1e-9, atol=1e-11)
     end
+
+    @testset "Truncated vector analysis (analysis_sphtor_l)" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        ltr = lmax - 2
+        rng = MersenneTwister(100)
+
+        # Create spectral coefficients with modes only up to ltr
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:ltr
+            for l in max(1, m):ltr
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # Synthesize and analyze with truncation
+        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
+        Slm_rec, Tlm_rec = analysis_sphtor_l(cfg, Vt, Vp, ltr)
+
+        # Only compare up to ltr (higher modes should be zero in original)
+        for m in 0:ltr
+            for l in max(1, m):ltr
+                @test isapprox(Slm_rec[l+1, m+1], Slm[l+1, m+1]; rtol=1e-9, atol=1e-11)
+                @test isapprox(Tlm_rec[l+1, m+1], Tlm[l+1, m+1]; rtol=1e-9, atol=1e-11)
+            end
+        end
+    end
+
+    @testset "Mode-limited vector analysis (analysis_sphtor_ml)" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(101)
+
+        im_mode = 2  # azimuthal mode
+        ltr = lmax - 1
+        len = ltr - im_mode + 1
+
+        # Create mode-limited coefficients
+        Sl = randn(rng, ComplexF64, len)
+        Tl = randn(rng, ComplexF64, len)
+
+        # Mode-limited synthesis then analysis
+        Vt_m, Vp_m = synthesis_sphtor_ml(cfg, im_mode, Sl, Tl, ltr)
+        Sl_rec, Tl_rec = analysis_sphtor_ml(cfg, im_mode, Vt_m, Vp_m, ltr)
+
+        @test length(Sl_rec) == len
+        @test length(Tl_rec) == len
+        @test isapprox(Sl_rec, Sl; rtol=1e-9, atol=1e-11)
+        @test isapprox(Tl_rec, Tl; rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "Truncated helper functions (_l variants)" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        ltr = lmax - 2
+        rng = MersenneTwister(102)
+
+        # Create spectral coefficients
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        alm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax
+            for l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+            for l in m:lmax
+                alm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+        alm[:, 1] .= real.(alm[:, 1])
+
+        # Test synthesis_sph_l: truncated spheroidal synthesis
+        Vt_sph_l, Vp_sph_l = synthesis_sph_l(cfg, Slm, ltr)
+        # Reference: zero high modes and use full synthesis
+        Slm_z = copy(Slm)
+        for m in 0:lmax, l in (ltr+1):lmax
+            Slm_z[l+1, m+1] = 0
+        end
+        Vt_sph_ref, Vp_sph_ref = synthesis_sph(cfg, Slm_z)
+        @test isapprox(Vt_sph_l, Vt_sph_ref; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_sph_l, Vp_sph_ref; rtol=1e-10, atol=1e-12)
+
+        # Test synthesis_tor_l: truncated toroidal synthesis
+        Vt_tor_l, Vp_tor_l = synthesis_tor_l(cfg, Tlm, ltr)
+        # Reference: zero high modes and use full synthesis
+        Tlm_z = copy(Tlm)
+        for m in 0:lmax, l in (ltr+1):lmax
+            Tlm_z[l+1, m+1] = 0
+        end
+        Vt_tor_ref, Vp_tor_ref = synthesis_tor(cfg, Tlm_z)
+        @test isapprox(Vt_tor_l, Vt_tor_ref; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_tor_l, Vp_tor_ref; rtol=1e-10, atol=1e-12)
+
+        # Test synthesis_grad_l: truncated gradient synthesis
+        Gt_l, Gp_l = synthesis_grad_l(cfg, alm, ltr)
+        # Reference: zero high modes and use full gradient
+        alm_z = copy(alm)
+        for m in 0:lmax, l in (ltr+1):lmax
+            alm_z[l+1, m+1] = 0
+        end
+        Gt_ref, Gp_ref = synthesis_grad(cfg, alm_z)
+        @test isapprox(Gt_l, Gt_ref; rtol=1e-10, atol=1e-12)
+        @test isapprox(Gp_l, Gp_ref; rtol=1e-10, atol=1e-12)
+    end
 end

@@ -272,4 +272,45 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test all(!isnan, vt_lat) && all(!isinf, vt_lat)
         @test all(!isnan, vp_lat) && all(!isinf, vp_lat)
     end
+
+    @testset "Truncated QST analysis (analysis_qst_l)" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        ltr = lmax - 2
+        rng = MersenneTwister(103)
+
+        # Create spectral coefficients with modes only up to ltr
+        Qlm = zeros(ComplexF64, lmax+1, lmax+1)
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:ltr
+            for l in m:ltr
+                Qlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+            for l in max(1, m):ltr
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Qlm[:, 1] .= real.(Qlm[:, 1])
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # Synthesize and analyze with truncation
+        Vr, Vt, Vp = synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true)
+        Qlm_rec, Slm_rec, Tlm_rec = analysis_qst_l(cfg, Vr, Vt, Vp, ltr)
+
+        # Only compare up to ltr (higher modes should be zero in original)
+        for m in 0:ltr
+            for l in m:ltr
+                @test isapprox(Qlm_rec[l+1, m+1], Qlm[l+1, m+1]; rtol=1e-9, atol=1e-11)
+            end
+            for l in max(1, m):ltr
+                @test isapprox(Slm_rec[l+1, m+1], Slm[l+1, m+1]; rtol=1e-9, atol=1e-11)
+                @test isapprox(Tlm_rec[l+1, m+1], Tlm[l+1, m+1]; rtol=1e-9, atol=1e-11)
+            end
+        end
+    end
 end

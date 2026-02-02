@@ -157,8 +157,9 @@ Returns ∂E/∂a_lm for use in optimization problems.
 function grad_energy_scalar_alm(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
-    grad = similar(alm)
+
+    # Use zeros to ensure l < m positions are properly initialized to zero
+    grad = zeros(eltype(alm), size(alm))
     for m in 0:mmax, l in m:lmax
         grad[l+1, m+1] = wm[m+1] * conj(alm[l+1, m+1])
     end

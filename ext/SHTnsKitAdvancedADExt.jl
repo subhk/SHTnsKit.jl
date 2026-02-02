@@ -87,23 +87,159 @@ end
     end
 
     # Vector sphtor transforms
+    # Helper: exact adjoint of analysis_sphtor (analogous to _adjoint_analysis for scalar)
+    #
+    # Forward analysis_sphtor does:
+    #   Fθ, Fφ = fft_phi(Vt), fft_phi(Vp)
+    #   S_lm = sum_i { w_i * scaleφ / ll1 * (dθY * Fθ + conj(term) * Fφ) }
+    #   T_lm = sum_i { w_i * scaleφ / ll1 * (-conj(term) * Fθ + dθY * Fφ) }
+    # where term = i*m*Y/sinθ, scaleφ = 2π/nlon
+    #
+    # The adjoint maps (S̄, T̄) → (V̄t, V̄p):
+    #   F̄θ[i,m] = φadj * w_i * sum_l { (1/ll1) * (dθY * S̄ - conj(term) * T̄) }
+    #   F̄φ[i,m] = φadj * w_i * sum_l { (1/ll1) * (conj(term) * S̄ + dθY * T̄) }
+    #   V̄t, V̄p = real(ifft_phi(F̄θ)), real(ifft_phi(F̄φ))
+    # where φadj = nlon * scaleφ = 2π (same as scalar adjoint)
+    function _adjoint_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Slm̄, Tlm̄)
+        nlat, nlon = cfg.nlat, cfg.nlon
+        lmax, mmax = cfg.lmax, cfg.mmax
+
+        # Output Fourier arrays
+        F̄θ = Matrix{ComplexF64}(undef, nlat, nlon)
+        F̄φ = Matrix{ComplexF64}(undef, nlat, nlon)
+        fill!(F̄θ, 0.0 + 0.0im)
+        fill!(F̄φ, 0.0 + 0.0im)
+
+        # Working arrays for Legendre functions
+        P = Vector{Float64}(undef, lmax + 1)
+        dPdtheta = Vector{Float64}(undef, lmax + 1)
+        P_over_sinth = Vector{Float64}(undef, lmax + 1)
+
+        # Scaling: φadj = nlon * scaleφ = nlon * (2π/nlon) = 2π
+        φadj = 2π
+
+        for m in 0:mmax
+            col = m + 1
+            for i in 1:nlat
+                x = cfg.x[i]
+                wi = cfg.w[i]
+
+                # Compute Legendre functions using pole-safe functions
+                SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+                SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+
+                # Accumulate contribution from all l for this (i, m)
+                sθ = 0.0 + 0.0im
+                sφ = 0.0 + 0.0im
+
+                @inbounds for l in max(1, m):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = N * dPdtheta[l+1]
+                    Y_over_sθ = N * P_over_sinth[l+1]
+                    ll1 = l * (l + 1)
+                    term = 1.0im * m * Y_over_sθ
+
+                    S_bar = Slm̄[l+1, col]
+                    T_bar = Tlm̄[l+1, col]
+
+                    # Forward matrix: [dθY, conj(term); -conj(term), dθY] where term = im*m*Y/sinth is pure imaginary
+                    # Since conj(term) = -term, forward is: [dθY, -term; term, dθY]
+                    # This is Hermitian: M^H = [dθY, -term; term, dθY] = M
+                    # So adjoint uses same matrix: [F̄θ; F̄φ] = (1/ll1) * M @ [S̄; T̄]
+                    sθ += (dθY * S_bar + conj(term) * T_bar) / ll1
+                    sφ += (-conj(term) * S_bar + dθY * T_bar) / ll1
+                end
+
+                # Apply scaling φadj * w_i (same structure as scalar _adjoint_analysis)
+                F̄θ[i, col] = φadj * wi * sθ
+                F̄φ[i, col] = φadj * wi * sφ
+            end
+        end
+
+        # Apply adjoint of fft_phi (which is nlon * ifft_phi, but φadj accounts for this)
+        V̄t_c = SHTnsKit.ifft_phi(F̄θ)
+        V̄p_c = SHTnsKit.ifft_phi(F̄φ)
+        return real.(V̄t_c), real.(V̄p_c)
+    end
+
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_sphtor), cfg::SHTnsKit.SHTConfig, Vt, Vp)
         Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Vt, Vp)
         function pullback(ṠTl)
             Slm̄, Tlm̄ = ṠTl
-            Vt̄, Vp̄ = SHTnsKit.synthesis_sphtor(cfg, _to_complex(Slm̄), _to_complex(Tlm̄); real_output=true)
-            return NoTangent(), NoTangent(), Vt̄, Vp̄
+            V̄t, V̄p = _adjoint_analysis_sphtor(cfg, _to_complex(Slm̄), _to_complex(Tlm̄))
+            return NoTangent(), NoTangent(), V̄t, V̄p
         end
         return (Slm, Tlm), pullback
+    end
+
+    # synthesis_sphtor adjoint: maps (V̄t, V̄p) → (S̄lm, T̄lm)
+    # Forward synthesis does (for real_output=true):
+    #   Fθ[i,m] = inv_scaleφ * sum_l { dθY * S - term * T } for m=0:mmax
+    #   Fill conjugate: Fθ[i, nlon-m+1] = conj(Fθ[i, m+1]) for m > 0
+    #   Vt = real(ifft_phi(Fθ))
+    # where term = i*m*Y/sinθ, inv_scaleφ = nlon
+    #
+    # Adjoint (for real V̄t input):
+    #   F̄θ = fft_phi(V̄t)  -- Hermitian symmetric since V̄t is real
+    #   The "fill conjugate" step doubles contribution for m > 0:
+    #     F̄θ_base[m] = F̄θ[m] + conj(F̄θ[nlon-m+1]) = 2*F̄θ[m] for m>0 (by Hermitian)
+    #   S̄_lm = inv_scaleφ * wm * sum_i { dθY * F̄θ + conj(term) * F̄φ }
+    #   where wm = 1 for m=0, 2 for m>0
+    function _adjoint_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, V̄t, V̄p)
+        nlat, nlon = cfg.nlat, cfg.nlon
+        lmax, mmax = cfg.lmax, cfg.mmax
+
+        # Adjoint of ifft_phi: fft_phi
+        F̄θ = SHTnsKit.fft_phi(complex.(V̄t))
+        F̄φ = SHTnsKit.fft_phi(complex.(V̄p))
+
+        S̄ = zeros(ComplexF64, lmax + 1, mmax + 1)
+        T̄ = zeros(ComplexF64, lmax + 1, mmax + 1)
+
+        P = Vector{Float64}(undef, lmax + 1)
+        dPdtheta = Vector{Float64}(undef, lmax + 1)
+        P_over_sinth = Vector{Float64}(undef, lmax + 1)
+
+        # Forward synthesis uses inv_scaleφ = nlon, but adjoint of ifft is (1/nlon)*fft
+        # So these factors cancel. wm accounts for Hermitian symmetry in "fill conjugate" step.
+        for m in 0:mmax
+            col = m + 1
+            wm = (m == 0) ? 1.0 : 2.0
+            adj_scale = wm  # nlon from forward cancels with 1/nlon from ifft adjoint
+
+            for i in 1:nlat
+                x = cfg.x[i]
+
+                SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+                SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+
+                Fθ_im = F̄θ[i, col]
+                Fφ_im = F̄φ[i, col]
+
+                @inbounds for l in max(1, m):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = N * dPdtheta[l+1]
+                    Y_over_sθ = N * P_over_sinth[l+1]
+                    term = 1.0im * m * Y_over_sθ
+
+                    # Adjoint of synthesis matrix [dθY, -term; term, dθY]:
+                    # This is Hermitian (M^H = M), so adjoint uses same matrix
+                    S̄[l+1, col] += adj_scale * (dθY * Fθ_im + conj(term) * Fφ_im)
+                    T̄[l+1, col] += adj_scale * (-conj(term) * Fθ_im + dθY * Fφ_im)
+                end
+            end
+        end
+
+        return S̄, T̄
     end
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_sphtor), cfg::SHTnsKit.SHTConfig,
                                 Slm, Tlm; real_output::Bool=true)
         Vt, Vp = SHTnsKit.synthesis_sphtor(cfg, Slm, Tlm; real_output)
         function pullback(Ṽ)
-            Vt̄, Vp̄ = Ṽ
-            Slm̄, Tlm̄ = SHTnsKit.analysis_sphtor(cfg, Vt̄, Vp̄)
-            return NoTangent(), NoTangent(), Slm̄, Tlm̄, (; real_output=NoTangent())
+            V̄t, V̄p = Ṽ
+            S̄, T̄ = _adjoint_synthesis_sphtor(cfg, V̄t, V̄p)
+            return NoTangent(), NoTangent(), S̄, T̄, (; real_output=NoTangent())
         end
         return (Vt, Vp), pullback
     end

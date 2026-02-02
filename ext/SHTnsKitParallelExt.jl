@@ -484,12 +484,17 @@ function globalindices(A, dim)
             end
         catch
             # Last resort: try to reconstruct from size information
+            # Only safe if local_size == global_size (no distribution along this dimension)
             if hasmethod(size, (typeof(A),)) && hasmethod(PencilArrays.size_global, (typeof(A),))
                 local_size = size(A)
                 global_size = PencilArrays.size_global(A)
-                if dim <= length(global_size)
-                    # This is a rough approximation - may not be accurate for all decompositions
-                    return 1:global_size[dim]
+                if dim <= length(global_size) && dim <= length(local_size)
+                    if local_size[dim] == global_size[dim]
+                        # No distribution along this dimension - safe to return full range
+                        return 1:global_size[dim]
+                    end
+                    # Distributed along this dimension but can't determine local indices
+                    # Fall through to error
                 end
             end
         end

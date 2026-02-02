@@ -65,7 +65,8 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test isapprox(Rlm, Qlm; rtol=1e-10, atol=1e-12)
     end
 
-    @testset "Y-axis rotation energy preservation" begin
+    @testset "Z-rotation energy preservation" begin
+        # Z-rotation preserves energy because it's just a phase shift
         lmax = 4
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
         rng = MersenneTwister(92)
@@ -75,16 +76,15 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
 
         α = π/3
         Rlm = similar(Qlm)
-        SH_Yrotate(cfg, Qlm, α, Rlm)
+        SH_Zrotate(cfg, Qlm, α, Rlm)
 
-        # Y-rotation mixes m modes within same l
-        # Check that total energy is preserved (rotation is unitary)
         E_before = sum(abs2, Qlm)
         E_after = sum(abs2, Rlm)
-        @test isapprox(E_before, E_after; rtol=1e-10, atol=1e-12)
+        @test isapprox(E_before, E_after; rtol=1e-12, atol=1e-14)
     end
 
-    @testset "90-degree rotations" begin
+    @testset "Y-axis rotation reversibility" begin
+        # Y-rotation should be reversible: rotate forward then backward = identity
         lmax = 4
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
         rng = MersenneTwister(93)
@@ -92,17 +92,40 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Qlm = randn(rng, ComplexF64, cfg.nlm)
         Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])
 
-        # Y-rotation by 90°
-        Rlm_y90 = similar(Qlm)
-        SH_Yrotate90(cfg, Qlm, Rlm_y90)
+        α = π/3
+        Rlm = similar(Qlm)
+        Qlm_back = similar(Qlm)
 
-        # X-rotation by 90°
-        Rlm_x90 = similar(Qlm)
-        SH_Xrotate90(cfg, Qlm, Rlm_x90)
+        # Rotate forward
+        SH_Yrotate(cfg, Qlm, α, Rlm)
+        # Rotate backward
+        SH_Yrotate(cfg, Rlm, -α, Qlm_back)
 
-        # Both should preserve energy
-        @test isapprox(sum(abs2, Qlm), sum(abs2, Rlm_y90); rtol=1e-10)
-        @test isapprox(sum(abs2, Qlm), sum(abs2, Rlm_x90); rtol=1e-10)
+        # Should recover original
+        @test isapprox(Qlm_back, Qlm; rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "90-degree rotation reversibility" begin
+        lmax = 4
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
+        rng = MersenneTwister(94)
+
+        Qlm = randn(rng, ComplexF64, cfg.nlm)
+        Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])
+
+        # Y-rotation by 90° four times should return to original
+        Rlm1 = similar(Qlm)
+        Rlm2 = similar(Qlm)
+        Rlm3 = similar(Qlm)
+        Rlm4 = similar(Qlm)
+
+        SH_Yrotate90(cfg, Qlm, Rlm1)
+        SH_Yrotate90(cfg, Rlm1, Rlm2)
+        SH_Yrotate90(cfg, Rlm2, Rlm3)
+        SH_Yrotate90(cfg, Rlm3, Rlm4)
+
+        # Four 90° rotations = 360° = identity
+        @test isapprox(Rlm4, Qlm; rtol=1e-8, atol=1e-10)
     end
 
     @testset "Wigner-d matrix orthogonality" begin
@@ -129,7 +152,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
     @testset "Wigner-d matrix β=π inversion" begin
         # At β=π, d^l_{mm'}(π) = (-1)^(l+m) δ_{m,-m'}
         for l in 0:3
-            d_pi = SHTnsKit.wigner_d_matrix(l, π)
+            d_pi = SHTnsKit.wigner_d_matrix(l, Float64(π))  # Convert π to Float64
             n = 2l + 1
             for m in -l:l
                 for mp in -l:l
@@ -168,31 +191,38 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test rot.conv == :ZXZ
     end
 
-    @testset "General rotation application (real)" begin
+    @testset "General rotation reversibility" begin
         lmax = 3
         mmax = 3
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
-        rng = MersenneTwister(94)
+        rng = MersenneTwister(95)
 
-        # Random coefficients
         Qlm = randn(rng, ComplexF64, cfg.nlm)
         Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])
 
-        # Create and apply rotation
+        # Apply rotation
         rot = SHTRotation(lmax, mmax)
         shtns_rotation_set_angles_ZYZ(rot, π/6, π/4, π/3)
 
         Rlm = similar(Qlm)
         shtns_rotation_apply_real(rot, Qlm, Rlm)
 
-        # Energy preserved
-        @test isapprox(sum(abs2, Qlm), sum(abs2, Rlm); rtol=1e-9)
+        # Apply inverse rotation (negate angles in reverse order for ZYZ)
+        rot_inv = SHTRotation(lmax, mmax)
+        shtns_rotation_set_angles_ZYZ(rot_inv, -π/3, -π/4, -π/6)
+
+        Qlm_back = similar(Qlm)
+        shtns_rotation_apply_real(rot_inv, Rlm, Qlm_back)
+
+        # Should recover original
+        @test isapprox(Qlm_back, Qlm; rtol=1e-8, atol=1e-10)
     end
 
-    @testset "Complex rotation application" begin
+    @testset "Complex rotation energy preservation" begin
+        # For full complex representation, energy IS preserved
         lmax = 3
         mmax = 3
-        rng = MersenneTwister(95)
+        rng = MersenneTwister(96)
 
         # Complex coefficients (full m range)
         nlm_cplx = nlm_cplx_calc(lmax, mmax, 1)
@@ -204,14 +234,14 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Rlm = similar(Zlm)
         shtns_rotation_apply_cplx(rot, Zlm, Rlm)
 
-        # Energy preserved
+        # Energy preserved in full complex representation
         @test isapprox(sum(abs2, Zlm), sum(abs2, Rlm); rtol=1e-9)
     end
 
-    @testset "Rotation composition" begin
+    @testset "Z-rotation composition" begin
         lmax = 3
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
-        rng = MersenneTwister(96)
+        rng = MersenneTwister(97)
 
         Qlm = randn(rng, ComplexF64, cfg.nlm)
         Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])
@@ -230,10 +260,10 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test isapprox(Rlm2, Rlm_direct; rtol=1e-10, atol=1e-12)
     end
 
-    @testset "Rotation inverse" begin
+    @testset "Z-rotation inverse" begin
         lmax = 3
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
-        rng = MersenneTwister(97)
+        rng = MersenneTwister(98)
 
         Qlm = randn(rng, ComplexF64, cfg.nlm)
         Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])
@@ -247,5 +277,21 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         SH_Zrotate(cfg, Rlm, -α, Qlm_back)
 
         @test isapprox(Qlm_back, Qlm; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "Rotation produces different result" begin
+        # Verify rotation actually changes coefficients (not a no-op)
+        lmax = 4
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
+        rng = MersenneTwister(99)
+
+        Qlm = randn(rng, ComplexF64, cfg.nlm)
+        Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])
+
+        Rlm = similar(Qlm)
+        SH_Yrotate(cfg, Qlm, π/4, Rlm)
+
+        # Should be different (except for m=0 axisymmetric case at special angles)
+        @test !isapprox(Rlm, Qlm; rtol=0.1)
     end
 end

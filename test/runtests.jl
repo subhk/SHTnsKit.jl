@@ -1064,7 +1064,12 @@ end
 include("serial/runtests.jl")
 
 # Parallel grid resolution tests (tests across multiple lat/lon configurations)
-include("parallel/runtests.jl")
+# Only run on Linux where MPI is available
+if Sys.islinux()
+    include("parallel/runtests.jl")
+else
+    @info "Skipping parallel grid resolution tests (Linux only)"
+end
 
 # JET.jl type stability tests (optional)
 if get(ENV, "SHTNSKIT_RUN_JET_TESTS", "0") == "1"

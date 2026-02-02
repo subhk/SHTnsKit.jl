@@ -36,10 +36,6 @@ jobs:
           - windows-latest
         arch:
           - x64
-        exclude:
-          # 32-bit Julia not needed and can be problematic
-          - os: macOS-latest
-            arch: x86
     
     steps:
       - uses: actions/checkout@v4
@@ -74,11 +70,12 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install fftw
-          
+
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
           julia --project=. -e 'using Pkg; Pkg.add("FFTW"); Pkg.build("FFTW"); using FFTW; println("FFTW version: ", FFTW.version)'
+
       
       - uses: julia-actions/julia-buildpkg@v1
 
@@ -125,6 +122,15 @@ jobs:
         env:
           SHTNSKIT_TEST_VERBOSE: "1"
           JULIA_NUM_THREADS: 2
+
+      - name: Run MPI comprehensive tests (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          mpiexec -n 4 julia --project=. test/parallel/test_mpi_comprehensive.jl
+        env:
+          SHTNSKIT_TEST_VERBOSE: "1"
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
 
       - name: Test advanced optimizations (if available)
         run: |
@@ -215,22 +221,23 @@ jobs:
 
   benchmark:
     name: Performance Benchmarks
-    runs-on: macOS-latest
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 45
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
-          
+
       - uses: julia-actions/cache@v2
-      
-      - name: Install system dependencies (macOS)
+
+      - name: Install system dependencies
         run: |
-          brew install fftw
+          sudo apt-get update
+          sudo apt-get install -y mpich libmpich-dev libfftw3-dev
 
       - uses: julia-actions/julia-buildpkg@v1
 
@@ -303,25 +310,26 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: macOS-latest
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     permissions:
       actions: write # needed to allow julia-actions/cache to proactively delete old caches that it has created
       contents: write
       statuses: write
-      
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
-          
+
       - uses: julia-actions/cache@v2
-      
-      - name: Install system dependencies (macOS)
+
+      - name: Install system dependencies
         run: |
-          brew install fftw
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-dev
       
       - name: Configure doc environment
         shell: julia --project=docs --color=yes {0}

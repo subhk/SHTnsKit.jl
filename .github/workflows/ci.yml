@@ -99,8 +99,8 @@ jobs:
           SHTNSKIT_TEST_PARALLEL: "true"   # Enable parallel tests
           SHTNSKIT_RUN_MPI_TESTS: "1"      # Enable MPI tests (Linux only)
           SHTNSKIT_TEST_PERFORMANCE: "true"
-          # JET.jl type stability tests
-          SHTNSKIT_RUN_JET_TESTS: "1"
+          # JET.jl type stability tests (disabled for Julia 1.12 due to compatibility/performance issues)
+          SHTNSKIT_RUN_JET_TESTS: ${{ matrix.version != '1.12' && '1' || '0' }}
           # Aqua.jl quality assurance tests
           SHTNSKIT_RUN_AQUA_TESTS: "1"
 

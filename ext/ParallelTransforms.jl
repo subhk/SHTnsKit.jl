@@ -1711,20 +1711,22 @@ function create_distributed_spectral_plan(lmax::Int, mmax::Int, comm::MPI.Comm)
     end
     
     # Pre-compute communication patterns for efficient gather/scatter
+    # IMPORTANT: recv_counts must be IDENTICAL on all ranks for MPI collectives
     send_counts = zeros(Int, nprocs)
     recv_counts = zeros(Int, nprocs)
-    
-    # Each process computes how many coefficients it needs to send/receive
+
+    # Compute recv_counts: how many coefficients each rank owns
+    # This must be computed identically on ALL ranks (no conditional on current rank)
     for l in 0:lmax
         owner_rank = l % nprocs
         coeff_count = min(l, mmax) + 1  # Number of m values for this l
-        
-        if rank == owner_rank
-            # This process owns these coefficients
-            recv_counts[owner_rank + 1] += coeff_count
-        else
-            # This process needs these coefficients from owner
-            send_counts[owner_rank + 1] += coeff_count
+        recv_counts[owner_rank + 1] += coeff_count
+    end
+
+    # send_counts tracks what we would send to each rank (for potential future use)
+    for r in 0:(nprocs - 1)
+        if r != rank
+            send_counts[r + 1] = recv_counts[r + 1]
         end
     end
     
@@ -1955,19 +1957,11 @@ function gather_to_dense(dsa::DistributedSpectralArray{T}) where T
     MPI.Allgatherv!(dsa.local_coeffs, VBuffer(all_coefficients, plan.recv_counts), comm)
 
     # Unpack into dense matrix
+    # Data is ordered by owner rank: [rank0 coeffs, rank1 coeffs, ...]
+    # Within each rank's segment: l-major order (for each l owned by that rank, for each m)
     result = zeros(T, lmax + 1, mmax + 1)
 
-    # First, store our own coefficients
-    for (i, (l, m)) in enumerate(plan.local_lm_indices)
-        result[l+1, m+1] = dsa.local_coeffs[i]
-    end
-
-    # Then unpack received coefficients from other ranks
     for owner_rank in 0:(plan.nprocs - 1)
-        if owner_rank == plan.rank
-            continue
-        end
-
         rank_offset = plan.recv_displs[owner_rank + 1]
         coeff_idx = 0
 
@@ -2081,13 +2075,26 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # Create output distributed array
     result = create_distributed_spectral_array(plan, ComplexF64)
 
-    # Pack local contributions for coefficients we OWN
-    local_contribs_packed = Vector{ComplexF64}(undef, length(plan.local_lm_indices))
-    for (i, (l, m)) in enumerate(plan.local_lm_indices)
-        local_contribs_packed[i] = local_contrib[l+1, m+1]
+    # For Reduce_scatter!, each rank must provide contributions for ALL coefficients
+    # The packing order must match the recv_counts segmentation (l-major: for each l, for each m)
+    total_nlm = sum(plan.recv_counts)
+    local_contribs_packed = Vector{ComplexF64}(undef, total_nlm)
+
+    # Pack in l-major order, grouped by owner rank
+    # recv_counts[r+1] = count for rank r, where rank r owns l values where l % nprocs == r
+    idx = 0
+    for owner_rank in 0:(plan.nprocs - 1)
+        for l in 0:lmax
+            if l % plan.nprocs == owner_rank
+                for m in 0:min(l, mmax)
+                    idx += 1
+                    local_contribs_packed[idx] = local_contrib[l+1, m+1]
+                end
+            end
+        end
     end
 
-    # Reduce contributions: sum across all ranks for coefficients we own
+    # Reduce_scatter!: reduces all contributions, then scatters so rank r gets recv_counts[r+1] elements
     MPI.Reduce_scatter!(local_contribs_packed, result.local_coeffs, plan.recv_counts, +, comm)
 
     return result

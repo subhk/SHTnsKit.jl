@@ -76,13 +76,13 @@ function bench_distributed(lmax::Int)
         Vpθφ[iθ, iφ] = 0.2*sin(0.1*(iθ+rank+1))
     end
     v_alloc = @allocated begin
-        Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ)
+        Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ)
         nothing
     end
     Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
     Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
     vplan = SHTnsKit.DistSphtorPlan(cfg, Vtθφ)
-    v_alloc_plan = @allocated SHTnsKit.dist_spat_to_SHsphtor!(vplan, Slm, Tlm, Vtθφ, Vpθφ)
+    v_alloc_plan = @allocated SHTnsKit.dist_analysis_sphtor!(vplan, Slm, Tlm, Vtθφ, Vpθφ)
     v_alloc_max = MPI.Allreduce(v_alloc, MPI.MAX, comm)
     v_alloc_plan_max = MPI.Allreduce(v_alloc_plan, MPI.MAX, comm)
     if rank == 0

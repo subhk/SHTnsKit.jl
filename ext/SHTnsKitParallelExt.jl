@@ -1247,9 +1247,9 @@ end
 # ===== MIGRATION NOTES =====
 # The previous version compatibility shims (prior to this update) used fragile patterns:
 # - Simple isdefined() checks that could miss method signature changes
-# - Direct field access without proper error handling  
+# - Direct field access without proper error handling
 # - Hardcoded fallback paths that assumed specific internal structures
-# 
+#
 # The new robust patterns provide:
 # - Method-based existence checking with proper type signatures
 # - Multi-level fallback chains with comprehensive error handling
@@ -1258,5 +1258,34 @@ end
 #
 # This should maintain compatibility across PencilArrays v0.15+ while being
 # more resilient to API changes in future versions.
+
+# ===== EXPORTS =====
+# Export types and functions defined in this extension
+
+# 1D Distributed spectral types and functions (from ParallelTransforms.jl)
+export DistributedSpectralPlan, DistributedSpectralArray
+export create_distributed_spectral_plan, create_distributed_spectral_array
+export gather_to_dense, scatter_from_dense!
+export dist_analysis_distributed, dist_synthesis_distributed
+export distributed_spectral_reduce!
+export estimate_distributed_memory_savings
+
+# 2D Distributed spectral types and functions (from ParallelTransforms.jl)
+export DistributedSpectralPlan2D, DistributedSpectralArray2D
+export create_distributed_spectral_plan_2d, create_distributed_spectral_array_2d
+export suggest_spectral_grid
+export gather_to_dense_2d, gather_to_full_dense_2d, scatter_from_dense_2d!
+export dist_analysis_distributed_2d, dist_synthesis_distributed_2d
+export dist_synthesis_distributed_2d_optimized
+export estimate_distributed_memory_savings_2d
+export validate_2d_distribution_alignment
+
+# Plan types (from ParallelPlans.jl)
+export DistAnalysisPlan, DistPlan, DistSphtorPlan, DistQstPlan
+
+# Utility functions
+export local_size, global_size
+export validate_plm_tables, estimate_plm_tables_memory
+export estimate_memory_savings
 
 end # module SHTnsKitParallelExt

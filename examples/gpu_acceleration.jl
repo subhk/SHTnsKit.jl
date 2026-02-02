@@ -236,21 +236,21 @@ function run_gpu_comparison_example()
     
     # CPU vector transform
     print("CPU spheroidal-toroidal analysis: ")
-    cpu_vector_time = @belapsed spat_to_SHsphtor($cfg_cpu, $u_wind, $v_wind)
+    cpu_vector_time = @belapsed analysis_sphtor($cfg_cpu, $u_wind, $v_wind)
     @printf "%.2f ms\n" (cpu_vector_time * 1000)
     
     # GPU vector transform (if available)
     if cfg_gpu !== nothing
         try
             print("GPU spheroidal-toroidal analysis: ")
-            gpu_vector_time = @belapsed gpu_spat_to_SHsphtor($cfg_gpu, $u_wind, $v_wind)
+            gpu_vector_time = @belapsed gpu_analysis_sphtor($cfg_gpu, $u_wind, $v_wind)
             @printf "%.2f ms" (gpu_vector_time * 1000)
             speedup = cpu_vector_time / gpu_vector_time
             @printf " (%.1f× speedup)\n" speedup
             
             # Test vector field roundtrip
-            sph_gpu, tor_gpu = gpu_spat_to_SHsphtor(cfg_gpu, u_wind, v_wind)
-            u_recon_gpu, v_recon_gpu = gpu_SHsphtor_to_spat(cfg_gpu, sph_gpu, tor_gpu; real_output=true)
+            sph_gpu, tor_gpu = gpu_analysis_sphtor(cfg_gpu, u_wind, v_wind)
+            u_recon_gpu, v_recon_gpu = gpu_synthesis_sphtor(cfg_gpu, sph_gpu, tor_gpu; real_output=true)
             
             vector_error = max(maximum(abs.(u_wind - u_recon_gpu)), maximum(abs.(v_wind - v_recon_gpu)))
             @printf "GPU vector roundtrip error: %.2e\n" vector_error

@@ -1174,7 +1174,7 @@ end
 ## Vector/QST distributed implementations
 
 # Distributed vector analysis (spheroidal/toroidal)
-function SHTnsKit.dist_spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false)
+function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false)
     comm = communicator(Vtθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
@@ -1314,15 +1314,15 @@ function SHTnsKit.dist_spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilA
     end
 end
 
-function SHTnsKit.dist_spat_to_SHsphtor!(plan::DistSphtorPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
+function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
                                          Vtθφ::PencilArray, Vpθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(plan.cfg, Vtθφ, Vpθφ; use_tables, use_rfft=plan.use_rfft)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(plan.cfg, Vtθφ, Vpθφ; use_tables, use_rfft=plan.use_rfft)
     copyto!(Slm_out, Slm); copyto!(Tlm_out, Tlm)
     return Slm_out, Tlm_out
 end
 
 # Distributed vector synthesis (spheroidal/toroidal) from dense spectra
-function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
     nlat = cfg.nlat
@@ -1448,27 +1448,27 @@ function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
 end
 
 # Convenience: spectral inputs as PencilArray (dense layout (:l,:m))
-function SHTnsKit.dist_SHsphtor_to_spat(cfg::SHTnsKit.SHTConfig, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    return SHTnsKit.dist_SHsphtor_to_spat(cfg, Array(Slm), Array(Tlm); prototype_θφ, real_output, use_rfft)
+function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+    return SHTnsKit.dist_synthesis_sphtor(cfg, Array(Slm), Array(Tlm); prototype_θφ, real_output, use_rfft)
 end
 
-function SHTnsKit.dist_SHsphtor_to_spat!(plan::DistSphtorPlan, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
+function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
                                          Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     if plan.with_spatial_scratch && plan.spatial_scratch !== nothing
         # Use pre-allocated scratch buffers for zero-allocation synthesis
-        _dist_SHsphtor_to_spat_with_scratch!(plan.cfg, Slm, Tlm, plan.spatial_scratch, Vtθφ_out, Vpθφ_out;
+        _dist_synthesis_sphtor_with_scratch!(plan.cfg, Slm, Tlm, plan.spatial_scratch, Vtθφ_out, Vpθφ_out;
                                             prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
         return Vtθφ_out, Vpθφ_out
     else
         # Fall back to standard allocation path
-        Vt, Vp = SHTnsKit.dist_SHsphtor_to_spat(plan.cfg, Slm, Tlm; prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
+        Vt, Vp = SHTnsKit.dist_synthesis_sphtor(plan.cfg, Slm, Tlm; prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
         copyto!(Vtθφ_out, Vt); copyto!(Vpθφ_out, Vp)
         return Vtθφ_out, Vpθφ_out
     end
 end
 
 # Full implementation using pre-allocated scratch buffers to eliminate allocations
-function _dist_SHsphtor_to_spat_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix,
+function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                                              scratch::NamedTuple, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray;
                                              prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -1593,28 +1593,28 @@ function _dist_SHsphtor_to_spat_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
 end
 
 # QST distributed implementations by composition
-function SHTnsKit.dist_spat_to_SHqst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray)
+function SHTnsKit.dist_analysis_qst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray)
     Qlm = SHTnsKit.dist_analysis(cfg, Vrθφ)
-    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ)
     return Qlm, Slm, Tlm
 end
 
-function SHTnsKit.dist_spat_to_SHqst!(plan::DistQstPlan, Qlm_out::AbstractMatrix, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
+function SHTnsKit.dist_analysis_qst!(plan::DistQstPlan, Qlm_out::AbstractMatrix, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
                                       Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray)
-    Q, S, T = SHTnsKit.dist_spat_to_SHqst(plan.cfg, Vrθφ, Vtθφ, Vpθφ)
+    Q, S, T = SHTnsKit.dist_analysis_qst(plan.cfg, Vrθφ, Vtθφ, Vpθφ)
     copyto!(Qlm_out, Q); copyto!(Slm_out, S); copyto!(Tlm_out, T)
     return Qlm_out, Slm_out, Tlm_out
 end
 
 # Synthesis to distributed fields from dense spectra
-function SHTnsKit.dist_SHqst_to_spat(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
     Vr = SHTnsKit.dist_synthesis(cfg, Qlm; prototype_θφ, real_output, use_rfft)
-    Vt, Vp = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft)
+    Vt, Vp = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft)
     return Vr, Vt, Vp
 end
 
-function SHTnsKit.dist_SHqst_to_spat(cfg::SHTnsKit.SHTConfig, Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    Vr, Vt, Vp = SHTnsKit.dist_SHqst_to_spat(cfg, Array(Qlm), Array(Slm), Array(Tlm); prototype_θφ, real_output, use_rfft)
+function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+    Vr, Vt, Vp = SHTnsKit.dist_synthesis_qst(cfg, Array(Qlm), Array(Slm), Array(Tlm); prototype_θφ, real_output, use_rfft)
     return Vr, Vt, Vp
 end
 
@@ -1641,8 +1641,8 @@ end
 
 function SHTnsKit.dist_vector_roundtrip!(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray)
     comm = communicator(Vtθφ)
-    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ)
-    Vt2_matrix, Vp2_matrix = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vtθφ, real_output=true)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ)
+    Vt2_matrix, Vp2_matrix = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vtθφ, real_output=true)
     # Compare synthesis results directly with local PencilArray data
     # (matching test_mpi_pencil.jl pattern which works correctly)
     vt_ref = parent(Vtθφ)
@@ -2147,4 +2147,1138 @@ function estimate_distributed_memory_savings(lmax::Int, mmax::Int, nprocs::Int)
         savings_percent = savings_pct,
         reduction_factor = nprocs
     )
+end
+
+# ===== 2D DISTRIBUTED SPECTRAL STORAGE =====
+# Extends the 1D distribution (l-only) to 2D (l,m) distribution for further memory reduction.
+# With P = p_l × p_m processes arranged in a 2D grid:
+# - Memory per rank: O(lmax²/(p_l × p_m)) vs O(lmax²/P) for 1D
+# - Synthesis gather: O(lmax²/p_m) within l-comm vs O(lmax²) globally for 1D
+
+"""
+    DistributedSpectralPlan2D
+
+Plan for 2D distribution of spherical harmonic coefficients across a process grid.
+Processes are arranged in a 2D grid (p_l × p_m) where:
+- Ranks in the same column (m-group) share the same m values
+- Ranks in the same row share the same l distribution pattern
+- l-communicator connects ranks within an m-group for Legendre operations
+- m-communicator connects ranks across m-groups for potential future optimizations
+
+Distribution strategy:
+- M-distribution: m values divided into p_m groups (m-groups)
+- L-distribution: within each m-group, l is distributed cyclically: l % p_l == l_rank
+
+This achieves O(lmax²/(p_l × p_m)) memory per rank and O(lmax²/p_m) gather for synthesis.
+
+# Scratch Buffers
+When created with `with_scratch=true` and a `prototype_θφ`, the plan pre-allocates
+all temporary arrays needed for analysis and synthesis operations. This eliminates
+per-call allocations for repeated transforms.
+"""
+struct DistributedSpectralPlan2D
+    lmax::Int
+    mmax::Int
+    mres::Int                        # m resolution (usually 1)
+
+    # World communicator and size
+    comm::MPI.Comm                   # World communicator
+    nprocs::Int                      # Total processes
+    rank::Int                        # World rank
+
+    # Process grid configuration
+    p_l::Int                         # Processes in l-dimension (within m-group)
+    p_m::Int                         # Processes in m-dimension (number of m-groups)
+    l_rank::Int                      # Rank within l-communicator (0:p_l-1)
+    m_rank::Int                      # Rank within m-communicator (0:p_m-1), also m-group index
+
+    # Sub-communicators
+    l_comm::MPI.Comm                 # L-communicator (within m-group, for gather/reduce)
+    m_comm::MPI.Comm                 # M-communicator (across m-groups)
+
+    # M-group ownership: which m values this m-group owns
+    m_range::UnitRange{Int}          # M values owned by this m-group [m_start:m_end]
+
+    # Local (l,m) pairs owned by this rank
+    local_lm_indices::Vector{Tuple{Int,Int}}  # (l,m) pairs owned
+    local_nlm::Int                   # Number of local coefficients
+
+    # Communication patterns for l-communicator gather/scatter
+    l_recv_counts::Vector{Int}       # Counts for each rank in l_comm
+    l_recv_displs::Vector{Int}       # Displacements for gather/scatter
+
+    # Total coefficients in this m-group (for gather buffer sizing)
+    m_group_nlm::Int                 # Total coefficients owned by all ranks in m-group
+
+    # Pre-allocated scratch buffers (optional - set when with_scratch=true)
+    with_scratch::Bool
+    scratch::Union{Nothing, NamedTuple{
+        (:nθ_local, :nlon, :n_m_valid, :n_valid_coeffs,
+         :θ_globals, :weights_cache, :x_cache,
+         :Fθm, :local_contrib, :P,
+         :gather_buffer, :fθφ_local, :fθφ_result,
+         :packed_contrib, :pack_offsets, :m_values),
+        Tuple{Int, Int, Int, Int,
+              Vector{Int}, Vector{Float64}, Vector{Float64},
+              Matrix{ComplexF64}, Matrix{ComplexF64}, Vector{Float64},
+              Vector{ComplexF64}, Matrix{Float64}, Matrix{Float64},
+              Vector{ComplexF64}, Vector{Int}, Vector{Int}}
+    }}
+end
+
+"""
+    DistributedSpectralArray2D{T}
+
+A wrapper for 2D-distributed spherical harmonic coefficients.
+Each rank only stores the coefficients it owns based on 2D (l,m) distribution.
+"""
+struct DistributedSpectralArray2D{T}
+    local_coeffs::Vector{T}          # Local coefficients owned by this rank
+    plan::DistributedSpectralPlan2D  # Distribution plan with ownership info
+end
+
+"""
+    suggest_spectral_grid(nprocs::Int, lmax::Int, mmax::Int) -> (p_l, p_m)
+
+Suggest an optimal 2D process grid for spectral coefficient distribution.
+Attempts to balance:
+1. Even division of processes
+2. Balanced load across m-groups (accounting for triangular constraint l >= m)
+3. Minimizing communication volume
+
+Returns (p_l, p_m) where nprocs = p_l × p_m.
+"""
+function suggest_spectral_grid(nprocs::Int, lmax::Int, mmax::Int)
+    if nprocs <= 1
+        return (1, 1)
+    end
+
+    # Find all factor pairs
+    best_p_l, best_p_m = 1, nprocs
+    best_score = Inf
+
+    for p_l in 1:isqrt(nprocs)
+        nprocs % p_l == 0 || continue
+        p_m = nprocs ÷ p_l
+
+        # Also try the swapped configuration
+        for (a, b) in ((p_l, p_m), (p_m, p_l))
+            a > 0 && b > 0 || continue
+
+            # Score this configuration
+            # Prefer configurations where p_l is smaller (less communication in l-gather)
+            # and p_m divides mmax+1 evenly (better load balance)
+            m_imbalance = (mmax + 1) % b  # Remainder when dividing m among m-groups
+            l_comm_size = a  # Size of l-communicator (smaller = less gather overhead)
+
+            # Communication score: smaller l_comm means less gather volume
+            comm_score = a
+
+            # Load balance score: prefer even m-division
+            balance_score = m_imbalance / (mmax + 1 + 1)
+
+            # Combined score (lower is better)
+            score = comm_score + 10 * balance_score
+
+            if score < best_score
+                best_score = score
+                best_p_l, best_p_m = a, b
+            end
+        end
+    end
+
+    return (best_p_l, best_p_m)
+end
+
+"""
+    create_distributed_spectral_plan_2d(lmax::Int, mmax::Int, comm::MPI.Comm;
+                                         p_l::Int=0, p_m::Int=0, mres::Int=1,
+                                         with_scratch::Bool=false,
+                                         prototype_θφ=nothing, cfg=nothing) -> DistributedSpectralPlan2D
+
+Create a 2D distribution plan for spherical harmonic coefficients.
+
+If p_l and p_m are not specified (or set to 0), automatically determines optimal grid.
+
+# Arguments
+- `lmax::Int`: Maximum spherical harmonic degree
+- `mmax::Int`: Maximum spherical harmonic order
+- `comm::MPI.Comm`: MPI communicator
+
+# Keyword Arguments
+- `p_l::Int=0`: Number of processes in l-dimension (0 = auto)
+- `p_m::Int=0`: Number of processes in m-dimension (0 = auto)
+- `mres::Int=1`: M resolution (only m values divisible by mres are used)
+- `with_scratch::Bool=false`: Pre-allocate scratch buffers to eliminate per-call allocations
+- `prototype_θφ::PencilArray`: Required when `with_scratch=true` - spatial array template
+- `cfg::SHTConfig`: Required when `with_scratch=true` - SHT configuration
+
+# Returns
+- `DistributedSpectralPlan2D`: The distribution plan
+
+# Scratch Buffers
+When `with_scratch=true`, the plan pre-allocates all temporary arrays needed for
+analysis and synthesis operations. This eliminates per-call allocations when performing
+repeated transforms, improving performance for time-stepping codes.
+
+# Process Grid Layout
+```
+        m-groups (p_m columns)
+       ┌─────┬─────┬─────┐
+p_l    │ R0  │ R2  │ R4  │  ← l-row 0
+rows   ├─────┼─────┼─────┤
+       │ R1  │ R3  │ R5  │  ← l-row 1
+       └─────┴─────┴─────┘
+         m0    m1    m2
+
+Rank = l_rank + m_rank * p_l
+l_rank = rank % p_l  (row in grid, position in l-comm)
+m_rank = rank ÷ p_l  (column in grid, which m-group)
+```
+
+# Example with scratch buffers
+```julia
+# Create plan with pre-allocated scratch buffers
+plan = create_distributed_spectral_plan_2d(lmax, mmax, comm;
+    with_scratch=true, prototype_θφ=fθφ, cfg=cfg)
+
+# Repeated transforms reuse buffers (no allocations)
+for timestep in 1:1000
+    alm = dist_analysis_distributed_2d(cfg, fθφ; plan=plan, assume_aligned=true)
+    fθφ_new = dist_synthesis_distributed_2d_optimized(cfg, alm; prototype_θφ=fθφ)
+end
+```
+"""
+function create_distributed_spectral_plan_2d(lmax::Int, mmax::Int, comm::MPI.Comm;
+                                              p_l::Int=0, p_m::Int=0, mres::Int=1,
+                                              with_scratch::Bool=false,
+                                              prototype_θφ::Union{Nothing, PencilArray}=nothing,
+                                              cfg::Union{Nothing, SHTnsKit.SHTConfig}=nothing)
+    nprocs = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+
+    # Auto-detect grid if not specified
+    if p_l <= 0 || p_m <= 0
+        p_l, p_m = suggest_spectral_grid(nprocs, lmax, mmax)
+    end
+
+    # Validate grid
+    if p_l * p_m != nprocs
+        error("Process grid p_l=$p_l × p_m=$p_m = $(p_l * p_m) does not match nprocs=$nprocs")
+    end
+
+    # Validate scratch requirements
+    if with_scratch && (prototype_θφ === nothing || cfg === nothing)
+        error("with_scratch=true requires both prototype_θφ and cfg to be provided")
+    end
+
+    # Compute grid position
+    l_rank = rank % p_l      # Row (position within m-group)
+    m_rank = rank ÷ p_l      # Column (which m-group)
+
+    # Create sub-communicators
+    # l_comm: ranks in same column (same m_rank) - for l-direction operations
+    l_comm = MPI.Comm_split(comm, m_rank, l_rank)
+    # m_comm: ranks in same row (same l_rank) - for m-direction operations
+    m_comm = MPI.Comm_split(comm, l_rank, m_rank)
+
+    # Determine m-range for this m-group
+    # Divide m values [0, mmax] into p_m groups
+    # Account for mres: only m values where m % mres == 0 are valid
+    valid_m_values = [m for m in 0:mmax if m % mres == 0]
+    n_valid_m = length(valid_m_values)
+
+    # Divide valid m values among m-groups
+    m_per_group = ceildiv(n_valid_m, p_m)
+    m_start_idx = m_rank * m_per_group + 1
+    m_end_idx = min((m_rank + 1) * m_per_group, n_valid_m)
+
+    if m_start_idx <= n_valid_m
+        m_start = valid_m_values[m_start_idx]
+        m_end = valid_m_values[min(m_end_idx, n_valid_m)]
+        m_range = m_start:m_end
+    else
+        # This m-group has no m values (more m-groups than valid m values)
+        m_range = 1:0  # Empty range
+    end
+
+    # Compute local (l,m) ownership
+    # Within this m-group, l is distributed cyclically: l % p_l == l_rank
+    local_lm_indices = Tuple{Int,Int}[]
+
+    for m in m_range
+        (m % mres == 0) || continue  # Skip invalid m values
+        for l in m:lmax
+            if l % p_l == l_rank  # This rank owns this l within the m-group
+                push!(local_lm_indices, (l, m))
+            end
+        end
+    end
+
+    local_nlm = length(local_lm_indices)
+
+    # Compute communication patterns for l-communicator
+    # recv_counts[r+1] = number of coefficients rank r in l_comm owns
+    l_recv_counts = zeros(Int, p_l)
+
+    for m in m_range
+        (m % mres == 0) || continue
+        for l in m:lmax
+            owner_l_rank = l % p_l
+            l_recv_counts[owner_l_rank + 1] += 1
+        end
+    end
+
+    l_recv_displs = cumsum([0; l_recv_counts[1:end-1]])
+
+    # Total coefficients in this m-group
+    m_group_nlm = sum(l_recv_counts)
+
+    # Create scratch buffers if requested
+    scratch = if with_scratch
+        θ_globals = collect(globalindices(prototype_θφ, 1))
+        nθ_local = length(θ_globals)
+        nlon = cfg.nlon
+        n_m_valid = count(m -> m % mres == 0, m_range)
+
+        # Pre-cache weights and x values
+        weights_cache = Vector{Float64}(undef, nθ_local)
+        x_cache = Vector{Float64}(undef, nθ_local)
+        for (ii, iglob) in enumerate(θ_globals)
+            weights_cache[ii] = cfg.w[iglob]
+            x_cache[ii] = cfg.x[iglob]
+        end
+
+        # Compute packed buffer size and offsets for triangular storage
+        # For each valid m, we have (lmax - m + 1) coefficients
+        m_values = Int[m for m in m_range if m % mres == 0]
+        n_valid_coeffs = sum(lmax - m + 1 for m in m_values; init=0)
+        pack_offsets = Vector{Int}(undef, max(length(m_values), 1))
+        offset = 0
+        for (i, m) in enumerate(m_values)
+            pack_offsets[i] = offset
+            offset += lmax - m + 1
+        end
+
+        (
+            nθ_local = nθ_local,
+            nlon = nlon,
+            n_m_valid = max(n_m_valid, 1),  # At least 1 to avoid zero-size arrays
+            n_valid_coeffs = max(n_valid_coeffs, 1),
+
+            # Cached indices
+            θ_globals = θ_globals,
+            weights_cache = weights_cache,
+            x_cache = x_cache,
+
+            # Analysis buffers
+            Fθm = Matrix{ComplexF64}(undef, nθ_local, nlon),
+            local_contrib = Matrix{ComplexF64}(undef, lmax + 1, max(n_m_valid, 1)),
+            P = Vector{Float64}(undef, lmax + 1),
+
+            # Gather/synthesis buffers
+            gather_buffer = Vector{ComplexF64}(undef, m_group_nlm),
+            fθφ_local = Matrix{Float64}(undef, nθ_local, nlon),
+            fθφ_result = Matrix{Float64}(undef, nθ_local, nlon),  # Separate result buffer
+
+            # Packed communication buffers (triangular storage)
+            packed_contrib = Vector{ComplexF64}(undef, max(n_valid_coeffs, 1)),
+            pack_offsets = pack_offsets,
+            m_values = m_values,
+        )
+    else
+        nothing
+    end
+
+    return DistributedSpectralPlan2D(
+        lmax, mmax, mres,
+        comm, nprocs, rank,
+        p_l, p_m, l_rank, m_rank,
+        l_comm, m_comm,
+        m_range,
+        local_lm_indices, local_nlm,
+        l_recv_counts, l_recv_displs,
+        m_group_nlm,
+        with_scratch, scratch
+    )
+end
+
+"""
+    create_distributed_spectral_array_2d(plan::DistributedSpectralPlan2D, T::Type=ComplexF64)
+
+Create an empty 2D-distributed spectral array for the given distribution plan.
+"""
+function create_distributed_spectral_array_2d(plan::DistributedSpectralPlan2D, ::Type{T}=ComplexF64) where T
+    local_coeffs = zeros(T, plan.local_nlm)
+    return DistributedSpectralArray2D{T}(local_coeffs, plan)
+end
+
+"""
+    local_size(dsa::DistributedSpectralArray2D) -> Int
+
+Return the number of coefficients stored locally on this rank.
+"""
+local_size(dsa::DistributedSpectralArray2D) = length(dsa.local_coeffs)
+
+"""
+    global_size(dsa::DistributedSpectralArray2D) -> Tuple{Int,Int}
+
+Return the global spectral array dimensions (lmax+1, mmax+1).
+"""
+global_size(dsa::DistributedSpectralArray2D) = (dsa.plan.lmax + 1, dsa.plan.mmax + 1)
+
+"""
+    gather_to_dense_2d(dsa::DistributedSpectralArray2D) -> Matrix
+
+Gather distributed coefficients within the m-group (l-communicator) only.
+Returns a partial dense matrix containing coefficients for this m-group's m values,
+with all l values gathered (for Legendre synthesis).
+
+This is more efficient than full global gather when only local m values are needed.
+The result has shape (lmax+1, length(m_range)).
+"""
+function gather_to_dense_2d(dsa::DistributedSpectralArray2D{T}) where T
+    plan = dsa.plan
+    lmax = plan.lmax
+    m_range = plan.m_range
+    l_comm = plan.l_comm
+    mres = plan.mres
+
+    if isempty(m_range)
+        # This m-group has no m values
+        return zeros(T, lmax + 1, 0)
+    end
+
+    n_m_local = count(m -> m % mres == 0, m_range)
+    if n_m_local == 0
+        return zeros(T, lmax + 1, 0)
+    end
+
+    # Use scratch buffer if available, otherwise allocate
+    has_scratch = plan.with_scratch && plan.scratch !== nothing
+    if has_scratch && T === ComplexF64
+        all_coefficients = plan.scratch.gather_buffer
+    else
+        all_coefficients = Vector{T}(undef, plan.m_group_nlm)
+    end
+
+    # Gather all local coefficients within l-communicator
+    MPI.Allgatherv!(dsa.local_coeffs, VBuffer(all_coefficients, plan.l_recv_counts), l_comm)
+
+    # Unpack into partial dense matrix
+    # Columns correspond to valid m values in m_range (indexed 1:n_m_local)
+    result = zeros(T, lmax + 1, n_m_local)
+
+    # Data is ordered by l_rank owner: [l_rank=0 coeffs, l_rank=1 coeffs, ...]
+    # Within each rank's segment: for each m in m_range, for each l where l % p_l == l_rank
+    for owner_l_rank in 0:(plan.p_l - 1)
+        rank_offset = plan.l_recv_displs[owner_l_rank + 1]
+        coeff_idx = 0
+
+        m_col = 0
+        for m in m_range
+            (m % mres == 0) || continue
+            m_col += 1
+
+            for l in m:lmax
+                if l % plan.p_l == owner_l_rank
+                    coeff_idx += 1
+                    result[l+1, m_col] = all_coefficients[rank_offset + coeff_idx]
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    gather_to_full_dense_2d(dsa::DistributedSpectralArray2D) -> Matrix
+
+Gather all distributed coefficients to a full dense (lmax+1, mmax+1) matrix on ALL ranks.
+This requires global communication across all m-groups.
+
+Use this when you need the complete spectral array (e.g., for comparison with 1D methods).
+For synthesis operations, prefer `gather_to_dense_2d` which is more efficient.
+"""
+function gather_to_full_dense_2d(dsa::DistributedSpectralArray2D{T}) where T
+    plan = dsa.plan
+    lmax, mmax = plan.lmax, plan.mmax
+    comm = plan.comm
+
+    # First gather within m-group to get complete l for local m values
+    partial = gather_to_dense_2d(dsa)
+
+    # Now need to gather across m-groups to get all m values
+    # Each m-group has different m_range, so we use Allgatherv with variable sizes
+
+    # Pack the partial matrix into a vector for communication
+    local_packed = vec(partial)
+    local_count = length(local_packed)
+
+    # Gather counts from all ranks
+    all_counts = MPI.Allgather(Int32(local_count), comm)
+
+    # Compute displacements
+    all_displs = cumsum([Int32(0); all_counts[1:end-1]])
+
+    # Gather all partial results
+    total_size = sum(all_counts)
+    all_packed = Vector{T}(undef, total_size)
+    MPI.Allgatherv!(local_packed, VBuffer(all_packed, all_counts), comm)
+
+    # Unpack into full dense matrix
+    result = zeros(T, lmax + 1, mmax + 1)
+
+    # Each rank's data is a flattened (lmax+1, n_m_local) matrix
+    # We need to know each rank's m_range to unpack correctly
+    # Since all ranks execute this function identically, we can reconstruct m_ranges
+    for r in 0:(plan.nprocs - 1)
+        r_m_rank = r ÷ plan.p_l
+        r_l_rank = r % plan.p_l
+
+        # Only process data from one rank per m-group (they all have the same data after l-gather)
+        if r_l_rank != 0
+            continue
+        end
+
+        # Reconstruct m_range for this rank's m-group
+        valid_m_values = [m for m in 0:mmax if m % plan.mres == 0]
+        n_valid_m = length(valid_m_values)
+        m_per_group = ceildiv(n_valid_m, plan.p_m)
+        m_start_idx = r_m_rank * m_per_group + 1
+        m_end_idx = min((r_m_rank + 1) * m_per_group, n_valid_m)
+
+        if m_start_idx > n_valid_m
+            continue
+        end
+
+        r_m_start = valid_m_values[m_start_idx]
+        r_m_end = valid_m_values[min(m_end_idx, n_valid_m)]
+        r_m_range = r_m_start:r_m_end
+
+        n_m_local = count(m -> m % plan.mres == 0, r_m_range)
+        if n_m_local == 0
+            continue
+        end
+
+        # Get this rank's data from all_packed
+        offset = all_displs[r + 1]
+        data_size = all_counts[r + 1]
+
+        if data_size > 0
+            # Reshape to (lmax+1, n_m_local)
+            partial_data = reshape(view(all_packed, offset+1:offset+data_size), lmax+1, n_m_local)
+
+            # Copy to result at correct m columns
+            m_col = 0
+            for m in r_m_range
+                (m % plan.mres == 0) || continue
+                m_col += 1
+                result[:, m+1] .= partial_data[:, m_col]
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    scatter_from_dense_2d!(dsa::DistributedSpectralArray2D, dense::AbstractMatrix)
+
+Scatter a dense spectral array to 2D-distributed storage.
+Each rank extracts only the coefficients it owns.
+"""
+function scatter_from_dense_2d!(dsa::DistributedSpectralArray2D{T}, dense::AbstractMatrix) where T
+    plan = dsa.plan
+
+    for (i, (l, m)) in enumerate(plan.local_lm_indices)
+        dsa.local_coeffs[i] = dense[l+1, m+1]
+    end
+
+    return dsa
+end
+
+"""
+    dist_analysis_distributed_2d(cfg::SHTConfig, fθφ::PencilArray;
+                                  plan::DistributedSpectralPlan2D,
+                                  use_tables=cfg.use_plm_tables,
+                                  assume_aligned::Bool=false) -> DistributedSpectralArray2D
+
+2D-distributed analysis that returns a DistributedSpectralArray2D.
+
+# Behavior depends on `assume_aligned`:
+
+**assume_aligned=false (default, safe)**:
+- Computes ALL (l,m) coefficients like standard analysis
+- Uses world communicator for reduction
+- Always correct, but no computation/communication savings vs standard
+- Only storage is reduced to O(lmax²/P)
+
+**assume_aligned=true (efficient)**:
+- Computes ONLY m_range coefficients (O(lmax²/p_m) computation)
+- Uses l_comm for reduction (O(lmax²/p_m) communication)
+- Requires spatial θ distribution to be aligned with spectral l-distribution
+- Use `validate_2d_distribution_alignment` to check before enabling
+
+# Performance comparison (assume_aligned=true vs standard):
+- Computation: O(lmax²/p_m) vs O(lmax²) - p_m times faster
+- Communication: O(lmax²/p_m) in l-comm vs O(lmax²) global - p_m times less data
+- Storage: O(lmax²/P) vs O(lmax²) - P times less memory
+"""
+function dist_analysis_distributed_2d(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                                       plan::DistributedSpectralPlan2D,
+                                       use_tables=cfg.use_plm_tables,
+                                       assume_aligned::Bool=false)
+    if assume_aligned
+        return _dist_analysis_2d_aligned(cfg, fθφ; plan=plan, use_tables=use_tables)
+    else
+        return _dist_analysis_2d_safe(cfg, fθφ; plan=plan, use_tables=use_tables)
+    end
+end
+
+# Safe version: computes all coefficients, always correct
+function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                                 plan::DistributedSpectralPlan2D,
+                                 use_tables=cfg.use_plm_tables)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlon = cfg.nlon
+    nlat = cfg.nlat
+    comm = plan.comm
+
+    # Get local data and FFT (same as standard analysis)
+    local_data = parent(fθφ)
+    nlat_local, nlon_local = size(local_data)
+    θ_globals = collect(globalindices(fθφ, 1))
+    nθ_local = length(θ_globals)
+
+    # FFT along φ
+    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    if nlon_local == nlon
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
+    else
+        φ_globals = collect(globalindices(fθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
+        Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
+    end
+
+    # Pre-cache weights and x values
+    weights_cache = Vector{Float64}(undef, nθ_local)
+    x_cache = Vector{Float64}(undef, nθ_local)
+    for (ii, iglob) in enumerate(θ_globals)
+        weights_cache[ii] = cfg.w[iglob]
+        x_cache[ii] = cfg.x[iglob]
+    end
+
+    scaleφ = cfg.cphi
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
+    P = Vector{Float64}(undef, lmax + 1)
+
+    # Compute local contributions to ALL (l,m) coefficients
+    # This ensures correctness when spatial and spectral distributions are independent
+    local_contrib = zeros(ComplexF64, lmax + 1, mmax + 1)
+
+    # Legendre integration for ALL m values
+    for mval in 0:mmax
+        col = mval + 1
+        m_fft = mval + 1
+
+        for ii in 1:nθ_local
+            iglob = θ_globals[ii]
+            Fi = Fθm[ii, m_fft]
+            wi = weights_cache[ii]
+
+            if use_tbl
+                tbl = cfg.plm_tables[col]
+                @inbounds @simd for l in mval:lmax
+                    local_contrib[l+1, col] += wi * tbl[l+1, iglob] * Fi
+                end
+            else
+                SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+                @inbounds @simd for l in mval:lmax
+                    local_contrib[l+1, col] += wi * P[l+1] * Fi
+                end
+            end
+        end
+    end
+
+    # Check if θ is distributed
+    θ_is_distributed = (nθ_local < nlat)
+
+    if θ_is_distributed
+        # Reduce contributions across all ranks
+        MPI.Allreduce!(local_contrib, +, comm)
+    end
+
+    # Apply normalization
+    @inbounds for m in 0:mmax
+        @simd ivdep for l in m:lmax
+            local_contrib[l+1, m+1] *= cfg.Nlm[l+1, m+1] * scaleφ
+        end
+    end
+
+    # Create output array and extract owned coefficients
+    result = create_distributed_spectral_array_2d(plan, ComplexF64)
+
+    for (i, (l, m)) in enumerate(plan.local_lm_indices)
+        result.local_coeffs[i] = local_contrib[l+1, m+1]
+    end
+
+    # Handle normalization conversion if needed
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        # The coefficients are already in internal (orthonormal) form
+        # For full compatibility, would need to apply convert_alm_norm!
+        # For now, this matches the behavior of dist_analysis
+    end
+
+    return result
+end
+
+"""
+    dist_synthesis_distributed_2d(cfg::SHTConfig, alm::DistributedSpectralArray2D;
+                                   prototype_θφ::PencilArray,
+                                   real_output::Bool=true) -> Matrix
+
+2D-distributed synthesis from a DistributedSpectralArray2D.
+
+This implementation gathers the full spectral array and uses standard synthesis,
+ensuring correctness when spatial distribution (PencilArray) is independent of
+spectral distribution (2D plan).
+
+# Algorithm
+1. Gather all coefficients to full dense matrix (across all ranks)
+2. Perform standard Legendre synthesis for local θ values
+3. IFFT along φ
+4. Extract local portion if φ is distributed
+
+For optimized synthesis when spatial and spectral distributions are aligned,
+use the specialized `dist_synthesis_distributed_2d_aligned` function.
+"""
+function dist_synthesis_distributed_2d(cfg::SHTnsKit.SHTConfig, alm::DistributedSpectralArray2D;
+                                        prototype_θφ::PencilArray, real_output::Bool=true)
+    # Gather to full dense array for correctness
+    # This ensures correct results regardless of spatial/spectral distribution alignment
+    alm_dense = gather_to_full_dense_2d(alm)
+
+    # Use standard synthesis
+    return SHTnsKit.dist_synthesis(cfg, alm_dense; prototype_θφ=prototype_θφ, real_output=real_output)
+end
+
+"""
+    dist_synthesis_distributed_2d_optimized(cfg::SHTConfig, alm::DistributedSpectralArray2D;
+                                             prototype_θφ::PencilArray,
+                                             real_output::Bool=true) -> Matrix
+
+Optimized 2D-distributed synthesis that assumes spatial and spectral distributions are aligned.
+
+**WARNING**: This function assumes that ranks with the same `l_rank` in the 2D spectral plan
+have the same θ portions in the spatial PencilArray. If this assumption is violated,
+results will be incorrect. Use `dist_synthesis_distributed_2d` for general correctness.
+
+# When to use this function
+- When you have explicitly set up the PencilArray to match the 2D spectral grid
+- When p_l divides nlat evenly and spatial θ distribution matches l_rank grouping
+
+# Algorithm
+1. Gather within l-communicator to get all l values for this m-group's m values
+2. Perform Legendre synthesis for local m values
+3. Allreduce across m-communicator to combine all m contributions
+4. IFFT along φ
+
+# Memory behavior with scratch buffers
+When the plan has `with_scratch=true` and `φ` is not distributed, the returned array
+is a view into pre-allocated scratch memory. This eliminates allocation but means:
+- The result will be **overwritten** on the next synthesis call
+- Copy the result if you need to retain it: `result_copy = copy(result)`
+- This is optimal for time-stepping codes that use the result immediately
+
+Without scratch buffers, each call returns a freshly allocated array.
+"""
+function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::DistributedSpectralArray2D;
+                                                  prototype_θφ::PencilArray, real_output::Bool=true)
+    plan = alm.plan
+    lmax, mmax = plan.lmax, plan.mmax
+    mres = plan.mres
+    nlon = cfg.nlon
+    m_range = plan.m_range
+
+    # Use scratch buffers if available
+    has_scratch = plan.with_scratch && plan.scratch !== nothing
+    nlon_local = size(parent(prototype_θφ), 2)
+    φ_is_local = (nlon_local == nlon)
+
+    if has_scratch
+        θ_globals = plan.scratch.θ_globals
+        nθ_local = plan.scratch.nθ_local
+        x_cache = plan.scratch.x_cache
+        Fθm = plan.scratch.Fθm
+        P = plan.scratch.P
+        fθφ_local = plan.scratch.fθφ_local
+        fθφ_result = plan.scratch.fθφ_result  # Separate result buffer to avoid copy
+    else
+        θ_globals = collect(globalindices(prototype_θφ, 1))
+        nθ_local = length(θ_globals)
+        x_cache = nothing  # Will use cfg.x directly
+        Fθm = Matrix{ComplexF64}(undef, nθ_local, nlon)
+        P = Vector{Float64}(undef, lmax + 1)
+        fθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
+        fθφ_result = nothing  # Will allocate on return
+    end
+
+    # Zero the Fourier coefficient matrix
+    fill!(Fθm, zero(ComplexF64))
+
+    if !isempty(m_range)
+        # Gather within l-communicator to get all l values for local m values
+        alm_partial = gather_to_dense_2d(alm)
+
+        inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+
+        # Synthesis: for each m in m_range, compute Legendre series
+        m_col = 0
+        for m in m_range
+            (m % mres == 0) || continue
+            m_col += 1
+            col = m + 1
+
+            if cfg.use_plm_tables && !isempty(cfg.plm_tables)
+                # Pre-multiply Nlm * alm to avoid redundant multiply per θ point
+                # Store in P buffer (reused across m values)
+                @inbounds for l in m:lmax
+                    P[l+1] = cfg.Nlm[l+1, col] * alm_partial[l+1, m_col]
+                end
+
+                tbl = cfg.plm_tables[col]
+                for (ii, iglob) in enumerate(θ_globals)
+                    g = 0.0 + 0.0im
+                    @inbounds @simd for l in m:lmax
+                        g += P[l+1] * tbl[l+1, iglob]
+                    end
+                    Fθm[ii, m + 1] = inv_scaleφ * g
+                    if real_output && m > 0
+                        Fθm[ii, nlon - m + 1] = conj(Fθm[ii, m + 1])
+                    end
+                end
+            elseif x_cache !== nothing
+                # Non-table path with cached x values
+                for ii in 1:nθ_local
+                    SHTnsKit.Plm_row!(P, x_cache[ii], lmax, m)
+                    g = 0.0 + 0.0im
+                    @inbounds @simd for l in m:lmax
+                        g += (cfg.Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
+                    end
+                    Fθm[ii, m + 1] = inv_scaleφ * g
+                    if real_output && m > 0
+                        Fθm[ii, nlon - m + 1] = conj(Fθm[ii, m + 1])
+                    end
+                end
+            else
+                # Non-table path without cache - direct cfg access
+                for ii in 1:nθ_local
+                    SHTnsKit.Plm_row!(P, cfg.x[θ_globals[ii]], lmax, m)
+                    g = 0.0 + 0.0im
+                    @inbounds @simd for l in m:lmax
+                        g += (cfg.Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
+                    end
+                    Fθm[ii, m + 1] = inv_scaleφ * g
+                    if real_output && m > 0
+                        Fθm[ii, nlon - m + 1] = conj(Fθm[ii, m + 1])
+                    end
+                end
+            end
+        end
+    end
+
+    # Combine Fourier coefficients from all m-groups
+    # This assumes ranks in m_comm have the same θ_globals!
+    MPI.Allreduce!(Fθm, +, plan.m_comm)
+
+    # Determine output buffer - use fθφ_result directly to avoid copy (fix #3)
+    # Note: when scratch is used and φ is local, the returned array is a view into
+    # scratch memory. It will be overwritten on the next synthesis call. Copy if needed.
+    output_buffer = (fθφ_result !== nothing && φ_is_local && real_output) ? fθφ_result : fθφ_local
+
+    # Perform inverse FFT along φ directly into output buffer
+    SHTnsKitParallelExt.ifft_along_dim2!(output_buffer, Fθm)
+
+    # Apply Robert form scaling if enabled
+    if cfg.robert_form
+        for ii in 1:nθ_local
+            x_val = x_cache !== nothing ? x_cache[ii] : cfg.x[θ_globals[ii]]
+            sθ = sqrt(max(0.0, 1 - x_val*x_val))
+            if sθ > 0
+                @inbounds for j in 1:nlon
+                    output_buffer[ii, j] *= sθ
+                end
+            end
+        end
+    end
+
+    # Return result
+    if φ_is_local
+        if real_output
+            # When scratch available, output_buffer IS fθφ_result - no copy needed
+            # When no scratch, output_buffer is fθφ_local - must copy
+            return fθφ_result !== nothing ? output_buffer : copy(output_buffer)
+        else
+            return Complex{Float64}.(output_buffer)
+        end
+    else
+        φ_globals = collect(globalindices(prototype_θφ, 2))
+        local_φ_range = first(φ_globals):last(φ_globals)
+        result = fθφ_local[:, local_φ_range]
+        if !real_output
+            result = Complex{Float64}.(result)
+        end
+        return result
+    end
+end
+
+"""
+    estimate_distributed_memory_savings_2d(lmax::Int, mmax::Int, p_l::Int, p_m::Int) -> NamedTuple
+
+Estimate memory savings from using 2D distributed spectral storage compared to 1D and dense.
+"""
+function estimate_distributed_memory_savings_2d(lmax::Int, mmax::Int, p_l::Int, p_m::Int)
+    nprocs = p_l * p_m
+
+    # Dense storage per rank (replicated)
+    dense_elements = (lmax + 1) * (mmax + 1)
+    dense_bytes = dense_elements * sizeof(ComplexF64)
+
+    # 1D distributed storage per rank (l-only distribution)
+    local_1d_elements = 0
+    for l in 0:lmax
+        if l % nprocs == 0
+            local_1d_elements += min(l, mmax) + 1
+        end
+    end
+    avg_1d_elements = ceildiv(dense_elements, nprocs)
+    dist_1d_bytes = avg_1d_elements * sizeof(ComplexF64)
+
+    # 2D distributed storage per rank
+    # Each m-group has mmax/p_m m values, each rank within m-group has 1/p_l of l values
+    # Approximate: (lmax² / 2) / (p_l * p_m)
+    total_coeffs = sum(min(l, mmax) + 1 for l in 0:lmax)  # Triangular count
+    avg_2d_elements = ceildiv(total_coeffs, nprocs)
+    dist_2d_bytes = avg_2d_elements * sizeof(ComplexF64)
+
+    # Synthesis gather communication volume
+    gather_1d_bytes = dense_bytes  # 1D gathers everything globally
+    gather_2d_bytes = ceildiv(dense_bytes, p_m)  # 2D gathers within l-comm only
+
+    savings_vs_dense = 100.0 * (1.0 - dist_2d_bytes / dense_bytes)
+    savings_vs_1d = 100.0 * (1.0 - dist_2d_bytes / dist_1d_bytes)
+
+    return (
+        dense_bytes_per_rank = dense_bytes,
+        dist_1d_bytes_per_rank = dist_1d_bytes,
+        dist_2d_bytes_per_rank = dist_2d_bytes,
+        savings_vs_dense_percent = savings_vs_dense,
+        savings_vs_1d_percent = savings_vs_1d,
+        gather_1d_bytes = gather_1d_bytes,
+        gather_2d_bytes = gather_2d_bytes,
+        gather_reduction_factor = p_m
+    )
+end
+
+"""
+    validate_2d_distribution_alignment(plan::DistributedSpectralPlan2D,
+                                        prototype_θφ::PencilArray) -> (aligned::Bool, message::String)
+
+Check if the spatial PencilArray distribution is aligned with the 2D spectral plan.
+
+Alignment means ranks with the same l_rank (in the same row of the process grid)
+have the same θ portions. This is required for `dist_synthesis_distributed_2d_optimized`.
+
+Returns a tuple of (is_aligned, diagnostic_message).
+"""
+function validate_2d_distribution_alignment(plan::DistributedSpectralPlan2D,
+                                             prototype_θφ::PencilArray)
+    # Get local θ range for this rank
+    θ_globals = collect(globalindices(prototype_θφ, 1))
+    local_θ_hash = hash(θ_globals)
+
+    # Exchange θ_hash within m_comm (ranks with same l_rank)
+    # If all ranks in m_comm have the same θ_hash, distributions are aligned
+    all_hashes = MPI.Allgather(UInt64(local_θ_hash), plan.m_comm)
+
+    aligned = all(h == all_hashes[1] for h in all_hashes)
+
+    if aligned
+        return (true, "Spatial and spectral distributions are aligned. " *
+                      "You can use dist_synthesis_distributed_2d_optimized.")
+    else
+        return (false, "Spatial and spectral distributions are NOT aligned. " *
+                       "Ranks with same l_rank have different θ portions. " *
+                       "Use dist_synthesis_distributed_2d for correct results.")
+    end
+end
+
+# Efficient aligned version: computes only m_range coefficients, uses l_comm for reduction
+# Requires spatial θ distribution to be aligned with spectral l-distribution
+function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                                    plan::DistributedSpectralPlan2D,
+                                    use_tables=cfg.use_plm_tables)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlon = cfg.nlon
+    nlat = cfg.nlat
+    m_range = plan.m_range
+    mres = plan.mres
+    l_comm = plan.l_comm
+
+    # Use scratch buffers if available, otherwise allocate
+    has_scratch = plan.with_scratch && plan.scratch !== nothing
+    local_data = parent(fθφ)
+    nlat_local, nlon_local = size(local_data)
+
+    # Get cached or compute θ indices
+    if has_scratch
+        θ_globals = plan.scratch.θ_globals
+        nθ_local = plan.scratch.nθ_local
+        weights_cache = plan.scratch.weights_cache
+        x_cache = plan.scratch.x_cache
+        Fθm = plan.scratch.Fθm
+        local_contrib = plan.scratch.local_contrib
+        P = plan.scratch.P
+        n_m_valid = plan.scratch.n_m_valid
+    else
+        θ_globals = collect(globalindices(fθφ, 1))
+        nθ_local = length(θ_globals)
+        weights_cache = Vector{Float64}(undef, nθ_local)
+        x_cache = Vector{Float64}(undef, nθ_local)
+        for (ii, iglob) in enumerate(θ_globals)
+            weights_cache[ii] = cfg.w[iglob]
+            x_cache[ii] = cfg.x[iglob]
+        end
+        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+        n_m_valid = count(m -> m % mres == 0, m_range)
+        local_contrib = Matrix{ComplexF64}(undef, lmax + 1, max(n_m_valid, 1))
+        P = Vector{Float64}(undef, lmax + 1)
+    end
+
+    # FFT along φ
+    if nlon_local == nlon
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
+    else
+        φ_globals = collect(globalindices(fθφ, 2))
+        φ_range = first(φ_globals):last(φ_globals)
+        θ_range = first(θ_globals):last(θ_globals)
+        Fθm_temp = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, plan.comm)
+        copyto!(Fθm, Fθm_temp)
+    end
+
+    scaleφ = cfg.cphi
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
+
+    # Early exit for empty m_range
+    if n_m_valid == 0 || isempty(m_range)
+        result = create_distributed_spectral_array_2d(plan, ComplexF64)
+        return result
+    end
+
+    # Zero the contribution buffer (reusing pre-allocated memory)
+    fill!(local_contrib, zero(ComplexF64))
+
+    # Legendre integration only for m values in this m-group
+    # This is the key efficiency gain: O(lmax²/p_m) computation instead of O(lmax²)
+    m_col = 0
+    for mval in m_range
+        (mval % mres == 0) || continue
+        m_col += 1
+        m_fft = mval + 1  # FFT index (1-based, matches m value + 1)
+
+        if use_tbl
+            tbl = cfg.plm_tables[mval + 1]  # Table is indexed by m+1
+            for ii in 1:nθ_local
+                iglob = θ_globals[ii]
+                wiFi = weights_cache[ii] * Fθm[ii, m_fft]  # Hoisted out of l-loop
+                @inbounds @simd for l in mval:lmax
+                    local_contrib[l+1, m_col] += wiFi * tbl[l+1, iglob]
+                end
+            end
+        else
+            for ii in 1:nθ_local
+                wiFi = weights_cache[ii] * Fθm[ii, m_fft]  # Hoisted out of l-loop
+                SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+                @inbounds @simd for l in mval:lmax
+                    local_contrib[l+1, m_col] += wiFi * P[l+1]
+                end
+            end
+        end
+    end
+
+    # Reduce contributions within l-communicator only
+    # This is the key efficiency gain: O(lmax²/p_m) communication within p_l ranks
+    # instead of O(lmax²) global communication
+    θ_is_distributed = (nθ_local < nlat)
+
+    if θ_is_distributed
+        # Use packed communication to avoid sending zeros in triangular region
+        # This reduces communication volume by ~50%
+        if has_scratch
+            packed = plan.scratch.packed_contrib
+            pack_offsets = plan.scratch.pack_offsets
+            m_values = plan.scratch.m_values
+
+            # Pack valid coefficients (l >= m for each m column)
+            pack_idx = 1
+            for (m_idx, mval) in enumerate(m_values)
+                @inbounds for l in mval:lmax
+                    packed[pack_idx] = local_contrib[l+1, m_idx]
+                    pack_idx += 1
+                end
+            end
+
+            # Reduce packed buffer (smaller than full matrix)
+            MPI.Allreduce!(packed, +, l_comm)
+
+            # Unpack back to matrix
+            pack_idx = 1
+            for (m_idx, mval) in enumerate(m_values)
+                @inbounds for l in mval:lmax
+                    local_contrib[l+1, m_idx] = packed[pack_idx]
+                    pack_idx += 1
+                end
+            end
+        else
+            # Fallback: reduce full matrix when scratch not available
+            MPI.Allreduce!(local_contrib, +, l_comm)
+        end
+    end
+
+    # Apply normalization
+    m_col = 0
+    for mval in m_range
+        (mval % mres == 0) || continue
+        m_col += 1
+        @inbounds @simd ivdep for l in mval:lmax
+            local_contrib[l+1, m_col] *= cfg.Nlm[l+1, mval+1] * scaleφ
+        end
+    end
+
+    # Create output array and extract owned coefficients
+    result = create_distributed_spectral_array_2d(plan, ComplexF64)
+
+    # Extract owned coefficients using direct index computation (avoids Dict overhead)
+    # m_col = (m - first_valid_m) / mres + 1 when mres divides m_range evenly
+    # For general case, compute offset from m_range start
+    m_range_start = first(m_range)
+
+    if mres == 1
+        # Fast path: direct indexing when mres=1
+        @inbounds for (i, (l, m)) in enumerate(plan.local_lm_indices)
+            m_col = m - m_range_start + 1
+            result.local_coeffs[i] = local_contrib[l+1, m_col]
+        end
+    else
+        # General case: account for mres spacing
+        @inbounds for (i, (l, m)) in enumerate(plan.local_lm_indices)
+            m_col = (m - m_range_start) ÷ mres + 1
+            result.local_coeffs[i] = local_contrib[l+1, m_col]
+        end
+    end
+
+    return result
 end

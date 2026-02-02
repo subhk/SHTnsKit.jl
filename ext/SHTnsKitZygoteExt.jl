@@ -93,7 +93,7 @@ function SHTnsKit.zgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::AbstractA
     size(Vtθφ) == size(Vpθφ) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     # Define vector energy functional for two-argument case
     loss(Xt, Xp) = begin
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)      # Spheroidal/toroidal analysis
+        Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Xt, Xp)      # Spheroidal/toroidal analysis
         SHTnsKit.energy_vector(cfg, Slm, Tlm)                  # Compute vector energy
     end
     
@@ -109,7 +109,7 @@ function SHTnsKit.zgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatri
     # Validate dimensions match
     size(Vt) == size(Vp) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     loss(Xt, Xp) = begin
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)
+        Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Xt, Xp)
         SHTnsKit.energy_vector(cfg, Slm, Tlm)
     end
     g = Zygote.gradient(loss, Vt, Vp)

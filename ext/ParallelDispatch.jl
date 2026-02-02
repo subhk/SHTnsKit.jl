@@ -111,9 +111,9 @@ end
 # Vector/QST dispatch for PencilArrays
 ##########
 
-function SHTnsKit.spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray;
+function SHTnsKit.analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray;
                                    use_tables=cfg.use_plm_tables, return_pencil::Bool=false)
-    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vtθφ, Vpθφ; use_tables)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; use_tables)
 
     if return_pencil
         comm = communicator(Vtθφ)
@@ -124,9 +124,9 @@ function SHTnsKit.spat_to_SHsphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray,
     end
 end
 
-function SHTnsKit.spat_to_SHqst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray;
+function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray;
                                 return_pencil::Bool=false)
-    Qlm, Slm, Tlm = SHTnsKit.dist_spat_to_SHqst(cfg, Vrθφ, Vtθφ, Vpθφ)
+    Qlm, Slm, Tlm = SHTnsKit.dist_analysis_qst(cfg, Vrθφ, Vtθφ, Vpθφ)
 
     if return_pencil
         comm = communicator(Vrθφ)

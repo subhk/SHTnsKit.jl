@@ -46,8 +46,8 @@ IN-PLACE TRANSFORM FUNCTIONS
 ----------------------------
     analysis!(plan, alm_out, f)             : f → alm (scalar)
     synthesis!(plan, f_out, alm)            : alm → f (scalar)
-    spat_to_SHsphtor!(plan, S, T, Vt, Vp)   : (Vt,Vp) → (S,T) (vector)
-    SHsphtor_to_spat!(plan, Vt, Vp, S, T)   : (S,T) → (Vt,Vp) (vector)
+    analysis_sphtor!(plan, S, T, Vt, Vp)   : (Vt,Vp) → (S,T) (vector)
+    synthesis_sphtor!(plan, Vt, Vp, S, T)   : (S,T) → (Vt,Vp) (vector)
 
 USAGE EXAMPLE
 -------------
@@ -173,12 +173,12 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
 end
 
 """
-    spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
+    analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
 
 In-place vector analysis. Accumulates Slm/Tlm into preallocated outputs.
 Uses a two-pass strategy over φ FFTs to avoid extra buffers.
 """
-function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
+function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
     
@@ -213,18 +213,18 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             # Use pole-safe functions
             Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
             Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
-            Fθ_i = plan.Fθk[i, col]
-            wi = cfg.w[i]
+            fourier_coeff_θ = plan.Fθk[i, col]
+            quad_weight = cfg.w[i]
             @inbounds for l in max(1,m):lmax
-                N = cfg.Nlm[l+1, col]
-                dθY = N * plan.dPdtheta[l+1]
-                Y = N * plan.P[l+1]
-                Y_over_sθ = N * plan.P_over_sinth[l+1]
-                coeff = wi * scaleφ / (l*(l+1))
+                norm_factor = cfg.Nlm[l+1, col]
+                legendre_deriv = norm_factor * plan.dPdtheta[l+1]
+                legendre_poly = norm_factor * plan.P[l+1]
+                legendre_over_sinθ = norm_factor * plan.P_over_sinth[l+1]
+                weight_coeff = quad_weight * scaleφ / (l*(l+1))
                 # From synthesis Vθ = dθY*S - (im*m/sinθ)*T, the adjoint contribution
-                # from Vθ to T has negative sign
-                Tlm_out[l+1, col] += coeff * (-1.0im * m * Y_over_sθ * Fθ_i)
-                Slm_out[l+1, col] += coeff * (Fθ_i * dθY)
+                # from Vθ to T is conj(-(im*m/sinθ)) = +(im*m/sinθ)
+                Tlm_out[l+1, col] += weight_coeff * (1.0im * m * legendre_over_sinθ * fourier_coeff_θ)
+                Slm_out[l+1, col] += weight_coeff * (fourier_coeff_θ * legendre_deriv)
             end
         end
     end
@@ -250,17 +250,17 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
             # Use pole-safe functions
             Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
             Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
-            Fφ_i = plan.Fθk[i, col]
-            wi = cfg.w[i]
+            fourier_coeff_φ = plan.Fθk[i, col]
+            quad_weight = cfg.w[i]
             @inbounds for l in max(1,m):lmax
-                N = cfg.Nlm[l+1, col]
-                dθY = N * plan.dPdtheta[l+1]
-                Y = N * plan.P[l+1]
-                Y_over_sθ = N * plan.P_over_sinth[l+1]
-                coeff = wi * scaleφ / (l*(l+1))
+                norm_factor = cfg.Nlm[l+1, col]
+                legendre_deriv = norm_factor * plan.dPdtheta[l+1]
+                legendre_poly = norm_factor * plan.P[l+1]
+                legendre_over_sinθ = norm_factor * plan.P_over_sinth[l+1]
+                weight_coeff = quad_weight * scaleφ / (l*(l+1))
                 # Adjoint: S gets -term*Vφ, T gets +dθY*Vφ
-                Slm_out[l+1, col] += -coeff * (1.0im * m * Y_over_sθ * Fφ_i)
-                Tlm_out[l+1, col] += coeff * (Fφ_i * dθY)
+                Slm_out[l+1, col] += -weight_coeff * (1.0im * m * legendre_over_sinθ * fourier_coeff_φ)
+                Tlm_out[l+1, col] += weight_coeff * (fourier_coeff_φ * legendre_deriv)
             end
         end
     end
@@ -276,11 +276,11 @@ function spat_to_SHsphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abst
 end
 
 """
-    SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output=true)
+    synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output=true)
 
 In-place vector synthesis. Streams m→k without forming (θ×m) intermediates; inverse FFT Vt then Vp.
 """
-function SHsphtor_to_spat!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
     

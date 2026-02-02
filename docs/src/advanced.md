@@ -203,8 +203,8 @@ end
 Alm = analysis(cfg, test_field)
 
 # Compute gradient using spectral method (exact derivatives)
-# SH_to_grad_spat computes ∇f = (∂f/∂θ, (1/sinθ)∂f/∂φ)
-∂f_∂θ, ∂f_∂φ_over_sinθ = SH_to_grad_spat(cfg, Alm)
+# synthesis_grad computes ∇f = (∂f/∂θ, (1/sinθ)∂f/∂φ)
+∂f_∂θ, ∂f_∂φ_over_sinθ = synthesis_grad(cfg, Alm)
 
 println("Gradient computed using spectral method:")
 println("  ∂f/∂θ range: ", extrema(∂f_∂θ))
@@ -250,7 +250,7 @@ Alm = SHTnsKit.dist_analysis(cfg, fθφ)
 # Compute gradient using distributed synthesis with spheroidal transform
 # Gradient = (∂f/∂θ, (1/sinθ)∂f/∂φ) via spheroidal synthesis
 Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)  # Zero toroidal component
-∂f_∂θ, ∂f_∂φ_over_sinθ = SHTnsKit.dist_SHsphtor_to_spat(cfg, Alm, Tlm; prototype_θφ=fθφ)
+∂f_∂θ, ∂f_∂φ_over_sinθ = SHTnsKit.dist_synthesis_sphtor(cfg, Alm, Tlm; prototype_θφ=fθφ)
 
 if rank == 0
     println("Distributed gradient computed successfully")
@@ -360,7 +360,7 @@ for i in 1:cfg.nlat, j in 1:cfg.nlon
 end
 
 # Decompose into spheroidal/toroidal
-Slm, Tlm = spat_to_SHsphtor(cfg, Vθ, Vφ)
+Slm, Tlm = analysis_sphtor(cfg, Vθ, Vφ)
 
 # Compute divergence and vorticity
 div_field = divergence_from_spheroidal(cfg, Slm)

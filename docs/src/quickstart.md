@@ -193,10 +193,10 @@ vθ = rand(cfg.nlat, cfg.nlon)
 vφ = rand(cfg.nlat, cfg.nlon)
 
 # Decompose: spatial → spectral
-Slm, Tlm = spat_to_SHsphtor(cfg, vθ, vφ)
+Slm, Tlm = analysis_sphtor(cfg, vθ, vφ)
 
 # Reconstruct: spectral → spatial
-vθ_out, vφ_out = SHsphtor_to_spat(cfg, Slm, Tlm)
+vθ_out, vφ_out = synthesis_sphtor(cfg, Slm, Tlm)
 
 # Check accuracy
 println("θ error: ", maximum(abs.(vθ - vθ_out)))
@@ -337,11 +337,11 @@ Alm = analysis(cfg, spatial)
 
 ```julia
 # Spheroidal-Toroidal decomposition
-Slm, Tlm = spat_to_SHsphtor(cfg, vθ, vφ)
-vθ, vφ = SHsphtor_to_spat(cfg, Slm, Tlm)
+Slm, Tlm = analysis_sphtor(cfg, vθ, vφ)
+vθ, vφ = synthesis_sphtor(cfg, Slm, Tlm)
 
 # Gradient
-dθ, dφ = SH_to_grad_spat(cfg, Alm)
+dθ, dφ = synthesis_grad(cfg, Alm)
 ```
 
 ### GPU Transforms

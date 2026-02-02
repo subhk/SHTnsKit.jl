@@ -127,8 +127,8 @@ let
             for (iθ, iφ) in Iterators.product(axes(fθφ,1), axes(fθφ,2))
                 fθφ[iθ, iφ] = sin(0.11*Int(iθ)) + cos(0.07*Int(iφ))
             end
-            Qlm = SHTnsKit.dist_spat_to_SH_packed(cfg, fθφ)
-            fθφ_rt = SHTnsKit.dist_SH_packed_to_spat(cfg, Qlm; prototype_θφ=fθφ, real_output=true)
+            Qlm = SHTnsKit.dist_analysis_packed(cfg, fθφ)
+            fθφ_rt = SHTnsKit.dist_synthesis_packed(cfg, Qlm; prototype_θφ=fθφ, real_output=true)
             # Relative error across ranks
             lrel = sqrt(sum(abs2, Array(fθφ_rt) .- Array(fθφ)) / (sum(abs2, Array(fθφ)) + eps()))
             grel = Ref(0.0)

@@ -140,7 +140,7 @@ function test_vector_roundtrip(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     end
 
     # Synthesize to spatial domain
-    Vt_full, Vp_full = SHTnsKit.SHsphtor_to_spat(cfg, Slm_orig, Tlm_orig)
+    Vt_full, Vp_full = SHTnsKit.synthesis_sphtor(cfg, Slm_orig, Tlm_orig)
 
     # Create distributed PencilArrays from the full spatial data
     ranges = local_ranges(pen)
@@ -161,7 +161,7 @@ function test_vector_roundtrip(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     Vp = PencilArray(pen, Vp_local)
 
     # Perform distributed vector analysis
-    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vt, Vp)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vt, Vp)
 
     if rank == 0
         println("  Slm max value: $(maximum(abs.(Slm)))")
@@ -179,7 +179,7 @@ function test_vector_roundtrip(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     @test max_err_T < 1e-10
 
     # Also verify spatial synthesis roundtrip
-    Vt_out, Vp_out = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vt, real_output=true)
+    Vt_out, Vp_out = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vt, real_output=true)
 
     max_err_t = 0.0
     max_err_p = 0.0
@@ -304,6 +304,111 @@ function test_latitude_evaluation(cfg::SHTnsKit.SHTConfig)
 end
 
 """
+Test 2D distributed spectral array functionality
+Tests the new 2D (l,m) distribution for reduced memory per rank
+"""
+function test_distributed_spectral_2d(cfg::SHTnsKit.SHTConfig, pen::Pencil)
+    root_println("\n=== Testing 2D Distributed Spectral Arrays ===")
+
+    lmax, mmax = cfg.lmax, cfg.mmax
+
+    # Get the extension module for 2D distributed types
+    ext = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+    if ext === nothing
+        root_println("  SKIP: Parallel extension not loaded")
+        return true
+    end
+
+    # Create a 2D distribution plan
+    root_println("  Creating 2D distribution plan...")
+    p_l, p_m = ext.suggest_spectral_grid(nprocs, lmax, mmax)
+    root_println("  Suggested grid: p_l=$p_l, p_m=$p_m")
+
+    # Check if grid is valid
+    if p_l * p_m != nprocs
+        root_println("  SKIP: Cannot form valid 2D grid with $nprocs processes")
+        return true
+    end
+
+    plan2d = ext.create_distributed_spectral_plan_2d(lmax, mmax, comm; p_l=p_l, p_m=p_m)
+
+    mpi_println("  m_range: $(plan2d.m_range), local_nlm: $(plan2d.local_nlm)")
+
+    # Create spatial field: Y_3^1 = sin(θ) * P_3^1(cos(θ)) * cos(φ)
+    fθφ_local = zeros(Float64, PencilArrays.size_local(pen)...)
+    ranges = local_ranges(pen)
+    θ_range = ranges[1]
+    φ_range = ranges[2]
+
+    for (i_local, i_global) in enumerate(θ_range)
+        x = cfg.x[i_global]  # cos(θ)
+        sθ = sqrt(1 - x^2)   # sin(θ)
+        # P_3^1(x) = -3/2 * (1-x^2)^{1/2} * (5x^2 - 1)
+        P31 = -1.5 * sθ * (5*x^2 - 1)
+        for (j_local, j_global) in enumerate(φ_range)
+            φ = 2π * (j_global - 1) / cfg.nlon
+            fθφ_local[i_local, j_local] = sθ * P31 * cos(φ)
+        end
+    end
+
+    fθφ = PencilArray(pen, fθφ_local)
+
+    # Test 2D distributed analysis
+    root_println("  Testing 2D distributed analysis...")
+    alm_2d = ext.dist_analysis_distributed_2d(cfg, fθφ; plan=plan2d)
+
+    local_nlm = ext.local_size(alm_2d)
+    mpi_println("  Local coefficients: $local_nlm")
+
+    # Gather to full dense for comparison
+    root_println("  Gathering to full dense...")
+    alm_full = ext.gather_to_full_dense_2d(alm_2d)
+
+    # Compare with standard analysis
+    root_println("  Comparing with standard analysis...")
+    alm_standard = SHTnsKit.dist_analysis(cfg, fθφ)
+
+    if rank == 0
+        max_diff = maximum(abs.(alm_full .- alm_standard))
+        root_println("  Max difference vs standard: $max_diff")
+        @test max_diff < 1e-10
+    end
+
+    # Test 2D distributed synthesis
+    root_println("  Testing 2D distributed synthesis...")
+    fθφ_recovered = ext.dist_synthesis_distributed_2d(cfg, alm_2d; prototype_θφ=fθφ)
+
+    # Compare with original
+    max_err = 0.0
+    for i in 1:size(fθφ_recovered, 1)
+        for j in 1:size(fθφ_recovered, 2)
+            err = abs(fθφ_recovered[i, j] - fθφ_local[i, j])
+            max_err = max(max_err, err)
+        end
+    end
+
+    global_max_err = MPI.Allreduce(max_err, MPI.MAX, comm)
+    root_println("  2D Roundtrip max error: $global_max_err")
+    @test global_max_err < 1e-10
+
+    # Test memory savings estimation
+    if rank == 0
+        savings = ext.estimate_distributed_memory_savings_2d(lmax, mmax, p_l, p_m)
+        root_println("  Memory savings vs dense: $(round(savings.savings_vs_dense_percent, digits=1))%")
+        root_println("  Gather reduction factor: $(savings.gather_reduction_factor)x")
+    end
+
+    # Test distribution alignment validation
+    root_println("  Testing distribution alignment validation...")
+    aligned, msg = ext.validate_2d_distribution_alignment(plan2d, fθφ)
+    root_println("  Alignment check: $aligned")
+    root_println("  Message: $msg")
+
+    MPI.Barrier(comm)
+    return true
+end
+
+"""
 Main test runner
 """
 function run_tests()
@@ -366,6 +471,14 @@ function run_tests()
         all_passed &= test_latitude_evaluation(cfg)
     catch e
         root_println("ERROR in latitude evaluation test: $e")
+        all_passed = false
+    end
+
+    try
+        all_passed &= test_distributed_spectral_2d(cfg, pen)
+    catch e
+        root_println("ERROR in 2D distributed spectral test: $e")
+        showerror(stdout, e, catch_backtrace())
         all_passed = false
     end
 

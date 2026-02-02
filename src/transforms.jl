@@ -10,31 +10,31 @@ WHEN TO USE SPECIALIZED TRANSFORMS
 ----------------------------------
 - Axisymmetric fields (m=0 only): Use *_axisym functions
 - Single azimuthal mode: Use *_ml functions
-- Point evaluation: Use SH_to_point
+- Point evaluation: Use synthesis_point
 - Degree truncation: Use *_l variants
-- Packed coefficient layout: Use SH_to_spat / spat_to_SH
+- Packed coefficient layout: Use synthesis_packed / analysis_packed
 
 FUNCTION CATEGORIES
 -------------------
 1. Packed Layout Transforms:
-   spat_to_SH(cfg, Vr)      : Grid → packed coefficients (1D vector)
-   SH_to_spat(cfg, Qlm)     : Packed coefficients → flattened grid
+   analysis_packed(cfg, Vr)      : Grid → packed coefficients (1D vector)
+   synthesis_packed(cfg, Qlm)     : Packed coefficients → flattened grid
 
 2. Axisymmetric (m=0) Transforms:
-   spat_to_SH_axisym(cfg, Vr)     : Latitude values → l-coefficients
-   SH_to_spat_axisym(cfg, Qlm)    : l-coefficients → latitude values
+   analysis_axisym(cfg, Vr)     : Latitude values → l-coefficients
+   synthesis_axisym(cfg, Qlm)    : l-coefficients → latitude values
    *_l_axisym variants            : Degree-limited versions
 
 3. Mode-Limited (single m) Transforms:
-   spat_to_SH_ml(cfg, m, Vr_m, ltr)  : Single-mode analysis
-   SH_to_spat_ml(cfg, m, Ql, ltr)    : Single-mode synthesis
+   analysis_packed_ml(cfg, m, Vr_m, ltr)  : Single-mode analysis
+   synthesis_packed_ml(cfg, m, Ql, ltr)    : Single-mode synthesis
 
 4. Degree-Limited Transforms:
-   spat_to_SH_l(cfg, Vr, ltr)  : Analysis with l ≤ ltr
-   SH_to_spat_l(cfg, Qlm, ltr) : Synthesis with l ≤ ltr
+   analysis_packed_l(cfg, Vr, ltr)  : Analysis with l ≤ ltr
+   synthesis_packed_l(cfg, Qlm, ltr) : Synthesis with l ≤ ltr
 
 5. Point Evaluation:
-   SH_to_point(cfg, Qlm, cosθ, φ)  : Evaluate at single point
+   synthesis_point(cfg, Qlm, cosθ, φ)  : Evaluate at single point
 
 PERFORMANCE BENEFITS
 --------------------
@@ -50,13 +50,13 @@ cfg = create_gauss_config(32, 64)
 
 # Axisymmetric field (zonal average)
 f_zonal = mean(f, dims=2)[:, 1]  # Average over longitude
-Ql = spat_to_SH_axisym(cfg, f_zonal)
+Ql = analysis_axisym(cfg, f_zonal)
 
 # Point evaluation (avoid full synthesis for single point)
-val = SH_to_point(cfg, Qlm, cos(θ), φ)
+val = synthesis_point(cfg, Qlm, cos(θ), φ)
 
 # Degree-limited synthesis (e.g., for low-pass filtering)
-f_smooth = SH_to_spat_l(cfg, Qlm, 10)  # Only l ≤ 10
+f_smooth = synthesis_packed_l(cfg, Qlm, 10)  # Only l ≤ 10
 ```
 
 ================================================================================
@@ -75,13 +75,13 @@ is needed, avoiding the computational overhead of full 2D transforms.
 """
 
 """
-    spat_to_SH_axisym(cfg, Vr) -> Vector{ComplexF64}
+    analysis_axisym(cfg, Vr) -> Vector{ComplexF64}
 
 Axisymmetric (m=0) transform from Gauss latitudes to degree-only coefficients.
 Input `Vr` should contain values at Gauss latitudes for a specific longitude mode.
 Returns coefficients Q_l for l = 0..lmax.
 """
-function spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
+function analysis_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     
@@ -100,15 +100,15 @@ function spat_to_SH_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
         end
     end
 
-    return Ql  # No phi scaling needed for single-mode transform (proper inverse of SH_to_spat_axisym)
+    return Ql  # No phi scaling needed for single-mode transform (proper inverse of synthesis_axisym)
 end
 
 """
-    spat_to_SH(cfg, Vr_flat::AbstractVector{<:Real}) -> Vector{ComplexF64}
+    analysis_packed(cfg, Vr_flat::AbstractVector{<:Real}) -> Vector{ComplexF64}
 
 Packed scalar analysis from flattened grid values (length nlat*nlon) to Qlm (LM order).
 """
-function spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real})
+function analysis_packed(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
     f = reshape(Vr, cfg.nlat, cfg.nlon)
     alm_mat = analysis(cfg, f)
@@ -124,11 +124,11 @@ function spat_to_SH(cfg::SHTConfig, Vr::AbstractVector{<:Real})
 end
 
 """
-    SH_to_spat(cfg, Qlm::AbstractVector{<:Complex}) -> Vector{Float64}
+    synthesis_packed(cfg, Qlm::AbstractVector{<:Complex}) -> Vector{Float64}
 
 Packed scalar synthesis from Qlm (LM order) to flattened real grid (length nlat*nlon).
 """
-function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+function synthesis_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
     alm_mat = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
     @inbounds for m in 0:cfg.mmax
@@ -143,12 +143,12 @@ function SH_to_spat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
 end
 
 """
-    spat_to_SH_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer) -> Vector{ComplexF64}
+    analysis_packed_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer) -> Vector{ComplexF64}
 
 Scalar analysis truncated to degrees `l ≤ ltr`. The returned packed coefficient
 vector has length `cfg.nlm`; coefficients with `l > ltr` are set to zero.
 """
-function spat_to_SH_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer)
+function analysis_packed_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer)
     length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
     lcap = min(Int(ltr), cfg.lmax)
     lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
@@ -167,12 +167,12 @@ function spat_to_SH_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer)
 end
 
 """
-    SH_to_spat_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integer) -> Vector{Float64}
+    synthesis_packed_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integer) -> Vector{Float64}
 
 Scalar synthesis truncated to degrees `l ≤ ltr`. Contributions from higher
 degrees are ignored.
 """
-function SH_to_spat_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integer)
+function synthesis_packed_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integer)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
     lcap = min(Int(ltr), cfg.lmax)
     lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
@@ -190,13 +190,13 @@ function SH_to_spat_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integ
 end
 
 """
-    SH_to_spat_axisym(cfg, Qlm) -> Vector{Float64}
+    synthesis_axisym(cfg, Qlm) -> Vector{Float64}
 
 Axisymmetric synthesis from degree-only coefficients to Gauss latitudes.
 Input `Qlm` should contain coefficients Q_l for l = 0..lmax.
 Returns spatial values at Gauss latitudes.
 """
-function SH_to_spat_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
+function synthesis_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Qlm) == lmax + 1 || throw(DimensionMismatch("Qlm length must be lmax+1=$(lmax+1)"))
     
@@ -218,11 +218,11 @@ function SH_to_spat_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
 end
 
 """
-    spat_to_SH_l_axisym(cfg, Vr, ltr) -> Vector{ComplexF64}
+    analysis_axisym_l(cfg, Vr, ltr) -> Vector{ComplexF64}
 
 Axisymmetric degree-limited transform up to degree ltr.
 """
-function spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
+function analysis_axisym_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
     nlat = cfg.nlat
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
@@ -242,15 +242,15 @@ function spat_to_SH_l_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::In
         end
     end
 
-    return Ql  # No phi scaling needed for single-mode transform (proper inverse of SH_to_spat_l_axisym)
+    return Ql  # No phi scaling needed for single-mode transform (proper inverse of synthesis_axisym_l)
 end
 
 """
-    SH_to_spat_l_axisym(cfg, Qlm, ltr) -> Vector{Float64}
+    synthesis_axisym_l(cfg, Qlm, ltr) -> Vector{Float64}
 
 Axisymmetric degree-limited synthesis using degrees up to ltr.
 """
-function SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_axisym_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     ltr_qlm = length(Qlm) - 1  # Convert length to max degree
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
@@ -274,13 +274,13 @@ function SH_to_spat_l_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr
 end
 
 """
-    spat_to_SH_ml(cfg, im, Vr_m, ltr) -> Vector{ComplexF64}
+    analysis_packed_ml(cfg, im, Vr_m, ltr) -> Vector{ComplexF64}
 
 Transform spatial field for specific azimuthal mode m to spherical harmonic coefficients.
 `im` is the m-index (0-based), `Vr_m` contains complex spatial values for that mode.
 Returns coefficients Q_l for degrees l = m..ltr.
 """
-function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int)
+function analysis_packed_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     length(Vr_m) == nlat || throw(DimensionMismatch("Vr_m length must be nlat=$(nlat)"))
     im >= 0 || throw(ArgumentError("im must be >= 0"))
@@ -311,13 +311,13 @@ function spat_to_SH_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex},
 end
 
 """
-    SH_to_spat_ml(cfg, im, Ql, ltr) -> Vector{ComplexF64}
+    synthesis_packed_ml(cfg, im, Ql, ltr) -> Vector{ComplexF64}
 
 Transform spherical harmonic coefficients for specific mode m to spatial field.
 `im` is the m-index, `Ql` contains coefficients for degrees l = im..ltr.
 Returns complex spatial values for that azimuthal mode.
 """
-function SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     im >= 0 || throw(ArgumentError("im must be >= 0"))
     im <= cfg.mmax || throw(ArgumentError("im must be <= mmax=$(cfg.mmax)"))
@@ -346,14 +346,14 @@ function SH_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, l
 end
 
 """
-    SH_to_point(cfg, Qlm, cost, phi) -> ComplexF64
+    synthesis_point(cfg, Qlm, cost, phi) -> ComplexF64
 
 Evaluate spherical harmonic expansion at a single point (θ,φ).
 `cost` = cos(θ), `phi` is the azimuthal angle.
 `Qlm` should be a matrix of size (lmax+1, mmax+1) with standard indexing.
 Returns the field value at the specified point.
 """
-function SH_to_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
+function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Qlm, 1) == lmax + 1 || throw(DimensionMismatch("Qlm first dim must be lmax+1"))
     size(Qlm, 2) == mmax + 1 || throw(DimensionMismatch("Qlm second dim must be mmax+1"))

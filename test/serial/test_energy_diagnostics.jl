@@ -44,7 +44,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Tlm[:, 1] .= real.(Tlm[:, 1])
         Slm[1, :] .= 0; Tlm[1, :] .= 0
 
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
 
         E_spec = energy_vector(cfg, Slm, Tlm)
         E_grid = grid_energy_vector(cfg, Vt, Vp)
@@ -81,7 +81,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Tlm = zeros(ComplexF64, lmax+1, lmax+1)
         Slm[4, 2] = 1.0 + 0im  # l=3, m=1
 
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
         E_spec = energy_vector(cfg, Slm, Tlm)
         E_grid = grid_energy_vector(cfg, Vt, Vp)
 
@@ -91,7 +91,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         fill!(Slm, 0)
         Tlm[5, 3] = 1.0 + 0im  # l=4, m=2
 
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
         E_spec = energy_vector(cfg, Slm, Tlm)
         E_grid = grid_energy_vector(cfg, Vt, Vp)
 
@@ -200,7 +200,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
 
         # Scalar packed
         f = randn(rng, nlat, nlon)
-        Qlm = spat_to_SH(cfg, vec(f))
+        Qlm = analysis_packed(cfg, vec(f))
         alm = analysis(cfg, f)
 
         E_packed = energy_scalar_packed(cfg, Qlm)
@@ -210,7 +210,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Vector packed
         Vt = randn(rng, nlat, nlon)
         Vp = randn(rng, nlat, nlon)
-        Slm_mat, Tlm_mat = spat_to_SHsphtor(cfg, Vt, Vp)
+        Slm_mat, Tlm_mat = analysis_sphtor(cfg, Vt, Vp)
 
         # Pack to vectors
         Sp = zeros(ComplexF64, cfg.nlm)

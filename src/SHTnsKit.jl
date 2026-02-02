@@ -189,33 +189,34 @@ export SHTPlan, analysis!, synthesis!                  # Planned (optimized) tra
 export set_batch_size!, get_batch_size, reset_batch_size!  # Batch configuration
 export analysis_batch, analysis_batch!                  # Batch scalar analysis
 export synthesis_batch, synthesis_batch!                # Batch scalar synthesis
-export spat_to_SHsphtor_batch, SHsphtor_to_spat_batch  # Batch vector transforms
-export spat_to_SHqst_batch, SHqst_to_spat_batch        # Batch 3D vector transforms
+export analysis_sphtor_batch, synthesis_sphtor_batch   # Batch vector transforms
+export analysis_qst_batch, synthesis_qst_batch         # Batch 3D vector transforms
 
 # ===== SPATIAL ↔ SPHERICAL HARMONIC TRANSFORMS =====
-export spat_to_SHsphtor!, SHsphtor_to_spat!            # In-place spheroidal/toroidal transforms
-export spat_to_SH, SH_to_spat, spat_to_SH_l, SH_to_spat_l, spat_to_SH_ml, SH_to_spat_ml, SH_to_point
+export analysis_sphtor!, synthesis_sphtor!              # In-place spheroidal/toroidal transforms
+export analysis_packed, synthesis_packed, analysis_packed_l, synthesis_packed_l, analysis_packed_ml, synthesis_packed_ml, synthesis_point
+export analysis_axisym, synthesis_axisym, analysis_axisym_l, synthesis_axisym_l
 
 # ===== INDEXING AND COMPLEX NUMBER UTILITIES =====
 export nlm_calc, nlm_cplx_calc, LM_index, LiM_index, im_from_lm, LM_cplx_index, LM_cplx
-export spat_cplx_to_SH, SH_to_spat_cplx, SH_to_point_cplx  # Complex number transforms
+export analysis_packed_cplx, synthesis_packed_cplx, synthesis_point_cplx  # Complex number transforms
 export fft_phi_backend
 
 # ===== BUFFER HELPERS =====
 export scratch_fft, scratch_spatial
 
 # ===== VECTOR FIELD TRANSFORMS =====
-export spat_to_SHsphtor, SHsphtor_to_spat, SHsph_to_spat, SHtor_to_spat, SH_to_grad_spat
+export analysis_sphtor, synthesis_sphtor, synthesis_sph, synthesis_tor, synthesis_grad
 export divergence_from_spheroidal, divergence_from_spheroidal!, spheroidal_from_divergence, spheroidal_from_divergence!
 export vorticity_from_toroidal, vorticity_from_toroidal!, toroidal_from_vorticity, toroidal_from_vorticity!
-export SH_to_grad_spat_l
-export spat_to_SHqst, SHqst_to_spat, spat_cplx_to_SHqst, SHqst_to_spat_cplx  # Q,S,T decomposition
+export synthesis_grad_l
+export analysis_qst, synthesis_qst, analysis_qst_cplx, synthesis_qst_cplx  # Q,S,T decomposition
 
 # ===== LATITUDE-BAND AND M-MODE SPECIFIC TRANSFORMS =====
-export SHsphtor_to_spat_l, spat_to_SHsphtor_l, SHsph_to_spat_l, SHtor_to_spat_l
-export spat_to_SHsphtor_ml, SHsphtor_to_spat_ml, SHsph_to_spat_ml, SHtor_to_spat_ml
-export spat_to_SHqst_l, SHqst_to_spat_l, spat_to_SHqst_ml, SHqst_to_spat_ml
-export SHsphtor_to_spat_cplx, spat_cplx_to_SHsphtor, SH_to_grad_spat_ml
+export synthesis_sphtor_l, analysis_sphtor_l, synthesis_sph_l, synthesis_tor_l
+export analysis_sphtor_ml, synthesis_sphtor_ml, synthesis_sph_ml, synthesis_tor_ml
+export analysis_qst_l, synthesis_qst_l, analysis_qst_ml, synthesis_qst_ml
+export synthesis_sphtor_cplx, analysis_sphtor_cplx, synthesis_grad_ml
 export suggest_pencil_grid, set_fft_plan_cache!, enable_fft_plan_cache!, disable_fft_plan_cache!, fft_plan_cache_enabled
 
 # ===== MATRIX OPERATIONS AND DIFFERENTIAL OPERATORS =====
@@ -272,7 +273,7 @@ export device_info, ensure_backend_initialized            # Device info
 export SHTDevice, CPU_DEVICE, CUDA_DEVICE  # Legacy device management (deprecated)
 export get_device, set_device!                            # Device utilities
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU transforms
-export gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat        # GPU vector transforms
+export gpu_analysis_sphtor, gpu_synthesis_sphtor         # GPU vector transforms
 export gpu_apply_laplacian!                              # GPU operators
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
 export MultiGPUConfig, create_multi_gpu_config           # Multi-GPU configuration
@@ -294,11 +295,11 @@ export dist_analysis, dist_synthesis                      # Distributed transfor
 export dist_scalar_roundtrip!, dist_vector_roundtrip!    # Distributed roundtrip tests
 export DistPlan, dist_synthesis!                         # Distributed plans
 export DistAnalysisPlan, dist_analysis!                  
-export DistSphtorPlan, dist_spat_to_SHsphtor!, dist_SHsphtor_to_spat!  # Distributed vector transforms
-export DistQstPlan, dist_spat_to_SHqst!, dist_SHqst_to_spat!           # Distributed Q,S,T transforms
+export DistSphtorPlan, dist_analysis_sphtor!, dist_synthesis_sphtor!   # Distributed vector transforms
+export DistQstPlan, dist_analysis_qst!, dist_synthesis_qst!            # Distributed Q,S,T transforms
 export dist_SH_to_lat, dist_SH_to_point, dist_SHqst_to_point           # Distributed evaluation
-export dist_spat_to_SH_packed, dist_SH_packed_to_spat                   # Distributed packed transforms
-export dist_spat_cplx_to_SH, dist_SH_to_spat_cplx                      # Distributed complex transforms
+export dist_analysis_packed, dist_synthesis_packed                   # Distributed packed transforms
+export dist_analysis_packed_cplx, dist_synthesis_packed_cplx                      # Distributed complex transforms
 export dist_SHqst_to_lat                                                # Distributed Q,S,T to latitude
 export dist_SH_rotate_euler                                             # Distributed Euler rotations
 export dist_spatial_divergence, dist_spatial_vorticity                  # Distributed vector invariants
@@ -386,8 +387,8 @@ gpu_analysis(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_synthesis(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_analysis_safe(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_synthesis_safe(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_analysis_sphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_synthesis_sphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_memory_info(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 check_gpu_memory(::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
@@ -414,23 +415,23 @@ dist_analysis(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loa
 dist_synthesis(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_scalar_roundtrip!(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_vector_roundtrip!(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_spat_to_SHsphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_SHsphtor_to_spat(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_spat_to_SHqst(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_SHqst_to_spat(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_analysis_sphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_synthesis_sphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_analysis_qst(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_synthesis_qst(::SHTConfig, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_analysis!(::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_synthesis!(::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_spat_to_SHsphtor!(::Any, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_SHsphtor_to_spat!(::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_spat_to_SHqst!(::Any, ::Any, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_SHqst_to_spat!(::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_analysis_sphtor!(::Any, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_synthesis_sphtor!(::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_analysis_qst!(::Any, ::Any, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_synthesis_qst!(::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_SH_to_lat(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_SH_to_point(::SHTConfig, ::Any, ::Any, ::Any) = error("Parallel extension not loaded")
 dist_SHqst_to_point(::SHTConfig, ::Any, ::Any, ::Any, ::Any, ::Any) = error("Parallel extension not loaded")
-dist_spat_to_SH_packed(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_SH_packed_to_spat(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
-dist_spat_cplx_to_SH(::SHTConfig, ::Any) = error("Parallel extension not loaded")
-dist_SH_to_spat_cplx(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_analysis_packed(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_synthesis_packed(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_analysis_packed_cplx(::SHTConfig, ::Any) = error("Parallel extension not loaded")
+dist_synthesis_packed_cplx(::SHTConfig, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_SHqst_to_lat(::SHTConfig, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_SH_rotate_euler(::SHTConfig, ::Any, ::Any, ::Any, ::Any, ::Any) = error("Parallel extension not loaded")
 dist_SH_Zrotate_packed(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")

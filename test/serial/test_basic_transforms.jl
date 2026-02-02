@@ -76,11 +76,11 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])  # m=0 real (first lmax+1 indices)
 
         # Packed synthesis
-        f = SH_to_spat(cfg, Qlm)
+        f = synthesis_packed(cfg, Qlm)
         @test length(f) == nlat * nlon
 
         # Packed analysis
-        Qlm_back = spat_to_SH(cfg, f)
+        Qlm_back = analysis_packed(cfg, f)
         @test length(Qlm_back) == cfg.nlm
 
         # Verify roundtrip
@@ -132,5 +132,96 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
 
         # Roundtrip should preserve coefficients
         @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "Unfused loop path" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(46)
+
+        # Random spectral coefficients
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
+
+        # Compare fused vs unfused synthesis
+        f_fused = synthesis(cfg, alm; real_output=true, use_fused_loops=true)
+        f_unfused = synthesis(cfg, alm; real_output=true, use_fused_loops=false)
+        @test isapprox(f_fused, f_unfused; rtol=1e-10, atol=1e-12)
+
+        # Compare fused vs unfused analysis
+        alm_fused = analysis(cfg, f_fused; use_fused_loops=true)
+        alm_unfused = analysis(cfg, f_fused; use_fused_loops=false)
+        @test isapprox(alm_fused, alm_unfused; rtol=1e-10, atol=1e-12)
+
+        # Verify roundtrip with unfused path
+        @test isapprox(alm_unfused, alm; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "FFT scratch buffer reuse" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(47)
+
+        # Preallocate scratch buffer
+        scratch = zeros(ComplexF64, nlat, nlon)
+
+        # Random spectral coefficients
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
+
+        # Synthesis with scratch buffer
+        f_scratch = synthesis(cfg, alm; real_output=true, fft_scratch=scratch)
+        f_no_scratch = synthesis(cfg, alm; real_output=true)
+        @test isapprox(f_scratch, f_no_scratch; rtol=1e-12, atol=1e-14)
+
+        # Analysis with scratch buffer
+        alm_scratch = analysis(cfg, f_scratch; fft_scratch=scratch)
+        alm_no_scratch = analysis(cfg, f_scratch)
+        @test isapprox(alm_scratch, alm_no_scratch; rtol=1e-12, atol=1e-14)
+    end
+
+    @testset "PLM tables path" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        # Config with precomputed PLM tables (use prepare_plm_tables!)
+        cfg_plm = create_gauss_config(lmax, nlat; nlon=nlon)
+        prepare_plm_tables!(cfg_plm)  # Enable PLM tables
+
+        cfg_otf = create_gauss_config(lmax, nlat; nlon=nlon)
+        # Default is on-the-fly (no tables)
+
+        @test cfg_plm.use_plm_tables == true
+        @test cfg_otf.use_plm_tables == false
+
+        rng = MersenneTwister(48)
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
+
+        # Both paths should give same results
+        f_plm = synthesis(cfg_plm, alm; real_output=true)
+        f_otf = synthesis(cfg_otf, alm; real_output=true)
+        @test isapprox(f_plm, f_otf; rtol=1e-10, atol=1e-12)
+
+        alm_plm = analysis(cfg_plm, f_plm)
+        alm_otf = analysis(cfg_otf, f_otf)
+        @test isapprox(alm_plm, alm_otf; rtol=1e-10, atol=1e-12)
+
+        # Roundtrip should work with PLM tables
+        @test isapprox(alm_plm, alm; rtol=1e-10, atol=1e-12)
     end
 end

@@ -48,12 +48,12 @@ APPLICATIONS
 IMPLEMENTATION STRUCTURE
 ------------------------
 Main transforms:
-    SHsphtor_to_spat(cfg, Slm, Tlm)   : Synthesis (spectral → spatial)
-    spat_to_SHsphtor(cfg, Vt, Vp)     : Analysis (spatial → spectral)
+    synthesis_sphtor(cfg, Slm, Tlm)   : Synthesis (spectral → spatial)
+    analysis_sphtor(cfg, Vt, Vp)      : Analysis (spatial → spectral)
 
 Helper functions:
-    SHsph_to_spat(cfg, Slm)           : Spheroidal-only synthesis (T=0)
-    SHtor_to_spat(cfg, Tlm)           : Toroidal-only synthesis (S=0)
+    synthesis_sph(cfg, Slm)           : Spheroidal-only synthesis (T=0)
+    synthesis_tor(cfg, Tlm)           : Toroidal-only synthesis (S=0)
 
 Spectral operators:
     divergence_from_spheroidal(cfg, Slm)   : δ_lm = -l(l+1) S_lm
@@ -62,7 +62,7 @@ Spectral operators:
     toroidal_from_vorticity(cfg, ζlm)      : Invert for T_lm
 
 Degree-limited variants (suffix _l):
-    SHsphtor_to_spat_l, spat_to_SHsphtor_l, etc.
+    synthesis_sphtor_l, analysis_sphtor_l, etc.
 
 Mode-limited variants (suffix _ml):
     For single azimuthal mode m processing
@@ -75,8 +75,8 @@ DEBUGGING TIPS
    Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
    Slm[3, 1] = 1.0  # l=2, m=0 mode
    Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-   Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm)
-   S_back, T_back = spat_to_SHsphtor(cfg, Vt, Vp)
+   Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm)
+   S_back, T_back = analysis_sphtor(cfg, Vt, Vp)
    @assert norm(T_back) < 1e-10 "Pure spheroidal should have no toroidal"
    ```
 
@@ -176,12 +176,12 @@ Compute P_l^m/sin(θ) * N at a pole (x = ±1) using analytical limits.
 end
 
 """
-    SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true) -> (Vt, Vp)
+    synthesis_sphtor(cfg, Slm, Tlm; real_output=true) -> (Vt, Vp)
 
 Transform spheroidal/toroidal coefficients to horizontal vector field components.
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
-function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     # Validate input dimensions
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
@@ -303,21 +303,21 @@ function SHsphtor_to_spat(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
 end
 
 """
-    spat_to_SHsphtor(cfg, Vt, Vp) -> (Slm, Tlm)
+    analysis_sphtor(cfg, Vt, Vp) -> (Slm, Tlm)
 
 Transform horizontal vector field components to spheroidal/toroidal coefficients.
 Input: colatitude (Vt) and azimuthal (Vp) components on spatial grid.
 The returned coefficients satisfy δ_lm = −l(l+1) S_lm (divergence) and
 ζ_lm = −l(l+1) T_lm (vorticity) when expressed in the internal normalization.
 """
-function spat_to_SHsphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     if is_gpu_config(cfg)
-        return gpu_spat_to_SHsphtor(cfg, Vt, Vp)
+        return gpu_analysis_sphtor(cfg, Vt, Vp)
     end
-    return spat_to_SHsphtor_cpu(cfg, Vt, Vp)
+    return analysis_sphtor_cpu(cfg, Vt, Vp)
 end
 
-function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+function analysis_sphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
@@ -424,43 +424,43 @@ function spat_to_SHsphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMa
 end
 
 """
-    SHsphtor_to_spat_cplx(cfg, Slm, Tlm) -> (Vt, Vp)
+    synthesis_sphtor_cplx(cfg, Slm, Tlm) -> (Vt, Vp)
 
 Complex version preserving complex values in output.
 """
-function SHsphtor_to_spat_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix)
-    return SHsphtor_to_spat(cfg, Slm, Tlm; real_output=false)
+function synthesis_sphtor_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix)
+    return synthesis_sphtor(cfg, Slm, Tlm; real_output=false)
 end
 
 """
-    spat_cplx_to_SHsphtor(cfg, Vt, Vp) -> (Slm, Tlm)
+    analysis_sphtor_cplx(cfg, Vt, Vp) -> (Slm, Tlm)
 
 Transform complex horizontal vector components to spheroidal/toroidal coefficients.
 """
-function spat_cplx_to_SHsphtor(cfg::SHTConfig, Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex})
-    return spat_to_SHsphtor(cfg, Vt, Vp)  # Same implementation works for complex
+function analysis_sphtor_cplx(cfg::SHTConfig, Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex})
+    return analysis_sphtor(cfg, Vt, Vp)  # Same implementation works for complex
 end
 
 """
-    SHsph_to_spat(cfg, Slm; real_output=true) -> (Vt, Vp)
+    synthesis_sph(cfg, Slm; real_output=true) -> (Vt, Vp)
 
 Transform only spheroidal component to spatial vector field (Tlm = 0).
 """
-function SHsph_to_spat(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
+function synthesis_sph(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     Tlm_zero = zeros(eltype(Slm), lmax+1, mmax+1)
-    return SHsphtor_to_spat(cfg, Slm, Tlm_zero; real_output=real_output)
+    return synthesis_sphtor(cfg, Slm, Tlm_zero; real_output=real_output)
 end
 
 """
-    SHtor_to_spat(cfg, Tlm; real_output=true) -> (Vt, Vp)
+    synthesis_tor(cfg, Tlm; real_output=true) -> (Vt, Vp)
 
 Transform only toroidal component to spatial vector field (Slm = 0).
 """
-function SHtor_to_spat(cfg::SHTConfig, Tlm::AbstractMatrix; real_output::Bool=true)
+function synthesis_tor(cfg::SHTConfig, Tlm::AbstractMatrix; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm_zero = zeros(eltype(Tlm), lmax+1, mmax+1)
-    return SHsphtor_to_spat(cfg, Slm_zero, Tlm; real_output=real_output)
+    return synthesis_sphtor(cfg, Slm_zero, Tlm; real_output=real_output)
 end
 
 """
@@ -551,36 +551,36 @@ function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::Abs
 end
 
 """
-    SHsphtor_to_spat_l(cfg, Slm, Tlm, ltr; real_output=true) -> (Vt, Vp)
+    synthesis_sphtor_l(cfg, Slm, Tlm, ltr; real_output=true) -> (Vt, Vp)
 
 Degree-limited spheroidal/toroidal transform using modes up to degree ltr.
 """
-function SHsphtor_to_spat_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    
+
     # Create truncated copies
     S2 = copy(Slm); T2 = copy(Tlm)
-    
+
     # Zero high-degree modes
     @inbounds for m in 0:mmax, l in (ltr+1):lmax
         if l >= m
             S2[l+1, m+1] = 0.0
-            T2[l+1, m+1] = 0.0  
+            T2[l+1, m+1] = 0.0
         end
     end
-    
-    return SHsphtor_to_spat(cfg, S2, T2; real_output=real_output)
+
+    return synthesis_sphtor(cfg, S2, T2; real_output=real_output)
 end
 
 """
-    spat_to_SHsphtor_l(cfg, Vt, Vp, ltr) -> (Slm, Tlm)
+    analysis_sphtor_l(cfg, Vt, Vp, ltr) -> (Slm, Tlm)
 
 Degree-limited analysis computing coefficients only up to degree ltr.
 """
-function spat_to_SHsphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
+function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
     # Get full transform then truncate
-    Slm, Tlm = spat_to_SHsphtor(cfg, Vt, Vp)
-    
+    Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
+
     # Zero high-degree modes
     @inbounds for m in 0:cfg.mmax, l in (ltr+1):cfg.lmax
         if l >= m
@@ -588,52 +588,52 @@ function spat_to_SHsphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatr
             Tlm[l+1, m+1] = 0.0
         end
     end
-    
+
     return Slm, Tlm
 end
 
 """
-    SHsph_to_spat_l(cfg, Slm, ltr; real_output=true) -> (Vt, Vp)
+    synthesis_sph_l(cfg, Slm, ltr; real_output=true) -> (Vt, Vp)
 
 Degree-limited spheroidal-only transform.
 """
-function SHsph_to_spat_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_sph_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
     Tlm_zero = zeros(eltype(Slm), cfg.lmax+1, cfg.mmax+1)
-    return SHsphtor_to_spat_l(cfg, Slm, Tlm_zero, ltr; real_output=real_output)
+    return synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr; real_output=real_output)
 end
 
 """
-    SHtor_to_spat_l(cfg, Tlm, ltr; real_output=true) -> (Vt, Vp)
+    synthesis_tor_l(cfg, Tlm, ltr; real_output=true) -> (Vt, Vp)
 
 Degree-limited toroidal-only transform.
 """
-function SHtor_to_spat_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_tor_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
     Slm_zero = zeros(eltype(Tlm), cfg.lmax+1, cfg.mmax+1)
-    return SHsphtor_to_spat_l(cfg, Slm_zero, Tlm, ltr; real_output=real_output)
+    return synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr; real_output=real_output)
 end
 
 """
-    SHsph_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+    synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
 
 Mode-limited spheroidal-only synthesis wrapper.
 """
-function SHsph_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
     Tl_zero = zeros(eltype(Sl), length(Sl))
-    return SHsphtor_to_spat_ml(cfg, im, Sl, Tl_zero, ltr)
+    return synthesis_sphtor_ml(cfg, im, Sl, Tl_zero, ltr)
 end
 
 """
-    SHtor_to_spat_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
+    synthesis_tor_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
 
 Mode-limited toroidal-only synthesis wrapper.
 """
-function SHtor_to_spat_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_tor_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
     Sl_zero = zeros(eltype(Tl), length(Tl))
-    return SHsphtor_to_spat_ml(cfg, im, Sl_zero, Tl, ltr)
+    return synthesis_sphtor_ml(cfg, im, Sl_zero, Tl, ltr)
 end
 
 """
-    spat_to_SHsphtor_ml(cfg, im, Vt_m, Vp_m, ltr) -> (Sl, Tl)
+    analysis_sphtor_ml(cfg, im, Vt_m, Vp_m, ltr) -> (Sl, Tl)
 
 Mode-limited transform for specific azimuthal mode im.
 Input vectors contain Fourier coefficients for mode m at all latitudes.
@@ -642,7 +642,7 @@ the synthesis formulas:
     Vθ = ∂S/∂θ - (im/sinθ) * T
     Vφ = (im/sinθ) * S + ∂T/∂θ
 """
-function spat_to_SHsphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
+function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     length(Vt_m) == nlat || throw(DimensionMismatch("Vt_m length must be nlat"))
     length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat"))
@@ -695,14 +695,14 @@ function spat_to_SHsphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Com
 end
 
 """
-    SHsphtor_to_spat_ml(cfg, im, Sl, Tl, ltr) -> (Vt_m, Vp_m)
+    synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr) -> (Vt_m, Vp_m)
 
 Mode-limited synthesis for specific azimuthal mode im.
 Implements the proper spheroidal-toroidal synthesis formulas:
     Vθ = ∂S/∂θ - (im/sinθ) * T
     Vφ = (im/sinθ) * S + ∂T/∂θ
 """
-function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     expected_len = ltr - im + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
@@ -753,28 +753,28 @@ function SHsphtor_to_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
 end
 
 """
-    SH_to_grad_spat(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
+    synthesis_grad(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
 
 Gradient synthesis alias for compatibility with SHTns.
 """
-function SH_to_grad_spat(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
-    return SHsph_to_spat(cfg, Slm; real_output=real_output)
+function synthesis_grad(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
+    return synthesis_sph(cfg, Slm; real_output=real_output)
 end
 
 """
-    SH_to_grad_spat_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+    synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
 
 Degree-limited gradient synthesis alias.
 """
-function SH_to_grad_spat_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
-    return SHsph_to_spat_l(cfg, Slm, ltr; real_output=real_output)
+function synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+    return synthesis_sph_l(cfg, Slm, ltr; real_output=real_output)
 end
 
 """
-    SH_to_grad_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+    synthesis_grad_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
 
 Mode-limited gradient synthesis alias.
 """
-function SH_to_grad_spat_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
-    return SHsph_to_spat_ml(cfg, im, Sl, ltr)
+function synthesis_grad_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+    return synthesis_sph_ml(cfg, im, Sl, ltr)
 end

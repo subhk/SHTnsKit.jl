@@ -67,61 +67,61 @@ end
         return y, pullback
 end
 
-    # Packed scalar transforms: spat_to_SH, SH_to_spat
-    function ChainRulesCore.rrule(::typeof(SHTnsKit.spat_to_SH), cfg::SHTnsKit.SHTConfig, Vr)
-        y = SHTnsKit.spat_to_SH(cfg, Vr)
+    # Packed scalar transforms: analysis_packed, synthesis_packed
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_packed), cfg::SHTnsKit.SHTConfig, Vr)
+        y = SHTnsKit.analysis_packed(cfg, Vr)
         function pullback(ȳ)
-            Vr̄ = SHTnsKit.SH_to_spat(cfg, _to_complex(ȳ))
+            Vr̄ = SHTnsKit.synthesis_packed(cfg, _to_complex(ȳ))
             return NoTangent(), NoTangent(), Vr̄
 end
         return y, pullback
 end
 
-    function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_to_spat), cfg::SHTnsKit.SHTConfig, Qlm)
-        y = SHTnsKit.SH_to_spat(cfg, Qlm)
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_packed), cfg::SHTnsKit.SHTConfig, Qlm)
+        y = SHTnsKit.synthesis_packed(cfg, Qlm)
         function pullback(ȳ)
-            Qlm̄ = SHTnsKit.spat_to_SH(cfg, ȳ)
+            Qlm̄ = SHTnsKit.analysis_packed(cfg, ȳ)
             return NoTangent(), NoTangent(), Qlm̄
         end
         return y, pullback
     end
 
     # Vector sphtor transforms
-    function ChainRulesCore.rrule(::typeof(SHTnsKit.spat_to_SHsphtor), cfg::SHTnsKit.SHTConfig, Vt, Vp)
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Vt, Vp)
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_sphtor), cfg::SHTnsKit.SHTConfig, Vt, Vp)
+        Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Vt, Vp)
         function pullback(ṠTl)
             Slm̄, Tlm̄ = ṠTl
-            Vt̄, Vp̄ = SHTnsKit.SHsphtor_to_spat(cfg, _to_complex(Slm̄), _to_complex(Tlm̄); real_output=true)
+            Vt̄, Vp̄ = SHTnsKit.synthesis_sphtor(cfg, _to_complex(Slm̄), _to_complex(Tlm̄); real_output=true)
             return NoTangent(), NoTangent(), Vt̄, Vp̄
         end
         return (Slm, Tlm), pullback
     end
 
-    function ChainRulesCore.rrule(::typeof(SHTnsKit.SHsphtor_to_spat), cfg::SHTnsKit.SHTConfig, 
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_sphtor), cfg::SHTnsKit.SHTConfig,
                                 Slm, Tlm; real_output::Bool=true)
-        Vt, Vp = SHTnsKit.SHsphtor_to_spat(cfg, Slm, Tlm; real_output)
+        Vt, Vp = SHTnsKit.synthesis_sphtor(cfg, Slm, Tlm; real_output)
         function pullback(Ṽ)
             Vt̄, Vp̄ = Ṽ
-            Slm̄, Tlm̄ = SHTnsKit.spat_to_SHsphtor(cfg, Vt̄, Vp̄)
+            Slm̄, Tlm̄ = SHTnsKit.analysis_sphtor(cfg, Vt̄, Vp̄)
             return NoTangent(), NoTangent(), Slm̄, Tlm̄, (; real_output=NoTangent())
         end
         return (Vt, Vp), pullback
     end
 
     # Complex packed
-    function ChainRulesCore.rrule(::typeof(SHTnsKit.spat_cplx_to_SH), cfg::SHTnsKit.SHTConfig, z)
-        y = SHTnsKit.spat_cplx_to_SH(cfg, z)
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_packed_cplx), cfg::SHTnsKit.SHTConfig, z)
+        y = SHTnsKit.analysis_packed_cplx(cfg, z)
         function pullback(ȳ)
-            z̄ = SHTnsKit.SH_to_spat_cplx(cfg, _to_complex(ȳ))
+            z̄ = SHTnsKit.synthesis_packed_cplx(cfg, _to_complex(ȳ))
             return NoTangent(), NoTangent(), z̄
         end
         return y, pullback
     end
 
-    function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_to_spat_cplx), cfg::SHTnsKit.SHTConfig, alm)
-        y = SHTnsKit.SH_to_spat_cplx(cfg, alm)
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_packed_cplx), cfg::SHTnsKit.SHTConfig, alm)
+        y = SHTnsKit.synthesis_packed_cplx(cfg, alm)
         function pullback(ȳ)
-            alm̄ = SHTnsKit.spat_cplx_to_SH(cfg, _to_complex(ȳ))
+            alm̄ = SHTnsKit.analysis_packed_cplx(cfg, _to_complex(ȳ))
             return NoTangent(), NoTangent(), alm̄
         end
         return y, pullback

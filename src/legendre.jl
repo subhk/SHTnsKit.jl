@@ -65,6 +65,27 @@ Plm_row!(P, 0.5, 9, 1)
 ================================================================================
 =#
 
+# =============================================================================
+# NUMERICAL CONSTANTS
+# =============================================================================
+
+"""
+Multiplier for machine epsilon to detect near-pole conditions.
+When sin(θ) < POLE_TOLERANCE_FACTOR * eps(T), we're effectively at a pole
+and need special handling to avoid division by zero or numerical instability.
+"""
+const POLE_TOLERANCE_FACTOR = 100
+
+"""
+Convergence criterion for Newton-Raphson iteration in Gauss-Legendre quadrature.
+Root finding stops when |z - z_prev| < NEWTON_CONVERGENCE_TOL.
+"""
+const NEWTON_CONVERGENCE_TOL = 1e-15
+
+# =============================================================================
+# LEGENDRE POLYNOMIAL COMPUTATION
+# =============================================================================
+
 """
     Plm_row!(P::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
 
@@ -176,7 +197,7 @@ function Plm_and_dPdx_row!(P::AbstractVector{T}, dPdx::AbstractVector{T}, x::T, 
         x2m1 = x*x - one(T)
 
         # Handle poles (x = ±1) where x² - 1 = 0 causes division by zero
-        if abs(x2m1) < 100 * eps(T)
+        if abs(x2m1) < POLE_TOLERANCE_FACTOR * eps(T)
             if m == 0
                 # For m = 0: dP_l^0/dx|_{x=±1} = (±1)^{l+1} * l(l+1)/2
                 # This is the well-known analytical result for Legendre polynomial derivatives at endpoints
@@ -247,7 +268,7 @@ function Plm_and_dPdtheta_row!(P::AbstractVector{T}, dPdtheta::AbstractVector{T}
         sinth = sqrt(max(zero(T), one(T) - x*x))
 
         # Handle poles (x = ±1) where sin(θ) = 0
-        if sinth < 100 * eps(T)
+        if sinth < POLE_TOLERANCE_FACTOR * eps(T)
             # At poles, dP/dθ has special values:
             # - For m = 0: dP_l^0/dθ = 0 (symmetry)
             # - For m = 1: dP_l^1/dθ|_{θ=0} = -√(l(l+1)/2) (with normalization)
@@ -336,7 +357,7 @@ function Plm_over_sinth_row!(P::AbstractVector{T}, P_over_sinth::AbstractVector{
         sinth = sqrt(max(zero(T), one(T) - x*x))
 
         # Handle poles (x = ±1) where sin(θ) = 0
-        if sinth < 100 * eps(T)
+        if sinth < POLE_TOLERANCE_FACTOR * eps(T)
             if m == 0
                 # P_l^0/sin(θ) is genuinely singular for m=0, but this case
                 # shouldn't be used in vector transforms (m=0 terms don't have 1/sinθ factor)
@@ -492,7 +513,7 @@ function gausslegendre(n::Int)
             pd = n * (z * pn - pnm1) / (z^2 - 1.0)
             z1 = z
             z -= pn / pd
-            if abs(z - z1) < 1e-15
+            if abs(z - z1) < NEWTON_CONVERGENCE_TOL
                 break
             end
         end

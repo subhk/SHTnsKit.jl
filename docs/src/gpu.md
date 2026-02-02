@@ -147,10 +147,10 @@ Alm = gpu_analysis_safe(cfg, large_spatial_data)
 
 ### Vector Field Transforms
 
-#### `gpu_spat_to_SHsphtor`
+#### `gpu_analysis_sphtor`
 
 ```julia
-gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
+gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 ```
 
 GPU-accelerated spheroidal-toroidal decomposition.
@@ -164,13 +164,13 @@ vθ = rand(cfg.nlat, cfg.nlon)
 vφ = rand(cfg.nlat, cfg.nlon)
 
 # Decompose into spheroidal and toroidal
-Slm, Tlm = gpu_spat_to_SHsphtor(cfg, vθ, vφ)
+Slm, Tlm = gpu_analysis_sphtor(cfg, vθ, vφ)
 ```
 
-#### `gpu_SHsphtor_to_spat`
+#### `gpu_synthesis_sphtor`
 
 ```julia
-gpu_SHsphtor_to_spat(cfg::SHTConfig, Slm, Tlm; device=get_device(), real_output=true)
+gpu_synthesis_sphtor(cfg::SHTConfig, Slm, Tlm; device=get_device(), real_output=true)
 ```
 
 GPU-accelerated vector field synthesis.
@@ -178,7 +178,7 @@ GPU-accelerated vector field synthesis.
 **Example:**
 ```julia
 # Reconstruct vector field from coefficients
-vθ_out, vφ_out = gpu_SHsphtor_to_spat(cfg, Slm, Tlm)
+vθ_out, vφ_out = gpu_synthesis_sphtor(cfg, Slm, Tlm)
 ```
 
 ### Spectral Operators

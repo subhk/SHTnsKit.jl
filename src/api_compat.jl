@@ -387,11 +387,11 @@ for fname in (
 end
 
 """
-    SH_to_spat_time(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Vr::AbstractVector{<:Real}) -> Float64
+    synthesis_packed_time(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Vr::AbstractVector{<:Real}) -> Float64
 
 Timed scalar synthesis; returns elapsed seconds and writes result into `Vr`.
 """
-function SH_to_spat_time(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Vr::AbstractVector{<:Real})
+function synthesis_packed_time(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Vr::AbstractVector{<:Real})
     alm_mat = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
     @inbounds for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
@@ -406,11 +406,11 @@ function SH_to_spat_time(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Vr::Abs
 end
 
 """
-    spat_to_SH_time(cfg::SHTConfig, Vr::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}) -> Float64
+    analysis_packed_time(cfg::SHTConfig, Vr::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}) -> Float64
 
 Timed scalar analysis; returns elapsed seconds and writes result into `Qlm`.
 """
-function spat_to_SH_time(cfg::SHTConfig, Vr::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex})
+function analysis_packed_time(cfg::SHTConfig, Vr::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex})
     f = reshape(Vr, cfg.nlat, cfg.nlon)
     t = @elapsed alm = analysis(cfg, f)
     @inbounds for m in 0:cfg.mmax

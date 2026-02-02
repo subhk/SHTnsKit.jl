@@ -124,7 +124,7 @@ function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::Abstract
     function loss_flat(z)
         Xt = reshape(view(z, 1:nlat*nlon), nlat, nlon)           # Extract Vt component
         Xp = reshape(view(z, nlat*nlon+1:2*nlat*nlon), nlat, nlon) # Extract Vp component
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)      # Spheroidal/toroidal analysis
+        Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Xt, Xp)      # Spheroidal/toroidal analysis
         return SHTnsKit.energy_vector(cfg, Slm, Tlm)            # Compute vector energy
     end
     
@@ -175,7 +175,7 @@ function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatr
     function loss_flat(z)
         Xt = reshape(view(z, 1:nlat*nlon), nlat, nlon)           # Extract Vt component
         Xp = reshape(view(z, nlat*nlon+1:2*nlat*nlon), nlat, nlon) # Extract Vp component
-        Slm, Tlm = SHTnsKit.spat_to_SHsphtor(cfg, Xt, Xp)      # Transform to spectral
+        Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Xt, Xp)      # Transform to spectral
         return SHTnsKit.energy_vector(cfg, Slm, Tlm)            # Compute energy
     end
     

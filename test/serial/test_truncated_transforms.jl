@@ -17,11 +17,11 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
 
         # Random spatial field
         f = randn(rng, nlat, nlon)
-        Qlm_full = spat_to_SH(cfg, vec(f))
+        Qlm_full = analysis_packed(cfg, vec(f))
 
         # Truncated analysis
         ltr = lmax - 2
-        Qlm_trunc = spat_to_SH_l(cfg, vec(f), ltr)
+        Qlm_trunc = analysis_packed_l(cfg, vec(f), ltr)
 
         # Verify truncation: modes l > ltr should be zero
         for m in 0:cfg.mmax
@@ -49,7 +49,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Qlm_full[1:lmax+1] .= real.(Qlm_full[1:lmax+1])  # m=0 real
 
         # Truncated synthesis
-        f_trunc = SH_to_spat_l(cfg, Qlm_full, ltr)
+        f_trunc = synthesis_packed_l(cfg, Qlm_full, ltr)
 
         # Should match synthesis of zeroed-out high modes
         Qlm_zeroed = copy(Qlm_full)
@@ -59,7 +59,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
                 Qlm_zeroed[idx] = 0
             end
         end
-        f_zeroed = SH_to_spat(cfg, Qlm_zeroed)
+        f_zeroed = synthesis_packed(cfg, Qlm_zeroed)
         @test isapprox(f_trunc, f_zeroed; rtol=1e-10, atol=1e-12)
     end
 
@@ -76,7 +76,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Evaluate at specific point
         cost = 0.5  # cos(θ)
         phi = 0.0
-        val = SH_to_point(cfg, alm, cost, phi)
+        val = synthesis_point(cfg, alm, cost, phi)
 
         # Should be finite and well-defined
         @test !isnan(val) && !isinf(val)
@@ -84,7 +84,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Test at multiple points
         for cost in [-0.8, -0.3, 0.0, 0.3, 0.8]
             for phi in [0.0, π/4, π/2, π, 3π/2]
-                val = SH_to_point(cfg, alm, cost, phi)
+                val = synthesis_point(cfg, alm, cost, phi)
                 @test !isnan(val) && !isinf(val)
             end
         end
@@ -108,7 +108,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
 
         # Verify consistency with full synthesis at this latitude
         # The latitude values should match a row of the full synthesis
-        f_full = reshape(SH_to_spat(cfg, Qlm), nlat, nlon)
+        f_full = reshape(synthesis_packed(cfg, Qlm), nlat, nlon)
 
         # Find closest latitude in grid
         idx = argmin(abs.(cfg.x .- cost))
@@ -134,13 +134,13 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
                 Ql = randn(rng, ComplexF64, len)
 
                 # Mode synthesis - verify output dimensions and validity
-                f_ml = SH_to_spat_ml(cfg, im, Ql, ltr)
+                f_ml = synthesis_packed_ml(cfg, im, Ql, ltr)
                 @test length(f_ml) == nlat
                 @test all(!isnan, f_ml)
                 @test all(!isinf, f_ml)
 
                 # Mode analysis - verify output dimensions
-                Ql_back = spat_to_SH_ml(cfg, im, f_ml, ltr)
+                Ql_back = analysis_packed_ml(cfg, im, f_ml, ltr)
                 @test length(Ql_back) == len
                 @test all(!isnan, Ql_back)
                 @test all(!isinf, Ql_back)

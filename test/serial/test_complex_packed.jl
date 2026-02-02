@@ -20,11 +20,11 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         alm = randn(rng, ComplexF64, nlm_cplx)
 
         # Synthesis
-        f = SH_to_spat_cplx(cfg, alm)
+        f = synthesis_packed_cplx(cfg, alm)
         @test size(f) == (nlat, nlon)
 
         # Analysis
-        alm_back = spat_cplx_to_SH(cfg, f)
+        alm_back = analysis_packed_cplx(cfg, f)
 
         @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
     end
@@ -137,10 +137,10 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         nlm_cplx = nlm_cplx_calc(lmax, lmax, 1)
         alm = randn(rng, ComplexF64, nlm_cplx)
 
-        # Evaluate at points - SH_to_point_cplx takes packed vector
+        # Evaluate at points - synthesis_point_cplx takes packed vector
         for cost in [-0.5, 0.0, 0.5]
             for phi in [0.0, π/2, π]
-                val = SH_to_point_cplx(cfg, alm, cost, phi)
+                val = synthesis_point_cplx(cfg, alm, cost, phi)
                 @test !isnan(val) && !isinf(val)
             end
         end
@@ -164,8 +164,8 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         end
 
         # Roundtrip in spectral domain: synth then analysis
-        Vt, Vp = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
-        Slm_back, Tlm_back = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
+        Vt, Vp = synthesis_sphtor_cplx(cfg, Slm, Tlm)
+        Slm_back, Tlm_back = analysis_sphtor_cplx(cfg, Vt, Vp)
 
         @test isapprox(Slm_back, Slm; rtol=1e-8, atol=1e-10)
         @test isapprox(Tlm_back, Tlm; rtol=1e-8, atol=1e-10)

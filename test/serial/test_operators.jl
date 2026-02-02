@@ -28,10 +28,10 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         SH_mul_mx(cfg, mx, Qlm, Rlm)
 
         # Verify by spatial multiplication
-        f = SH_to_spat(cfg, Qlm)
+        f = synthesis_packed(cfg, Qlm)
         f_mat = reshape(f, nlat, nlon)
         f_times_cost = f_mat .* cfg.x  # x = cos(θ)
-        Rlm_ref = spat_to_SH(cfg, vec(f_times_cost))
+        Rlm_ref = analysis_packed(cfg, vec(f_times_cost))
 
         @test isapprox(Rlm, Rlm_ref; rtol=1e-9, atol=1e-11)
     end

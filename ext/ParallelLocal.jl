@@ -93,10 +93,10 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
             end
         end
         ph = cis(mval * phi)
-        s_local += gm * ph  # Match serial SH_to_point: no conjugate term
+        s_local += gm * ph  # Match serial synthesis_point: no conjugate term
     end
     s = MPI.Allreduce(s_local, +, comm)
-    return s  # Return complex to match serial SH_to_point
+    return s  # Return complex to match serial synthesis_point
 end
 
 """
@@ -232,9 +232,9 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
 end
 
 """
-    dist_spat_to_SH_packed(cfg, fθφ::PencilArray) -> Qlm packed
+    dist_analysis_packed(cfg, fθφ::PencilArray) -> Qlm packed
 """
-function SHTnsKit.dist_spat_to_SH_packed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray)
+function SHTnsKit.dist_analysis_packed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ)
     Qlm = Vector{ComplexF64}(undef, cfg.nlm)
     for m in 0:cfg.mmax
@@ -247,9 +247,9 @@ function SHTnsKit.dist_spat_to_SH_packed(cfg::SHTnsKit.SHTConfig, fθφ::PencilA
 end
 
 """
-    dist_SH_packed_to_spat(cfg, Qlm::AbstractVector{<:Complex}; prototype_θφ, real_output=true)
+    dist_synthesis_packed(cfg, Qlm::AbstractVector{<:Complex}; prototype_θφ, real_output=true)
 """
-function SHTnsKit.dist_SH_packed_to_spat(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex}; prototype_θφ::PencilArray, real_output::Bool=true)
+function SHTnsKit.dist_synthesis_packed(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex}; prototype_θφ::PencilArray, real_output::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length"))
     Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
     for m in 0:cfg.mmax, l in m:cfg.lmax
@@ -259,9 +259,9 @@ function SHTnsKit.dist_SH_packed_to_spat(cfg::SHTnsKit.SHTConfig, Qlm::AbstractV
 end
 
 """
-    dist_spat_cplx_to_SH(cfg, z::PencilArray) -> alm_packed (LM_cplx)
+    dist_analysis_packed_cplx(cfg, z::PencilArray) -> alm_packed (LM_cplx)
 """
-function SHTnsKit.dist_spat_cplx_to_SH(cfg::SHTnsKit.SHTConfig, z::PencilArray)
+function SHTnsKit.dist_analysis_packed_cplx(cfg::SHTnsKit.SHTConfig, z::PencilArray)
     Alm = SHTnsKit.dist_analysis(cfg, z; use_tables=cfg.use_plm_tables)
     lmax, mmax = cfg.lmax, cfg.mmax
     alm_p = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
@@ -278,9 +278,9 @@ function SHTnsKit.dist_spat_cplx_to_SH(cfg::SHTnsKit.SHTConfig, z::PencilArray)
 end
 
 """
-    dist_SH_to_spat_cplx(cfg, alm_packed::AbstractVector{<:Complex}; prototype_θφ) -> PencilArray complex field
+    dist_synthesis_packed_cplx(cfg, alm_packed::AbstractVector{<:Complex}; prototype_θφ) -> PencilArray complex field
 """
-function SHTnsKit.dist_SH_to_spat_cplx(cfg::SHTnsKit.SHTConfig, alm_packed::AbstractVector{<:Complex}; prototype_θφ::PencilArray)
+function SHTnsKit.dist_synthesis_packed_cplx(cfg::SHTnsKit.SHTConfig, alm_packed::AbstractVector{<:Complex}; prototype_θφ::PencilArray)
     lmax, mmax = cfg.lmax, cfg.mmax
     length(alm_packed) == SHTnsKit.nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("alm_packed length"))
     Alm = zeros(ComplexF64, lmax+1, mmax+1)

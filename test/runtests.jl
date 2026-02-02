@@ -56,7 +56,7 @@ end
     Slm = zeros(ComplexF64, lmax+1, lmax+1)
     Tlm = zeros(ComplexF64, lmax+1, lmax+1)
     Slm[3, 2] = 1.0 + 0im
-    Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+    Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
     E_spec = energy_vector(cfg, Slm, Tlm)
     E_grid = grid_energy_vector(cfg, Vt, Vp)
     try
@@ -67,7 +67,7 @@ end
     # Single T-mode: l=3, m=2
     fill!(Slm, 0); fill!(Tlm, 0)
     Tlm[4, 3] = 1.0 + 0im
-    Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+    Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
     E_spec = energy_vector(cfg, Slm, Tlm)
     E_grid = grid_energy_vector(cfg, Vt, Vp)
     try
@@ -87,9 +87,9 @@ end
     alm[:, 1] .= real.(alm[:, 1])
     Vr = vec(synthesis(cfg, alm; real_output=true))
 
-    full_Q = spat_to_SH(cfg, Vr)
+    full_Q = analysis_packed(cfg, Vr)
     ltr = lmax - 1
-    trunc_Q = spat_to_SH_l(cfg, Vr, ltr)
+    trunc_Q = analysis_packed_l(cfg, Vr, ltr)
     for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
         for l in m:cfg.lmax
@@ -102,7 +102,7 @@ end
         end
     end
 
-    full_spatial = SH_to_spat(cfg, full_Q)
+    full_spatial = synthesis_packed(cfg, full_Q)
     zeroed_Q = copy(full_Q)
     for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
@@ -111,9 +111,9 @@ end
             zeroed_Q[lm] = 0
         end
     end
-    expected_trunc = SH_to_spat(cfg, zeroed_Q)
-    @test isapprox(SH_to_spat_l(cfg, full_Q, ltr), expected_trunc; rtol=1e-10, atol=1e-12)
-    @test isapprox(SH_to_spat_l(cfg, full_Q, lmax), full_spatial; rtol=1e-10, atol=1e-12)
+    expected_trunc = synthesis_packed(cfg, zeroed_Q)
+    @test isapprox(synthesis_packed_l(cfg, full_Q, ltr), expected_trunc; rtol=1e-10, atol=1e-12)
+    @test isapprox(synthesis_packed_l(cfg, full_Q, lmax), full_spatial; rtol=1e-10, atol=1e-12)
 end
 
 @testset "Mode-limited vector wrappers" begin
@@ -128,31 +128,31 @@ end
     Sl = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
     Tl = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
 
-    Vt_ref, Vp_ref = SHsphtor_to_spat_ml(cfg, im, Sl, zeros(ComplexF64, len), ltr)
-    Vt_s, Vp_s = SHsph_to_spat_ml(cfg, im, Sl, ltr)
+    Vt_ref, Vp_ref = synthesis_sphtor_ml(cfg, im, Sl, zeros(ComplexF64, len), ltr)
+    Vt_s, Vp_s = synthesis_sph_ml(cfg, im, Sl, ltr)
     @test isapprox(Vt_s, Vt_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Vp_s, Vp_ref; rtol=1e-10, atol=1e-12)
 
-    Vt_ref_t, Vp_ref_t = SHsphtor_to_spat_ml(cfg, im, zeros(ComplexF64, len), Tl, ltr)
-    Vt_t, Vp_t = SHtor_to_spat_ml(cfg, im, Tl, ltr)
+    Vt_ref_t, Vp_ref_t = synthesis_sphtor_ml(cfg, im, zeros(ComplexF64, len), Tl, ltr)
+    Vt_t, Vp_t = synthesis_tor_ml(cfg, im, Tl, ltr)
     @test isapprox(Vt_t, Vt_ref_t; rtol=1e-10, atol=1e-12)
     @test isapprox(Vp_t, Vp_ref_t; rtol=1e-10, atol=1e-12)
 
     Slm = ComplexF64.(randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1))
     Slm[:, 1] .= real.(Slm[:, 1])
-    Gt_ref, Gp_ref = SHsph_to_spat(cfg, Slm)
-    Gt, Gp = SH_to_grad_spat(cfg, Slm)
+    Gt_ref, Gp_ref = synthesis_sph(cfg, Slm)
+    Gt, Gp = synthesis_grad(cfg, Slm)
     @test isapprox(Gt, Gt_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Gp, Gp_ref; rtol=1e-10, atol=1e-12)
 
-    Gt_l_ref, Gp_l_ref = SHsph_to_spat_l(cfg, Slm, ltr)
-    Gt_l, Gp_l = SH_to_grad_spat_l(cfg, Slm, ltr)
+    Gt_l_ref, Gp_l_ref = synthesis_sph_l(cfg, Slm, ltr)
+    Gt_l, Gp_l = synthesis_grad_l(cfg, Slm, ltr)
     @test isapprox(Gt_l, Gt_l_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Gp_l, Gp_l_ref; rtol=1e-10, atol=1e-12)
 
     Sl_ml = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
-    Vt_ml_ref, Vp_ml_ref = SHsph_to_spat_ml(cfg, im, Sl_ml, ltr)
-    Vt_ml, Vp_ml = SH_to_grad_spat_ml(cfg, im, Sl_ml, ltr)
+    Vt_ml_ref, Vp_ml_ref = synthesis_sph_ml(cfg, im, Sl_ml, ltr)
+    Vt_ml, Vp_ml = synthesis_grad_ml(cfg, im, Sl_ml, ltr)
     @test isapprox(Vt_ml, Vt_ml_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Vp_ml, Vp_ml_ref; rtol=1e-10, atol=1e-12)
 end
@@ -299,8 +299,8 @@ end
             Tlm_r = similar(Tlm_c)
             vplan_c = _get_parallel_ext().DistSphtorPlan(cfg, Vt; use_rfft=false)
             vplan_r = _get_parallel_ext().DistSphtorPlan(cfg, Vt; use_rfft=true)
-            SHTnsKit.dist_spat_to_SHsphtor!(vplan_c, Slm_c, Tlm_c, Vt, Vp)
-            SHTnsKit.dist_spat_to_SHsphtor!(vplan_r, Slm_r, Tlm_r, Vt, Vp)
+            SHTnsKit.dist_analysis_sphtor!(vplan_c, Slm_c, Tlm_c, Vt, Vp)
+            SHTnsKit.dist_analysis_sphtor!(vplan_r, Slm_r, Tlm_r, Vt, Vp)
 
             @test isapprox(Slm_c, Slm_r; rtol=1e-10, atol=1e-12)
             @test isapprox(Tlm_c, Tlm_r; rtol=1e-10, atol=1e-12)
@@ -401,11 +401,11 @@ end
                 vplan = _get_parallel_ext().DistSphtorPlan(cfg, Vt; use_rfft=true, with_spatial_scratch=true)
                 Slm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
                 Tlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-                SHTnsKit.dist_spat_to_SHsphtor!(vplan, Slm, Tlm, Vt, Vp)
+                SHTnsKit.dist_analysis_sphtor!(vplan, Slm, Tlm, Vt, Vp)
 
                 Vt_back = PencilArrays.PencilArray{Float64}(undef, topo)
                 Vp_back = PencilArrays.PencilArray{Float64}(undef, topo)
-                SHTnsKit.dist_SHsphtor_to_spat!(vplan, Vt_back, Vp_back, Slm, Tlm)
+                SHTnsKit.dist_synthesis_sphtor!(vplan, Vt_back, Vp_back, Slm, Tlm)
 
                 vt_diff = sum(abs2, Array(Vt_back) .- Array(Vt))
                 vp_diff = sum(abs2, Array(Vp_back) .- Array(Vp))
@@ -463,7 +463,7 @@ function parseval_vector_test(lmax::Int)
     Tlm[:, 1] .= real.(Tlm[:, 1])
     
     # Synthesize vector components from spectral coefficients
-    Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+    Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
 
     # Parseval for vector fields: ∫(|V_θ|² + |V_φ|²) dΩ = Σ(|S_lm|² + |T_lm|²)
     E_vec = energy_vector(cfg, Slm, Tlm)
@@ -506,10 +506,10 @@ function vector_coefficient_roundtrip_test(lmax::Int)
     end
 
     # Synthesize to spatial domain
-    Vt, Vp = SHsphtor_to_spat(cfg, Slm_orig, Tlm_orig; real_output=true)
+    Vt, Vp = synthesis_sphtor(cfg, Slm_orig, Tlm_orig; real_output=true)
 
     # Analyze back to spectral domain
-    Slm_recov, Tlm_recov = spat_to_SHsphtor(cfg, Vt, Vp)
+    Slm_recov, Tlm_recov = analysis_sphtor(cfg, Vt, Vp)
 
     # Compare recovered coefficients
     S_err = maximum(abs.(Slm_recov - Slm_orig))
@@ -715,7 +715,7 @@ end
 
     # Packed scalar
     f = randn(rng, nlat, nlon)
-    Q = spat_to_SH(cfg, vec(f))
+    Q = analysis_packed(cfg, vec(f))
     @test isapprox(energy_scalar_packed(cfg, Q), energy_scalar(cfg, analysis(cfg, f)); rtol=1e-10)
     GQ = grad_energy_scalar_packed(cfg, Q)
     ϵ = 1e-7
@@ -728,7 +728,7 @@ end
     # Packed vector
     Vt = randn(rng, nlat, nlon)
     Vp = randn(rng, nlat, nlon)
-    Slm, Tlm = spat_to_SHsphtor(cfg, Vt, Vp)
+    Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
     # Pack matrices into vectors in LM order
     Sp = similar(Q); Tp = similar(Q)
     for m in 0:cfg.mmax
@@ -788,20 +788,20 @@ end
             # Create spectral Pencil for coefficient arrays
             P_spec = PencilArrays.Pencil((lmax+1, lmax+1), MPI.COMM_WORLD)
             val_dist = SHTnsKit.dist_SH_to_point(cfg, PencilArrays.PencilArray(P_spec, Alm), cost, phi)
-            val_ref = SH_to_point(cfg, Alm, cost, phi)
+            val_ref = synthesis_point(cfg, Alm, cost, phi)
             @test isapprox(val_dist, val_ref; rtol=1e-10, atol=1e-12)
             lat_dist = SHTnsKit.dist_SH_to_lat(cfg, PencilArrays.PencilArray(P_spec, Alm), cost)
             lat_ref = SH_to_lat(cfg, Qlm, cost)  # SH_to_lat expects Vector (packed) form
             @test isapprox(lat_dist, lat_ref; rtol=1e-10, atol=1e-12)
 
-            # QST analysis only (roundtrip skipped - dist_SHqst_to_spat has known issues in single-process MPI)
-            Q,S,T = SHTnsKit.dist_spat_to_SHqst(cfg, Vrθφ, Vtθφ, Vpθφ)
+            # QST analysis only (roundtrip skipped - dist_synthesis_qst has known issues in single-process MPI)
+            Q,S,T = SHTnsKit.dist_analysis_qst(cfg, Vrθφ, Vtθφ, Vpθφ)
 
             # QST point/lat evals (use spectral Pencil from earlier)
             Qp = PencilArrays.PencilArray(P_spec, Q)
             Sp = PencilArrays.PencilArray(P_spec, S)
             Tp = PencilArrays.PencilArray(P_spec, T)
-            vr_d, vt_d, vp_d = SHTnsKit.dist_SHqst_to_point(cfg, Qp, Sp, Tp, cost, phi)
+            vr_d, vt_d, vp_d = SHTnsKit.dist_synthesis_qst_to_point(cfg, Qp, Sp, Tp, cost, phi)
 
             # Build packed references
             Qv = similar(Qlm); Sv = similar(Qlm); Tv = similar(Qlm)

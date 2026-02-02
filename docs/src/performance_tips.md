@@ -30,7 +30,7 @@ This page summarizes practical tips to reduce allocations and improve locality a
   vplan = DistSphtorPlan(cfg, proto; use_rfft=true, with_spatial_scratch=true)
   splan = DistPlan(cfg, proto; use_rfft=true)
   dist_analysis!(aplan, Alm, fθφ)          # no per-call FFT allocs
-  dist_SHsphtor_to_spat!(vplan, Vt, Vp, S, T; real_output=true)
+  dist_synthesis_sphtor!(vplan, Vt, Vp, S, T; real_output=true)
   dist_synthesis!(splan, fθφ, Alm; real_output=true)
   ```
   `use_rfft` trims the spectral grid; `with_spatial_scratch` keeps a single complex (θ,φ) buffer inside the vector/QST plans so real outputs don’t allocate a fresh iFFT workspace each call.

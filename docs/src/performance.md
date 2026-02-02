@@ -451,7 +451,7 @@ function benchmark_vector_vs_scalar(cfg)
     Tlm[3,2] = 0.5
 
     # Vector spatial fields
-    Vθ, Vφ = SHsphtor_to_spat(cfg, Slm, Tlm)
+    Vθ, Vφ = synthesis_sphtor(cfg, Slm, Tlm)
 
     # Scalar benchmarks
     scalar_synth = @elapsed begin
@@ -469,13 +469,13 @@ function benchmark_vector_vs_scalar(cfg)
     # Vector benchmarks
     vector_synth = @elapsed begin
         for i in 1:20
-            SHsphtor_to_spat(cfg, Slm, Tlm)
+            synthesis_sphtor(cfg, Slm, Tlm)
         end
     end
 
     vector_analysis = @elapsed begin
         for i in 1:20
-            spat_to_SHsphtor(cfg, Vθ, Vφ)
+            analysis_sphtor(cfg, Vθ, Vφ)
         end
     end
 

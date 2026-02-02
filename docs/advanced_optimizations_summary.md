@@ -100,10 +100,10 @@ for i in 1:cfg.nlat, j in 1:cfg.nlon
 end
 
 # Decompose into spheroidal/toroidal components
-Slm, Tlm = spat_to_SHsphtor(cfg, Vθ, Vφ)
+Slm, Tlm = analysis_sphtor(cfg, Vθ, Vφ)
 
 # Reconstruct velocity field
-Vθ_rec, Vφ_rec = SHsphtor_to_spat(cfg, Slm, Tlm)
+Vθ_rec, Vφ_rec = synthesis_sphtor(cfg, Slm, Tlm)
 
 destroy_config(cfg)
 ```

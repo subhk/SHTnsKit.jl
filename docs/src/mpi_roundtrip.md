@@ -38,6 +38,6 @@ end
 MPI.Finalize()
 ```
 
-For vector fields, use `dist_spat_to_SHsphtor` and `dist_SHsphtor_to_spat` with the
+For vector fields, use `dist_analysis_sphtor` and `dist_synthesis_sphtor` with the
 same `prototype_θφ`. Precomputing Legendre tables via `prepare_plm_tables!(cfg)` on
 regular grids typically improves performance.

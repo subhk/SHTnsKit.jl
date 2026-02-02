@@ -31,10 +31,10 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         end
 
         # Synthesis
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
 
         # Analysis
-        Slm_rec, Tlm_rec = spat_to_SHsphtor(cfg, Vt, Vp)
+        Slm_rec, Tlm_rec = analysis_sphtor(cfg, Vt, Vp)
 
         @test isapprox(Slm_rec, Slm; rtol=1e-9, atol=1e-11)
         @test isapprox(Tlm_rec, Tlm; rtol=1e-9, atol=1e-11)
@@ -51,16 +51,16 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
 
         # Only S component - use consistent real_output setting
         Slm[4, 2] = 1.0 + 0.5im  # l=3, m=1
-        Vt_s, Vp_s = SHsph_to_spat(cfg, Slm; real_output=false)
-        Vt_full, Vp_full = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=false)
+        Vt_s, Vp_s = synthesis_sph(cfg, Slm; real_output=false)
+        Vt_full, Vp_full = synthesis_sphtor(cfg, Slm, Tlm; real_output=false)
         @test isapprox(Vt_s, Vt_full; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_s, Vp_full; rtol=1e-10, atol=1e-12)
 
         # Only T component - use consistent real_output setting
         fill!(Slm, 0)
         Tlm[5, 3] = 0.8 - 0.3im  # l=4, m=2
-        Vt_t, Vp_t = SHtor_to_spat(cfg, Tlm; real_output=false)
-        Vt_full2, Vp_full2 = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=false)
+        Vt_t, Vp_t = synthesis_tor(cfg, Tlm; real_output=false)
+        Vt_full2, Vp_full2 = synthesis_sphtor(cfg, Slm, Tlm; real_output=false)
         @test isapprox(Vt_t, Vt_full2; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_t, Vp_full2; rtol=1e-10, atol=1e-12)
     end
@@ -79,9 +79,9 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
             alm[l+1, m+1] = 0.0
         end
 
-        # Gradient via SH_to_grad_spat should match SHsph_to_spat
-        Gt, Gp = SH_to_grad_spat(cfg, alm)
-        Gt_ref, Gp_ref = SHsph_to_spat(cfg, alm)
+        # Gradient via synthesis_grad should match synthesis_sph
+        Gt, Gp = synthesis_grad(cfg, alm)
+        Gt_ref, Gp_ref = synthesis_sph(cfg, alm)
 
         @test isapprox(Gt, Gt_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Gp, Gp_ref; rtol=1e-10, atol=1e-12)
@@ -105,7 +105,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Tlm[1, :] .= 0
 
         # Truncated synthesis (default real_output=true)
-        Vt_l, Vp_l = SHsphtor_to_spat_l(cfg, Slm, Tlm, ltr)
+        Vt_l, Vp_l = synthesis_sphtor_l(cfg, Slm, Tlm, ltr)
 
         # Reference: zero high modes and synthesize with same real_output setting
         Slm_z = copy(Slm); Tlm_z = copy(Tlm)
@@ -113,7 +113,7 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
             Slm_z[l+1, m+1] = 0
             Tlm_z[l+1, m+1] = 0
         end
-        Vt_ref, Vp_ref = SHsphtor_to_spat(cfg, Slm_z, Tlm_z; real_output=true)
+        Vt_ref, Vp_ref = synthesis_sphtor(cfg, Slm_z, Tlm_z; real_output=true)
 
         @test isapprox(Vt_l, Vt_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_l, Vp_ref; rtol=1e-10, atol=1e-12)
@@ -134,14 +134,14 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         Tl = randn(rng, ComplexF64, len)
 
         # Mode-limited synthesis
-        Vt_ml, Vp_ml = SHsphtor_to_spat_ml(cfg, im, Sl, Tl, ltr)
+        Vt_ml, Vp_ml = synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
 
         @test length(Vt_ml) == nlat
         @test length(Vp_ml) == nlat
 
         # Individual component mode-limited
-        Vt_s, Vp_s = SHsph_to_spat_ml(cfg, im, Sl, ltr)
-        Vt_t, Vp_t = SHtor_to_spat_ml(cfg, im, Tl, ltr)
+        Vt_s, Vp_s = synthesis_sph_ml(cfg, im, Sl, ltr)
+        Vt_t, Vp_t = synthesis_tor_ml(cfg, im, Tl, ltr)
 
         @test length(Vt_s) == nlat
         @test length(Vt_t) == nlat
@@ -206,12 +206,52 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         end
 
         # Synthesis
-        Vt, Vp = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
+        Vt, Vp = synthesis_sphtor_cplx(cfg, Slm, Tlm)
 
         # Analysis
-        Slm_back, Tlm_back = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
+        Slm_back, Tlm_back = analysis_sphtor_cplx(cfg, Vt, Vp)
 
         @test isapprox(Slm_back, Slm; rtol=1e-8, atol=1e-10)
         @test isapprox(Tlm_back, Tlm; rtol=1e-8, atol=1e-10)
+    end
+
+    @testset "In-place spheroidal-toroidal transforms" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        plan = SHTPlan(cfg)  # In-place functions require a plan
+        rng = MersenneTwister(88)
+
+        # Create spectral coefficients
+        Slm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        Tlm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+        Slm[1, :] .= 0
+        Tlm[1, :] .= 0
+        for m in 0:lmax, l in 0:(m-1)
+            Slm[l+1, m+1] = 0
+            Tlm[l+1, m+1] = 0
+        end
+
+        # In-place synthesis using plan
+        Vt = zeros(nlat, nlon)
+        Vp = zeros(nlat, nlon)
+        synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)
+
+        # Compare with out-of-place version
+        Vt_ref, Vp_ref = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
+        @test isapprox(Vt, Vt_ref; rtol=1e-12, atol=1e-14)
+        @test isapprox(Vp, Vp_ref; rtol=1e-12, atol=1e-14)
+
+        # In-place analysis using plan
+        Slm_back = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm_back = zeros(ComplexF64, lmax+1, lmax+1)
+        analysis_sphtor!(plan, Slm_back, Tlm_back, Vt, Vp)
+
+        # Verify roundtrip
+        @test isapprox(Slm_back, Slm; rtol=1e-9, atol=1e-11)
+        @test isapprox(Tlm_back, Tlm; rtol=1e-9, atol=1e-11)
     end
 end

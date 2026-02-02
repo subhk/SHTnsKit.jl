@@ -11,7 +11,7 @@ using CUDA.CUFFT
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: get_device, set_device!,
                  gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
-                 gpu_spat_to_SHsphtor, gpu_SHsphtor_to_spat,
+                 gpu_analysis_sphtor, gpu_synthesis_sphtor,
                  gpu_apply_laplacian!,
                  gpu_memory_info, check_gpu_memory, gpu_clear_cache!,
                  estimate_memory_usage, get_available_gpus, set_gpu_device,
@@ -657,7 +657,7 @@ end
 # ============================================================================
 
 """
-    gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
+    gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 
 GPU-accelerated spheroidal-toroidal decomposition of vector fields using proper spectral method.
 
@@ -668,9 +668,9 @@ Uses the adjoint of the synthesis formula with Gauss-Legendre quadrature:
 Where F_θ, F_φ are Fourier modes of Vθ, Vφ and w_i are quadrature weights.
 All computation stays on GPU for maximum performance.
 """
-function gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
+function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     if device == CPU_DEVICE
-        return SHTnsKit.spat_to_SHsphtor(cfg, vθ, vφ)
+        return SHTnsKit.analysis_sphtor(cfg, vθ, vφ)
     end
 
     backend = CUDABackend()
@@ -807,7 +807,7 @@ function gpu_spat_to_SHsphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 end
 
 """
-    gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
+    gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
 
 GPU-accelerated synthesis of spheroidal-toroidal vector field components using proper spectral method.
 
@@ -817,9 +817,9 @@ Uses the spectral formula:
 
 Where ∂Y_l^m/∂θ = -sinθ * N_lm * dP_l^m/dx (x = cosθ)
 """
-function gpu_SHsphtor_to_spat(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
+function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
     if device == CPU_DEVICE
-        return SHTnsKit.SHsphtor_to_spat(cfg, sph_coeffs, tor_coeffs; real_output=real_output)
+        return SHTnsKit.synthesis_sphtor(cfg, sph_coeffs, tor_coeffs; real_output=real_output)
     end
 
     backend = CUDABackend()

@@ -207,7 +207,7 @@ for i in 1:cfg.nlat, j in 1:cfg.nlon
 end
 
 # Decompose into spheroidal (divergent) and toroidal (rotational)
-Slm, Tlm = spat_to_SHsphtor(cfg, u, v)
+Slm, Tlm = analysis_sphtor(cfg, u, v)
 
 # Analyze energy distribution
 spheroidal_energy = sum(abs2, Slm)
@@ -216,7 +216,7 @@ println("Spheroidal (divergent) energy: $spheroidal_energy")
 println("Toroidal (rotational) energy: $toroidal_energy")
 
 # Reconstruct original velocity
-u_recon, v_recon = SHsphtor_to_spat(cfg, Slm, Tlm)
+u_recon, v_recon = synthesis_sphtor(cfg, Slm, Tlm)
 velocity_error = norm(u - u_recon) + norm(v - v_recon)
 println("Velocity reconstruction error: $velocity_error")
 
@@ -258,7 +258,7 @@ end
 
 # Get velocity from stream function (toroidal component only)
 Slm_zero = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-u_stream, v_stream = SHsphtor_to_spat(cfg, Slm_zero, ψ_lm)
+u_stream, v_stream = synthesis_sphtor(cfg, Slm_zero, ψ_lm)
 
 # Convert stream function to spatial domain
 stream_function = synthesis(cfg, ψ_lm)
@@ -472,8 +472,8 @@ start_time = MPI.Wtime()
 
 n_iter = 20
 for i in 1:n_iter
-    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
-    Vθ_out, Vφ_out = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vθ, Vφ)
+    Vθ_out, Vφ_out = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vθ)
 end
 
 MPI.Barrier(comm)
@@ -485,8 +485,8 @@ if rank == 0
 end
 
 # Verify accuracy
-Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
-Vθ_rec, Vφ_rec = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vθ, Vφ)
+Vθ_rec, Vφ_rec = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vθ)
 
 θ_err = maximum(abs.(parent(Vθ_rec) .- parent(Vθ)))
 φ_err = maximum(abs.(parent(Vφ_rec) .- parent(Vφ)))

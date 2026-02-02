@@ -39,12 +39,12 @@ const JET_NLON = 2 * JET_LMAX + 1
         alm2 = analysis(cfg, f)
         @test alm2 isa Matrix
 
-        # Test spat_to_SH and SH_to_spat
+        # Test analysis_packed and synthesis_packed
         Vr = vec(f)
-        alm_vec = spat_to_SH(cfg, Vr)
+        alm_vec = analysis_packed(cfg, Vr)
         @test alm_vec isa Vector
 
-        f_back = SH_to_spat(cfg, alm_vec)
+        f_back = synthesis_packed(cfg, alm_vec)
         @test f_back isa Vector
     end
 
@@ -57,11 +57,11 @@ const JET_NLON = 2 * JET_LMAX + 1
 
         # Vector transforms have FFT-related type instabilities
         # Test that they produce correct types
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
         @test Vt isa Matrix
         @test Vp isa Matrix
 
-        Slm2, Tlm2 = spat_to_SHsphtor(cfg, Vt, Vp)
+        Slm2, Tlm2 = analysis_sphtor(cfg, Vt, Vp)
         @test Slm2 isa Matrix
         @test Tlm2 isa Matrix
     end

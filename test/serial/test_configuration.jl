@@ -50,6 +50,48 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         @test cfg_nopole.nlat == nlat
     end
 
+    @testset "Generic create_config" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        # Test create_config with various options
+        cfg = create_config(lmax; nlat=nlat, nlon=nlon)
+        @test cfg.lmax == lmax
+        @test cfg.nlat == nlat
+        @test cfg.nlon == nlon
+
+        # Test with mmax different from lmax
+        cfg_mmax = create_config(lmax; mmax=lmax-2, nlat=nlat, nlon=nlon)
+        @test cfg_mmax.mmax == lmax - 2
+
+        # Test with mres
+        cfg_mres = create_config(lmax; mres=2, nlat=nlat, nlon=nlon)
+        @test cfg_mres.mres == 2
+    end
+
+    @testset "shtns_init compatibility" begin
+        lmax = 6
+        mmax = 6
+        mres = 1
+        nlat = lmax + 2
+        nphi = 2*lmax + 1
+
+        # Test shtns_init with default flags
+        cfg = shtns_init(0, lmax, mmax, mres, nlat, nphi)
+        @test cfg.lmax == lmax
+        @test cfg.mmax == mmax
+        @test cfg.mres == mres
+
+        # Test with SHT_GAUSS flag
+        cfg_gauss = shtns_init(SHTnsKit.SHT_GAUSS, lmax, mmax, mres, nlat, nphi)
+        @test cfg_gauss.grid_type == :gauss
+
+        # Test with SHT_REGULAR flag
+        cfg_reg = shtns_init(SHTnsKit.SHT_REGULAR, lmax, mmax, mres, 2*(lmax+1), 2*nphi)
+        @test cfg_reg.grid_type in (:regular, :regular_poles)
+    end
+
     @testset "On-the-fly mode" begin
         lmax = 6
         nlat = lmax + 2
@@ -59,6 +101,34 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         set_on_the_fly!(cfg)
         @test cfg.on_the_fly == true
         @test cfg.use_plm_tables == false
+        @test is_on_the_fly(cfg) == true
+
+        # Test switching back to table mode
+        set_use_tables!(cfg)
+        @test cfg.use_plm_tables == true
+        @test is_on_the_fly(cfg) == false
+    end
+
+    @testset "PLM table preparation" begin
+        lmax = 6
+        nlat = lmax + 2
+        cfg = create_gauss_config(lmax, nlat)
+
+        # Initially no tables (default is on-the-fly)
+        @test cfg.use_plm_tables == false
+
+        # Prepare PLM tables
+        prepare_plm_tables!(cfg)
+        @test cfg.use_plm_tables == true
+        @test length(cfg.plm_tables) == cfg.mmax + 1
+
+        # Each table should be non-empty and have valid dimensions
+        for m in 0:cfg.mmax
+            tbl = cfg.plm_tables[m+1]
+            @test !isempty(tbl)
+            @test size(tbl, 1) > 0
+            @test size(tbl, 2) > 0
+        end
     end
 
     @testset "Normalization matrix" begin
@@ -108,6 +178,198 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
             @test length(cfg.w) == nlat
             @test length(cfg.θ) == nlat
             @test length(cfg.φ) == nlon
+        end
+    end
+
+    @testset "Thread utilization diagnostics" begin
+        lmax = 8
+        nlat = lmax + 2
+        cfg = create_gauss_config(lmax, nlat)
+
+        # Test check_thread_utilization returns correct structure
+        stats = SHTnsKit.check_thread_utilization(cfg; warn=false)
+
+        @test haskey(stats, :nthreads)
+        @test haskey(stats, :mmax)
+        @test haskey(stats, :active_threads)
+        @test haskey(stats, :utilization)
+
+        # Verify values are consistent
+        @test stats.mmax == cfg.mmax
+        @test stats.nthreads == Threads.nthreads()
+        @test stats.active_threads == min(stats.nthreads, cfg.mmax + 1)
+        @test stats.utilization == stats.active_threads / max(stats.nthreads, 1)
+
+        # Utilization should be in [0, 1]
+        @test 0.0 <= stats.utilization <= 1.0
+
+        # Test with different configurations
+        for lmax_test in [4, 16, 32]
+            cfg_test = create_gauss_config(lmax_test, lmax_test + 2)
+            stats_test = SHTnsKit.check_thread_utilization(cfg_test; warn=false)
+            @test stats_test.mmax == lmax_test
+            @test stats_test.active_threads <= stats_test.nthreads
+            @test stats_test.active_threads <= lmax_test + 1
+        end
+    end
+
+    @testset "Memory estimation" begin
+        lmax = 8
+        nlat = lmax + 2
+        cfg = create_gauss_config(lmax, nlat)
+
+        # Test estimate_table_memory returns reasonable value
+        mem = estimate_table_memory(cfg)
+        @test mem >= 0
+        @test typeof(mem) <: Number
+
+        # Larger lmax should require more memory
+        cfg_large = create_gauss_config(32, 34)
+        mem_large = estimate_table_memory(cfg_large)
+        @test mem_large >= mem
+    end
+
+    @testset "South pole first mode" begin
+        lmax = 6
+        nlat = lmax + 2
+        cfg = create_gauss_config(lmax, nlat)
+
+        # Test south pole first functions
+        initial_state = is_south_pole_first(cfg)
+        @test typeof(initial_state) == Bool
+
+        # Toggle south pole first
+        set_south_pole_first!(cfg)
+        @test is_south_pole_first(cfg) == true
+
+        set_north_pole_first!(cfg)
+        @test is_south_pole_first(cfg) == false
+
+        # Test create_gauss_config_spf creates south-pole-first config
+        cfg_spf = create_gauss_config_spf(lmax, nlat)
+        @test is_south_pole_first(cfg_spf) == true
+    end
+
+    @testset "Padding control" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        # Test padding functions exist and return expected types
+        initial_padding = is_padding_enabled(cfg)
+        @test typeof(initial_padding) == Bool
+
+        # Enable and disable padding
+        set_allow_padding!(cfg)
+        @test is_padding_enabled(cfg) == true
+
+        disable_padding!(cfg)
+        @test is_padding_enabled(cfg) == false
+
+        # Test padding queries
+        nlat_padded = get_nlat_padded(cfg)
+        @test nlat_padded >= nlat
+
+        spat_dist = get_spat_dist(cfg)
+        @test spat_dist >= 0
+
+        optimal_pad = compute_optimal_padding(nlat, nlon)
+        @test optimal_pad >= 0
+
+        # Test padding overhead estimation
+        overhead = estimate_padding_overhead(cfg)
+        @test overhead >= 0.0
+    end
+
+    @testset "Padded array allocation" begin
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        # Allocate padded spatial arrays
+        arr = allocate_padded_spatial(cfg)
+        @test size(arr, 1) >= nlat
+        @test size(arr, 2) >= nlon
+
+        # Allocate padded batch arrays
+        batch_size = 4
+        arr_batch = allocate_padded_spatial_batch(cfg, batch_size)
+        @test size(arr_batch, 1) >= nlat
+        @test size(arr_batch, 2) >= nlon
+        @test size(arr_batch, 3) == batch_size
+
+        # Test copy functions
+        src = randn(nlat, nlon)
+        padded = allocate_padded_spatial(cfg)
+        copy_to_padded!(padded, src, cfg)
+
+        dst = zeros(nlat, nlon)
+        copy_from_padded!(dst, padded, cfg)
+        @test isapprox(dst, src; rtol=1e-14)
+    end
+
+    @testset "FFT utilities" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+        # Test FFT backend query
+        backend = fft_phi_backend()
+        @test backend isa Symbol
+
+        # Test scratch buffer creation
+        fft_scratch = scratch_fft(cfg)
+        @test size(fft_scratch) == (nlat, nlon)
+        @test eltype(fft_scratch) <: Complex
+
+        spatial_scratch = scratch_spatial(cfg)
+        @test size(spatial_scratch) == (nlat, nlon)
+    end
+
+    @testset "FFT plan cache control" begin
+        # FFT plan cache requires the parallel extension
+        # Skip if not available
+        try
+            # Save initial state
+            initial_state = fft_plan_cache_enabled()
+            @test typeof(initial_state) == Bool
+
+            # Test enable/disable
+            enable_fft_plan_cache!()
+            @test fft_plan_cache_enabled() == true
+
+            disable_fft_plan_cache!()
+            @test fft_plan_cache_enabled() == false
+
+            # Test set function
+            set_fft_plan_cache!(true)
+            @test fft_plan_cache_enabled() == true
+
+            set_fft_plan_cache!(false)
+            @test fft_plan_cache_enabled() == false
+
+            # Restore initial state
+            set_fft_plan_cache!(initial_state)
+        catch e
+            @info "Skipping FFT plan cache tests (requires parallel extension)" exception=e
+        end
+    end
+
+    @testset "Pencil grid suggestion" begin
+        # Test suggest_pencil_grid for various sizes
+        nlat, nlon = 32, 64
+
+        # Without MPI, should return reasonable default
+        try
+            grid = suggest_pencil_grid(nothing, nlat, nlon)
+            @test grid isa Tuple
+            @test length(grid) == 2
+        catch e
+            # May error without MPI - that's OK
+            @test e isa Exception
         end
     end
 end

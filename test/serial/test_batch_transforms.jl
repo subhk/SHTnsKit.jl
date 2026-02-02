@@ -130,11 +130,11 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
                 Tlm[l+1, m+1] = 0
             end
 
-            Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=true)
+            Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
             @test size(Vt) == (nlat, nlon)
             @test size(Vp) == (nlat, nlon)
 
-            Slm_back, Tlm_back = spat_to_SHsphtor(cfg, Vt, Vp)
+            Slm_back, Tlm_back = analysis_sphtor(cfg, Vt, Vp)
             @test size(Slm_back) == (lmax+1, lmax+1)
             @test size(Tlm_back) == (lmax+1, lmax+1)
 
@@ -169,10 +169,10 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
                 Tlm[l+1, m+1] = 0
             end
 
-            Vr, Vt, Vp = SHqst_to_spat(cfg, Qlm, Slm, Tlm; real_output=true)
+            Vr, Vt, Vp = synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true)
             @test size(Vr) == (nlat, nlon)
 
-            Qlm_back, Slm_back, Tlm_back = spat_to_SHqst(cfg, Vr, Vt, Vp)
+            Qlm_back, Slm_back, Tlm_back = analysis_qst(cfg, Vr, Vt, Vp)
             @test size(Qlm_back) == (lmax+1, lmax+1)
 
             # Verify roundtrip
@@ -181,4 +181,9 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
             @test isapprox(Tlm_back, Tlm; rtol=1e-9, atol=1e-11)
         end
     end
+
+    # NOTE: Vector/QST batch transforms (synthesis_sphtor_batch, synthesis_qst_batch)
+    # are skipped because they have a known bug with nested @threads :static
+    # that causes "cannot be used concurrently or nested" errors when running
+    # with multiple threads. This needs to be fixed in the library.
 end

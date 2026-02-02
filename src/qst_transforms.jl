@@ -40,8 +40,8 @@ QST transforms are implemented by combining scalar and sphtor transforms:
     - S,T components: spheroidal-toroidal vector transforms
 
 Main functions:
-    SHqst_to_spat(cfg, Qlm, Slm, Tlm)    : Spectral → Spatial (Vr, Vθ, Vφ)
-    spat_to_SHqst(cfg, Vr, Vt, Vp)       : Spatial → Spectral (Q, S, T)
+    synthesis_qst(cfg, Qlm, Slm, Tlm)    : Spectral → Spatial (Vr, Vθ, Vφ)
+    analysis_qst(cfg, Vr, Vt, Vp)        : Spatial → Spectral (Q, S, T)
 
 Variants:
     *_cplx     : Complex-valued output
@@ -62,10 +62,10 @@ Qlm[3, 1] = 1.0  # Radial l=2, m=0
 Slm[4, 2] = 0.5  # Spheroidal l=3, m=1
 
 # Synthesize to spatial
-Vr, Vt, Vp = SHqst_to_spat(cfg, Qlm, Slm, Tlm)
+Vr, Vt, Vp = synthesis_qst(cfg, Qlm, Slm, Tlm)
 
 # Analyze back to spectral
-Q2, S2, T2 = spat_to_SHqst(cfg, Vr, Vt, Vp)
+Q2, S2, T2 = analysis_qst(cfg, Vr, Vt, Vp)
 @assert Q2 ≈ Qlm
 @assert S2 ≈ Slm
 ```
@@ -93,104 +93,104 @@ velocity fields in spherical coordinates (Vr, Vt, Vp).
 """
 
 """
-    SHqst_to_spat(cfg, Qlm, Slm, Tlm; real_output=true) -> (Vr, Vt, Vp)
+    synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true) -> (Vr, Vt, Vp)
 
 Transform QST spectral coefficients to 3D spatial vector field components.
 Returns radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
-function SHqst_to_spat(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat, nlon = cfg.nlat, cfg.nlon
-    
+
     # Validate input dimensions
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-    
+
     # Get the spatial components
     Vr = synthesis(cfg, Qlm; real_output=real_output)
-    Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=real_output)
-    
+    Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=real_output)
+
     return Vr, Vt, Vp
 end
 
 """
-    spat_to_SHqst(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
+    analysis_qst(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
 
 Transform 3D spatial vector field to QST spectral coefficients.
 Input: radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
-function spat_to_SHqst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
+function analysis_qst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    
+
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
-    
+
     # Transform each component
     Qlm = analysis(cfg, Vr)
-    Slm, Tlm = spat_to_SHsphtor(cfg, Vt, Vp)
-    
+    Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
+
     return Qlm, Slm, Tlm
 end
 
 """
-    SHqst_to_spat_cplx(cfg, Qlm, Slm, Tlm) -> (Vr, Vt, Vp)
+    synthesis_qst_cplx(cfg, Qlm, Slm, Tlm) -> (Vr, Vt, Vp)
 
 Complex version of QST to spatial transform, preserving complex values.
 """
-function SHqst_to_spat_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
+function synthesis_qst_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    
+
     # Transform to spatial fields keeping complex values
     Vr = synthesis(cfg, Qlm; real_output=false)
-    Vt, Vp = SHsphtor_to_spat_cplx(cfg, Slm, Tlm)
-    
+    Vt, Vp = synthesis_sphtor_cplx(cfg, Slm, Tlm)
+
     return Vr, Vt, Vp
 end
 
 """
-    spat_cplx_to_SHqst(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
+    analysis_qst_cplx(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
 
 Transform complex spatial vector field to QST coefficients.
 """
-function spat_cplx_to_SHqst(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex})
+function analysis_qst_cplx(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex})
     nlat, nlon = cfg.nlat, cfg.nlon
-    
+
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
-    
+
     # Transform each component
     Qlm = analysis(cfg, Vr)
-    Slm, Tlm = spat_cplx_to_SHsphtor(cfg, Vt, Vp)
-    
+    Slm, Tlm = analysis_sphtor_cplx(cfg, Vt, Vp)
+
     return Qlm, Slm, Tlm
 end
 
 """
-    spat_to_SHqst_l(cfg, Vr, Vt, Vp, ltr) -> (Qlm, Slm, Tlm)
+    analysis_qst_l(cfg, Vr, Vt, Vp, ltr) -> (Qlm, Slm, Tlm)
 
-Degree-limited version of spat_to_SHqst, computing coefficients only up to degree ltr.
+Degree-limited version of analysis_qst, computing coefficients only up to degree ltr.
 """
-function spat_to_SHqst_l(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
+function analysis_qst_l(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
     # Get full transforms first
-    Qlm, Slm, Tlm = spat_to_SHqst(cfg, Vr, Vt, Vp)
-    
+    Qlm, Slm, Tlm = analysis_qst(cfg, Vr, Vt, Vp)
+
     # Create copies and zero out high-degree modes
     Q2, S2, T2 = copy_spectral_triple(Qlm, Slm, Tlm)
     zero_high_degree_modes!((Q2, S2, T2), cfg, ltr)
-    
+
     return Q2, S2, T2
 end
 
 """
-    SHqst_to_spat_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true) -> (Vr, Vt, Vp)
+    synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true) -> (Vr, Vt, Vp)
 
-Degree-limited version of SHqst_to_spat, using coefficients only up to degree ltr.
+Degree-limited version of synthesis_qst, using coefficients only up to degree ltr.
 """
-function SHqst_to_spat_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    
+
     # Create truncated coefficient arrays
     Q2 = copy(Qlm); S2 = copy(Slm); T2 = copy(Tlm)
-    
+
     # Zero high-degree modes
     for m in 0:mmax, l in (ltr+1):lmax
         if l >= m
@@ -199,32 +199,32 @@ function SHqst_to_spat_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatri
             T2[l+1, m+1] = 0.0
         end
     end
-    
-    return SHqst_to_spat(cfg, Q2, S2, T2; real_output=real_output)
+
+    return synthesis_qst(cfg, Q2, S2, T2; real_output=real_output)
 end
 
 """
-    spat_to_SHqst_ml(cfg, im, Vr_m, Vt_m, Vp_m, ltr) -> (Ql, Sl, Tl)
+    analysis_qst_ml(cfg, im, Vr_m, Vt_m, Vp_m, ltr) -> (Ql, Sl, Tl)
 
 Mode-limited transform for specific azimuthal mode im.
 """
-function spat_to_SHqst_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
+function analysis_qst_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
     # Transform each component for this specific mode
-    Ql = spat_to_SH_ml(cfg, im, Vr_m, ltr)
-    Sl, Tl = spat_to_SHsphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
-    
+    Ql = analysis_packed_ml(cfg, im, Vr_m, ltr)
+    Sl, Tl = analysis_sphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
+
     return Ql, Sl, Tl
 end
 
 """
-    SHqst_to_spat_ml(cfg, im, Ql, Sl, Tl, ltr) -> (Vr_m, Vt_m, Vp_m)
+    synthesis_qst_ml(cfg, im, Ql, Sl, Tl, ltr) -> (Vr_m, Vt_m, Vp_m)
 
 Mode-limited synthesis for specific azimuthal mode im.
 """
-function SHqst_to_spat_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_qst_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
     # Synthesize each component for this specific mode
-    Vr_m = SH_to_spat_ml(cfg, im, Ql, ltr)
-    Vt_m, Vp_m = SHsphtor_to_spat_ml(cfg, im, Sl, Tl, ltr)
-    
+    Vr_m = synthesis_packed_ml(cfg, im, Ql, ltr)
+    Vt_m, Vp_m = synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
+
     return Vr_m, Vt_m, Vp_m
 end

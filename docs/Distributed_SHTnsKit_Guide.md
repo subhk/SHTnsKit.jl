@@ -106,17 +106,17 @@ Vt = copy(fθφ);
 Vp = copy(fθφ);
 
 # Analysis → Slm, Tlm (respects Robert form and PLM tables)
-Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vt, Vp; use_rfft=true)
+Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vt, Vp; use_rfft=true)
 
 # Synthesis back to grid
-Vt2, Vp2 = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vt, real_output=true, use_rfft=true)
+Vt2, Vp2 = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vt, real_output=true, use_rfft=true)
 ```
 
 QST transforms (distributed)
 ```julia
 Vr = copy(fθφ)
-Q, S, T = SHTnsKit.dist_spat_to_SHqst(cfg, Vr, Vt, Vp)
-Vr2, Vt2, Vp2 = SHTnsKit.dist_SHqst_to_spat(cfg, Q, S, T; prototype_θφ=Vr, real_output=true, use_rfft=true)
+Q, S, T = SHTnsKit.dist_analysis_qst(cfg, Vr, Vt, Vp)
+Vr2, Vt2, Vp2 = SHTnsKit.dist_synthesis_qst(cfg, Q, S, T; prototype_θφ=Vr, real_output=true, use_rfft=true)
 ```
 
 Finalize MPI when done:
@@ -132,8 +132,8 @@ Using `use_rfft=true` halves azimuthal FFT work for real inputs/outputs.
 
 Direct API
 - Scalar: `dist_analysis(...; use_rfft=true)`, `dist_synthesis(...; use_rfft=true)`
-- Vector: `dist_spat_to_SHsphtor(...; use_rfft=true)`, `dist_SHsphtor_to_spat(...; use_rfft=true)`
-- QST: `dist_SHqst_to_spat(...; use_rfft=true)`
+- Vector: `dist_analysis_sphtor(...; use_rfft=true)`, `dist_synthesis_sphtor(...; use_rfft=true)`
+- QST: `dist_synthesis_qst(...; use_rfft=true)`
 
 Plan-based API (optional caching of FFT plans)
 ```julia
@@ -210,11 +210,11 @@ Local/point (distributed reductions return the same result on all ranks)
 
 Packed conversions (dense/LM ⇄ distributed)
 - Real (LM):
-  - `dist_spat_to_SH_packed(cfg, fθφ::PencilArray) -> Qlm`
-  - `dist_SH_packed_to_spat(cfg, Qlm; prototype_θφ, real_output=true) -> PencilArray`
+  - `dist_analysis_packed(cfg, fθφ::PencilArray) -> Qlm`
+  - `dist_synthesis_packed(cfg, Qlm; prototype_θφ, real_output=true) -> PencilArray`
 - Complex (LM_cplx):
-  - `dist_spat_cplx_to_SH(cfg, z::PencilArray) -> alm_packed`
-  - `dist_SH_to_spat_cplx(cfg, alm_packed; prototype_θφ) -> PencilArray`
+  - `dist_analysis_packed_cplx(cfg, z::PencilArray) -> alm_packed`
+  - `dist_synthesis_packed_cplx(cfg, alm_packed; prototype_θφ) -> PencilArray`
 
 ---
 

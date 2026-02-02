@@ -36,9 +36,9 @@ FUNCTIONS
     LM_cplx(cfg, l, m)                 : Compatibility wrapper
     nlm_cplx_calc(lmax, mmax, mres)    : Count total complex coefficients
 
-    SH_to_spat_cplx(cfg, alm_packed)   : Synthesis for complex field
-    spat_cplx_to_SH(cfg, z)            : Analysis for complex field
-    SH_to_point_cplx(cfg, alm, cosθ, φ): Point evaluation for complex field
+    synthesis_packed_cplx(cfg, alm_packed)   : Synthesis for complex field
+    analysis_packed_cplx(cfg, z)            : Analysis for complex field
+    synthesis_point_cplx(cfg, alm, cosθ, φ): Point evaluation for complex field
 
 COMPARISON WITH REAL LAYOUT
 ---------------------------
@@ -83,12 +83,12 @@ function LM_cplx(cfg::SHTConfig, l::Integer, m::Integer)
 end
 
 """
-    SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}) -> Matrix{ComplexF64}
+    synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}) -> Matrix{ComplexF64}
 
 Synthesize complex spatial field from packed complex coefficients (LM_cplx order).
 Returns an `nlat × nlon` complex array.
 """
-function SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
+function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
     mres = cfg.mres
     mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
     expected = nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
@@ -137,12 +137,12 @@ function SH_to_spat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
 end
 
 """
-    spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex}) -> Vector{ComplexF64}
+    analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex}) -> Vector{ComplexF64}
 
 Analyze complex spatial field into packed complex coefficients (LM_cplx order).
 Input `z` must be `nlat × nlon` complex.
 """
-function spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
+function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     size(z,1) == cfg.nlat || throw(DimensionMismatch("z first dim must be nlat"))
     size(z,2) == cfg.nlon || throw(DimensionMismatch("z second dim must be nlon"))
     mres = cfg.mres
@@ -181,11 +181,11 @@ function spat_cplx_to_SH(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
 end
 
 """
-    SH_to_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real) -> ComplexF64
+    synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real) -> ComplexF64
 
 Evaluate a complex field represented by packed `alm` at a single point.
 """
-function SH_to_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real)
     expected = nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     length(alm) == expected || throw(DimensionMismatch("alm length mismatch"))
     x = float(cost)

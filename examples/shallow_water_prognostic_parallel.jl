@@ -252,7 +252,7 @@ function compute_velocity!(cfg::SHTConfig, plans::PlanSet, work::SWWorkspace,
                            ζlm::Matrix{ComplexF64}, δlm::Matrix{ComplexF64})
     SHTnsKit.spheroidal_from_divergence!(cfg, work.Slm_buf, δlm)
     SHTnsKit.toroidal_from_vorticity!(cfg, work.Tlm_buf, ζlm)
-    SHTnsKit.dist_SHsphtor_to_spat!(plans.vplan, work.Vt, work.Vp, work.Slm_buf, work.Tlm_buf; real_output=true)
+    SHTnsKit.dist_synthesis_sphtor!(plans.vplan, work.Vt, work.Vp, work.Slm_buf, work.Tlm_buf; real_output=true)
     return work.Vt, work.Vp
 end
 

@@ -294,4 +294,37 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Should be different (except for m=0 axisymmetric case at special angles)
         @test !isapprox(Rlm, Qlm; rtol=0.1)
     end
+
+    @testset "Angle-axis rotation" begin
+        lmax = 5
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
+        rng = MersenneTwister(100)
+
+        # Create rotation object
+        rot = SHTRotation(lmax, lmax)
+
+        # Set rotation using angle-axis (rotate by π/3 around normalized axis)
+        theta = π/3
+        Vx, Vy, Vz = 1/sqrt(3), 1/sqrt(3), 1/sqrt(3)  # Unit axis
+        shtns_rotation_set_angle_axis(rot, theta, Vx, Vy, Vz)
+
+        # Apply rotation
+        Qlm = randn(rng, ComplexF64, cfg.nlm)
+        Qlm[1:lmax+1] .= real.(Qlm[1:lmax+1])
+
+        Rlm = similar(Qlm)
+        shtns_rotation_apply_real(rot, Qlm, Rlm)
+
+        # Should produce valid output
+        @test all(!isnan, Rlm)
+        @test all(!isinf, Rlm)
+
+        # Rotated field should be different from original
+        @test !isapprox(Rlm, Qlm; rtol=0.1)
+
+        # Energy should be preserved (use proper packed energy function)
+        E_orig = energy_scalar_packed(cfg, Qlm)
+        E_rot = energy_scalar_packed(cfg, Rlm)
+        @test isapprox(E_orig, E_rot; rtol=1e-10)
+    end
 end

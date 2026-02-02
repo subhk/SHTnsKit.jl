@@ -42,12 +42,12 @@ Scalar batch transforms:
     synthesis_batch(cfg, alm_batch)  : Multiple spectral → spatial
 
 Vector batch transforms:
-    spat_to_SHsphtor_batch(cfg, Vt, Vp)           : 2D vector analysis
-    SHsphtor_to_spat_batch(cfg, Slm, Tlm)         : 2D vector synthesis
+    analysis_sphtor_batch(cfg, Vt, Vp)            : 2D vector analysis
+    synthesis_sphtor_batch(cfg, Slm, Tlm)         : 2D vector synthesis
 
 QST batch transforms:
-    spat_to_SHqst_batch(cfg, Vr, Vt, Vp)          : 3D vector analysis
-    SHqst_to_spat_batch(cfg, Qlm, Slm, Tlm)       : 3D vector synthesis
+    analysis_qst_batch(cfg, Vr, Vt, Vp)           : 3D vector analysis
+    synthesis_qst_batch(cfg, Qlm, Slm, Tlm)       : 3D vector synthesis
 
 USAGE EXAMPLE
 -------------
@@ -499,8 +499,8 @@ end
 # ============================================================================
 
 """
-    spat_to_SHsphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3},
-                           Vp_batch::AbstractArray{<:Real,3})
+    analysis_sphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3},
+                          Vp_batch::AbstractArray{<:Real,3})
 
 Batch spheroidal-toroidal analysis for multiple vector fields.
 
@@ -513,8 +513,8 @@ Batch spheroidal-toroidal analysis for multiple vector fields.
 - `(Slm_batch, Tlm_batch)`: Tuple of 3D arrays `(lmax+1, mmax+1, nfields)`
   containing spheroidal and toroidal coefficients
 """
-function spat_to_SHsphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3},
-                                 Vp_batch::AbstractArray{<:Real,3})
+function analysis_sphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3},
+                               Vp_batch::AbstractArray{<:Real,3})
     nlat, nlon, nfields = size(Vt_batch)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
@@ -524,12 +524,12 @@ function spat_to_SHsphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3
     Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
     Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
 
-    # Process each field using existing spat_to_SHsphtor
+    # Process each field using existing analysis_sphtor
     # This can be further optimized by sharing Legendre computations
     @threads :static for k in 1:nfields
         Vt = view(Vt_batch, :, :, k)
         Vp = view(Vp_batch, :, :, k)
-        Slm, Tlm = spat_to_SHsphtor(cfg, Vt, Vp)
+        Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
         Slm_batch[:, :, k] .= Slm
         Tlm_batch[:, :, k] .= Tlm
     end
@@ -538,7 +538,7 @@ function spat_to_SHsphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3
 end
 
 """
-    SHsphtor_to_spat_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
+    synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
                            Tlm_batch::AbstractArray{<:Complex,3}; real_output::Bool=true)
 
 Batch spheroidal-toroidal synthesis for multiple vector fields.
@@ -547,8 +547,8 @@ Batch spheroidal-toroidal synthesis for multiple vector fields.
 - `(Vt_batch, Vp_batch)`: Tuple of 3D arrays `(nlat, nlon, nfields)`
   containing theta and phi components
 """
-function SHsphtor_to_spat_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
-                                 Tlm_batch::AbstractArray{<:Complex,3}; real_output::Bool=true)
+function synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
+                                Tlm_batch::AbstractArray{<:Complex,3}; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1"))
     size(Slm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1"))
@@ -568,7 +568,7 @@ function SHsphtor_to_spat_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Compl
     @threads :static for k in 1:nfields
         Slm = view(Slm_batch, :, :, k)
         Tlm = view(Tlm_batch, :, :, k)
-        Vt, Vp = SHsphtor_to_spat(cfg, Slm, Tlm; real_output=real_output)
+        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=real_output)
         Vt_batch[:, :, k] .= Vt
         Vp_batch[:, :, k] .= Vp
     end
@@ -581,16 +581,16 @@ end
 # ============================================================================
 
 """
-    spat_to_SHqst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
-                        Vt_batch::AbstractArray{<:Real,3}, Vp_batch::AbstractArray{<:Real,3})
+    analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
+                       Vt_batch::AbstractArray{<:Real,3}, Vp_batch::AbstractArray{<:Real,3})
 
 Batch QST analysis for multiple 3D vector fields.
 
 # Returns
 - `(Qlm_batch, Slm_batch, Tlm_batch)`: Tuple of 3D arrays with Q, S, T coefficients
 """
-function spat_to_SHqst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
-                              Vt_batch::AbstractArray{<:Real,3}, Vp_batch::AbstractArray{<:Real,3})
+function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
+                            Vt_batch::AbstractArray{<:Real,3}, Vp_batch::AbstractArray{<:Real,3})
     nlat, nlon, nfields = size(Vr_batch)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
@@ -606,7 +606,7 @@ function spat_to_SHqst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
         Vr = view(Vr_batch, :, :, k)
         Vt = view(Vt_batch, :, :, k)
         Vp = view(Vp_batch, :, :, k)
-        Qlm, Slm, Tlm = spat_to_SHqst(cfg, Vr, Vt, Vp)
+        Qlm, Slm, Tlm = analysis_qst(cfg, Vr, Vt, Vp)
         Qlm_batch[:, :, k] .= Qlm
         Slm_batch[:, :, k] .= Slm
         Tlm_batch[:, :, k] .= Tlm
@@ -616,7 +616,7 @@ function spat_to_SHqst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
 end
 
 """
-    SHqst_to_spat_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
+    synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
                         Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3};
                         real_output::Bool=true)
 
@@ -625,9 +625,9 @@ Batch QST synthesis for multiple 3D vector fields.
 # Returns
 - `(Vr_batch, Vt_batch, Vp_batch)`: Tuple of 3D arrays with spatial components
 """
-function SHqst_to_spat_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
-                              Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3};
-                              real_output::Bool=true)
+function synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
+                             Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3};
+                             real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Qlm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1"))
     size(Qlm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1"))
@@ -651,7 +651,7 @@ function SHqst_to_spat_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,
         Qlm = view(Qlm_batch, :, :, k)
         Slm = view(Slm_batch, :, :, k)
         Tlm = view(Tlm_batch, :, :, k)
-        Vr, Vt, Vp = SHqst_to_spat(cfg, Qlm, Slm, Tlm; real_output=real_output)
+        Vr, Vt, Vp = synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=real_output)
         Vr_batch[:, :, k] .= Vr
         Vt_batch[:, :, k] .= Vt
         Vp_batch[:, :, k] .= Vp
@@ -659,3 +659,4 @@ function SHqst_to_spat_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,
 
     return Vr_batch, Vt_batch, Vp_batch
 end
+

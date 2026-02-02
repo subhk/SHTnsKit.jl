@@ -5,8 +5,8 @@ This document summarizes AD capabilities for SHTnsKit.jl, enabling applications 
 ## AD Capabilities
 
 ### Supported Functions
-- **Basic transforms**: `synthesis`, `analysis`, `SH_to_spat_cplx`, `spat_cplx_to_SH`
-- **Vector transforms**: `SHsphtor_to_spat`, `spat_to_SHsphtor`
+- **Basic transforms**: `synthesis`, `analysis`, `synthesis_packed_cplx`, `analysis_packed_cplx`
+- **Vector transforms**: `synthesis_sphtor`, `analysis_sphtor`
 - **Diagnostics**: `energy_scalar_l_spectrum`, `energy_vector_l_spectrum`
 
 ### ForwardDiff Support

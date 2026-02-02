@@ -46,8 +46,8 @@ analysis!
 ## Complex Field Transforms
 
 ```@docs
-SH_to_spat_cplx
-spat_cplx_to_SH
+synthesis_packed_cplx
+analysis_packed_cplx
 ```
 
 ## Vector Field Transforms
@@ -59,20 +59,20 @@ Vector fields on the sphere are decomposed into **spheroidal** and **toroidal** 
 ### Vector Synthesis
 
 ```@docs
-SHsphtor_to_spat
+synthesis_sphtor
 ```
 
 ### Vector Analysis
 
 ```@docs
-spat_to_SHsphtor
+analysis_sphtor
 ```
 
 ## QST Transforms (3D Vector Fields)
 
 ```@docs
-SHqst_to_spat
-spat_to_SHqst
+synthesis_qst
+analysis_qst
 ```
 
 ## Rotations
@@ -113,15 +113,15 @@ When using MPI with PencilArrays, the following functions are available via the 
 
 - `dist_analysis(cfg, fθφ)` - Distributed spatial to spectral transform
 - `dist_synthesis(cfg, Alm; prototype_θφ, real_output)` - Distributed spectral to spatial transform
-- `dist_spat_to_SHsphtor(cfg, Vθ, Vφ)` - Distributed vector analysis
-- `dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ)` - Distributed vector synthesis
+- `dist_analysis_sphtor(cfg, Vθ, Vφ)` - Distributed vector analysis
+- `dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ)` - Distributed vector synthesis
 
 See the [Distributed Guide](../distributed.md) for detailed usage.
 
 ## Gradient and Differential Operators
 
 ```@docs
-SH_to_grad_spat
+synthesis_grad
 divergence_from_spheroidal
 vorticity_from_toroidal
 ```
@@ -173,10 +173,10 @@ for i in 1:cfg.nlat, j in 1:cfg.nlon
 end
 
 # Decompose into spheroidal/toroidal
-Slm, Tlm = spat_to_SHsphtor(cfg, Vθ, Vφ)
+Slm, Tlm = analysis_sphtor(cfg, Vθ, Vφ)
 
 # Reconstruct
-Vθ_rec, Vφ_rec = SHsphtor_to_spat(cfg, Slm, Tlm)
+Vθ_rec, Vφ_rec = synthesis_sphtor(cfg, Slm, Tlm)
 
 destroy_config(cfg)
 ```

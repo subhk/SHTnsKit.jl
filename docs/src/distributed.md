@@ -96,8 +96,8 @@ Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
 |----------|-------------|
 | `dist_analysis(cfg, fθφ)` | Distributed spatial → spectral transform |
 | `dist_synthesis(cfg, Alm; prototype_θφ)` | Distributed spectral → spatial transform |
-| `dist_spat_to_SHsphtor(cfg, Vθ, Vφ)` | Distributed vector field analysis |
-| `dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ)` | Distributed vector field synthesis |
+| `dist_analysis_sphtor(cfg, Vθ, Vφ)` | Distributed vector field analysis |
+| `dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ)` | Distributed vector field synthesis |
 
 ### Spectral Operators
 
@@ -189,8 +189,8 @@ for (i_local, i_global) in enumerate(ranges[1])
 end
 
 # Distributed vector transform
-Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
-Vθ_out, Vφ_out = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vθ, Vφ)
+Vθ_out, Vφ_out = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vθ)
 
 destroy_config(cfg)
 MPI.Finalize()

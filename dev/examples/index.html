@@ -133,7 +133,7 @@ for i in 1:cfg.nlat, j in 1:cfg.nlon
 end
 
 # Decompose into spheroidal (divergent) and toroidal (rotational)
-Slm, Tlm = spat_to_SHsphtor(cfg, u, v)
+Slm, Tlm = analysis_sphtor(cfg, u, v)
 
 # Analyze energy distribution
 spheroidal_energy = sum(abs2, Slm)
@@ -142,7 +142,7 @@ println(&quot;Spheroidal (divergent) energy: $spheroidal_energy&quot;)
 println(&quot;Toroidal (rotational) energy: $toroidal_energy&quot;)
 
 # Reconstruct original velocity
-u_recon, v_recon = SHsphtor_to_spat(cfg, Slm, Tlm)
+u_recon, v_recon = synthesis_sphtor(cfg, Slm, Tlm)
 velocity_error = norm(u - u_recon) + norm(v - v_recon)
 println(&quot;Velocity reconstruction error: $velocity_error&quot;)
 
@@ -178,7 +178,7 @@ end
 
 # Get velocity from stream function (toroidal component only)
 Slm_zero = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-u_stream, v_stream = SHsphtor_to_spat(cfg, Slm_zero, ψ_lm)
+u_stream, v_stream = synthesis_sphtor(cfg, Slm_zero, ψ_lm)
 
 # Convert stream function to spatial domain
 stream_function = synthesis(cfg, ψ_lm)
@@ -349,8 +349,8 @@ start_time = MPI.Wtime()
 
 n_iter = 20
 for i in 1:n_iter
-    Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
-    Vθ_out, Vφ_out = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vθ, Vφ)
+    Vθ_out, Vφ_out = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vθ)
 end
 
 MPI.Barrier(comm)
@@ -362,8 +362,8 @@ if rank == 0
 end
 
 # Verify accuracy
-Slm, Tlm = SHTnsKit.dist_spat_to_SHsphtor(cfg, Vθ, Vφ)
-Vθ_rec, Vφ_rec = SHTnsKit.dist_SHsphtor_to_spat(cfg, Slm, Tlm; prototype_θφ=Vθ)
+Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vθ, Vφ)
+Vθ_rec, Vφ_rec = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vθ)
 
 θ_err = maximum(abs.(parent(Vθ_rec) .- parent(Vθ)))
 φ_err = maximum(abs.(parent(Vφ_rec) .- parent(Vφ)))
@@ -662,4 +662,4 @@ Alm_recovered = analysis(cfg, spatial)
 error = norm(Alm_original - Alm_recovered) / norm(Alm_original)
 println(&quot;l=2, m=2 roundtrip error: $(round(error, sigdigits=3))&quot;)
 
-destroy_config(cfg)</code></pre><p>These examples demonstrate the full range of SHTnsKit.jl capabilities from basic transforms to advanced scientific applications. Each example can serve as a starting point for your specific research needs.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 2 February 2026 01:41">Monday 2 February 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+destroy_config(cfg)</code></pre><p>These examples demonstrate the full range of SHTnsKit.jl capabilities from basic transforms to advanced scientific applications. Each example can serve as a starting point for your specific research needs.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 2 February 2026 17:24">Monday 2 February 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -587,6 +587,517 @@ end
     end
 end
 
+@testset "AD gradients - Zygote: scalar synthesis" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(101)
+
+        # Random spectral coefficients with proper symmetry
+        alm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            alm[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        alm[:, 1] .= real.(alm[:, 1])  # m=0 must be real
+
+        # Loss: sum of squares of spatial field
+        function loss_synth(a)
+            f = synthesis(cfg, a; real_output=true)
+            return sum(abs2, f)
+        end
+
+        g = Zygote.gradient(loss_synth, alm)[1]
+
+        # Finite difference check
+        h = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            h[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        h[:, 1] .= real.(h[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_synth(alm .+ ϵ.*h) - loss_synth(alm .- ϵ.*h)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(g) .* h))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote scalar synthesis test" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: vector sphtor transforms" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(201)
+
+        # Random spheroidal and toroidal coefficients
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax
+            for l in max(1, m):lmax  # l >= 1 for vector fields
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # Test 1: Gradient of vector synthesis w.r.t. Slm
+        function loss_sphtor_S(S)
+            Vt, Vp = synthesis_sphtor(cfg, S, Tlm; real_output=true)
+            return sum(abs2, Vt) + sum(abs2, Vp)
+        end
+
+        gS = Zygote.gradient(loss_sphtor_S, Slm)[1]
+        hS = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in max(1,m):lmax
+            hS[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        hS[:, 1] .= real.(hS[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_sphtor_S(Slm .+ ϵ.*hS) - loss_sphtor_S(Slm .- ϵ.*hS)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gS) .* hS))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test 2: Gradient of vector synthesis w.r.t. Tlm
+        function loss_sphtor_T(T)
+            Vt, Vp = synthesis_sphtor(cfg, Slm, T; real_output=true)
+            return sum(abs2, Vt) + sum(abs2, Vp)
+        end
+
+        gT = Zygote.gradient(loss_sphtor_T, Tlm)[1]
+        hT = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in max(1,m):lmax
+            hT[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        hT[:, 1] .= real.(hT[:, 1])
+
+        dfdξ_fd = (loss_sphtor_T(Tlm .+ ϵ.*hT) - loss_sphtor_T(Tlm .- ϵ.*hT)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gT) .* hT))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test 3: Gradient of vector analysis w.r.t. spatial fields
+        Vt0 = randn(rng, nlat, nlon)
+        Vp0 = randn(rng, nlat, nlon)
+
+        function loss_analysis_vt(Vt)
+            S, T = analysis_sphtor(cfg, Vt, Vp0)
+            return sum(abs2, S) + sum(abs2, T)
+        end
+
+        gVt = Zygote.gradient(loss_analysis_vt, Vt0)[1]
+        hVt = randn(rng, nlat, nlon)
+
+        dfdξ_fd = (loss_analysis_vt(Vt0 .+ ϵ.*hVt) - loss_analysis_vt(Vt0 .- ϵ.*hVt)) / (2ϵ)
+        dfdξ_ad = sum(gVt .* hVt)
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote vector sphtor tests" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: vector energy" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(301)
+
+        # Random vector field coefficients
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax
+            for l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # Test: Gradient of vector energy w.r.t. Slm
+        function loss_energy_S(S)
+            return energy_vector(cfg, S, Tlm)
+        end
+
+        gS = Zygote.gradient(loss_energy_S, Slm)[1]
+        hS = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in max(1,m):lmax
+            hS[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        hS[:, 1] .= real.(hS[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_energy_S(Slm .+ ϵ.*hS) - loss_energy_S(Slm .- ϵ.*hS)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gS) .* hS))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test: Gradient of vector energy w.r.t. Tlm
+        function loss_energy_T(T)
+            return energy_vector(cfg, Slm, T)
+        end
+
+        gT = Zygote.gradient(loss_energy_T, Tlm)[1]
+        hT = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in max(1,m):lmax
+            hT[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        hT[:, 1] .= real.(hT[:, 1])
+
+        dfdξ_fd = (loss_energy_T(Tlm .+ ϵ.*hT) - loss_energy_T(Tlm .- ϵ.*hT)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gT) .* hT))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test: Gradient of grid energy w.r.t. spatial field
+        Vt0, Vp0 = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
+
+        function loss_grid_energy(Vt)
+            return grid_energy_vector(cfg, Vt, Vp0)
+        end
+
+        gVt = Zygote.gradient(loss_grid_energy, Vt0)[1]
+        hVt = randn(rng, nlat, nlon)
+
+        dfdξ_fd = (loss_grid_energy(Vt0 .+ ϵ.*hVt) - loss_grid_energy(Vt0 .- ϵ.*hVt)) / (2ϵ)
+        dfdξ_ad = sum(gVt .* hVt)
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote vector energy tests" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: divergence and vorticity" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(401)
+
+        # Random spheroidal coefficients
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax
+            for l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Slm[:, 1] .= real.(Slm[:, 1])
+
+        # Test: Gradient of divergence computation
+        function loss_div(S)
+            div_lm = divergence_from_spheroidal(cfg, S)
+            return sum(abs2, div_lm)
+        end
+
+        gS = Zygote.gradient(loss_div, Slm)[1]
+        hS = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in max(1,m):lmax
+            hS[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        hS[:, 1] .= real.(hS[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_div(Slm .+ ϵ.*hS) - loss_div(Slm .- ϵ.*hS)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gS) .* hS))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Random toroidal coefficients
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax
+            for l in max(1, m):lmax
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # Test: Gradient of vorticity computation
+        function loss_vort(T)
+            vort_lm = vorticity_from_toroidal(cfg, T)
+            return sum(abs2, vort_lm)
+        end
+
+        gT = Zygote.gradient(loss_vort, Tlm)[1]
+        hT = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in max(1,m):lmax
+            hT[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        hT[:, 1] .= real.(hT[:, 1])
+
+        dfdξ_fd = (loss_vort(Tlm .+ ϵ.*hT) - loss_vort(Tlm .- ϵ.*hT)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gT) .* hT))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote divergence/vorticity tests" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: gradient transform" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(501)
+
+        # Random scalar field coefficients
+        alm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            alm[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        alm[:, 1] .= real.(alm[:, 1])
+
+        # Test: Gradient of gradient transform (synthesis_grad)
+        function loss_grad(a)
+            Gt, Gp = synthesis_grad(cfg, a)
+            return sum(abs2, Gt) + sum(abs2, Gp)
+        end
+
+        g = Zygote.gradient(loss_grad, alm)[1]
+        h = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            h[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        h[:, 1] .= real.(h[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_grad(alm .+ ϵ.*h) - loss_grad(alm .- ϵ.*h)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(g) .* h))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote gradient transform tests" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: truncated transforms" begin
+    try
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(601)
+        ltr = lmax - 2  # Truncation level
+
+        # Random spectral coefficients
+        alm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            alm[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        alm[:, 1] .= real.(alm[:, 1])
+
+        # Test: Gradient of truncated synthesis
+        function loss_synth_l(a)
+            f = synthesis_l(cfg, a, ltr)
+            return sum(abs2, f)
+        end
+
+        g = Zygote.gradient(loss_synth_l, alm)[1]
+        h = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            h[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        h[:, 1] .= real.(h[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_synth_l(alm .+ ϵ.*h) - loss_synth_l(alm .- ϵ.*h)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(g) .* h))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test: Gradient of truncated analysis
+        f0 = randn(rng, nlat, nlon)
+
+        function loss_analysis_l(f)
+            a = analysis_l(cfg, f, ltr)
+            return sum(abs2, a)
+        end
+
+        gf = Zygote.gradient(loss_analysis_l, f0)[1]
+        hf = randn(rng, nlat, nlon)
+
+        dfdξ_fd = (loss_analysis_l(f0 .+ ϵ.*hf) - loss_analysis_l(f0 .- ϵ.*hf)) / (2ϵ)
+        dfdξ_ad = sum(gf .* hf)
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote truncated transform tests" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: QST transforms" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(701)
+
+        # Random QST coefficients
+        Qlm = zeros(ComplexF64, lmax+1, lmax+1)
+        Slm = zeros(ComplexF64, lmax+1, lmax+1)
+        Tlm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax
+            for l in m:lmax
+                Qlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+            for l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng) + im * randn(rng)
+                Tlm[l+1, m+1] = randn(rng) + im * randn(rng)
+            end
+        end
+        Qlm[:, 1] .= real.(Qlm[:, 1])
+        Slm[:, 1] .= real.(Slm[:, 1])
+        Tlm[:, 1] .= real.(Tlm[:, 1])
+
+        # Test: Gradient of QST synthesis w.r.t. Q
+        function loss_qst_Q(Q)
+            Vr, Vt, Vp = synthesis_qst(cfg, Q, Slm, Tlm; real_output=true)
+            return sum(abs2, Vr) + sum(abs2, Vt) + sum(abs2, Vp)
+        end
+
+        gQ = Zygote.gradient(loss_qst_Q, Qlm)[1]
+        hQ = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            hQ[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        hQ[:, 1] .= real.(hQ[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_qst_Q(Qlm .+ ϵ.*hQ) - loss_qst_Q(Qlm .- ϵ.*hQ)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gQ) .* hQ))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test: Gradient of QST analysis w.r.t. spatial field
+        Vr0, Vt0, Vp0 = synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true)
+
+        function loss_qst_analysis(Vr)
+            Q, S, T = analysis_qst(cfg, Vr, Vt0, Vp0)
+            return sum(abs2, Q) + sum(abs2, S) + sum(abs2, T)
+        end
+
+        gVr = Zygote.gradient(loss_qst_analysis, Vr0)[1]
+        hVr = randn(rng, nlat, nlon)
+
+        dfdξ_fd = (loss_qst_analysis(Vr0 .+ ϵ.*hVr) - loss_qst_analysis(Vr0 .- ϵ.*hVr)) / (2ϵ)
+        dfdξ_ad = sum(gVr .* hVr)
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote QST transform tests" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: complex transforms" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(801)
+
+        # Random spectral coefficients
+        alm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            alm[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        alm[:, 1] .= real.(alm[:, 1])
+
+        # Test: Gradient of complex synthesis
+        function loss_cplx_synth(a)
+            f = synthesis_cplx(cfg, a)
+            return sum(abs2, f)
+        end
+
+        g = Zygote.gradient(loss_cplx_synth, alm)[1]
+        h = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            h[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        h[:, 1] .= real.(h[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_cplx_synth(alm .+ ϵ.*h) - loss_cplx_synth(alm .- ϵ.*h)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(g) .* h))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test: Gradient of complex analysis
+        f0_cplx = synthesis_cplx(cfg, alm)
+
+        function loss_cplx_analysis(f)
+            a = analysis_cplx(cfg, f)
+            return sum(abs2, a)
+        end
+
+        gf = Zygote.gradient(loss_cplx_analysis, f0_cplx)[1]
+        hf = randn(rng, ComplexF64, nlat, nlon)
+
+        dfdξ_fd = (loss_cplx_analysis(f0_cplx .+ ϵ.*hf) - loss_cplx_analysis(f0_cplx .- ϵ.*hf)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(gf) .* hf))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote complex transform tests" exception=(e, catch_backtrace())
+    end
+end
+
+@testset "AD gradients - Zygote: Laplacian operator" begin
+    try
+        lmax = 4
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(901)
+
+        # Random spectral coefficients
+        alm = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            alm[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        alm[:, 1] .= real.(alm[:, 1])
+
+        # Test: Gradient of Laplacian application
+        function loss_laplacian(a)
+            lap = apply_laplacian(cfg, a)
+            return sum(abs2, lap)
+        end
+
+        g = Zygote.gradient(loss_laplacian, alm)[1]
+        h = zeros(ComplexF64, lmax+1, lmax+1)
+        for m in 0:lmax, l in m:lmax
+            h[l+1, m+1] = randn(rng) + im * randn(rng)
+        end
+        h[:, 1] .= real.(h[:, 1])
+
+        ϵ = 1e-6
+        dfdξ_fd = (loss_laplacian(alm .+ ϵ.*h) - loss_laplacian(alm .- ϵ.*h)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(g) .* h))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+        # Test: Gradient of inverse Laplacian
+        function loss_inv_laplacian(a)
+            inv_lap = apply_inv_laplacian(cfg, a)
+            return sum(abs2, inv_lap)
+        end
+
+        g_inv = Zygote.gradient(loss_inv_laplacian, alm)[1]
+        dfdξ_fd = (loss_inv_laplacian(alm .+ ϵ.*h) - loss_inv_laplacian(alm .- ϵ.*h)) / (2ϵ)
+        dfdξ_ad = real(sum(conj(g_inv) .* h))
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    catch e
+        @info "Skipping Zygote Laplacian tests" exception=(e, catch_backtrace())
+    end
+end
+
 @testset "AD gradients - Zygote: rotations and operators" begin
     try
         # Setup

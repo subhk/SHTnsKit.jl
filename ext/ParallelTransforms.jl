@@ -729,7 +729,8 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 end
 
 function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    return SHTnsKit.dist_synthesis(cfg, Array(Alm); prototype_θφ, real_output, use_rfft)
+    Alm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Alm)
+    return SHTnsKit.dist_synthesis(cfg, Alm_dense; prototype_θφ, real_output, use_rfft)
 end
 
 function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::PencilArray; real_output::Bool=true)
@@ -1593,34 +1594,18 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         end
     end
 
-    # Create output distributed array
-    result = create_distributed_spectral_array(plan, ComplexF64)
-
-    # Pack all coefficients in l-major order grouped by owner rank, then Allreduce
-    # and extract the local portion for this rank
-    total_nlm = sum(plan.recv_counts)
-    local_contribs_packed = Vector{ComplexF64}(undef, total_nlm)
-
-    # Pack in l-major order, grouped by owner rank
-    # recv_counts[r+1] = count for rank r, where rank r owns l values where l % nprocs == r
-    idx = 0
-    for owner_rank in 0:(plan.nprocs - 1)
-        for l in 0:lmax
-            if l % plan.nprocs == owner_rank
-                for m in 0:min(l, mmax)
-                    idx += 1
-                    local_contribs_packed[idx] = local_contrib[l+1, m+1]
-                end
-            end
-        end
+    # Only reduce if θ is distributed across ranks (if all ranks have all latitudes,
+    # each rank's local_contrib is already the complete answer)
+    θ_is_distributed = (nθ_local < cfg.nlat)
+    if θ_is_distributed
+        MPI.Allreduce!(MPI.IN_PLACE, local_contrib, +, comm)
     end
 
-    # Allreduce the packed buffer, then extract the local portion for this rank
-    full_reduced = similar(local_contribs_packed)
-    MPI.Allreduce!(local_contribs_packed, full_reduced, +, comm)
-    offset = plan.recv_displs[plan.rank + 1]
-    count = plan.recv_counts[plan.rank + 1]
-    copyto!(result.local_coeffs, 1, full_reduced, offset + 1, count)
+    # Create output distributed array and extract local portion
+    result = create_distributed_spectral_array(plan, ComplexF64)
+    for (i, (l, m)) in enumerate(plan.local_lm_indices)
+        result.local_coeffs[i] = local_contrib[l+1, m+1]
+    end
 
     return result
 end

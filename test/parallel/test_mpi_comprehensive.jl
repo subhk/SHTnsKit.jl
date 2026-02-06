@@ -534,8 +534,8 @@ function test_plan_synthesis(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     # Fill in spectral data
     for (ii, il) in enumerate(axes(Alm_pencil, 1))
         for (jj, jm) in enumerate(axes(Alm_pencil, 2))
-            lval = globalindices(Alm_pencil, 1)[ii] - 1
-            mval = globalindices(Alm_pencil, 2)[jj] - 1
+            lval = ParExt.globalindices(Alm_pencil, 1)[ii] - 1
+            mval = ParExt.globalindices(Alm_pencil, 2)[jj] - 1
             if lval >= mval && mval <= mmax && lval <= lmax
                 Alm_pencil[il, jm] = alm_orig[lval+1, mval+1]
             else
@@ -819,8 +819,8 @@ function test_point_evaluation(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     Alm_pencil = PencilArray{ComplexF64}(undef, spec_pen)
     for (ii, il) in enumerate(axes(Alm_pencil, 1))
         for (jj, jm) in enumerate(axes(Alm_pencil, 2))
-            lval = globalindices(Alm_pencil, 1)[ii] - 1
-            mval = globalindices(Alm_pencil, 2)[jj] - 1
+            lval = ParExt.globalindices(Alm_pencil, 1)[ii] - 1
+            mval = ParExt.globalindices(Alm_pencil, 2)[jj] - 1
             if lval >= mval && mval <= mmax && lval <= lmax
                 Alm_pencil[il, jm] = alm[lval+1, mval+1]
             else
@@ -868,8 +868,8 @@ function test_latitude_evaluation(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     Alm_pencil = PencilArray{ComplexF64}(undef, spec_pen)
     for (ii, il) in enumerate(axes(Alm_pencil, 1))
         for (jj, jm) in enumerate(axes(Alm_pencil, 2))
-            lval = globalindices(Alm_pencil, 1)[ii] - 1
-            mval = globalindices(Alm_pencil, 2)[jj] - 1
+            lval = ParExt.globalindices(Alm_pencil, 1)[ii] - 1
+            mval = ParExt.globalindices(Alm_pencil, 2)[jj] - 1
             if lval >= mval && mval <= mmax && lval <= lmax
                 Alm_pencil[il, jm] = alm[lval+1, mval+1]
             else

@@ -102,7 +102,7 @@ function SHTnsKit.dist_scalar_laplacian(cfg::SHTnsKit.SHTConfig,
                                         use_rfft::Bool=false,
                                         real_output::Bool=true)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)
-    SHTnsKit.apply_laplacian!(cfg, Alm)
+    SHTnsKit.dist_apply_laplacian!(cfg, Alm)
     return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=prototype_θφ,
                                    real_output=real_output, use_rfft=use_rfft)
 end

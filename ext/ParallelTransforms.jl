@@ -1310,61 +1310,15 @@ end
     distributed_spectral_reduce!(plan::DistributedSpectralPlan, local_contrib::AbstractMatrix, 
                                 result::AbstractMatrix)
 
-Efficiently reduce spectral contributions using distributed ownership instead of Allreduce.
-Each process accumulates contributions for coefficients it owns, then redistributes the results.
-This replaces the O(lmax²) Allreduce with O(lmax²/P) local work + O(lmax²) communication.
+Reduce spectral contributions across all MPI ranks using Allreduce.
+Each rank provides its local partial sums in `local_contrib`; the result contains the global sum.
 """
 function distributed_spectral_reduce!(plan::DistributedSpectralPlan, local_contrib::AbstractMatrix, 
                                      result::AbstractMatrix)
-    lmax, mmax = plan.lmax, plan.mmax
     comm = plan.comm
-    
-    # Step 1: Pack local contributions into communication buffers
-    local_contribs_packed = Vector{ComplexF64}(undef, length(plan.local_lm_indices))
-    
-    for (i, (l, m)) in enumerate(plan.local_lm_indices)
-        local_contribs_packed[i] = local_contrib[l+1, m+1]
-    end
-    
-    # Step 2: Reduce contributions for locally owned coefficients
-    # Use MPI_Reduce_scatter instead of Allreduce for better scalability
-    global_contribs_packed = Vector{ComplexF64}(undef, length(plan.local_lm_indices))
-    MPI.Reduce_scatter!(local_contribs_packed, global_contribs_packed, plan.recv_counts, +, comm)
-    
-    # Step 3: Store reduced coefficients in result matrix
-    fill!(result, 0.0 + 0.0im)
-    for (i, (l, m)) in enumerate(plan.local_lm_indices)
-        result[l+1, m+1] = global_contribs_packed[i]
-    end
-    
-    # Step 4: Distribute final results to all processes using Allgatherv
-    # This is more efficient than broadcasting from each owner
-    all_coefficients = Vector{ComplexF64}(undef, sum(plan.recv_counts))
-    MPI.Allgatherv!(global_contribs_packed, VBuffer(all_coefficients, plan.recv_counts), comm)
 
-    # Step 5: Unpack received coefficients into result matrix
-    # Data in all_coefficients is ordered by rank (according to recv_displs/recv_counts).
-    # Each rank's segment contains coefficients for l values where (l % nprocs == rank),
-    # packed in order of increasing l, then increasing m within each l.
-    for owner_rank in 0:(plan.nprocs - 1)
-        if owner_rank == plan.rank
-            continue  # Skip our own coefficients - already stored in Step 3
-        end
-
-        # Calculate starting offset into all_coefficients for this rank's data
-        rank_offset = plan.recv_displs[owner_rank + 1]
-        coeff_idx = 0
-
-        # Iterate through (l,m) pairs owned by this rank (same order as packing)
-        for l in 0:lmax
-            if l % plan.nprocs == owner_rank
-                for m in 0:min(l, mmax)
-                    coeff_idx += 1
-                    result[l+1, m+1] = all_coefficients[rank_offset + coeff_idx]
-                end
-            end
-        end
-    end
+    # Sum contributions from all ranks into result using Allreduce
+    MPI.Allreduce!(local_contrib, result, +, comm)
 
     return result
 end
@@ -1642,8 +1596,8 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # Create output distributed array
     result = create_distributed_spectral_array(plan, ComplexF64)
 
-    # For Reduce_scatter!, each rank must provide contributions for ALL coefficients
-    # The packing order must match the recv_counts segmentation (l-major: for each l, for each m)
+    # Pack all coefficients in l-major order grouped by owner rank, then Allreduce
+    # and extract the local portion for this rank
     total_nlm = sum(plan.recv_counts)
     local_contribs_packed = Vector{ComplexF64}(undef, total_nlm)
 
@@ -1661,8 +1615,12 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         end
     end
 
-    # Reduce_scatter!: reduces all contributions, then scatters so rank r gets recv_counts[r+1] elements
-    MPI.Reduce_scatter!(local_contribs_packed, result.local_coeffs, plan.recv_counts, +, comm)
+    # Allreduce the packed buffer, then extract the local portion for this rank
+    full_reduced = similar(local_contribs_packed)
+    MPI.Allreduce!(local_contribs_packed, full_reduced, +, comm)
+    offset = plan.recv_displs[plan.rank + 1]
+    count = plan.recv_counts[plan.rank + 1]
+    copyto!(result.local_coeffs, 1, full_reduced, offset + 1, count)
 
     return result
 end

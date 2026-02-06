@@ -12,7 +12,7 @@ along the m dimension (dimension 2) for optimal SHT performance.
 function SHTnsKit.create_spectral_pencil(cfg::SHTnsKit.SHTConfig; comm=MPI.COMM_WORLD)
     # Distribute along m (dimension 2) - each rank owns all l values for its m subset
     # This is optimal because each m-column is independent in Legendre transforms
-    return Pencil((cfg.lmax + 1, cfg.mmax + 1), comm; decomp_dims=(2,))
+    return Pencil((cfg.lmax + 1, cfg.mmax + 1), comm)
 end
 
 """

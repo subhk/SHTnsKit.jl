@@ -487,7 +487,7 @@ function test_plan_analysis(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     f_pa = PencilArray(pen, flocal)
 
     # Create plan and run in-place analysis
-    plan = SHTnsKit.DistAnalysisPlan(cfg, f_pa)
+    plan = ParExt.DistAnalysisPlan(cfg, f_pa)
     Alm_out = zeros(ComplexF64, lmax + 1, mmax + 1)
     SHTnsKit.dist_analysis!(plan, Alm_out, f_pa)
 
@@ -545,7 +545,7 @@ function test_plan_synthesis(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     end
 
     # Create plan and run in-place synthesis
-    plan = SHTnsKit.DistPlan(cfg, f_pa)
+    plan = ParExt.DistPlan(cfg, f_pa)
     fθφ_out = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
     SHTnsKit.dist_synthesis!(plan, fθφ_out, Alm_pencil; real_output=true)
 
@@ -598,7 +598,7 @@ function test_plan_sphtor(cfg::SHTnsKit.SHTConfig, pen::Pencil)
     Vp_pa = PencilArray(pen, Vp_local)
 
     # Create sphtor plan and test in-place analysis
-    plan = SHTnsKit.DistSphtorPlan(cfg, Vt_pa)
+    plan = ParExt.DistSphtorPlan(cfg, Vt_pa)
     Slm_out = zeros(ComplexF64, lmax + 1, mmax + 1)
     Tlm_out = zeros(ComplexF64, lmax + 1, mmax + 1)
     SHTnsKit.dist_analysis_sphtor!(plan, Slm_out, Tlm_out, Vt_pa, Vp_pa)

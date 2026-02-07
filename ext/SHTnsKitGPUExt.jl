@@ -1210,11 +1210,9 @@ function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_outp
         lat_start = lat_end + 1
     end
 
-    if real_output && eltype(spatial_data) <: Real
-        return real(final_coeffs)
-    else
-        return final_coeffs
-    end
+    # Spectral coefficients are always complex (even for real-valued fields),
+    # so real_output is accepted for API compatibility but has no effect.
+    return final_coeffs
 end
 
 """
@@ -1310,11 +1308,9 @@ function multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data;
         gpu_clear_cache!()
     end
 
-    if real_output && eltype(spatial_data) <: Real
-        return real(final_coeffs)
-    else
-        return final_coeffs
-    end
+    # Spectral coefficients are always complex (even for real-valued fields),
+    # so real_output is accepted for API compatibility but has no effect.
+    return final_coeffs
 end
 
 """

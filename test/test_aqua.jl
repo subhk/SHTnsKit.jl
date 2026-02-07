@@ -18,6 +18,7 @@ using SHTnsKit
         stale_deps=(ignore=[:BenchmarkTools, :SparseArrays, :MPI, :PencilArrays, :PencilFFTs],),
         # Disable deps_compat check entirely - stdlib packages don't need compat entries
         deps_compat=false,
-        piracies=false  # Disable piracy tests for packages with many extensions
+        piracies=false,  # Disable piracy tests for packages with many extensions
+        persistent_tasks=false  # FFTW.jl creates background timer tasks for wisdom management
     )
 end

@@ -124,6 +124,8 @@ struct SHTPlan
     fft_plan::Any                 # Pre-optimized forward FFT plan (or nothing for RFFT)
     ifft_plan::Any                # Pre-optimized inverse FFT plan (or nothing for RFFT)
     use_rfft::Bool                # Flag: true = use real FFT optimization, false = complex FFT
+    norm_tmp1::Matrix{ComplexF64} # Scratch buffer for normalization conversion
+    norm_tmp2::Matrix{ComplexF64} # Second scratch buffer for vector normalization conversion
 end
 
 """
@@ -169,7 +171,11 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
     fft_plan = FFTW.plan_fft!(Fθk, 2)   # Forward FFT along longitude (dim 2)
     ifft_plan = FFTW.plan_ifft!(Fθk, 2) # Inverse FFT along longitude (dim 2)
 
-    return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, G, Fθk, fft_plan, ifft_plan, false)
+    # Pre-allocate normalization scratch buffers for zero-allocation in-place transforms
+    norm_tmp1 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
+    norm_tmp2 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
+
+    return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, G, Fθk, fft_plan, ifft_plan, false, norm_tmp1, norm_tmp2)
 end
 
 """
@@ -265,12 +271,11 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
         end
     end
     
-    # Convert to cfg normalization if needed
+    # Convert to cfg normalization if needed (using pre-allocated scratch buffers)
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        tmpS = similar(Slm_out); tmpT = similar(Tlm_out)
-        convert_alm_norm!(tmpS, Slm_out, cfg; to_internal=false)
-        convert_alm_norm!(tmpT, Tlm_out, cfg; to_internal=false)
-        copyto!(Slm_out, tmpS); copyto!(Tlm_out, tmpT)
+        convert_alm_norm!(plan.norm_tmp1, Slm_out, cfg; to_internal=false)
+        convert_alm_norm!(plan.norm_tmp2, Tlm_out, cfg; to_internal=false)
+        copyto!(Slm_out, plan.norm_tmp1); copyto!(Tlm_out, plan.norm_tmp2)
     end
     return Slm_out, Tlm_out
 end
@@ -292,13 +297,12 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
     
-    # Convert to internal normalization if needed
+    # Convert to internal normalization if needed (using pre-allocated scratch buffers)
     Slm_int = Slm; Tlm_int = Tlm
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        tmpS = similar(Slm); tmpT = similar(Tlm)
-        convert_alm_norm!(tmpS, Slm, cfg; to_internal=true)
-        convert_alm_norm!(tmpT, Tlm, cfg; to_internal=true)
-        Slm_int = tmpS; Tlm_int = tmpT
+        convert_alm_norm!(plan.norm_tmp1, Slm, cfg; to_internal=true)
+        convert_alm_norm!(plan.norm_tmp2, Tlm, cfg; to_internal=true)
+        Slm_int = plan.norm_tmp1; Tlm_int = plan.norm_tmp2
     end
     
     # Synthesize Vt: stream m→k then inverse FFT
@@ -459,11 +463,10 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
         end
     end
     
-    # Convert to cfg normalization if needed
+    # Convert to cfg normalization if needed (using pre-allocated scratch buffer)
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        tmp = similar(alm_out)
-        convert_alm_norm!(tmp, alm_out, cfg; to_internal=false)
-        copyto!(alm_out, tmp)
+        convert_alm_norm!(plan.norm_tmp1, alm_out, cfg; to_internal=false)
+        copyto!(alm_out, plan.norm_tmp1)
     end
     return alm_out
 end
@@ -483,12 +486,11 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     size(alm,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
     
-    # Convert alm to internal normalization if needed
+    # Convert alm to internal normalization if needed (using pre-allocated scratch buffer)
     alm_int = alm
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        tmp = similar(alm)
-        convert_alm_norm!(tmp, alm, cfg; to_internal=true)
-        alm_int = tmp
+        convert_alm_norm!(plan.norm_tmp1, alm, cfg; to_internal=true)
+        alm_int = plan.norm_tmp1
     end
     
     # Zero Fourier buffer

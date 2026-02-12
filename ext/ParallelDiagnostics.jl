@@ -150,10 +150,11 @@ end
 
 function SHTnsKit.grid_energy_scalar(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray)
     θloc = axes(fθφ, 1)
+    gl_θ = globalindices(fθφ, 1)
     φscale = 2π / cfg.nlon
     e_local = 0.0
     @inbounds for (ii, iθ) in enumerate(θloc)
-        iglobθ = globalindices(fθφ, 1)[ii]
+        iglobθ = gl_θ[ii]
         wi = cfg.w[iglobθ]
         for j in axes(fθφ, 2)
             e_local += wi * abs2(fθφ[iθ, j])
@@ -165,10 +166,11 @@ end
 
 function SHTnsKit.grid_energy_vector(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray)
     θloc = axes(Vtθφ, 1)
+    gl_θ = globalindices(Vtθφ, 1)
     φscale = 2π / cfg.nlon
     e_local = 0.0
     @inbounds for (ii, iθ) in enumerate(θloc)
-        iglobθ = globalindices(Vtθφ, 1)[ii]
+        iglobθ = gl_θ[ii]
         wi = cfg.w[iglobθ]
         for j in axes(Vtθφ, 2)
             e_local += wi * (abs2(Vtθφ[iθ, j]) + abs2(Vpθφ[iθ, j]))
@@ -180,10 +182,11 @@ end
 
 function SHTnsKit.grid_enstrophy(cfg::SHTnsKit.SHTConfig, ζθφ::PencilArray)
     θloc = axes(ζθφ, 1)
+    gl_θ = globalindices(ζθφ, 1)
     φscale = 2π / cfg.nlon
     z_local = 0.0
     @inbounds for (ii, iθ) in enumerate(θloc)
-        iglobθ = globalindices(ζθφ, 1)[ii]
+        iglobθ = gl_θ[ii]
         wi = cfg.w[iglobθ]
         for j in axes(ζθφ, 2)
             z_local += wi * abs2(ζθφ[iθ, j])

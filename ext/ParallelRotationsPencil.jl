@@ -4,18 +4,9 @@
 
 function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
                             Alm_pencil::PencilArray, alpha::Real)
-    lloc = axes(Alm_pencil, 1)
-    mloc = axes(Alm_pencil, 2)
-    gl_m = globalindices(Alm_pencil, 2)
-    for (jj, jm) in enumerate(mloc)
-        mval = gl_m[jj] - 1
-        phase = cis(mval * alpha)
-        for il in lloc
-            Alm_pencil[il, jm] *= phase
-        end
-    end
-
-    return Alm_pencil
+    # Return a new PencilArray; do not mutate the input
+    R_pencil = similar(Alm_pencil)
+    return SHTnsKit.dist_SH_Zrotate(cfg, Alm_pencil, alpha, R_pencil)
 end
 
 function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
@@ -266,8 +257,8 @@ function SHTnsKit.dist_SH_Yrotate_packed(cfg::SHTnsKit.SHTConfig,
     @inbounds for m in 0:mmax, l in m:lmax
         Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1]
     end
-    # Create PencilArrays for the spectral coefficients (decompose along m)
-    comm = MPI.COMM_WORLD
+    # Create PencilArrays using the communicator from prototype_lm
+    comm = communicator(prototype_lm)
     Alm_p = SHTnsKit.matrix_to_spectral_pencil(cfg, Alm; comm)
     R_p = PencilArray{ComplexF64}(undef, pencil(Alm_p))
     SHTnsKit.dist_SH_Yrotate(cfg, Alm_p, β, R_p)
@@ -307,8 +298,8 @@ function SHTnsKit.dist_SH_Xrotate90_packed(cfg::SHTnsKit.SHTConfig,
     @inbounds for m in 0:mmax, l in m:lmax
         Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1]
     end
-    # Create PencilArrays for the spectral coefficients (decompose along m)
-    comm = MPI.COMM_WORLD
+    # Create PencilArrays using the communicator from prototype_lm
+    comm = communicator(prototype_lm)
     Alm_p = SHTnsKit.matrix_to_spectral_pencil(cfg, Alm; comm)
     R_p = PencilArray{ComplexF64}(undef, pencil(Alm_p))
     SHTnsKit.dist_SH_rotate_euler(cfg, Alm_p, π/2, π/2, -π/2, R_p)

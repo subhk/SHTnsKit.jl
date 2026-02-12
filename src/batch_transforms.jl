@@ -648,7 +648,8 @@ function synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,
         Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
     end
 
-    @threads :static for k in 1:nfields
+    # Process each field serially; synthesis_qst already uses @threads :static internally
+    for k in 1:nfields
         Qlm = view(Qlm_batch, :, :, k)
         Slm = view(Slm_batch, :, :, k)
         Tlm = view(Tlm_batch, :, :, k)

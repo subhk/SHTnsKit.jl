@@ -930,7 +930,7 @@ function sparse_spectral_reduce!(local_data::AbstractVector{T}, comm) where {T}
     # Note: Resize operations are performed outside the lock to reduce contention.
     # This is safe because each (T, comm) key maps to a unique buffer pair that
     # is only used by operations on that specific communicator.
-    key = (T, hash(comm))
+    key = (T, MPI.Comm_rank(comm), MPI.Comm_size(comm), UInt64(comm.val))
     idx_recv, val_recv, needs_resize_idx, needs_resize_val = lock(_cache_lock) do
         if haskey(_sparse_gather_cache, key)
             buf = _sparse_gather_cache[key]

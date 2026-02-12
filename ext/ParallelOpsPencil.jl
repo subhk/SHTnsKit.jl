@@ -25,18 +25,19 @@ where lm_prev = LM_index(l-1,m) and lm_next = LM_index(l+1,m).
 """
 function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Alm_pencil::PencilArray, R_pencil::PencilArray)
     lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
-    comm = communicator(Alm_pencil)
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
     gl_l = globalindices(Alm_pencil, 1)
     gl_m = globalindices(Alm_pencil, 2)
-    nl_local = length(lloc)
-    counts = Allgather(nl_local, comm)
+    # l-dimension is NOT distributed (PencilArrays distributes along last dim = m),
+    # so each rank has the full l-column locally. No Allgatherv needed.
     col_full = Vector{ComplexF64}(undef, lmax + 1)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         mval > mmax && continue
-        col_local = Array(view(Alm_pencil, :, jm))
-        Allgatherv!(col_local, VBuffer(col_full, counts), comm)
+        # Extract the full l-column from local data
+        @inbounds for (ii, il) in enumerate(lloc)
+            col_full[gl_l[ii]] = Alm_pencil[il, jm]
+        end
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             acc = 0.0 + 0.0im

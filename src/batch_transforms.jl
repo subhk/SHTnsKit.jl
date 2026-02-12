@@ -524,9 +524,8 @@ function analysis_sphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3}
     Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
     Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
 
-    # Process each field using existing analysis_sphtor
-    # This can be further optimized by sharing Legendre computations
-    @threads :static for k in 1:nfields
+    # Process each field serially; analysis_sphtor already uses @threads :static internally
+    for k in 1:nfields
         Vt = view(Vt_batch, :, :, k)
         Vp = view(Vp_batch, :, :, k)
         Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
@@ -565,7 +564,8 @@ function synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Compl
         Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
     end
 
-    @threads :static for k in 1:nfields
+    # Process each field serially; synthesis_sphtor already uses @threads :static internally
+    for k in 1:nfields
         Slm = view(Slm_batch, :, :, k)
         Tlm = view(Tlm_batch, :, :, k)
         Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=real_output)
@@ -602,7 +602,8 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
     Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
 
-    @threads :static for k in 1:nfields
+    # Process each field serially; analysis_qst already uses @threads :static internally
+    for k in 1:nfields
         Vr = view(Vr_batch, :, :, k)
         Vt = view(Vt_batch, :, :, k)
         Vp = view(Vp_batch, :, :, k)

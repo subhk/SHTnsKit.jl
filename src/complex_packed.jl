@@ -200,7 +200,13 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
         gm = zero(CT)
         @inbounds for l in am:lmax
             idx = LM_cplx_index(lmax, mmax, l, m) + 1
-            gm += cfg.Nlm[l+1, am+1] * P[l+1] * alm[idx]
+            a = alm[idx]
+            if cfg.norm !== :orthonormal || cfg.cs_phase == false
+                k = norm_scale_from_orthonormal(l, am, cfg.norm)
+                α = cs_phase_factor(m, true, cfg.cs_phase)
+                a *= (k * α)
+            end
+            gm += cfg.Nlm[l+1, am+1] * P[l+1] * a
         end
         acc += gm * cis(m * phi)
     end

@@ -30,31 +30,45 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     # Adaptive threading: use nested parallelism for better load balancing
     n_threads = Threads.nthreads()
     if mmax + 1 < n_threads ÷ 2 && nlat > 32
-        # Few m modes: parallelize over latitude points instead
+        # Few m modes: parallelize over latitude points with thread-local accumulators
+        n_tid = Threads.maxthreadid()
+        thread_alm = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:n_tid]
         for m in 0:mmax
             col = m + 1
+            for t in 1:n_tid
+                fill!(thread_alm[t], zero(ComplexF64))
+            end
             if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
                 tbl = cfg.plm_tables[m + 1]
                 @threads for i in 1:nlat
+                    tid = Threads.threadid()
+                    local_acc = thread_alm[tid]
                     Fi = Fφ[i, col]
                     wi = cfg.w[i]
-                    @tturbo warn_check_args=false for l in m:lmax
-                        alm[l + 1, col] += (wi * tbl[l + 1, i]) * Fi
+                    @inbounds for l in m:lmax
+                        local_acc[l + 1] += (wi * tbl[l + 1, i]) * Fi
                     end
                 end
             else
                 @threads for i in 1:nlat
+                    tid = Threads.threadid()
+                    local_acc = thread_alm[tid]
                     thread_P = Vector{Float64}(undef, lmax + 1)
                     SHTnsKit.Plm_row!(thread_P, cfg.x[i], lmax, m)
                     Fi = Fφ[i, col]
                     wi = cfg.w[i]
-                    @tturbo warn_check_args=false for l in m:lmax
-                        alm[l + 1, col] += (wi * thread_P[l + 1]) * Fi
+                    @inbounds for l in m:lmax
+                        local_acc[l + 1] += (wi * thread_P[l + 1]) * Fi
                     end
                 end
             end
-            @tturbo warn_check_args=false for l in m:lmax
-                alm[l + 1, col] *= cfg.Nlm[l + 1, col] * scaleφ
+            # Merge thread-local accumulators and apply normalization
+            @inbounds for l in m:lmax
+                acc = zero(ComplexF64)
+                for t in 1:n_tid
+                    acc += thread_alm[t][l + 1]
+                end
+                alm[l + 1, col] = acc * cfg.Nlm[l + 1, col] * scaleφ
             end
         end
     else
@@ -156,6 +170,12 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
             end
             @tturbo warn_check_args=false for i in 1:nlat
                 Fφ[i, col] = inv_scaleφ * G[i]
+            end
+            if real_output && m > 0
+                conj_index = nlon - m + 1
+                @inbounds for i in 1:nlat
+                    Fφ[i, conj_index] = conj(Fφ[i, col])
+                end
             end
         end
     else

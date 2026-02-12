@@ -110,33 +110,34 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
     lmax, mmax = cfg.lmax, cfg.mmax
     x = float(cost)
     P = Vector{Float64}(undef, lmax + 1)
-    dPdx = Vector{Float64}(undef, lmax + 1)
+    dPdtheta = Vector{Float64}(undef, lmax + 1)
+    P_over_sinth = Vector{Float64}(undef, lmax + 1)
     lloc = axes(Q_p, 1); mloc = axes(Q_p, 2)
     gl_l = globalindices(Q_p, 1)
     gl_m = globalindices(Q_p, 2)
-    sθ = sqrt(max(0.0, 1 - x*x)); inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
     vr_local = 0.0 + 0.0im
     vt_local = 0.0 + 0.0im
     vp_local = 0.0 + 0.0im
     # m=0
     j0 = findfirst(==(1), gl_m)
     if j0 !== nothing
-        SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, 0)
+        SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             N = cfg.Nlm[lval+1, 1]
             Y = N * P[lval+1]
-            dθY = -sθ * N * dPdx[lval+1]
+            dθY = N * dPdtheta[lval+1]
             vr_local += Y   * Q_p[il, mloc[j0]]
             vt_local += dθY * S_p[il, mloc[j0]]
             vp_local += dθY * T_p[il, mloc[j0]]  # Vφ = dθY * T for m=0
         end
     end
-    # m>0
+    # m>0 (use pole-safe Legendre functions)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         mval > 0 || continue
-        SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
+        SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, mval)
+        SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, mval)
         gvr = 0.0 + 0.0im
         gvt = 0.0 + 0.0im
         gvp = 0.0 + 0.0im
@@ -145,12 +146,13 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
             if lval >= mval
                 N = cfg.Nlm[lval+1, mval+1]
                 Y = N * P[lval+1]
-                dθY = -sθ * N * dPdx[lval+1]
+                dθY = N * dPdtheta[lval+1]
+                Y_over_sθ = N * P_over_sinth[lval+1]
                 gvr += Y   * Q_p[il, jm]
                 # Vθ = ∂S/∂θ - (im/sinθ) * T
-                gvt += dθY * S_p[il, jm] - (0 + 1im) * mval * inv_sθ * Y * T_p[il, jm]
+                gvt += dθY * S_p[il, jm] - (0 + 1im) * mval * Y_over_sθ * T_p[il, jm]
                 # Vφ = (im/sinθ) * S + ∂T/∂θ
-                gvp += (0 + 1im) * mval * inv_sθ * Y * S_p[il, jm] + dθY * T_p[il, jm]
+                gvp += (0 + 1im) * mval * Y_over_sθ * S_p[il, jm] + dθY * T_p[il, jm]
             end
         end
         ph = cis(mval * phi)
@@ -174,25 +176,25 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
     lmax = cfg.lmax
     x = float(cost)
     P = Vector{Float64}(undef, lmax + 1)
-    dPdx = Vector{Float64}(undef, lmax + 1)
+    dPdtheta = Vector{Float64}(undef, lmax + 1)
+    P_over_sinth = Vector{Float64}(undef, lmax + 1)
     lloc = axes(Q_p, 1); mloc = axes(Q_p, 2)
     gl_l = globalindices(Q_p, 1)
     gl_m = globalindices(Q_p, 2)
-    sθ = sqrt(max(0.0, 1 - x*x)); inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
     Vr_local = zeros(ComplexF64, nphi)
     Vt_local = zeros(ComplexF64, nphi)
     Vp_local = zeros(ComplexF64, nphi)
     # m=0
     j0 = findfirst(==(1), gl_m)
     if j0 !== nothing
-        SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, 0)
+        SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
         g0 = 0.0 + 0.0im; gθ0 = 0.0 + 0.0im; gφ0 = 0.0 + 0.0im
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             if lval <= ltr
                 N = cfg.Nlm[lval+1, 1]
                 Y = N * P[lval+1]
-                dθY = -sθ * N * dPdx[lval+1]
+                dθY = N * dPdtheta[lval+1]
                 g0  += Y * Q_p[il, mloc[j0]]
                 gθ0 += dθY * S_p[il, mloc[j0]]
                 gφ0 += dθY * T_p[il, mloc[j0]]  # Vφ = dθY * T for m=0
@@ -200,11 +202,12 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
         end
         Vr_local .+= g0; Vt_local .+= gθ0; Vp_local .+= gφ0
     end
-    # m>0
+    # m>0 (use pole-safe Legendre functions)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         (mval > 0 && mval <= mtr) || continue
-        SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
+        SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, mval)
+        SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, mval)
         g  = 0.0 + 0.0im
         gθ = 0.0 + 0.0im
         gφ = 0.0 + 0.0im
@@ -213,12 +216,13 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
             if mval <= lval <= ltr
                 N = cfg.Nlm[lval+1, mval+1]
                 Y = N * P[lval+1]
-                dθY = -sθ * N * dPdx[lval+1]
+                dθY = N * dPdtheta[lval+1]
+                Y_over_sθ = N * P_over_sinth[lval+1]
                 g  += Y   * Q_p[il, jm]
                 # Vθ = ∂S/∂θ - (im/sinθ) * T
-                gθ += dθY * S_p[il, jm] - (0 + 1im) * mval * inv_sθ * Y * T_p[il, jm]
+                gθ += dθY * S_p[il, jm] - (0 + 1im) * mval * Y_over_sθ * T_p[il, jm]
                 # Vφ = (im/sinθ) * S + ∂T/∂θ
-                gφ += (0 + 1im) * mval * inv_sθ * Y * S_p[il, jm] + dθY * T_p[il, jm]
+                gφ += (0 + 1im) * mval * Y_over_sθ * S_p[il, jm] + dθY * T_p[il, jm]
             end
         end
         @inbounds for j in 0:(nphi-1)

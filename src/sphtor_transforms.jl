@@ -691,6 +691,17 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
         end
     end
 
+    # Convert from internal to user normalization if needed
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        @inbounds for l in max(1, im):ltr
+            k = norm_scale_from_orthonormal(l, im, cfg.norm)
+            α = cs_phase_factor(im, true, cfg.cs_phase)
+            s = k * α
+            Sl[l-im+1] /= s
+            Tl[l-im+1] /= s
+        end
+    end
+
     return Sl, Tl
 end
 
@@ -707,6 +718,19 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     expected_len = ltr - im + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
     length(Tl) == expected_len || throw(DimensionMismatch("Tl length mismatch"))
+
+    # Convert from user normalization to internal if needed
+    Sl_int = Sl; Tl_int = Tl
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        Sl_int = copy(Sl); Tl_int = copy(Tl)
+        @inbounds for l in max(1, im):ltr
+            k = norm_scale_from_orthonormal(l, im, cfg.norm)
+            α = cs_phase_factor(im, true, cfg.cs_phase)
+            s = k * α
+            Sl_int[l-im+1] *= s
+            Tl_int[l-im+1] *= s
+        end
+    end
 
     Vt_m = Vector{ComplexF64}(undef, nlat)
     Vp_m = Vector{ComplexF64}(undef, nlat)
@@ -730,8 +754,8 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
             dθY = N * dPdtheta[l+1]
             Y = N * P[l+1]
             Y_over_sθ = N * P_over_sinth[l+1]
-            S_coef = Sl[l-im+1]
-            T_coef = Tl[l-im+1]
+            S_coef = Sl_int[l-im+1]
+            T_coef = Tl_int[l-im+1]
 
             # Vθ = ∂S/∂θ - (im/sinθ) * T
             gθ += dθY * S_coef - 1.0im * im * Y_over_sθ * T_coef

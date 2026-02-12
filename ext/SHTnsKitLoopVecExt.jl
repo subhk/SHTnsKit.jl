@@ -26,7 +26,6 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     alm = Matrix{CT}(undef, lmax + 1, mmax + 1)
     fill!(alm, 0.0 + 0.0im)
 
-    P = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
     # Adaptive threading: use nested parallelism for better load balancing
     n_threads = Threads.nthreads()
@@ -72,12 +71,13 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                     end
                 end
             else
+                thread_P = Vector{Float64}(undef, lmax + 1)
                 for i in 1:nlat
-                    SHTnsKit.Plm_row!(P, cfg.x[i], lmax, m)
+                    SHTnsKit.Plm_row!(thread_P, cfg.x[i], lmax, m)
                     Fi = Fφ[i, col]
                     wi = cfg.w[i]
                     @tturbo warn_check_args=false for l in m:lmax
-                        alm[l + 1, col] += (wi * P[l + 1]) * Fi
+                        alm[l + 1, col] += (wi * thread_P[l + 1]) * Fi
                     end
                 end
             end
@@ -111,7 +111,6 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
     Fφ = Matrix{CT}(undef, nlat, nlon)
     fill!(Fφ, 0.0 + 0.0im)
 
-    P = Vector{Float64}(undef, lmax + 1)
     G = Vector{CT}(undef, nlat)
     inv_scaleφ = nlon / (2π)
 
@@ -163,6 +162,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
         # Standard m-parallel approach with dynamic scheduling
         @threads :dynamic for m in 0:mmax
             col = m + 1
+            thread_G = Vector{CT}(undef, nlat)
             if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
                 tbl = cfg.plm_tables[m + 1]
                 for i in 1:nlat
@@ -174,24 +174,25 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
                         g_re += c * real(a)
                         g_im += c * imag(a)
                     end
-                    G[i] = complex(g_re, g_im)
+                    thread_G[i] = complex(g_re, g_im)
                 end
             else
+                thread_P = Vector{Float64}(undef, lmax + 1)
                 for i in 1:nlat
-                    SHTnsKit.Plm_row!(P, cfg.x[i], lmax, m)
+                    SHTnsKit.Plm_row!(thread_P, cfg.x[i], lmax, m)
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = cfg.Nlm[l + 1, col] * P[l + 1]
+                        c = cfg.Nlm[l + 1, col] * thread_P[l + 1]
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)
                     end
-                    G[i] = complex(g_re, g_im)
+                    thread_G[i] = complex(g_re, g_im)
                 end
             end
             @tturbo warn_check_args=false for i in 1:nlat
-                Fφ[i, col] = inv_scaleφ * G[i]
+                Fφ[i, col] = inv_scaleφ * thread_G[i]
             end
             if real_output && m > 0
                 conj_index = nlon - m + 1

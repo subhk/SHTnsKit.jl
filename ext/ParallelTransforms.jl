@@ -1017,7 +1017,9 @@ end
 
 # Convenience: spectral inputs as PencilArray (dense layout (:l,:m))
 function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    return SHTnsKit.dist_synthesis_sphtor(cfg, Array(Slm), Array(Tlm); prototype_θφ, real_output, use_rfft)
+    Slm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Slm)
+    Tlm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Tlm)
+    return SHTnsKit.dist_synthesis_sphtor(cfg, Slm_dense, Tlm_dense; prototype_θφ, real_output, use_rfft)
 end
 
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
@@ -1182,7 +1184,10 @@ function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatri
 end
 
 function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    Vr, Vt, Vp = SHTnsKit.dist_synthesis_qst(cfg, Array(Qlm), Array(Slm), Array(Tlm); prototype_θφ, real_output, use_rfft)
+    Qlm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Qlm)
+    Slm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Slm)
+    Tlm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Tlm)
+    Vr, Vt, Vp = SHTnsKit.dist_synthesis_qst(cfg, Qlm_dense, Slm_dense, Tlm_dense; prototype_θφ, real_output, use_rfft)
     return Vr, Vt, Vp
 end
 

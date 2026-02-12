@@ -880,9 +880,9 @@ function tree_reduce!(data::AbstractMatrix, comm)
     # Optimized binary tree reduction for inter-node communication
     rank = MPI.Comm_rank(comm)
     nprocs = MPI.Comm_size(comm)
-    
+
     temp_buf = similar(data)
-    
+
     # Up-sweep: reduce up the tree
     step = 1
     while step < nprocs
@@ -891,14 +891,14 @@ function tree_reduce!(data::AbstractMatrix, comm)
             MPI.Recv!(temp_buf, rank + step, step, comm)
             data .+= temp_buf
         elseif (rank - step) % (2 * step) == 0 && rank >= step
-            # Send to parent and exit
+            # Send to parent, then wait for down-sweep
             MPI.Send(data, rank - step, step, comm)
-            return
+            break
         end
         step *= 2
     end
-    
-    # Down-sweep: broadcast final result
+
+    # Down-sweep: broadcast final result to all ranks
     step = prevpow(2, nprocs - 1)
     while step >= 1
         if rank % (2 * step) == 0 && rank + step < nprocs
@@ -1167,17 +1167,17 @@ function tree_reduce_vector!(data::AbstractVector, comm)
                 chunk_view .+= buffer_view
             end
         elseif (rank - step) % (2 * step) == 0 && rank >= step
-            # Send to parent in chunks and exit
+            # Send to parent in chunks, then wait for down-sweep
             for start_idx in 1:chunk_size:length(data)
                 end_idx = min(start_idx + chunk_size - 1, length(data))
                 chunk_view = view(data, start_idx:end_idx)
                 MPI.Send(chunk_view, rank - step, step, comm)
             end
-            return
+            break
         end
         step *= 2
     end
-    
+
     # Down-sweep phase (broadcast final result)
     step = prevpow(2, nprocs - 1)
     while step >= 1

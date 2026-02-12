@@ -199,10 +199,10 @@ function Plm_and_dPdx_row!(P::AbstractVector{T}, dPdx::AbstractVector{T}, x::T, 
         # Handle poles (x = ±1) where x² - 1 = 0 causes division by zero
         if abs(x2m1) < POLE_TOLERANCE_FACTOR * eps(T)
             if m == 0
-                # For m = 0: dP_l^0/dx|_{x=±1} = (±1)^{l+1} * l(l+1)/2
-                # This is the well-known analytical result for Legendre polynomial derivatives at endpoints
+                # For m = 0: dP_l^0/dx|_{x=+1} = l(l+1)/2
+                #            dP_l^0/dx|_{x=-1} = (-1)^{l+1} * l(l+1)/2
                 for l in 1:lmax
-                    sign_factor = x > 0 ? T((-1)^(l+1)) : one(T)
+                    sign_factor = x > 0 ? one(T) : T((-1)^(l+1))
                     dPdx[l+1] = sign_factor * T(l * (l + 1)) / 2
                 end
             else

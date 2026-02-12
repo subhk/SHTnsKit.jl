@@ -346,29 +346,37 @@ function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Compl
 end
 
 """
-    synthesis_point(cfg, Qlm, cost, phi) -> ComplexF64
+    synthesis_point(cfg, Qlm, cost, phi) -> Float64
 
-Evaluate spherical harmonic expansion at a single point (θ,φ).
+Evaluate spherical harmonic expansion at a single point (θ,φ) for a real-valued field.
 `cost` = cos(θ), `phi` is the azimuthal angle.
-`Qlm` should be a matrix of size (lmax+1, mmax+1) with standard indexing.
-Returns the field value at the specified point.
+`Qlm` should be a matrix of size (lmax+1, mmax+1) with standard indexing
+(only m ≥ 0 stored; negative-m reconstructed via Hermitian symmetry).
+Returns the real field value at the specified point.
 """
 function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Qlm, 1) == lmax + 1 || throw(DimensionMismatch("Qlm first dim must be lmax+1"))
     size(Qlm, 2) == mmax + 1 || throw(DimensionMismatch("Qlm second dim must be mmax+1"))
 
-    result = zero(ComplexF64)
+    result = 0.0
     P = Vector{Float64}(undef, lmax + 1)
 
-    # Process each azimuthal mode
-    for m in 0:mmax
-        Plm_row!(P, cost, lmax, m)
-        phase = m == 0 ? one(ComplexF64) : cos(m * phi) + 1.0im * sin(m * phi)  # e^(imφ)
+    # m = 0 contribution (no conjugate partner)
+    Plm_row!(P, cost, lmax, 0)
+    @inbounds for l in 0:lmax
+        result += real(Qlm[l+1, 1]) * cfg.Nlm[l+1, 1] * P[l+1]
+    end
 
+    # m > 0 contributions: add both +m and -m via 2*real(...)
+    for m in 1:mmax
+        Plm_row!(P, cost, lmax, m)
+        phase = cis(m * phi)  # e^(imφ)
+        gm = zero(ComplexF64)
         @inbounds for l in m:lmax
-            result += Qlm[l+1, m+1] * cfg.Nlm[l+1, m+1] * P[l+1] * phase
+            gm += Qlm[l+1, m+1] * cfg.Nlm[l+1, m+1] * P[l+1]
         end
+        result += 2 * real(gm * phase)
     end
 
     return result

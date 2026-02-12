@@ -58,7 +58,10 @@ function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArra
 end
 
 """
-    dist_SH_to_point(cfg, Alm_pencil::PencilArray, cost::Real, phi::Real) -> ComplexF64 or Float64
+    dist_SH_to_point(cfg, Alm_pencil::PencilArray, cost::Real, phi::Real) -> Float64
+
+Evaluate spherical harmonic expansion at a single point for a real-valued field.
+Uses Hermitian symmetry: negative-m contribution added via 2*real(...) for m > 0.
 """
 function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray, cost::Real, phi::Real)
     comm = communicator(Alm_pencil)
@@ -68,19 +71,19 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
     gl_l = globalindices(Alm_pencil, 1)
     gl_m = globalindices(Alm_pencil, 2)
-    s_local = 0.0 + 0.0im
+    s_local = 0.0
     # m=0
     j0 = findfirst(==(1), gl_m)
     if j0 !== nothing
         SHTnsKit.Plm_row!(P, x, lmax, 0)
-        g0 = 0.0 + 0.0im
+        g0 = 0.0
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
-            g0 += cfg.Nlm[lval+1, 1] * P[lval+1] * Alm_pencil[il, mloc[j0]]
+            g0 += cfg.Nlm[lval+1, 1] * P[lval+1] * real(Alm_pencil[il, mloc[j0]])
         end
         s_local += g0
     end
-    # m>0
+    # m>0: add both +m and -m via 2*real(...)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         mval > 0 || continue
@@ -93,10 +96,10 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
             end
         end
         ph = cis(mval * phi)
-        s_local += gm * ph  # Match serial synthesis_point: no conjugate term
+        s_local += 2 * real(gm * ph)
     end
     s = MPI.Allreduce(s_local, +, comm)
-    return s  # Return complex to match serial synthesis_point
+    return s
 end
 
 """

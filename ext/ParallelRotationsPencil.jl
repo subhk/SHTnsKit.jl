@@ -12,12 +12,16 @@ end
 function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
                             Alm_pencil::PencilArray, alpha::Real,
                             R_pencil::PencilArray)
-    mloc = axes(Alm_pencil, 2)
+    A_local = parent(Alm_pencil)
+    R_local = parent(R_pencil)
     gl_m = globalindices(Alm_pencil, 2)
-    for (jj, jm) in enumerate(mloc)
-        mval = gl_m[jj] - 1
+    nloc_l = size(A_local, 1)
+    for (jj, gm) in enumerate(gl_m)
+        mval = gm - 1
         phase = cis(mval * alpha)
-        @inbounds R_pencil[:, jm] .= phase .* Alm_pencil[:, jm]
+        @inbounds for il in 1:nloc_l
+            R_local[il, jj] = phase * A_local[il, jj]
+        end
     end
     return R_pencil
 end

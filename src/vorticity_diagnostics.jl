@@ -83,7 +83,7 @@ end
     grad_enstrophy_Tlm(cfg, Tlm; real_field=true) -> Matrix
 
 Compute gradient of enstrophy with respect to toroidal coefficients.
-Returns ∂Z/∂T_lm = l²(l+1)² conj(T_lm) for optimization applications.
+Returns ∂Z/∂T_lm = l²(l+1)² T_lm for optimization applications.
 """
 function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -94,7 +94,7 @@ function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Boo
     
     for m in 0:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
-        grad[l+1, m+1] = wm[m+1] * ll1_sq * conj(Tlm[l+1, m+1])
+        grad[l+1, m+1] = wm[m+1] * ll1_sq * Tlm[l+1, m+1]
     end
     return grad
 end

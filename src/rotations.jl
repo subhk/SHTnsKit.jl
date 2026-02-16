@@ -264,14 +264,13 @@ function wigner_d_matrix_deriv(l::Int, beta::Float64)
                 p = 2l + m - mp - 2k
                 q = mp - m + 2k
                 amp = (-1.0)^k * exp(logpref - logden)
-                # derivative of cb^p sb^q
-                term = amp * (cb^p) * (sb^q)
+                # derivative of cb^p * sb^q using direct powers (avoids 0/0 at beta=0,pi)
                 dterm = 0.0
                 if p != 0
-                    dterm += term * p * (dcb / cb)
+                    dterm += amp * p * dcb * (cb^(p-1)) * (sb^q)
                 end
                 if q != 0
-                    dterm += term * q * (dsb / sb)
+                    dterm += amp * q * dsb * (cb^p) * (sb^(q-1))
                 end
                 s += dterm
             end

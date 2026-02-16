@@ -126,7 +126,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
     fill!(Fφ, 0.0 + 0.0im)
 
     G = Vector{CT}(undef, nlat)
-    inv_scaleφ = nlon / (2π)
+    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
 
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         alm_int = similar(alm)

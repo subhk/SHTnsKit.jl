@@ -114,6 +114,7 @@ symmetry assumptions can be made about the coefficients.
 function nlm_cplx_calc(lmax::Integer, mmax::Integer, mres::Integer)
     # Validate input parameters
     lmax ≥ 0 && mmax ≥ 0 && mres ≥ 1 || throw(ArgumentError("invalid sizes"))
+    mres == 1 || throw(ArgumentError("nlm_cplx_calc only defined for mres == 1"))
     
     # Early return if no valid modes exist
     mmax ≤ lmax || return 0

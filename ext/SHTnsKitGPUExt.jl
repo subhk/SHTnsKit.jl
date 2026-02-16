@@ -327,7 +327,7 @@ end
 Perform in-place forward FFT using pre-planned cuFFT.
 """
 function gpu_fft!(plan::CuFFTPlan, data::CuArray)
-    plan.forward_plan * data
+    mul!(data, plan.forward_plan, data)
     return data
 end
 
@@ -337,7 +337,7 @@ end
 Perform in-place inverse FFT using pre-planned cuFFT.
 """
 function gpu_ifft!(plan::CuFFTPlan, data::CuArray)
-    plan.inverse_plan * data
+    mul!(data, plan.inverse_plan, data)
     return data
 end
 

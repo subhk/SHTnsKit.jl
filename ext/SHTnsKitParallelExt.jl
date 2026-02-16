@@ -751,8 +751,8 @@ function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
     end
 
     # Compute counts and displacements for recv buffer
-    recv_counts = [Int32(nlat_local * all_nlons[r]) for r in 1:nprocs]
-    recv_displs = cumsum([Int32(0); recv_counts[1:end-1]])
+    recv_counts = [nlat_local * Int(all_nlons[r]) for r in 1:nprocs]
+    recv_displs = cumsum([0; recv_counts[1:end-1]])
 
     # Single Allgatherv for all data
     MPI.Allgatherv!(send_buf, VBuffer(recv_buf, recv_counts, recv_displs), comm)

@@ -872,39 +872,8 @@ function hierarchical_spectral_reduce!(local_data::AbstractMatrix, comm, ppn::In
 end
 
 function tree_reduce!(data::AbstractMatrix, comm)
-    # Optimized binary tree reduction for inter-node communication
-    rank = MPI.Comm_rank(comm)
-    nprocs = MPI.Comm_size(comm)
-
-    temp_buf = similar(data)
-
-    # Up-sweep: reduce up the tree
-    step = 1
-    while step < nprocs
-        if rank % (2 * step) == 0 && rank + step < nprocs
-            # Receive and accumulate from partner
-            MPI.Recv!(temp_buf, rank + step, step, comm)
-            data .+= temp_buf
-        elseif (rank - step) % (2 * step) == 0 && rank >= step
-            # Send to parent, then wait for down-sweep
-            MPI.Send(data, rank - step, step, comm)
-            break
-        end
-        step *= 2
-    end
-
-    # Down-sweep: broadcast final result to all ranks
-    step = prevpow(2, nprocs - 1)
-    while step >= 1
-        if rank % (2 * step) == 0 && rank + step < nprocs
-            # Send result to child
-            MPI.Send(data, rank + step, -step, comm)
-        elseif (rank - step) % (2 * step) == 0 && rank >= step
-            # Receive final result from parent
-            MPI.Recv!(data, rank - step, -step, comm)
-        end
-        step ÷= 2
-    end
+    # Use MPI.Allreduce! which is correct for all process counts
+    MPI.Allreduce!(data, +, comm)
 end
 
 function sparse_spectral_reduce!(local_data::AbstractVector{T}, comm) where {T}
@@ -1141,58 +1110,8 @@ end
 Binary tree reduction optimized for vector data with better memory locality.
 """
 function tree_reduce_vector!(data::AbstractVector, comm)
-    rank = MPI.Comm_rank(comm)
-    nprocs = MPI.Comm_size(comm)
-    
-    # Use chunked processing for better cache behavior
-    chunk_size = min(length(data), 5000)
-    temp_buffer = Vector{eltype(data)}(undef, chunk_size)
-    
-    # Up-sweep phase
-    step = 1
-    while step < nprocs
-        if rank % (2 * step) == 0 && rank + step < nprocs
-            # Receive and accumulate from partner in chunks
-            for start_idx in 1:chunk_size:length(data)
-                end_idx = min(start_idx + chunk_size - 1, length(data))
-                chunk_view = view(data, start_idx:end_idx)
-                buffer_view = view(temp_buffer, 1:(end_idx - start_idx + 1))
-                
-                MPI.Recv!(buffer_view, rank + step, step, comm)
-                chunk_view .+= buffer_view
-            end
-        elseif (rank - step) % (2 * step) == 0 && rank >= step
-            # Send to parent in chunks, then wait for down-sweep
-            for start_idx in 1:chunk_size:length(data)
-                end_idx = min(start_idx + chunk_size - 1, length(data))
-                chunk_view = view(data, start_idx:end_idx)
-                MPI.Send(chunk_view, rank - step, step, comm)
-            end
-            break
-        end
-        step *= 2
-    end
-
-    # Down-sweep phase (broadcast final result)
-    step = prevpow(2, nprocs - 1)
-    while step >= 1
-        if rank % (2 * step) == 0 && rank + step < nprocs
-            # Send result to child in chunks
-            for start_idx in 1:chunk_size:length(data)
-                end_idx = min(start_idx + chunk_size - 1, length(data))
-                chunk_view = view(data, start_idx:end_idx)
-                MPI.Send(chunk_view, rank + step, -step, comm)
-            end
-        elseif (rank - step) % (2 * step) == 0 && rank >= step
-            # Receive final result from parent in chunks
-            for start_idx in 1:chunk_size:length(data)
-                end_idx = min(start_idx + chunk_size - 1, length(data))
-                chunk_view = view(data, start_idx:end_idx)
-                MPI.Recv!(chunk_view, rank - step, -step, comm)
-            end
-        end
-        step ÷= 2
-    end
+    # Use MPI.Allreduce! which is correct for all process counts
+    MPI.Allreduce!(data, +, comm)
 end
 
 """

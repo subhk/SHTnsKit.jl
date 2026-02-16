@@ -175,12 +175,7 @@ function _get_or_plan(kind::Symbol, A)
     # Thread-safe caching with optimized lookup
     key = _cache_key(kind, A)
     
-    # Fast path: check without lock first (common case)
-    if haskey(_pfft_cache, key)
-        return _pfft_cache[key]  # Return cached plan
-    end
-    
-    # Slow path: thread-safe plan creation and caching
+    # Thread-safe plan lookup and creation
     return lock(_cache_lock) do
         # Double-check pattern: another thread might have created the plan
         if haskey(_pfft_cache, key)

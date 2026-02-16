@@ -2342,9 +2342,17 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     # Handle normalization conversion if needed
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        # The coefficients are already in internal (orthonormal) form
-        # For full compatibility, would need to apply convert_alm_norm!
-        # For now, this matches the behavior of dist_analysis
+        # Convert from internal (orthonormal) form to user-requested normalization
+        # Gather local coefficients into a dense matrix, convert, then scatter back
+        dense = zeros(ComplexF64, lmax+1, mmax+1)
+        for (i, (l, m)) in enumerate(plan.local_lm_indices)
+            dense[l+1, m+1] = result.local_coeffs[i]
+        end
+        dense_out = similar(dense)
+        SHTnsKit.convert_alm_norm!(dense_out, dense, cfg; to_internal=false)
+        for (i, (l, m)) in enumerate(plan.local_lm_indices)
+            result.local_coeffs[i] = dense_out[l+1, m+1]
+        end
     end
 
     return result
@@ -2792,6 +2800,19 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         @inbounds for (i, (l, m)) in enumerate(plan.local_lm_indices)
             m_col = (m - m_range_start) ÷ mres + 1
             result.local_coeffs[i] = local_contrib[l+1, m_col]
+        end
+    end
+
+    # Handle normalization conversion if needed
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        dense = zeros(ComplexF64, lmax+1, mmax+1)
+        for (i, (l, m)) in enumerate(plan.local_lm_indices)
+            dense[l+1, m+1] = result.local_coeffs[i]
+        end
+        dense_out = similar(dense)
+        SHTnsKit.convert_alm_norm!(dense_out, dense, cfg; to_internal=false)
+        for (i, (l, m)) in enumerate(plan.local_lm_indices)
+            result.local_coeffs[i] = dense_out[l+1, m+1]
         end
     end
 

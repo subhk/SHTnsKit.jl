@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Distributed Computing · SHTnsKit.jl</title><meta name="title" content="Distributed Computing · SHTnsKit.jl"/><meta property="og:title" content="Distributed Computing · SHTnsKit.jl"/><meta property="twitter:title" content="Distributed Computing · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/distributed/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/distributed/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/distributed/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../gpu/">GPU Acceleration</a></li><li class="is-active"><a class="tocitem" href>Distributed Computing</a><ul class="internal"><li><a class="tocitem" href="#Quick-Start"><span>Quick Start</span></a></li><li><a class="tocitem" href="#Installation"><span>Installation</span></a></li><li><a class="tocitem" href="#API-Reference"><span>API Reference</span></a></li><li><a class="tocitem" href="#Running-MPI-Programs"><span>Running MPI Programs</span></a></li><li><a class="tocitem" href="#Working-with-PencilArrays"><span>Working with PencilArrays</span></a></li><li><a class="tocitem" href="#Vector-Field-Transforms"><span>Vector Field Transforms</span></a></li><li><a class="tocitem" href="#Best-Practices"><span>Best Practices</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../examples/">Examples Gallery</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Distributed Computing</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Distributed Computing</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/distributed.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Distributed-Computing"><a class="docs-heading-anchor" href="#Distributed-Computing">Distributed Computing</a><a id="Distributed-Computing-1"></a><a class="docs-heading-anchor-permalink" href="#Distributed-Computing" title="Permalink"></a></h1><div style="background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">MPI Parallelization</h2>
+    <p style="margin: 0; opacity: 0.9;">Scale your transforms across thousands of cores with PencilArrays</p>
+</div><p>SHTnsKit.jl integrates seamlessly with MPI through PencilArrays.jl for distributed memory parallelization. This enables scaling spherical harmonic transforms to large HPC clusters.</p><div class="admonition is-success" id="When-to-Use-Distributed-Computing-5e02fd0a2d68a25e"><header class="admonition-header">When to Use Distributed Computing<a class="admonition-anchor" href="#When-to-Use-Distributed-Computing-5e02fd0a2d68a25e" title="Permalink"></a></header><div class="admonition-body"><p>MPI parallelization is most beneficial for <strong>large problems (lmax &gt; 128)</strong> or when processing many fields simultaneously. For single-field transforms on smaller problems, consider GPU acceleration instead.</p></div></div><hr/><h2 id="Quick-Start"><a class="docs-heading-anchor" href="#Quick-Start">Quick Start</a><a id="Quick-Start-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Start" title="Permalink"></a></h2><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+# Configuration
+lmax = 64
+nlat = lmax + 2
+nlon = 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed array
+comm = MPI.COMM_WORLD
+pen = Pencil((nlat, nlon), comm)
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data (Y_2^0 pattern)
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    x = cfg.x[i_global]
+    for j in 1:length(ranges[2])
+        fθφ[i_local, j] = (3*x^2 - 1)/2
+    end
+end
+
+# Distributed transforms
+Alm = SHTnsKit.dist_analysis(cfg, fθφ)
+fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
+
+# Verify
+max_err = maximum(abs.(parent(fθφ_recovered) .- parent(fθφ)))
+global_max_err = MPI.Allreduce(max_err, MPI.MAX, comm)
+
+if MPI.Comm_rank(comm) == 0
+    println(&quot;Roundtrip error: $global_max_err&quot;)
+end
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><hr/><h2 id="Installation"><a class="docs-heading-anchor" href="#Installation">Installation</a><a id="Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Installation" title="Permalink"></a></h2><h3 id="Requirements"><a class="docs-heading-anchor" href="#Requirements">Requirements</a><a id="Requirements-1"></a><a class="docs-heading-anchor-permalink" href="#Requirements" title="Permalink"></a></h3><ul><li>Julia 1.10+</li><li>MPI library (OpenMPI or MPICH)</li><li>PencilArrays.jl and PencilFFTs.jl</li></ul><h3 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h3><p><strong>Linux (Ubuntu/Debian):</strong></p><pre><code class="language-bash hljs">sudo apt-get install libopenmpi-dev openmpi-bin</code></pre><p><strong>macOS:</strong></p><pre><code class="language-bash hljs">brew install open-mpi</code></pre><p><strong>Julia packages:</strong></p><pre><code class="language-julia hljs">using Pkg
+Pkg.add([&quot;MPI&quot;, &quot;PencilArrays&quot;, &quot;PencilFFTs&quot;])</code></pre><hr/><h2 id="API-Reference"><a class="docs-heading-anchor" href="#API-Reference">API Reference</a><a id="API-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#API-Reference" title="Permalink"></a></h2><h3 id="Distributed-Transforms"><a class="docs-heading-anchor" href="#Distributed-Transforms">Distributed Transforms</a><a id="Distributed-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Distributed-Transforms" title="Permalink"></a></h3><table><tr><th style="text-align: right">Function</th><th style="text-align: right">Description</th></tr><tr><td style="text-align: right"><code>dist_analysis(cfg, fθφ)</code></td><td style="text-align: right">Distributed spatial → spectral transform</td></tr><tr><td style="text-align: right"><code>dist_synthesis(cfg, Alm; prototype_θφ)</code></td><td style="text-align: right">Distributed spectral → spatial transform</td></tr><tr><td style="text-align: right"><code>dist_analysis_sphtor(cfg, Vθ, Vφ)</code></td><td style="text-align: right">Distributed vector field analysis</td></tr><tr><td style="text-align: right"><code>dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ)</code></td><td style="text-align: right">Distributed vector field synthesis</td></tr></table><h3 id="Spectral-Operators"><a class="docs-heading-anchor" href="#Spectral-Operators">Spectral Operators</a><a id="Spectral-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Operators" title="Permalink"></a></h3><table><tr><th style="text-align: right">Function</th><th style="text-align: right">Description</th></tr><tr><td style="text-align: right"><code>dist_scalar_laplacian(cfg, fθφ)</code></td><td style="text-align: right">Distributed Laplacian computation</td></tr><tr><td style="text-align: right"><code>dist_spatial_divergence(cfg, Vθ, Vφ)</code></td><td style="text-align: right">Distributed divergence</td></tr><tr><td style="text-align: right"><code>dist_spatial_vorticity(cfg, Vθ, Vφ)</code></td><td style="text-align: right">Distributed vorticity</td></tr></table><hr/><h2 id="Running-MPI-Programs"><a class="docs-heading-anchor" href="#Running-MPI-Programs">Running MPI Programs</a><a id="Running-MPI-Programs-1"></a><a class="docs-heading-anchor-permalink" href="#Running-MPI-Programs" title="Permalink"></a></h2><p>Save your script as <code>transform_mpi.jl</code> and run with:</p><pre><code class="language-bash hljs">mpiexec -n 4 julia --project transform_mpi.jl</code></pre><hr/><h2 id="Working-with-PencilArrays"><a class="docs-heading-anchor" href="#Working-with-PencilArrays">Working with PencilArrays</a><a id="Working-with-PencilArrays-1"></a><a class="docs-heading-anchor-permalink" href="#Working-with-PencilArrays" title="Permalink"></a></h2><h3 id="Understanding-Domain-Decomposition"><a class="docs-heading-anchor" href="#Understanding-Domain-Decomposition">Understanding Domain Decomposition</a><a id="Understanding-Domain-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-Domain-Decomposition" title="Permalink"></a></h3><p>PencilArrays distributes data across MPI ranks by splitting along one or more dimensions:</p><pre><code class="language-julia hljs">using MPI, PencilArrays
+
+MPI.Init()
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+
+# Create pencil decomposition
+pen = Pencil((nlat, nlon), comm)
+
+# Each rank owns a portion of the data
+local_size = PencilArrays.size_local(pen)
+global_range = PencilArrays.range_local(pen)
+
+println(&quot;Rank $rank: local size = $local_size, global range = $global_range&quot;)</code></pre><h3 id="Accessing-Local-Data"><a class="docs-heading-anchor" href="#Accessing-Local-Data">Accessing Local Data</a><a id="Accessing-Local-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Local-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create distributed array
+fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Access local data directly
+local_data = parent(fθφ)
+
+# Use local_range() helper from SHTnsKit
+for idx in local_range(fθφ)
+    local_data[idx] = some_value
+end</code></pre><hr/><h2 id="Vector-Field-Transforms"><a class="docs-heading-anchor" href="#Vector-Field-Transforms">Vector Field Transforms</a><a id="Vector-Field-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Field-Transforms" title="Permalink"></a></h2><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using SHTnsKit, PencilArrays, PencilFFTs
+
+comm = MPI.COMM_WORLD
+lmax = 64
+nlat, nlon = lmax + 2, 2*lmax + 1
+cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+
+# Create distributed vector field components
+pen = Pencil((nlat, nlon), comm)
+Vθ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+Vφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
+
+# Fill with test data
+ranges = PencilArrays.range_local(pen)
+for (i_local, i_global) in enumerate(ranges[1])
+    θ = cfg.θ[i_global]
+    for (j_local, j_global) in enumerate(ranges[2])
+        φ = cfg.φ[j_global]
+        Vθ[i_local, j_local] = cos(θ) * sin(φ)
+        Vφ[i_local, j_local] = cos(φ)
+    end
+end
+
+# Distributed vector transform
+Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vθ, Vφ)
+Vθ_out, Vφ_out = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ=Vθ)
+
+destroy_config(cfg)
+MPI.Finalize()</code></pre><hr/><h2 id="Best-Practices"><a class="docs-heading-anchor" href="#Best-Practices">Best Practices</a><a id="Best-Practices-1"></a><a class="docs-heading-anchor-permalink" href="#Best-Practices" title="Permalink"></a></h2><div class="admonition is-info" id="Performance-Tips-a55165330bbd2ce7"><header class="admonition-header">Performance Tips<a class="admonition-anchor" href="#Performance-Tips-a55165330bbd2ce7" title="Permalink"></a></header><div class="admonition-body"><ol><li><strong>Problem size</strong>: MPI overhead is significant for small problems. Use lmax &gt; 64 for benefit.</li><li><strong>Process count</strong>: Scale processes with problem size. Too many processes hurt efficiency.</li><li><strong>Memory</strong>: Each rank needs memory for local data plus communication buffers.</li><li><strong>I/O</strong>: Use parallel I/O (HDF5, NetCDF) for large datasets.</li></ol></div></div><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../gpu/">GPU Acceleration</a> - Single-node GPU speedup</li><li><a href="../performance/">Performance Guide</a> - Optimization strategies</li><li><a href="../api/">API Reference</a> - Complete function documentation</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../gpu/">« GPU Acceleration</a><a class="docs-footer-nextpage" href="../performance/">Performance Guide »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 16 February 2026 20:40">Monday 16 February 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

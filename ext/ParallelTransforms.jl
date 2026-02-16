@@ -1063,6 +1063,11 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
     nlon_local = size(parent(prototype_θφ), 2)
     φ_is_local = (nlon_local == nlon)
 
+    # Validate scratch buffer sizes match the current prototype
+    if size(scratch.Fθ, 1) != nθ_local || size(scratch.Fθ, 2) != nlon
+        throw(DimensionMismatch("Scratch buffers were allocated for nθ_local=$(size(scratch.Fθ, 1)) but prototype has nθ_local=$nθ_local. Recreate the DistSphtorPlan with the correct prototype."))
+    end
+
     # Extract and zero the scratch buffers
     Fθm = scratch.Fθ
     Fφm = scratch.Fφ

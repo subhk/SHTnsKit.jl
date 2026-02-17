@@ -1269,20 +1269,20 @@ struct DistributedSpectralPlan
     recv_displs::Vector{Int}                  # Receive displacement offsets
 end
 
-function create_distributed_spectral_plan(lmax::Int, mmax::Int, comm::MPI.Comm)
+function create_distributed_spectral_plan(lmax::Int, mmax::Int, comm::MPI.Comm; mres::Int=1)
     nprocs = MPI.Comm_size(comm)
     rank = MPI.Comm_rank(comm)
-    
+
     # Determine local coefficient ownership (l-major distribution)
     local_lm_indices = Tuple{Int,Int}[]
     local_packed_indices = Int[]
-    
+
     for l in 0:lmax
         if l % nprocs == rank  # This process owns this l
             for m in 0:min(l, mmax)
                 push!(local_lm_indices, (l, m))
                 # Compute packed index for this coefficient (LM_index returns 0-based, add 1)
-                packed_idx = SHTnsKit.LM_index(lmax, 1, l, m) + 1
+                packed_idx = SHTnsKit.LM_index(lmax, mres, l, m) + 1
                 push!(local_packed_indices, packed_idx)
             end
         end
@@ -1608,7 +1608,7 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # each rank's local_contrib is already the complete answer)
     θ_is_distributed = (nθ_local < cfg.nlat)
     if θ_is_distributed
-        MPI.Allreduce!(MPI.IN_PLACE, local_contrib, +, comm)
+        MPI.Allreduce!(local_contrib, +, comm)
     end
 
     # Create output distributed array and extract local portion

@@ -95,7 +95,7 @@ const _CACHE_PENCILFFTS = Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "1") =
 # Thread-safe cache storage for FFT plans indexed by array characteristics
 const _pfft_cache = IdDict{Any,Any}()
 const _cache_lock = Threads.ReentrantLock()
-const _sparse_gather_cache = Dict{Tuple{DataType,Int}, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}()
+const _sparse_gather_cache = Dict{Any, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}()
 
 # Compat helper: `ceildiv` was added in Julia 1.11
 const _ceildiv = isdefined(Base, :ceildiv) ? Base.ceildiv : (a, b) -> cld(a, b)
@@ -166,7 +166,7 @@ function _get_or_plan(kind::Symbol, A)
     # If caching disabled, create plan directly without storing
     if !_CACHE_PENCILFFTS[]
         return kind === :fft  ? plan_fft(A; dims=2) :     # Forward FFT along longitude (dim 2)
-               kind === :ifft ? plan_fft(A; dims=2) :     # Inverse FFT along longitude  
+               kind === :ifft ? plan_ifft(A; dims=2) :     # Inverse FFT along longitude
                kind === :rfft ? (try plan_rfft(A; dims=2) catch; nothing end) :   # Real-to-complex FFT
                kind === :irfft ? (try plan_irfft(A; dims=2) catch; nothing end) : # Complex-to-real IFFT
                error("unknown plan kind")
@@ -184,7 +184,7 @@ function _get_or_plan(kind::Symbol, A)
         
         # Create new plan and cache it for future use
         plan = kind === :fft  ? plan_fft(A; dims=2) :     # Forward FFT along longitude
-               kind === :ifft ? plan_fft(A; dims=2) :     # Inverse FFT along longitude
+               kind === :ifft ? plan_ifft(A; dims=2) :     # Inverse FFT along longitude
                kind === :rfft ? (try plan_rfft(A; dims=2) catch; nothing end) :   # Real-to-complex FFT
                kind === :irfft ? (try plan_irfft(A; dims=2) catch; nothing end) : # Complex-to-real IFFT
                error("unknown plan kind")

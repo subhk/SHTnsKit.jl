@@ -94,7 +94,7 @@ function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Boo
     
     for m in 0:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
-        grad[l+1, m+1] = wm[m+1] * ll1_sq * conj(Tlm[l+1, m+1])
+        grad[l+1, m+1] = wm[m+1] * ll1_sq * Tlm[l+1, m+1]
     end
     return grad
 end

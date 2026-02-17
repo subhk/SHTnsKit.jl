@@ -38,7 +38,7 @@ function SHTnsKit.energy_scalar_l_spectrum(cfg::SHTnsKit.SHTConfig, Alm::PencilA
         end
     end
     MPI.Allreduce!(E, +, communicator(Alm))
-    return 0.5 .* E
+    return E
 end
 
 function SHTnsKit.energy_scalar_m_spectrum(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; real_field::Bool=true)

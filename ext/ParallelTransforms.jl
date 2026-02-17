@@ -1272,11 +1272,11 @@ end
 function create_distributed_spectral_plan(lmax::Int, mmax::Int, comm::MPI.Comm; mres::Int=1)
     nprocs = MPI.Comm_size(comm)
     rank = MPI.Comm_rank(comm)
-    
+
     # Determine local coefficient ownership (l-major distribution)
     local_lm_indices = Tuple{Int,Int}[]
     local_packed_indices = Int[]
-    
+
     for l in 0:lmax
         if l % nprocs == rank  # This process owns this l
             for m in 0:min(l, mmax)

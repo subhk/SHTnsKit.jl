@@ -166,7 +166,7 @@ function _get_or_plan(kind::Symbol, A)
     # If caching disabled, create plan directly without storing
     if !_CACHE_PENCILFFTS[]
         return kind === :fft  ? plan_fft(A; dims=2) :     # Forward FFT along longitude (dim 2)
-               kind === :ifft ? plan_ifft(A; dims=2) :    # Inverse FFT along longitude
+               kind === :ifft ? plan_ifft(A; dims=2) :     # Inverse FFT along longitude
                kind === :rfft ? (try plan_rfft(A; dims=2) catch; nothing end) :   # Real-to-complex FFT
                kind === :irfft ? (try plan_irfft(A; dims=2) catch; nothing end) : # Complex-to-real IFFT
                error("unknown plan kind")
@@ -184,7 +184,7 @@ function _get_or_plan(kind::Symbol, A)
         
         # Create new plan and cache it for future use
         plan = kind === :fft  ? plan_fft(A; dims=2) :     # Forward FFT along longitude
-               kind === :ifft ? plan_ifft(A; dims=2) :    # Inverse FFT along longitude
+               kind === :ifft ? plan_ifft(A; dims=2) :     # Inverse FFT along longitude
                kind === :rfft ? (try plan_rfft(A; dims=2) catch; nothing end) :   # Real-to-complex FFT
                kind === :irfft ? (try plan_irfft(A; dims=2) catch; nothing end) : # Complex-to-real IFFT
                error("unknown plan kind")

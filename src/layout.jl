@@ -235,15 +235,17 @@ function im_from_lm(lm::Int, lmax::Int, mres::Int)
     im = 0      # Current reduced m-index being tested
     base = 0    # Base offset for current m-block
     
+    im_max = lmax ÷ mres  # maximum valid reduced m-index
     while true
+        im > im_max && throw(ArgumentError("lm=$lm is out of range for lmax=$lmax, mres=$mres"))
         # Size of current m-block (number of l-modes for this m)
         block = lmax - im*mres + 1
-        
+
         # Check if lm falls within current m-block
         if lm < base + block
             return im    # Found the correct m-block
         end
-        
+
         # Move to next m-block
         base += block
         im += 1

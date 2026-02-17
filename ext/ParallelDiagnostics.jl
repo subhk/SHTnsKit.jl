@@ -3,14 +3,18 @@
 ##########
 
 function SHTnsKit.energy_scalar(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; real_field::Bool=true)
-    mloc = axes(Alm, 2)
+    lloc = axes(Alm, 1); mloc = axes(Alm, 2)
+    gl_l = globalindices(Alm, 1)
     gl_m = globalindices(Alm, 2)
     e_local = 0.0
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         w = (real_field && mval > 0) ? 2.0 : 1.0
-        for (ii, il) in enumerate(axes(Alm, 1))
-            e_local += w * abs2(Alm[il, jm])
+        for (ii, il) in enumerate(lloc)
+            lval = gl_l[ii] - 1
+            if lval >= mval
+                e_local += w * abs2(Alm[il, jm])
+            end
         end
     end
     e = Allreduce(e_local, +, communicator(Alm))
@@ -34,7 +38,7 @@ function SHTnsKit.energy_scalar_l_spectrum(cfg::SHTnsKit.SHTConfig, Alm::PencilA
         end
     end
     MPI.Allreduce!(E, +, communicator(Alm))
-    return E
+    return 0.5 .* E
 end
 
 function SHTnsKit.energy_scalar_m_spectrum(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; real_field::Bool=true)

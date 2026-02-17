@@ -178,7 +178,8 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
 
     # Build the computational grid using Gauss-Legendre quadrature
     θ, φ, x, w = thetaphi_from_nodes(nlat, nlon)
-    
+    reverse!(θ); reverse!(x); reverse!(w)  # north-pole-first ordering (consistent with SHTns conventions and api_compat.jl)
+
     # Compute normalization factors for spherical harmonics
     Nlm = Nlm_table(lmax, mmax)  # currently orthonormal; future: adjust per norm/cs_phase
     

@@ -4,7 +4,7 @@
 using Test
 using SHTnsKit
 
-const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
+@isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 @testset "Indexing Utilities" begin
     @testset "nlm_calc triangular number" begin

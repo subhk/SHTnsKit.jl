@@ -5,7 +5,7 @@ using Test
 using Random
 using SHTnsKit
 
-const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
+@isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 @testset "Truncated and Mode-Limited Transforms" begin
     @testset "Degree-limited analysis" begin
@@ -73,19 +73,18 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         alm = zeros(ComplexF64, lmax+1, lmax+1)
         alm[3, 1] = 1.0  # l=2, m=0
 
-        # Evaluate at specific point
-        cost = 0.5  # cos(θ)
-        phi = 0.0
-        val = synthesis_point(cfg, alm, cost, phi)
-
-        # Should be finite and well-defined
-        @test !isnan(val) && !isinf(val)
-
-        # Test at multiple points
-        for cost in [-0.8, -0.3, 0.0, 0.3, 0.8]
+        # Evaluate at specific point and verify against known value
+        # Y_2^0(θ,φ) = N_2^0 * P_2^0(cosθ) where P_2^0(x) = (3x²-1)/2
+        # N_2^0 = sqrt((2*2+1)/(4π)) = sqrt(5/(4π))
+        N20 = sqrt(5 / (4π))
+        for cost in [-0.8, -0.3, 0.0, 0.3, 0.5, 0.8]
+            P20 = (3 * cost^2 - 1) / 2
+            expected = cfg.Nlm[3, 1] * P20  # Use the normalization from config
             for phi in [0.0, π/4, π/2, π, 3π/2]
                 val = synthesis_point(cfg, alm, cost, phi)
                 @test !isnan(val) && !isinf(val)
+                # m=0 mode is independent of phi, so all phi give same value
+                @test isapprox(val, expected; rtol=1e-10, atol=1e-12)
             end
         end
     end

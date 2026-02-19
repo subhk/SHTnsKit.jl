@@ -5,7 +5,7 @@ using Test
 using Random
 using SHTnsKit
 
-const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
+@isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 @testset "Energy Diagnostics" begin
     @testset "Scalar Parseval identity" begin

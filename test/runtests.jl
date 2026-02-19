@@ -537,8 +537,8 @@ end
 # automatic differentiation ecosystem (ForwardDiff, Zygote)
 
 @testset "AD gradients - ForwardDiff" begin
-    try
-        using ForwardDiff  # Forward-mode automatic differentiation
+    _has_forwarddiff = try; using ForwardDiff; true; catch; false; end
+    if _has_forwarddiff
         lmax = 3
         nlat = lmax + 2
         nlon = 2*lmax + 1
@@ -559,209 +559,185 @@ end
         dfdξ_fd = (φ(ϵ) - φ(-ϵ)) / (2ϵ)  # Finite difference derivative
         dfdξ_ad = dot(g, h)  # Automatic differentiation derivative
         @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-    catch e
-        @info "Skipping ForwardDiff gradient test" exception=(e, catch_backtrace())
+    else
+        @info "Skipping ForwardDiff gradient test (package not available)"
     end
 end
 
 @testset "AD gradients - Zygote" begin
-    try
-        lmax = 3
-        nlat = lmax + 2
-        nlon = 2*lmax + 1
+    lmax = 3
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
 
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        rng = MersenneTwister(9)
-        f0 = randn(rng, nlat, nlon)
-        loss(f) = energy_scalar(cfg, analysis(cfg, f))
-        g = Zygote.gradient(loss, f0)[1]
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(9)
+    f0 = randn(rng, nlat, nlon)
+    loss(f) = energy_scalar(cfg, analysis(cfg, f))
+    g = Zygote.gradient(loss, f0)[1]
 
-        # Dot-test
-        h = randn(rng, size(f0))
-        ϵ = 1e-6
-        dfdξ_fd = (loss(f0 .+ ϵ.*h) - loss(f0 .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = sum(g .* h)
-        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-    catch e
-        @info "Skipping Zygote gradient test" exception=(e, catch_backtrace())
-    end
+    # Dot-test
+    h = randn(rng, size(f0))
+    ϵ = 1e-6
+    dfdξ_fd = (loss(f0 .+ ϵ.*h) - loss(f0 .- ϵ.*h)) / (2ϵ)
+    dfdξ_ad = sum(g .* h)
+    @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 end
 
 @testset "AD gradients - Zygote: scalar analysis pipeline" begin
     # Test gradient through: spatial → analysis → energy (known working pattern)
-    try
-        lmax = 4
-        nlat = lmax + 2
-        nlon = 2*lmax + 1
+    lmax = 4
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
 
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        rng = MersenneTwister(101)
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(101)
 
-        # Real spatial field input
-        f0 = randn(rng, nlat, nlon)
+    # Real spatial field input
+    f0 = randn(rng, nlat, nlon)
 
-        # Loss: spatial → spectral → energy
-        loss(f) = energy_scalar(cfg, analysis(cfg, f))
-        g = Zygote.gradient(loss, f0)[1]
+    # Loss: spatial → spectral → energy
+    loss(f) = energy_scalar(cfg, analysis(cfg, f))
+    g = Zygote.gradient(loss, f0)[1]
 
-        # Finite difference check
-        h = randn(rng, nlat, nlon)
-        ϵ = 1e-6
-        dfdξ_fd = (loss(f0 .+ ϵ.*h) - loss(f0 .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = sum(g .* h)
-        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-    catch e
-        @info "Skipping Zygote scalar analysis pipeline test" exception=(e, catch_backtrace())
-    end
+    # Finite difference check
+    h = randn(rng, nlat, nlon)
+    ϵ = 1e-6
+    dfdξ_fd = (loss(f0 .+ ϵ.*h) - loss(f0 .- ϵ.*h)) / (2ϵ)
+    dfdξ_ad = sum(g .* h)
+    @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 end
 
 @testset "AD gradients - Zygote: vector analysis pipeline" begin
     # Test gradient through: spatial vector → analysis_sphtor → energy
-    try
-        lmax = 4
-        nlat = lmax + 2
-        nlon = 2*lmax + 1
+    lmax = 4
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
 
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        rng = MersenneTwister(201)
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(201)
 
-        # Real spatial vector field inputs
-        Vt0 = randn(rng, nlat, nlon)
-        Vp0 = randn(rng, nlat, nlon)
+    # Real spatial vector field inputs
+    Vt0 = randn(rng, nlat, nlon)
+    Vp0 = randn(rng, nlat, nlon)
 
-        # Loss: spatial → spectral → energy (gradient w.r.t. Vt)
-        function loss_vt(Vt)
-            S, T = analysis_sphtor(cfg, Vt, Vp0)
-            return energy_vector(cfg, S, T)
-        end
-
-        gVt = Zygote.gradient(loss_vt, Vt0)[1]
-        hVt = randn(rng, nlat, nlon)
-
-        ϵ = 1e-6
-        dfdξ_fd = (loss_vt(Vt0 .+ ϵ.*hVt) - loss_vt(Vt0 .- ϵ.*hVt)) / (2ϵ)
-        dfdξ_ad = sum(gVt .* hVt)
-        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-
-        # Loss: gradient w.r.t. Vp
-        function loss_vp(Vp)
-            S, T = analysis_sphtor(cfg, Vt0, Vp)
-            return energy_vector(cfg, S, T)
-        end
-
-        gVp = Zygote.gradient(loss_vp, Vp0)[1]
-        hVp = randn(rng, nlat, nlon)
-
-        dfdξ_fd = (loss_vp(Vp0 .+ ϵ.*hVp) - loss_vp(Vp0 .- ϵ.*hVp)) / (2ϵ)
-        dfdξ_ad = sum(gVp .* hVp)
-        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-    catch e
-        @info "Skipping Zygote vector analysis pipeline tests" exception=(e, catch_backtrace())
+    # Loss: spatial → spectral → energy (gradient w.r.t. Vt)
+    function loss_vt(Vt)
+        S, T = analysis_sphtor(cfg, Vt, Vp0)
+        return energy_vector(cfg, S, T)
     end
+
+    gVt = Zygote.gradient(loss_vt, Vt0)[1]
+    hVt = randn(rng, nlat, nlon)
+
+    ϵ = 1e-6
+    dfdξ_fd = (loss_vt(Vt0 .+ ϵ.*hVt) - loss_vt(Vt0 .- ϵ.*hVt)) / (2ϵ)
+    dfdξ_ad = sum(gVt .* hVt)
+    @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+
+    # Loss: gradient w.r.t. Vp
+    function loss_vp(Vp)
+        S, T = analysis_sphtor(cfg, Vt0, Vp)
+        return energy_vector(cfg, S, T)
+    end
+
+    gVp = Zygote.gradient(loss_vp, Vp0)[1]
+    hVp = randn(rng, nlat, nlon)
+
+    dfdξ_fd = (loss_vp(Vp0 .+ ϵ.*hVp) - loss_vp(Vp0 .- ϵ.*hVp)) / (2ϵ)
+    dfdξ_ad = sum(gVp .* hVp)
+    @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 end
 
 @testset "AD gradients - Zygote: grid energy functions" begin
     # Test gradient of grid-space energy functions (simple, should work)
-    try
-        lmax = 4
-        nlat = lmax + 2
-        nlon = 2*lmax + 1
+    lmax = 4
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
 
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        rng = MersenneTwister(301)
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(301)
 
-        # Test scalar grid energy
-        f0 = randn(rng, nlat, nlon)
-        loss_scalar(f) = grid_energy_scalar(cfg, f)
+    # Test scalar grid energy
+    f0 = randn(rng, nlat, nlon)
+    loss_scalar(f) = grid_energy_scalar(cfg, f)
 
-        g = Zygote.gradient(loss_scalar, f0)[1]
-        h = randn(rng, nlat, nlon)
+    g = Zygote.gradient(loss_scalar, f0)[1]
+    h = randn(rng, nlat, nlon)
 
-        ϵ = 1e-6
-        dfdξ_fd = (loss_scalar(f0 .+ ϵ.*h) - loss_scalar(f0 .- ϵ.*h)) / (2ϵ)
-        dfdξ_ad = sum(g .* h)
-        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
+    ϵ = 1e-6
+    dfdξ_fd = (loss_scalar(f0 .+ ϵ.*h) - loss_scalar(f0 .- ϵ.*h)) / (2ϵ)
+    dfdξ_ad = sum(g .* h)
+    @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 
-        # Test vector grid energy
-        Vt0 = randn(rng, nlat, nlon)
-        Vp0 = randn(rng, nlat, nlon)
+    # Test vector grid energy
+    Vt0 = randn(rng, nlat, nlon)
+    Vp0 = randn(rng, nlat, nlon)
 
-        function loss_vec_vt(Vt)
-            return grid_energy_vector(cfg, Vt, Vp0)
-        end
-
-        gVt = Zygote.gradient(loss_vec_vt, Vt0)[1]
-        hVt = randn(rng, nlat, nlon)
-
-        dfdξ_fd = (loss_vec_vt(Vt0 .+ ϵ.*hVt) - loss_vec_vt(Vt0 .- ϵ.*hVt)) / (2ϵ)
-        dfdξ_ad = sum(gVt .* hVt)
-        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-    catch e
-        @info "Skipping Zygote grid energy tests" exception=(e, catch_backtrace())
+    function loss_vec_vt(Vt)
+        return grid_energy_vector(cfg, Vt, Vp0)
     end
+
+    gVt = Zygote.gradient(loss_vec_vt, Vt0)[1]
+    hVt = randn(rng, nlat, nlon)
+
+    dfdξ_fd = (loss_vec_vt(Vt0 .+ ϵ.*hVt) - loss_vec_vt(Vt0 .- ϵ.*hVt)) / (2ϵ)
+    dfdξ_ad = sum(gVt .* hVt)
+    @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 end
 
 @testset "AD gradients - Zygote: QST analysis pipeline" begin
     # Test gradient through: spatial 3D vector → analysis_qst → energy
-    try
-        lmax = 4
-        nlat = lmax + 2
-        nlon = 2*lmax + 1
+    lmax = 4
+    nlat = lmax + 2
+    nlon = 2*lmax + 1
 
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        rng = MersenneTwister(401)
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(401)
 
-        # Real spatial 3D vector field inputs
-        Vr0 = randn(rng, nlat, nlon)
-        Vt0 = randn(rng, nlat, nlon)
-        Vp0 = randn(rng, nlat, nlon)
+    # Real spatial 3D vector field inputs
+    Vr0 = randn(rng, nlat, nlon)
+    Vt0 = randn(rng, nlat, nlon)
+    Vp0 = randn(rng, nlat, nlon)
 
-        # Loss: spatial → spectral → sum of squared coefficients
-        function loss_vr(Vr)
-            Q, S, T = analysis_qst(cfg, Vr, Vt0, Vp0)
-            return sum(abs2, Q) + sum(abs2, S) + sum(abs2, T)
-        end
-
-        gVr = Zygote.gradient(loss_vr, Vr0)[1]
-        hVr = randn(rng, nlat, nlon)
-
-        ϵ = 1e-6
-        dfdξ_fd = (loss_vr(Vr0 .+ ϵ.*hVr) - loss_vr(Vr0 .- ϵ.*hVr)) / (2ϵ)
-        dfdξ_ad = sum(gVr .* hVr)
-        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-    catch e
-        @info "Skipping Zygote QST analysis pipeline tests" exception=(e, catch_backtrace())
+    # Loss: spatial → spectral → sum of squared coefficients
+    function loss_vr(Vr)
+        Q, S, T = analysis_qst(cfg, Vr, Vt0, Vp0)
+        return sum(abs2, Q) + sum(abs2, S) + sum(abs2, T)
     end
+
+    gVr = Zygote.gradient(loss_vr, Vr0)[1]
+    hVr = randn(rng, nlat, nlon)
+
+    ϵ = 1e-6
+    dfdξ_fd = (loss_vr(Vr0 .+ ϵ.*hVr) - loss_vr(Vr0 .- ϵ.*hVr)) / (2ϵ)
+    dfdξ_ad = sum(gVr .* hVr)
+    @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
 end
 
 @testset "AD gradients - Zygote: multiple resolutions" begin
     # Test gradients work across different grid sizes
-    try
-        rng = MersenneTwister(501)
+    rng = MersenneTwister(501)
 
-        for lmax in [3, 5, 8]
-            nlat = lmax + 2
-            nlon = 2*lmax + 1
-            cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    for lmax in [3, 5, 8]
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-            f0 = randn(rng, nlat, nlon)
-            loss(f) = energy_scalar(cfg, analysis(cfg, f))
+        f0 = randn(rng, nlat, nlon)
+        loss(f) = energy_scalar(cfg, analysis(cfg, f))
 
-            g = Zygote.gradient(loss, f0)[1]
-            h = randn(rng, nlat, nlon)
+        g = Zygote.gradient(loss, f0)[1]
+        h = randn(rng, nlat, nlon)
 
-            ϵ = 1e-6
-            dfdξ_fd = (loss(f0 .+ ϵ.*h) - loss(f0 .- ϵ.*h)) / (2ϵ)
-            dfdξ_ad = sum(g .* h)
-            @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
-        end
-    catch e
-        @info "Skipping Zygote multiple resolution tests" exception=(e, catch_backtrace())
+        ϵ = 1e-6
+        dfdξ_fd = (loss(f0 .+ ϵ.*h) - loss(f0 .- ϵ.*h)) / (2ϵ)
+        dfdξ_ad = sum(g .* h)
+        @test isapprox(dfdξ_ad, dfdξ_fd; rtol=5e-4, atol=1e-7)
     end
 end
 
 @testset "AD gradients - Zygote: rotations and operators" begin
-    try
+    begin
         # Setup
         lmax = 3
         nlat = lmax + 2
@@ -874,8 +850,6 @@ end
             dfdξ_fd_c = (φgc(ϵ) - φgc(-ϵ)) / (2ϵ)
             @test isapprox(gγc, dfdξ_fd_c; rtol=5e-4, atol=1e-7)
         end
-    catch e
-        @info "Skipping Zygote rotation/operator gradient tests" exception=(e, catch_backtrace())
     end
 end
 

@@ -6,7 +6,7 @@ using Random
 using LinearAlgebra
 using SHTnsKit
 
-const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
+@isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 @testset "QST Transforms - Multiple Grid Resolutions" begin
     # Test QST transforms across different latitude and longitude configurations

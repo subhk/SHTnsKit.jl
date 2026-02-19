@@ -5,7 +5,7 @@ using Test
 using Random
 using SHTnsKit
 
-const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
+@isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 @testset "QST (3D Vector) Transforms" begin
     @testset "QST roundtrip" begin
@@ -158,10 +158,12 @@ const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1"
         # Q component (scalar) should roundtrip exactly
         @test isapprox(Ql_back, Ql; rtol=1e-9, atol=1e-11)
 
-        # S and T components have complex l(l+1) coupling in mode-limited transforms
-        # so we only verify they produce non-trivial output
+        # S and T components have complex l(l+1) coupling in mode-limited transforms.
+        # Verify energy is conserved between input and roundtrip (Parseval-like check).
+        E_in = sum(abs2.(Sl)) + sum(abs2.(Tl))
         E_back = sum(abs2.(Sl_back)) + sum(abs2.(Tl_back))
         @test E_back > 0
+        @test isapprox(E_back, E_in; rtol=0.5)  # Energy should be within 50% (loose bound for coupled modes)
     end
 
     @testset "QST decomposition orthogonality" begin

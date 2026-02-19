@@ -1048,11 +1048,10 @@ end
             maxdiff = 0.0
             for (ii, il) in enumerate(lloc)
                 for (jj, jm) in enumerate(mloc)
-                    # In full Julia, compare: abs(R_p[il,jm] - Rlm[gl_l[ii], gl_m[jj]])
-                    maxdiff = maxdiff
+                    maxdiff = max(maxdiff, abs(R_p[il,jm] - Rlm[gl_l[ii], gl_m[jj]]))
                 end
             end
-            # @test maxdiff < 1e-10  # real check done in full environment
+            @test maxdiff < 1e-10
             # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping halo operator test (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"
@@ -1101,10 +1100,9 @@ end
             Alm_p = PencilArrays.PencilArray(P_spec, Alm)
             SHTnsKit.dist_SH_Zrotate(cfg, Alm_p, α)
 
-            # Compare
-            # NOTE: Skipped - dist_SH_Zrotate has known issues in single-process MPI mode
-            # The dense variant leaves Rlm with uninitialized/incorrect values
-            @info "Skipping Z-rotation comparison (known issue in single-process MPI mode)"
+            # Compare dense vs PencilArray Z-rotation
+            Rlm_from_pencil = Array(parent(Alm_p))
+            @test isapprox(Rlm, Rlm_from_pencil; rtol=1e-10, atol=1e-12)
             # MPI.Finalize() - removed, finalize at process exit
         else
             @info "Skipping Z-rotation test (set SHTNSKIT_RUN_MPI_TESTS=1 to enable)"

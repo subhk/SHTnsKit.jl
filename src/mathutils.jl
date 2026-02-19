@@ -17,29 +17,36 @@ All functions use cached computation for efficiency in repeated evaluations.
 # Cache stores log(k!) values for k = 0, 1, 2, ... to avoid repeated computation
 # Index: cache[k+1] = log(k!), so cache[1] = log(0!) = 0
 const _logfac_cache = Ref(Vector{Float64}([0.0]))
+const _logfac_lock = ReentrantLock()
 
 """
     _ensure_logfac!(n::Int)
 
 Internal function to extend the factorial cache up to n! if needed.
 Uses the recurrence log(k!) = log((k-1)!) + log(k) for numerical stability.
+Thread-safe: uses a lock to protect concurrent cache extension.
 """
 function _ensure_logfac!(n::Int)
     # Validate input
     n >= 0 || throw(DomainError(n, "logfactorial expects n ≥ 0"))
-    
-    # Check if cache needs extension
+
+    # Fast path: no lock needed if cache is already large enough
     cache = _logfac_cache[]
-    kmax = length(cache) - 1  # Current maximum cached factorial
-    
-    if n > kmax
-        # Extend cache incrementally using stable recurrence relation
-        # log(k!) = log((k-1)!) + log(k) avoids overflow issues
-        for k in (kmax + 1):n
-            push!(cache, cache[end] + log(k))
+    length(cache) - 1 >= n && return nothing
+
+    # Slow path: extend cache under lock
+    lock(_logfac_lock) do
+        cache = _logfac_cache[]
+        kmax = length(cache) - 1  # Current maximum cached factorial
+        if n > kmax
+            # Extend cache incrementally using stable recurrence relation
+            # log(k!) = log((k-1)!) + log(k) avoids overflow issues
+            for k in (kmax + 1):n
+                push!(cache, cache[end] + log(k))
+            end
         end
     end
-    
+
     return nothing
 end
 

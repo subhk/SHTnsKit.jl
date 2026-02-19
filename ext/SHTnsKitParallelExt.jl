@@ -894,28 +894,25 @@ function sparse_spectral_reduce!(local_data::AbstractVector{T}, comm) where {T}
     # Note: Resize operations are performed outside the lock to reduce contention.
     # This is safe because each (T, comm) key maps to a unique buffer pair that
     # is only used by operations on that specific communicator.
-    key = (T, MPI.Comm_rank(comm), MPI.Comm_size(comm), UInt64(comm.val))
-    idx_recv, val_recv, needs_resize_idx, needs_resize_val = lock(_cache_lock) do
+    key = (T, MPI.Comm_rank(comm), MPI.Comm_size(comm))
+    idx_recv, val_recv = lock(_cache_lock) do
         if haskey(_sparse_gather_cache, key)
             buf = _sparse_gather_cache[key]
             idx_buf = buf.idx
             val_buf = buf.val
-            # Return buffers and resize flags; actual resize happens outside lock
-            (idx_buf, val_buf, length(idx_buf) < total, length(val_buf) < total)
+            if length(idx_buf) < total
+                resize!(idx_buf, total)
+            end
+            if length(val_buf) < total
+                resize!(val_buf, total)
+            end
+            (idx_buf, val_buf)
         else
             idx_buf = Vector{Int}(undef, total)
             val_buf = Vector{T}(undef, total)
             _sparse_gather_cache[key] = (idx=idx_buf, val=val_buf)
-            (idx_buf, val_buf, false, false)
+            (idx_buf, val_buf)
         end
-    end
-
-    # Perform resize outside lock to reduce lock contention in multi-threaded scenarios
-    if needs_resize_idx
-        resize!(idx_recv, total)
-    end
-    if needs_resize_val
-        resize!(val_recv, total)
     end
 
     # Exchange indices and values using MPI.jl v0.20+ API

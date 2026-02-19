@@ -348,7 +348,7 @@ Perform FFT on CUDA array along specified dimensions (without pre-planning).
 """
 function gpu_fft!(data::CuArray, dims)
     plan = CUFFT.plan_fft!(data, dims)
-    plan * data
+    plan * data  # In-place plan: mul! is called internally, modifying data
     return data
 end
 

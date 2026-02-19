@@ -71,18 +71,21 @@ The conversion pattern is:
 3. Copy result back to distributed array type
 """
 function SHTnsKit.fdgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, fθφ::AbstractArray)
-    nlat = length(axes(fθφ, 1)); nlon = length(axes(fθφ, 2))
-    
-    # Define energy loss function for flattened distributed array
+    # For non-Matrix types (e.g., PencilArrays), Array() gives local data only.
+    # Convert to a plain Matrix first to get the full data.
+    fθφ_mat = fθφ isa Matrix ? fθφ : Matrix(fθφ)
+    nlat = size(fθφ_mat, 1); nlon = size(fθφ_mat, 2)
+
+    # Define energy loss function for flattened array
     function loss_flat(z)
         xloc = reshape(z, nlat, nlon)
         return SHTnsKit.energy_scalar(cfg, SHTnsKit.analysis(cfg, xloc))
     end
-    
-    # Compute gradient on local array data
-    g = ForwardDiff.gradient(loss_flat, vec(Array(fθφ)))
+
+    # Compute gradient
+    g = ForwardDiff.gradient(loss_flat, vec(fθφ_mat))
     gl = reshape(g, nlat, nlon)
-    
+
     # Copy result back to distributed array format if supported
     if typeof(fθφ) <: AbstractMatrix
         return gl
@@ -129,7 +132,10 @@ function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::Abstract
     end
     
     # Create combined state vector and compute gradient
-    z0 = vcat(vec(Array(Vtθφ)), vec(Array(Vpθφ)))              # Concatenate components
+    # For non-Matrix types (e.g., PencilArrays), Array() gives local data only.
+    Vt_mat = Vtθφ isa Matrix ? Vtθφ : Matrix(Vtθφ)
+    Vp_mat = Vpθφ isa Matrix ? Vpθφ : Matrix(Vpθφ)
+    z0 = vcat(vec(Vt_mat), vec(Vp_mat))                        # Concatenate components
     g = ForwardDiff.gradient(loss_flat, z0)                    # Compute full gradient
     
     # Split gradient back into component gradients (make copies for consistent behavior)

@@ -1995,6 +1995,7 @@ function create_distributed_spectral_plan_2d(lmax::Int, mmax::Int, comm::MPI.Com
             Fθm = Matrix{ComplexF64}(undef, nθ_local, nlon),
             local_contrib = Matrix{ComplexF64}(undef, lmax + 1, max(n_m_valid, 1)),
             P = Vector{Float64}(undef, lmax + 1),
+            P_complex = Vector{ComplexF64}(undef, lmax + 1),
 
             # Gather/synthesis buffers
             gather_buffer = Vector{ComplexF64}(undef, m_group_nlm),
@@ -2442,6 +2443,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         x_cache = plan.scratch.x_cache
         Fθm = plan.scratch.Fθm
         P = plan.scratch.P
+        P_complex = plan.scratch.P_complex
         fθφ_local = plan.scratch.fθφ_local
         fθφ_result = plan.scratch.fθφ_result  # Separate result buffer to avoid copy
     else
@@ -2450,6 +2452,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         x_cache = nothing  # Will use cfg.x directly
         Fθm = Matrix{ComplexF64}(undef, nθ_local, nlon)
         P = Vector{Float64}(undef, lmax + 1)
+        P_complex = Vector{ComplexF64}(undef, lmax + 1)
         fθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
         fθφ_result = nothing  # Will allocate on return
     end
@@ -2472,16 +2475,16 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
 
             if cfg.use_plm_tables && !isempty(cfg.plm_tables)
                 # Pre-multiply Nlm * alm to avoid redundant multiply per θ point
-                # Store in P buffer (reused across m values)
+                # Use complex buffer since alm_partial is ComplexF64
                 @inbounds for l in m:lmax
-                    P[l+1] = cfg.Nlm[l+1, col] * alm_partial[l+1, m_col]
+                    P_complex[l+1] = cfg.Nlm[l+1, col] * alm_partial[l+1, m_col]
                 end
 
                 tbl = cfg.plm_tables[col]
                 for (ii, iglob) in enumerate(θ_globals)
                     g = 0.0 + 0.0im
                     @inbounds @simd for l in m:lmax
-                        g += P[l+1] * tbl[l+1, iglob]
+                        g += P_complex[l+1] * tbl[l+1, iglob]
                     end
                     Fθm[ii, m + 1] = inv_scaleφ * g
                     if real_output && m > 0

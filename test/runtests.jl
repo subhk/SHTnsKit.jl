@@ -121,24 +121,24 @@ end
     nlat = lmax + 2
     nlon = 2*lmax + 1
     cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-    im = 1
+    azm = 1
     ltr = lmax - 1
-    len = ltr - im + 1
+    len = ltr - azm + 1
     rng = MersenneTwister(17)
-    Sl = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
-    Tl = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
+    Sl = ComplexF64.(randn(rng, len) .+ 1im * randn(rng, len))
+    Tl = ComplexF64.(randn(rng, len) .+ 1im * randn(rng, len))
 
-    Vt_ref, Vp_ref = synthesis_sphtor_ml(cfg, im, Sl, zeros(ComplexF64, len), ltr)
-    Vt_s, Vp_s = synthesis_sph_ml(cfg, im, Sl, ltr)
+    Vt_ref, Vp_ref = synthesis_sphtor_ml(cfg, azm, Sl, zeros(ComplexF64, len), ltr)
+    Vt_s, Vp_s = synthesis_sph_ml(cfg, azm, Sl, ltr)
     @test isapprox(Vt_s, Vt_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Vp_s, Vp_ref; rtol=1e-10, atol=1e-12)
 
-    Vt_ref_t, Vp_ref_t = synthesis_sphtor_ml(cfg, im, zeros(ComplexF64, len), Tl, ltr)
-    Vt_t, Vp_t = synthesis_tor_ml(cfg, im, Tl, ltr)
+    Vt_ref_t, Vp_ref_t = synthesis_sphtor_ml(cfg, azm, zeros(ComplexF64, len), Tl, ltr)
+    Vt_t, Vp_t = synthesis_tor_ml(cfg, azm, Tl, ltr)
     @test isapprox(Vt_t, Vt_ref_t; rtol=1e-10, atol=1e-12)
     @test isapprox(Vp_t, Vp_ref_t; rtol=1e-10, atol=1e-12)
 
-    Slm = ComplexF64.(randn(rng, lmax+1, lmax+1) .+ im * randn(rng, lmax+1, lmax+1))
+    Slm = ComplexF64.(randn(rng, lmax+1, lmax+1) .+ 1im * randn(rng, lmax+1, lmax+1))
     Slm[:, 1] .= real.(Slm[:, 1])
     Gt_ref, Gp_ref = synthesis_sph(cfg, Slm)
     Gt, Gp = synthesis_grad(cfg, Slm)
@@ -150,9 +150,9 @@ end
     @test isapprox(Gt_l, Gt_l_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Gp_l, Gp_l_ref; rtol=1e-10, atol=1e-12)
 
-    Sl_ml = ComplexF64.(randn(rng, len) .+ im * randn(rng, len))
-    Vt_ml_ref, Vp_ml_ref = synthesis_sph_ml(cfg, im, Sl_ml, ltr)
-    Vt_ml, Vp_ml = synthesis_grad_ml(cfg, im, Sl_ml, ltr)
+    Sl_ml = ComplexF64.(randn(rng, len) .+ 1im * randn(rng, len))
+    Vt_ml_ref, Vp_ml_ref = synthesis_sph_ml(cfg, azm, Sl_ml, ltr)
+    Vt_ml, Vp_ml = synthesis_grad_ml(cfg, azm, Sl_ml, ltr)
     @test isapprox(Vt_ml, Vt_ml_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Vp_ml, Vp_ml_ref; rtol=1e-10, atol=1e-12)
 end

@@ -948,7 +948,7 @@ end
             Qp = PencilArrays.PencilArray(P_spec, Q)
             Sp = PencilArrays.PencilArray(P_spec, S)
             Tp = PencilArrays.PencilArray(P_spec, T)
-            vr_d, vt_d, vp_d = SHTnsKit.dist_synthesis_qst_to_point(cfg, Qp, Sp, Tp, cost, phi)
+            vr_d, vt_d, vp_d = SHTnsKit.dist_SHqst_to_point(cfg, Qp, Sp, Tp, cost, phi)
 
             # Build packed references
             Qv = similar(Qlm); Sv = similar(Qlm); Tv = similar(Qlm)
@@ -1067,15 +1067,15 @@ end
 
             # Rotate
             α = 0.37
-            Rlm = similar(Alm)
+            Rlm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
             SHTnsKit.dist_SH_Zrotate(cfg, Alm, α, Rlm)
             # Pencil variant should match
             P_spec = PencilArrays.Pencil((cfg.lmax+1, cfg.mmax+1), MPI.COMM_WORLD)
             Alm_p = PencilArrays.PencilArray(P_spec, Alm)
-            SHTnsKit.dist_SH_Zrotate(cfg, Alm_p, α)
+            Rlm_p = SHTnsKit.dist_SH_Zrotate(cfg, Alm_p, α)
 
             # Compare dense vs PencilArray Z-rotation
-            Rlm_from_pencil = Array(parent(Alm_p))
+            Rlm_from_pencil = Array(parent(Rlm_p))
             @test isapprox(Rlm, Rlm_from_pencil; rtol=1e-10, atol=1e-12)
             # MPI.Finalize() - removed, finalize at process exit
         else

@@ -45,7 +45,7 @@ jobs:
           version: ${{ matrix.version }}
           arch: x64
           
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
         with:
           # Key on OS + Julia + Project/Manifest hash + commit to avoid stale caches
           key: ${{ runner.os }}-julia-${{ matrix.version }}-${{ hashFiles('Project.toml') }}-${{ hashFiles('Manifest.toml') }}-${{ github.sha }}
@@ -232,7 +232,7 @@ jobs:
         with:
           version: '1'
 
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
 
       - name: Install system dependencies
         run: |
@@ -324,7 +324,7 @@ jobs:
         with:
           version: '1'
 
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
 
       - name: Install system dependencies
         run: |

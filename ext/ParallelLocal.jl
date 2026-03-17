@@ -136,8 +136,7 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         mval > 0 || continue
-        SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, mval)
-        SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, mval)
+        SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, mval)
         gvr = 0.0 + 0.0im
         gvt = 0.0 + 0.0im
         gvp = 0.0 + 0.0im
@@ -206,8 +205,7 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         (mval > 0 && mval <= mtr) || continue
-        SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, mval)
-        SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, mval)
+        SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, mval)
         g  = 0.0 + 0.0im
         gθ = 0.0 + 0.0im
         gφ = 0.0 + 0.0im

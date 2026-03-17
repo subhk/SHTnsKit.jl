@@ -329,22 +329,25 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
     expected = nlm_cplx_calc(r.lmax, r.mmax, mres)
     length(Zlm) == expected || throw(DimensionMismatch("LM_cplx size mismatch"))
     α, β, γ = r.α, r.β, r.γ
-    
+
+    # Pre-allocate working vectors at maximum size to avoid per-l allocations
+    nmax = 2 * r.lmax + 1
+    b = Vector{ComplexF64}(undef, nmax)
+    c = Vector{ComplexF64}(undef, nmax)
+
     # Apply R = diag(e^{-i m α}) * d^l(β) * diag(e^{-i m γ}) for each l
     for l in 0:r.lmax
         mm = min(l, r.mmax)
+        n = 2l + 1
         # Build input vector b_m' = e^{-i m' γ} A_{m'} for m' in [-mm..mm]
-        ncols = 2*mm + 1
-        b = Vector{ComplexF64}(undef, 2l + 1)
-        fill!(b, zero(ComplexF64))
+        fill!(view(b, 1:n), zero(ComplexF64))
         for mp in -mm:mm
             idx = LM_cplx_index(r.lmax, r.mmax, l, mp) + 1
             b[mp + l + 1] = Zlm[idx] * cis(-mp * γ)
         end
         # Multiply with d^l(β)
         dl = wigner_d_matrix(l, β)
-        c = Vector{ComplexF64}(undef, 2l + 1)
-        fill!(c, zero(ComplexF64))
+        fill!(view(c, 1:n), zero(ComplexF64))
         # c_m = sum_{m'} d_{m m'} b_{m'}
         for mi in -l:l
             acc = zero(ComplexF64)

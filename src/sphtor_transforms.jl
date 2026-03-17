@@ -254,15 +254,13 @@ function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
                     gφ += 1.0im * m * Y_over_sθ * Sl + dθY * Tl
                 end
             else
-                # Compute Legendre polynomials on the fly using pole-safe functions
+                # Compute Legendre polynomials on the fly using combined pole-safe function
                 P = thread_local_P[Threads.threadid()]
                 dPdtheta = thread_local_dPdtheta[Threads.threadid()]
                 P_over_sinth = thread_local_P_over_sinth[Threads.threadid()]
 
-                # Use pole-safe derivative computation
-                Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
-                # Also compute P/sin(θ) with proper pole handling
-                Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+                # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
+                Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
 
                 @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
@@ -389,9 +387,8 @@ function analysis_sphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMat
                 P = thread_local_P[tid]
                 dPdtheta = thread_local_dPdtheta[tid]
                 P_over_sinth = thread_local_P_over_sinth[tid]
-                # Use pole-safe functions
-                Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
-                Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+                # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
+                Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
                 @inbounds for l in max(1, m):lmax
                     N = cfg.Nlm[l+1, col]
                     dθY = N * dPdtheta[l+1]  # Already dP/dθ, not dP/dx
@@ -672,9 +669,8 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
             Fφ = Fφ / sθ
         end
 
-        # Use pole-safe functions
-        Plm_and_dPdtheta_row!(P, dPdtheta, x, ltr, im)
-        Plm_over_sinth_row!(P, P_over_sinth, x, ltr, im)
+        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
+        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im)
 
         @inbounds for l in max(1, im):ltr
             N = cfg.Nlm[l+1, im+1]
@@ -742,9 +738,8 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
         x = cfg.x[i]
         sθ = sqrt(max(0.0, 1 - x*x))
 
-        # Use pole-safe functions
-        Plm_and_dPdtheta_row!(P, dPdtheta, x, ltr, im)
-        Plm_over_sinth_row!(P, P_over_sinth, x, ltr, im)
+        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
+        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im)
 
         gθ = zero(ComplexF64)
         gφ = zero(ComplexF64)

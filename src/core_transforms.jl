@@ -299,7 +299,7 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        # Use dynamic scheduling for better load balance
+        # Parallelize over m-modes with static scheduling
         @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
@@ -314,7 +314,7 @@ function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{No
     else
         # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        # Use dynamic scheduling for better load balance
+        # Parallelize over m-modes with static scheduling
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -342,7 +342,7 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        # Use dynamic scheduling for better load balance
+        # Parallelize over m-modes with static scheduling
         @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
@@ -357,7 +357,7 @@ function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix;
     else
         # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        # Use dynamic scheduling for better load balance
+        # Parallelize over m-modes with static scheduling
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
@@ -404,6 +404,11 @@ workspace.
 function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     size(f_out, 1) == cfg.nlat || throw(DimensionMismatch("f_out first dim must be nlat=$(cfg.nlat)"))
     size(f_out, 2) == cfg.nlon || throw(DimensionMismatch("f_out second dim must be nlon=$(cfg.nlon)"))
+    # Use a complex scratch buffer for the Legendre summation + IFFT work.
+    # The allocating synthesis_fused/unfused functions write into fft_scratch,
+    # perform IFFT in-place, then allocate real.() for their return value.
+    # By passing our own scratch buffer and copying from it directly, we avoid
+    # relying on the discarded return value and make the data flow explicit.
     Fφ = fft_scratch === nothing ? Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon) : fft_scratch
     size(Fφ,1) == cfg.nlat && size(Fφ,2) == cfg.nlon || throw(DimensionMismatch("fft_scratch wrong size"))
     fill!(Fφ, 0)
@@ -412,14 +417,15 @@ function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; 
     else
         synthesis_unfused(cfg, alm; real_output=real_output, fft_scratch=Fφ)
     end
-    # After conjugate symmetry + IFFT, Fφ contains the result
-    # For real_output=true, imaginary part should be ~0 due to Hermitian symmetry
+    # Fφ now contains the complex IFFT result; copy to f_out
     if real_output
         @inbounds for j in 1:cfg.nlon, i in 1:cfg.nlat
             f_out[i, j] = real(Fφ[i, j])
         end
     else
-        f_out .= Fφ
+        @inbounds for j in 1:cfg.nlon, i in 1:cfg.nlat
+            f_out[i, j] = Fφ[i, j]
+        end
     end
     return f_out
 end
@@ -492,7 +498,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        # Use dynamic scheduling for better load balance
+        # Parallelize over m-modes with static scheduling
         @threads :static for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
@@ -503,7 +509,7 @@ function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=
     else
         # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        # Use dynamic scheduling for better load balance
+        # Parallelize over m-modes with static scheduling
         @threads :static for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]

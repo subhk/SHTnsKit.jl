@@ -166,9 +166,8 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     # m>0 (need pole-safe 1/sinθ handling)
     for m in 1:mmax
         (m % cfg.mres == 0) || continue
-        # Use pole-safe functions
-        Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
-        Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
+        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
         gvr = zero(CT)
         gvt = zero(CT)
         gvp = zero(CT)
@@ -267,9 +266,8 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     # m>0 (need pole-safe 1/sinθ handling)
     for m in 1:mtr
         (m % cfg.mres == 0) || continue
-        # Use pole-safe functions
-        Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
-        Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
+        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
         g  = zero(ComplexF64)
         gθ = zero(ComplexF64)
         gφ = zero(ComplexF64)

@@ -125,8 +125,7 @@ end
                 wi = cfg.w[i]
 
                 # Compute Legendre functions using pole-safe functions
-                SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
-                SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+                SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
 
                 # Accumulate contribution from all l for this (i, m)
                 sθ = 0.0 + 0.0im
@@ -210,8 +209,7 @@ end
             for i in 1:nlat
                 x = cfg.x[i]
 
-                SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
-                SHTnsKit.Plm_over_sinth_row!(P, P_over_sinth, x, lmax, m)
+                SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
 
                 Fθ_im = F̄θ[i, col]
                 Fφ_im = F̄φ[i, col]

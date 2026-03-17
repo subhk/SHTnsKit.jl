@@ -113,6 +113,27 @@ The SHTPlan stores all necessary working arrays and can handle both complex
 FFTs and real-optimized FFTs (RFFT) depending on the use case.
 """
 
+"""
+    SHTPlan
+
+Pre-allocated working buffers and FFTW plans for zero-allocation transforms.
+
+# Thread Safety
+
+**WARNING:** A single `SHTPlan` instance must NOT be used from multiple threads
+simultaneously. The internal buffers (`P`, `dPdtheta`, `G`, `Fθk`, etc.) are
+shared mutable state — concurrent calls to `analysis!` or `synthesis!` on the
+same plan will produce data races and incorrect results.
+
+For multi-threaded use, create one `SHTPlan` per thread:
+```julia
+plans = [SHTPlan(cfg) for _ in 1:Threads.nthreads()]
+Threads.@threads for i in 1:n
+    plan = plans[Threads.threadid()]
+    analysis!(plan, alm_out[i], fields[i])
+end
+```
+"""
 struct SHTPlan
     cfg::SHTConfig                # Configuration parameters
     P::Vector{Float64}            # Working array for Legendre polynomials P_l^m(x)
@@ -217,8 +238,7 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
         col = m + 1
         for i in 1:nlat
             # Use pole-safe functions
-            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
-            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
+            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
             fourier_coeff_θ = plan.Fθk[i, col]
             quad_weight = cfg.w[i]
             @inbounds for l in max(1,m):lmax
@@ -254,8 +274,7 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
         col = m + 1
         for i in 1:nlat
             # Use pole-safe functions
-            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
-            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
+            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
             fourier_coeff_φ = plan.Fθk[i, col]
             quad_weight = cfg.w[i]
             @inbounds for l in max(1,m):lmax
@@ -311,8 +330,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
         col = m + 1
         for i in 1:nlat
             # Use pole-safe functions
-            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
-            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
+            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
             g = zero(ComplexF64)
             @inbounds for l in max(1,m):lmax
                 N = cfg.Nlm[l+1, col]
@@ -371,8 +389,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
         col = m + 1
         for i in 1:nlat
             # Use pole-safe functions
-            Plm_and_dPdtheta_row!(plan.P, plan.dPdtheta, cfg.x[i], lmax, m)
-            Plm_over_sinth_row!(plan.P, plan.P_over_sinth, cfg.x[i], lmax, m)
+            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
             g = zero(ComplexF64)
             @inbounds for l in max(1,m):lmax
                 N = cfg.Nlm[l+1, col]

@@ -137,7 +137,10 @@ function ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
         ifft!(dest, 2)
         _FFT_BACKEND[] = :fftw
         return dest
-    catch
+    catch e
+        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
+            rethrow(e)
+        end
         # DFT fallback: must preserve original row data before overwriting
         row_buf = Vector{eltype(dest)}(undef, nlon)
         @inbounds for i in 1:nlat
@@ -177,8 +180,13 @@ function fft_phi(A::AbstractMatrix)
         local Y = fft(A, 2)
         _FFT_BACKEND[] = :fftw
         return Y
-    catch
-        # Fallback path: use pure Julia DFT for AD compatibility or when FFTW fails
+    catch e
+        # Only fall back for type-related errors (FFTW doesn't support AD types).
+        # Re-throw genuine bugs like DimensionMismatch, OutOfMemoryError, etc.
+        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
+            rethrow(e)
+        end
+        # Fallback path: use pure Julia DFT for AD compatibility
         # (FFTW only supports Float32/Float64/ComplexF32/ComplexF64)
         local Y = _dft_phi(A, -1)  # Forward transform uses -1 direction
         _FFT_BACKEND[] = :dft
@@ -201,7 +209,10 @@ function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
         fft!(dest, 2)
         _FFT_BACKEND[] = :fftw
         return dest
-    catch
+    catch e
+        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
+            rethrow(e)
+        end
         # DFT fallback: must preserve original row data before overwriting
         row_buf = Vector{eltype(dest)}(undef, nlon)
         @inbounds for i in 1:nlat
@@ -236,13 +247,18 @@ true inverses of each other.
 """
 function ifft_phi(A::AbstractMatrix)
     nlon = size(A,2)  # Number of longitude points for normalization
-    
+
     try
         # Primary path: use optimized FFTW inverse FFT
         local y = ifft(A, 2)
         _FFT_BACKEND[] = :fftw
         return y
-    catch
+    catch e
+        # Only fall back for type-related errors (FFTW doesn't support AD types).
+        # Re-throw genuine bugs like DimensionMismatch, OutOfMemoryError, etc.
+        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
+            rethrow(e)
+        end
         # Fallback path: use pure Julia inverse DFT with proper scaling
         # (FFTW only supports Float32/Float64/ComplexF32/ComplexF64)
         local y = (1/nlon) * _dft_phi(A, +1)  # Inverse transform uses +1 direction

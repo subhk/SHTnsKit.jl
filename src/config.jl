@@ -740,13 +740,20 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
                 x[i+1] = cos(θi)
             end
         else
-            # Use simple trapezoidal rule with both poles
+            # Use trapezoidal rule with both poles
+            # Poles (θ=0 and θ=π) get half-weight per the trapezoidal rule
+            h = π / (nlat - 1)
             for i in 0:(nlat-1)
-                θi = i * (π / (nlat - 1))
+                θi = i * h
                 θ[i+1] = θi
-                w[i+1] = (π / (nlat - 1)) * sin(θi)
                 x[i+1] = cos(θi)
+                w[i+1] = h * sin(θi)
             end
+            # Apply trapezoidal endpoint correction: first and last points get half-weight.
+            # At exact poles sin(θ)=0 so w is already 0, but for near-pole points and
+            # correctness of the quadrature rule, enforce the half-weight convention.
+            w[1] *= 0.5
+            w[nlat] *= 0.5
         end
     else
         for i in 0:(nlat-1)
@@ -903,6 +910,40 @@ end
 No-op placeholder for API symmetry with libraries that require explicit teardown.
 """
 destroy_config(::SHTConfig) = nothing
+
+"""
+    Base.copy(cfg::SHTConfig) -> SHTConfig
+
+Create an independent copy of an SHTConfig with all arrays deep-copied.
+
+Since SHTConfig is a mutable struct with shared Vector fields, a simple
+assignment `cfg2 = cfg` creates an alias — mutating one modifies the other.
+Use `copy(cfg)` to get a fully independent copy that can be safely modified
+(e.g., `set_south_pole_first!`) without affecting the original.
+"""
+function Base.copy(cfg::SHTConfig)
+    return SHTConfig(;
+        lmax = cfg.lmax, mmax = cfg.mmax, mres = cfg.mres,
+        nlat = cfg.nlat, nlon = cfg.nlon, grid_type = cfg.grid_type,
+        θ = copy(cfg.θ), φ = copy(cfg.φ), x = copy(cfg.x), w = copy(cfg.w),
+        wlat = copy(cfg.w),  # fresh copy, not aliased to w
+        Nlm = copy(cfg.Nlm), cphi = cfg.cphi,
+        nlm = cfg.nlm, li = copy(cfg.li), mi = copy(cfg.mi), nspat = cfg.nspat,
+        ct = copy(cfg.ct), st = copy(cfg.st), sintheta = copy(cfg.st),
+        norm = cfg.norm, cs_phase = cfg.cs_phase, real_norm = cfg.real_norm,
+        robert_form = cfg.robert_form, phi_scale = cfg.phi_scale,
+        use_plm_tables = cfg.use_plm_tables, on_the_fly = cfg.on_the_fly,
+        compute_device = cfg.compute_device,
+        device_preference = copy(cfg.device_preference),
+        plm_tables = [copy(t) for t in cfg.plm_tables],
+        dplm_tables = [copy(t) for t in cfg.dplm_tables],
+        howmany = cfg.howmany, spec_dist = cfg.spec_dist,
+        south_pole_first = cfg.south_pole_first,
+        allow_padding = cfg.allow_padding,
+        nlat_padded = cfg.nlat_padded,
+        spat_dist = cfg.spat_dist,
+    )
+end
 
 # ==== GPU DEVICE MANAGEMENT FUNCTIONS ====
 

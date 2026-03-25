@@ -58,26 +58,19 @@ let
     # Create a real spatial field on the Gauss×equiangular grid
     f = randn(Float64, cfg.nlat, cfg.nlon)
 
-    # Roundtrip diagnostics: fused vs non-fused
-    alm_fused = analysis(cfg, f; use_fused_loops=true)
-    f2_fused = synthesis(cfg, alm_fused; real_output=true, use_fused_loops=true)
-    alm_nf = analysis(cfg, f; use_fused_loops=false)
-    f2_nf = synthesis(cfg, alm_nf; real_output=true, use_fused_loops=false)
+    # Roundtrip diagnostics
+    alm = analysis(cfg, f)
+    f2 = synthesis(cfg, alm; real_output=true)
     # Local errors
-    lmax_f = maximum(abs.(f2_fused .- f))
-    lrel_f = sqrt(sum(abs2, f2_fused .- f) / (sum(abs2, f) + eps()))
-    lmax_nf = maximum(abs.(f2_nf .- f))
-    lrel_nf = sqrt(sum(abs2, f2_nf .- f) / (sum(abs2, f) + eps()))
+    lmax_err = maximum(abs.(f2 .- f))
+    lrel_err = sqrt(sum(abs2, f2 .- f) / (sum(abs2, f) + eps()))
     # Reduce max across ranks
-    gmax_f = Ref(0.0); grel_f = Ref(0.0); gmax_nf = Ref(0.0); grel_nf = Ref(0.0)
-    MPI.Allreduce!(Ref(lmax_f), gmax_f, MPI.MAX, COMM)
-    MPI.Allreduce!(Ref(lrel_f), grel_f, MPI.MAX, COMM)
-    MPI.Allreduce!(Ref(lmax_nf), gmax_nf, MPI.MAX, COMM)
-    MPI.Allreduce!(Ref(lrel_nf), grel_nf, MPI.MAX, COMM)
+    gmax = Ref(0.0); grel = Ref(0.0)
+    MPI.Allreduce!(Ref(lmax_err), gmax, MPI.MAX, COMM)
+    MPI.Allreduce!(Ref(lrel_err), grel, MPI.MAX, COMM)
 
     if RANK == 0
-        println("Roundtrip (fused):    max|f̂−f|=$(gmax_f[]), rel=$(grel_f[])")
-        println("Roundtrip (nonfused): max|f̂−f|=$(gmax_nf[]), rel=$(grel_nf[])\n")
+        println("Roundtrip: max|f̂−f|=$(gmax[]), rel=$(grel[])\n")
     end
 
     # Optional: demonstrate safe PencilArrays allocation patterns

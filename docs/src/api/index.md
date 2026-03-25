@@ -121,7 +121,7 @@ See the [Distributed Guide](../distributed.md) for detailed usage.
 ## Gradient and Differential Operators
 
 ```@docs
-synthesis_grad
+synthesis_sph
 divergence_from_spheroidal
 vorticity_from_toroidal
 ```

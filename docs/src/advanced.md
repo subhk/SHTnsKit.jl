@@ -203,8 +203,8 @@ end
 Alm = analysis(cfg, test_field)
 
 # Compute gradient using spectral method (exact derivatives)
-# synthesis_grad computes ∇f = (∂f/∂θ, (1/sinθ)∂f/∂φ)
-∂f_∂θ, ∂f_∂φ_over_sinθ = synthesis_grad(cfg, Alm)
+# synthesis_sph computes ∇f = (∂f/∂θ, (1/sinθ)∂f/∂φ)
+∂f_∂θ, ∂f_∂φ_over_sinθ = synthesis_sph(cfg, Alm)
 
 println("Gradient computed using spectral method:")
 println("  ∂f/∂θ range: ", extrema(∂f_∂θ))

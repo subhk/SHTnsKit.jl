@@ -341,7 +341,7 @@ Slm, Tlm = analysis_sphtor(cfg, vθ, vφ)
 vθ, vφ = synthesis_sphtor(cfg, Slm, Tlm)
 
 # Gradient
-dθ, dφ = synthesis_grad(cfg, Alm)
+dθ, dφ = synthesis_sph(cfg, Alm)
 ```
 
 ### GPU Transforms

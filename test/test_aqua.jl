@@ -13,7 +13,9 @@ using SHTnsKit
         ambiguities=false,  # Disable ambiguity tests (can be strict for complex packages)
         # Undefined exports: some symbols are defined in extensions (GPU, parallel, etc.)
         undefined_exports=false,
-        stale_deps=true,
+        # Aqua flags weak deps (MPI, PencilArrays, PencilFFTs) as stale because they're
+        # not directly imported in the main module — they're used by package extensions.
+        stale_deps=(ignore=[:MPI, :PencilArrays, :PencilFFTs],),
         # Disable deps_compat check entirely - stdlib packages don't need compat entries
         deps_compat=false,
         piracies=false,  # Disable piracy tests for packages with many extensions

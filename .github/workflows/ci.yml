@@ -243,7 +243,7 @@ jobs:
 
       - name: Instantiate and precompile (benchmark)
         run: |
-          julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+          julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.add("BenchmarkTools"); Pkg.precompile()'
       
       - name: Run performance benchmarks
         run: |

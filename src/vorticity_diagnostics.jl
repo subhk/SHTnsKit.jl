@@ -23,12 +23,11 @@ This is a measure of the small-scale intensity of rotational motion.
 """
 function enstrophy(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+
     Z = 0.0
     for m in 0:mmax, l in max(1,m):lmax  # Vorticity starts at l=1
         ll1_sq = (l * (l + 1))^2
-        Z += wm[m+1] * ll1_sq * abs2(Tlm[l+1, m+1])
+        Z += _wm(m, real_field) * ll1_sq * abs2(Tlm[l+1, m+1])
     end
     return 0.5 * Z
 end
@@ -87,14 +86,13 @@ Returns ∂Z/∂T_lm = l²(l+1)² T_lm for optimization applications.
 """
 function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+
     grad = similar(Tlm)
     fill!(grad, 0.0)
-    
+
     for m in 0:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
-        grad[l+1, m+1] = wm[m+1] * ll1_sq * Tlm[l+1, m+1]
+        grad[l+1, m+1] = _wm(m, real_field) * ll1_sq * Tlm[l+1, m+1]
     end
     return grad
 end
@@ -125,12 +123,11 @@ Returns Z(l) = Σₘ l²(l+1)²|T_lm|² for each l = 1..lmax.
 """
 function enstrophy_l_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+
     Zl = zeros(lmax + 1)
     for l in 1:lmax, m in 0:min(l, mmax)
         ll1_sq = (l * (l + 1))^2
-        Zl[l+1] += wm[m+1] * ll1_sq * abs2(Tlm[l+1, m+1])
+        Zl[l+1] += _wm(m, real_field) * ll1_sq * abs2(Tlm[l+1, m+1])
     end
     return 0.5 * Zl
 end
@@ -143,12 +140,11 @@ Returns Z(m) = Σₗ l²(l+1)²|T_lm|² for each m = 0..mmax.
 """
 function enstrophy_m_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+
     Zm = zeros(mmax + 1)
     for m in 0:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
-        Zm[m+1] += wm[m+1] * ll1_sq * abs2(Tlm[l+1, m+1])
+        Zm[m+1] += _wm(m, real_field) * ll1_sq * abs2(Tlm[l+1, m+1])
     end
     return 0.5 * Zm
 end
@@ -161,14 +157,13 @@ Returns matrix of size (lmax+1, mmax+1) with enstrophy contributions.
 """
 function enstrophy_lm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
+
     Zlm = Matrix{Float64}(undef, lmax+1, mmax+1)
     fill!(Zlm, 0.0)
-    
+
     for m in 0:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
-        Zlm[l+1, m+1] = 0.5 * wm[m+1] * ll1_sq * abs2(Tlm[l+1, m+1])
+        Zlm[l+1, m+1] = 0.5 * _wm(m, real_field) * ll1_sq * abs2(Tlm[l+1, m+1])
     end
     return Zlm
 end

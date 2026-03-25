@@ -78,9 +78,17 @@ Performance Notes:
 const _TWO_PI = 2π
 
 # Track which backend was used most recently for φ-FFTs: :fftw or :dft
-const _FFT_BACKEND = Ref{Symbol}(:unknown)
+# Uses Atomic{Int} for thread safety (0=unknown, 1=fftw, 2=dft)
+const _FFT_BACKEND = Threads.Atomic{Int}(0)
+const _FFT_BACKEND_FFTW = 1
+const _FFT_BACKEND_DFT = 2
 
-fft_phi_backend() = _FFT_BACKEND[]
+function fft_phi_backend()
+    v = _FFT_BACKEND[]
+    v == _FFT_BACKEND_FFTW && return :fftw
+    v == _FFT_BACKEND_DFT && return :dft
+    return :unknown
+end
 
 """
     _dft_phi(A::AbstractMatrix, dir::Int)
@@ -135,7 +143,7 @@ function ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     nlat, nlon = size(A)
     try
         ifft!(dest, 2)
-        _FFT_BACKEND[] = :fftw
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
         return dest
     catch e
         if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
@@ -157,7 +165,7 @@ function ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
                 dest[i, k+1] = s / nlon
             end
         end
-        _FFT_BACKEND[] = :dft
+        _FFT_BACKEND[] = _FFT_BACKEND_DFT
         return dest
     end
 end
@@ -178,7 +186,7 @@ function fft_phi(A::AbstractMatrix)
     try
         # Primary path: use optimized FFTW along dimension 2 (longitude)
         local Y = fft(A, 2)
-        _FFT_BACKEND[] = :fftw
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
         return Y
     catch e
         # Only fall back for type-related errors (FFTW doesn't support AD types).
@@ -189,7 +197,7 @@ function fft_phi(A::AbstractMatrix)
         # Fallback path: use pure Julia DFT for AD compatibility
         # (FFTW only supports Float32/Float64/ComplexF32/ComplexF64)
         local Y = _dft_phi(A, -1)  # Forward transform uses -1 direction
-        _FFT_BACKEND[] = :dft
+        _FFT_BACKEND[] = _FFT_BACKEND_DFT
         return Y
     end
 end
@@ -207,7 +215,7 @@ function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     nlat, nlon = size(A)
     try
         fft!(dest, 2)
-        _FFT_BACKEND[] = :fftw
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
         return dest
     catch e
         if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
@@ -229,7 +237,7 @@ function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
                 dest[i, k+1] = s
             end
         end
-        _FFT_BACKEND[] = :dft
+        _FFT_BACKEND[] = _FFT_BACKEND_DFT
         return dest
     end
 end
@@ -251,7 +259,7 @@ function ifft_phi(A::AbstractMatrix)
     try
         # Primary path: use optimized FFTW inverse FFT
         local y = ifft(A, 2)
-        _FFT_BACKEND[] = :fftw
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
         return y
     catch e
         # Only fall back for type-related errors (FFTW doesn't support AD types).
@@ -262,7 +270,7 @@ function ifft_phi(A::AbstractMatrix)
         # Fallback path: use pure Julia inverse DFT with proper scaling
         # (FFTW only supports Float32/Float64/ComplexF32/ComplexF64)
         local y = (1/nlon) * _dft_phi(A, +1)  # Inverse transform uses +1 direction
-        _FFT_BACKEND[] = :dft
+        _FFT_BACKEND[] = _FFT_BACKEND_DFT
         return y
     end
 end

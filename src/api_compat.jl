@@ -179,11 +179,9 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
   
     # Update cfg in-place
     cfg.nlat = nlat; cfg.nlon = nphi; cfg.grid_type = grid_sym
-    cfg.θ = θ; cfg.φ = φ; 
-    cfg.x = x; cfg.w = w; 
-    cfg.wlat = w
-    cfg.ct = cos.(θ); cfg.st = sin.(θ); 
-    cfg.sintheta = cfg.st
+    cfg.θ = θ; cfg.φ = φ
+    cfg.x = x; cfg.w = w
+    cfg.st = sin.(θ)
     cfg.nspat = nlat * nphi
     cfg.cphi = 2π / nphi
   

@@ -122,59 +122,6 @@ The corresponding scalar invariants are:
 so spheroidal/toroidal spectra are directly tied to divergence and vorticity.
 """
 
-# Helper functions for pole handling (when precomputed tables are used)
-# These compute the analytical limits at poles where sin(θ) = 0
-
-"""
-    _dPdtheta_at_pole(l, m, x, N)
-
-Compute dP_l^m/dθ * N at a pole (x = ±1) using analytical limits.
-"""
-@inline function _dPdtheta_at_pole(l::Int, m::Int, x::Float64, N::Float64)
-    if m == 0
-        # dP_l^0/dθ = 0 at poles
-        return 0.0
-    elseif m == 1
-        # dP_l^1/dθ at poles has finite nonzero limit
-        # P_l^1 = -sin(θ) * dP_l^0/dx (Condon-Shortley phase)
-        # dP_l^1/dθ = -cos(θ)*dP_l^0/dx + sin²(θ)*d²P_l^0/dx²
-        # At x = +1 (north pole, θ = 0): dP_l^1/dθ = -l(l+1)/2 (always negative)
-        # At x = -1 (south pole, θ = π): dP_l^1/dθ = (-1)^{l+1} * l(l+1)/2
-        if x > 0
-            return N * (-Float64(l * (l + 1)) / 2)
-        else
-            return N * Float64((-1)^(l+1)) * l * (l + 1) / 2
-        end
-    else
-        # For m > 1, dP_l^m/dθ = 0 at poles
-        return 0.0
-    end
-end
-
-"""
-    _P_over_sinth_at_pole(l, m, x, N)
-
-Compute P_l^m/sin(θ) * N at a pole (x = ±1) using analytical limits.
-"""
-@inline function _P_over_sinth_at_pole(l::Int, m::Int, x::Float64, N::Float64)
-    if m == 0
-        # P_l^0/sin(θ) is singular, but m=0 terms don't have 1/sinθ factor in transforms
-        return 0.0
-    elseif m == 1
-        # P_l^1/sin(θ) = -dP_l^0/dx (since P_l^1 = -sin(θ)*dP_l^0/dx)
-        # At x = 1 (north pole): dP_l^0/dx = l(l+1)/2, so P_l^1/sinθ = -l(l+1)/2
-        # At x = -1 (south pole): dP_l^0/dx = (-1)^{l+1}*l(l+1)/2, so P_l^1/sinθ = (-1)^l*l(l+1)/2
-        if x > 0
-            return N * (-Float64(l * (l + 1)) / 2)
-        else
-            return N * Float64((-1)^l) * l * (l + 1) / 2
-        end
-    else
-        # For m > 1, P_l^m/sin(θ) → 0 at poles
-        return 0.0
-    end
-end
-
 """
     synthesis_sphtor(cfg, Slm, Tlm; real_output=true) -> (Vt, Vp)
 
@@ -182,7 +129,6 @@ Transform spheroidal/toroidal coefficients to horizontal vector field components
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
 function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
-    # Validate input dimensions
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
@@ -196,105 +142,22 @@ function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
         Slm_int = S2; Tlm_int = T2
     end
 
-    # Set up arrays for synthesis
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(Slm_int)
-    Fθ = Matrix{CT}(undef, nlat, nlon)  # Fourier coefficients for θ-component
-    Fφ = Matrix{CT}(undef, nlat, nlon)  # Fourier coefficients for φ-component
-    fill!(Fθ, 0); fill!(Fφ, 0)
+    Ftheta = zeros(CT, nlat, nlon)
+    Fphi = zeros(CT, nlat, nlon)
 
-    # Thread-local working arrays for Legendre polynomial computation
-    # Use maxthreadid() to handle all possible thread IDs with static scheduling
-    nthreads = Threads.maxthreadid()
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_dPdtheta = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_P_over_sinth = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
+                              ltr=lmax, real_output=real_output)
 
-    # Scale continuous Fourier coefficients to DFT bins for ifft (factor nlon or nlon/(2π))
-    inv_scaleφ = phi_inv_scale(cfg)
+    Vt = real_output ? real.(ifft_phi(Ftheta)) : ifft_phi(Ftheta)
+    Vp = real_output ? real.(ifft_phi(Fphi)) : ifft_phi(Fphi)
 
-    # Process each azimuthal mode m in parallel
-    # Use :static scheduling for consistent load distribution
-    @threads :static for m in 0:mmax
-        col = m + 1
-        for i in 1:nlat
-            x = cfg.x[i]
-            sθ = sqrt(max(0.0, 1 - x*x))
-
-            gθ = zero(ComplexF64)
-            gφ = zero(ComplexF64)
-
-            if cfg.use_plm_tables && length(cfg.plm_tables) == mmax+1 && length(cfg.dplm_tables) == mmax+1
-                # Using precomputed tables - note: tables store dP/dx, convert to dP/dθ
-                tblP = cfg.plm_tables[m+1]
-                tbld = cfg.dplm_tables[m+1]
-
-                # Handle poles carefully
-                is_pole = sθ < 100 * eps(Float64)
-                inv_sθ = is_pole ? 0.0 : 1.0 / sθ
-
-                @inbounds for l in max(1, m):lmax
-                    N = cfg.Nlm[l+1, col]
-                    # Convert dP/dx to dP/dθ: dP/dθ = -sin(θ) * dP/dx
-                    # At poles, this is handled by the pole-safe code in Plm_and_dPdtheta_row!
-                    if is_pole
-                        # At poles, use analytical limits
-                        dθY = _dPdtheta_at_pole(l, m, x, N)
-                        Y_over_sθ = _P_over_sinth_at_pole(l, m, x, N)
-                    else
-                        dθY = -sθ * N * tbld[l+1, i]
-                        Y_over_sθ = N * tblP[l+1, i] * inv_sθ
-                    end
-                    Y = N * tblP[l+1, i]
-                    Sl = Slm_int[l+1, col]
-                    Tl = Tlm_int[l+1, col]
-                    # Vθ = ∂S/∂θ - (im/sinθ) * T
-                    gθ += dθY * Sl - 1.0im * m * Y_over_sθ * Tl
-                    # Vφ = (im/sinθ) * S + ∂T/∂θ
-                    gφ += 1.0im * m * Y_over_sθ * Sl + dθY * Tl
-                end
-            else
-                # Compute Legendre polynomials on the fly using combined pole-safe function
-                P = thread_local_P[Threads.threadid()]
-                dPdtheta = thread_local_dPdtheta[Threads.threadid()]
-                P_over_sinth = thread_local_P_over_sinth[Threads.threadid()]
-
-                # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
-                Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
-
-                @inbounds for l in max(1, m):lmax
-                    N = cfg.Nlm[l+1, col]
-                    dθY = N * dPdtheta[l+1]  # Already dP/dθ, not dP/dx
-                    Y = N * P[l+1]
-                    Y_over_sθ = N * P_over_sinth[l+1]
-                    Sl = Slm_int[l+1, col]
-                    Tl = Tlm_int[l+1, col]
-                    # Vθ = ∂S/∂θ - (im/sinθ) * T
-                    gθ += dθY * Sl - 1.0im * m * Y_over_sθ * Tl
-                    # Vφ = (im/sinθ) * S + ∂T/∂θ
-                    gφ += 1.0im * m * Y_over_sθ * Sl + dθY * Tl
-                end
-            end
-            Fθ[i, col] = inv_scaleφ * gθ
-            Fφ[i, col] = inv_scaleφ * gφ
-        end
-        if real_output && m > 0
-            conj_index = nlon - m + 1
-            @inbounds for i in 1:nlat
-                Fθ[i, conj_index] = conj(Fθ[i, col])
-                Fφ[i, conj_index] = conj(Fφ[i, col])
-            end
-        end
-    end
-    
-    Vt = real_output ? real.(ifft_phi(Fθ)) : ifft_phi(Fθ)
-    Vp = real_output ? real.(ifft_phi(Fφ)) : ifft_phi(Fφ)
-    
     if cfg.robert_form
         @inbounds for i in 1:nlat
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
-            Vt[i, :] .*= sθ
-            Vp[i, :] .*= sθ
+            s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
+            Vt[i, :] .*= s_theta
+            Vp[i, :] .*= s_theta
         end
     end
     return Vt, Vp
@@ -304,120 +167,136 @@ end
     analysis_sphtor(cfg, Vt, Vp) -> (Slm, Tlm)
 
 Transform horizontal vector field components to spheroidal/toroidal coefficients.
-Input: colatitude (Vt) and azimuthal (Vp) components on spatial grid.
-The returned coefficients satisfy δ_lm = −l(l+1) S_lm (divergence) and
-ζ_lm = −l(l+1) T_lm (vorticity) when expressed in the internal normalization.
 """
 function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     if is_gpu_config(cfg)
         return gpu_analysis_sphtor(cfg, Vt, Vp)
     end
-    return analysis_sphtor_cpu(cfg, Vt, Vp)
-end
 
-function analysis_sphtor_cpu(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
 
-    Ftθm = fft_phi(complex.(Vt))
-    Fpθm = fft_phi(complex.(Vp))
+    Fthetam = fft_phi(complex.(Vt))
+    Fphim = fft_phi(complex.(Vp))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm_int = zeros(ComplexF64, lmax + 1, mmax + 1)
     Tlm_int = zeros(ComplexF64, lmax + 1, mmax + 1)
-    scaleφ = cfg.cphi
+
+    _analysis_sphtor_mloop!(Slm_int, Tlm_int, cfg, Fthetam, Fphim; ltr=lmax)
+
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        S2 = similar(Slm_int); T2 = similar(Tlm_int)
+        convert_alm_norm!(S2, Slm_int, cfg; to_internal=false)
+        convert_alm_norm!(T2, Tlm_int, cfg; to_internal=false)
+        return S2, T2
+    end
+    return Slm_int, Tlm_int
+end
+
+# ============================================================================
+# SPHTOR ORCHESTRATORS
+# ============================================================================
+
+"""Sphtor synthesis orchestrator. Parallelizes over m-modes."""
+function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
+                                   cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                                   ltr::Int=cfg.lmax, real_output::Bool=true)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlat, nlon = cfg.nlat, cfg.nlon
+    ltr_eff = min(ltr, lmax)
+    inv_scale_phi = phi_inv_scale(cfg)
+
+    use_tbl = cfg.use_plm_tables &&
+              length(cfg.plm_tables) == mmax + 1 &&
+              length(cfg.dplm_tables) == mmax + 1
+
+    nthreads = Threads.maxthreadid()
+    thread_P = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_dP = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Ps = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+
+    @threads :static for m in 0:mmax
+        col = m + 1
+        for i in 1:nlat
+            if use_tbl
+                g_theta, g_phi = _sphtor_synthesis_kernel(cfg, Slm, Tlm,
+                    cfg.plm_tables[col], cfg.dplm_tables[col], i, col, m, ltr_eff)
+            else
+                tid = Threads.threadid()
+                g_theta, g_phi = _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm,
+                    thread_P[tid], thread_dP[tid], thread_Ps[tid], i, col, m, ltr_eff)
+            end
+            Ftheta[i, col] = inv_scale_phi * g_theta
+            Fphi[i, col] = inv_scale_phi * g_phi
+        end
+        if real_output && m > 0
+            conj_index = nlon - m + 1
+            @inbounds for i in 1:nlat
+                Ftheta[i, conj_index] = conj(Ftheta[i, col])
+                Fphi[i, conj_index] = conj(Fphi[i, col])
+            end
+        end
+    end
+    return Ftheta, Fphi
+end
+
+"""Sphtor analysis orchestrator. Parallelizes over m-modes."""
+function _analysis_sphtor_mloop!(Slm::AbstractMatrix, Tlm::AbstractMatrix,
+                                  cfg::SHTConfig, Fthetam::AbstractMatrix, Fphim::AbstractMatrix;
+                                  ltr::Int=cfg.lmax)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlat = cfg.nlat
+    ltr_eff = min(ltr, lmax)
+    scale_phi = cfg.cphi
 
     use_tbl = cfg.use_plm_tables &&
               length(cfg.plm_tables) == mmax + 1 &&
               length(cfg.dplm_tables) == mmax + 1 &&
               !isempty(cfg.plm_tables)
 
-    # Use maxthreadid() to handle all possible thread IDs with static scheduling
     nthreads = Threads.maxthreadid()
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_dPdtheta = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_P_over_sinth = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_local_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_P = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_dP = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Ps = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
 
     @threads :static for m in 0:mmax
         col = m + 1
         tid = Threads.threadid()
-
-        Sacc = thread_local_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
-        Tacc = thread_local_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
+        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
+        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
 
         for i in 1:nlat
-            x = cfg.x[i]
-            sθ = sqrt(max(0.0, 1 - x*x))
             wi = cfg.w[i]
-            Fθ = Ftθm[i, col]
-            Fφ = Fpθm[i, col]
+            Ftheta_i = Fthetam[i, col]
+            Fphi_i = Fphim[i, col]
 
-            if cfg.robert_form && sθ > 0
-                Fθ /= sθ
-                Fφ /= sθ
+            if cfg.robert_form
+                s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
+                if s_theta > 0
+                    Ftheta_i /= s_theta
+                    Fphi_i /= s_theta
+                end
             end
-
-            # Handle poles carefully
-            is_pole = sθ < 100 * eps(Float64)
 
             if use_tbl
-                tblP = cfg.plm_tables[col]
-                tbld = cfg.dplm_tables[col]
-                @inbounds for l in max(1, m):lmax
-                    N = cfg.Nlm[l+1, col]
-                    # Use pole-safe computation
-                    if is_pole
-                        dθY = _dPdtheta_at_pole(l, m, x, N)
-                        Y_over_sθ = _P_over_sinth_at_pole(l, m, x, N)
-                    else
-                        dθY = -sθ * N * tbld[l+1, i]
-                        Y_over_sθ = N * tblP[l+1, i] / sθ
-                    end
-                    Y = N * tblP[l+1, i]
-                    coeff = wi * scaleφ / (l * (l + 1))
-                    term = 1.0im * m * Y_over_sθ
-                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
-                    Sacc[l+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
-                    Tacc[l+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
-                end
+                _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
+                    cfg.plm_tables[col], cfg.dplm_tables[col], i, col, m, ltr_eff, scale_phi)
             else
-                P = thread_local_P[tid]
-                dPdtheta = thread_local_dPdtheta[tid]
-                P_over_sinth = thread_local_P_over_sinth[tid]
-                # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
-                Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
-                @inbounds for l in max(1, m):lmax
-                    N = cfg.Nlm[l+1, col]
-                    dθY = N * dPdtheta[l+1]  # Already dP/dθ, not dP/dx
-                    Y = N * P[l+1]
-                    Y_over_sθ = N * P_over_sinth[l+1]
-                    coeff = wi * scaleφ / (l * (l + 1))
-                    term = 1.0im * m * Y_over_sθ
-                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
-                    Sacc[l+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
-                    Tacc[l+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
-                end
+                _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
+                    thread_P[tid], thread_dP[tid], thread_Ps[tid], i, col, m, ltr_eff, scale_phi)
             end
         end
 
-        for l in max(1, m):lmax
-            Slm_int[l+1, col] = Sacc[l+1]
-            Tlm_int[l+1, col] = Tacc[l+1]
+        for l in max(1, m):ltr_eff
+            Slm[l+1, col] = Sacc[l+1]
+            Tlm[l+1, col] = Tacc[l+1]
         end
     end
-
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm_int)
-        T2 = similar(Tlm_int)
-        convert_alm_norm!(S2, Slm_int, cfg; to_internal=false)
-        convert_alm_norm!(T2, Tlm_int, cfg; to_internal=false)
-        return S2, T2
-    else
-        return Slm_int, Tlm_int
-    end
+    return Slm, Tlm
 end
 
 """
@@ -547,45 +426,57 @@ function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::Abs
     return Tlm
 end
 
-"""
-    synthesis_sphtor_l(cfg, Slm, Tlm, ltr; real_output=true) -> (Vt, Vp)
-
-Degree-limited spheroidal/toroidal transform using modes up to degree ltr.
-"""
 function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
+    size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
+    size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
 
-    # Create truncated copies
-    S2 = copy(Slm); T2 = copy(Tlm)
-
-    # Zero high-degree modes
-    @inbounds for m in 0:mmax, l in (ltr+1):lmax
-        if l >= m
-            S2[l+1, m+1] = 0.0
-            T2[l+1, m+1] = 0.0
-        end
+    Slm_int, Tlm_int = Slm, Tlm
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        S2 = similar(Slm); T2 = similar(Tlm)
+        convert_alm_norm!(S2, Slm, cfg; to_internal=true)
+        convert_alm_norm!(T2, Tlm, cfg; to_internal=true)
+        Slm_int = S2; Tlm_int = T2
     end
 
-    return synthesis_sphtor(cfg, S2, T2; real_output=real_output)
+    nlat, nlon = cfg.nlat, cfg.nlon
+    CT = eltype(Slm_int)
+    Ftheta = zeros(CT, nlat, nlon)
+    Fphi = zeros(CT, nlat, nlon)
+    _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
+                              ltr=ltr, real_output=real_output)
+    Vt = real_output ? real.(ifft_phi(Ftheta)) : ifft_phi(Ftheta)
+    Vp = real_output ? real.(ifft_phi(Fphi)) : ifft_phi(Fphi)
+
+    # Robert form: scale by sin(theta) — must match synthesis_sphtor behavior
+    if cfg.robert_form
+        @inbounds for i in 1:nlat
+            s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
+            Vt[i, :] .*= s_theta
+            Vp[i, :] .*= s_theta
+        end
+    end
+    return Vt, Vp
 end
 
-"""
-    analysis_sphtor_l(cfg, Vt, Vp, ltr) -> (Slm, Tlm)
-
-Degree-limited analysis computing coefficients only up to degree ltr.
-"""
 function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
-    # Get full transform then truncate
-    Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
+    nlat, nlon = cfg.nlat, cfg.nlon
+    size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
+    size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
+    Fthetam = fft_phi(complex.(Vt))
+    Fphim = fft_phi(complex.(Vp))
+    lmax, mmax = cfg.lmax, cfg.mmax
+    Slm = zeros(ComplexF64, lmax + 1, mmax + 1)
+    Tlm = zeros(ComplexF64, lmax + 1, mmax + 1)
+    _analysis_sphtor_mloop!(Slm, Tlm, cfg, Fthetam, Fphim; ltr=ltr)
 
-    # Zero high-degree modes
-    @inbounds for m in 0:cfg.mmax, l in (ltr+1):cfg.lmax
-        if l >= m
-            Slm[l+1, m+1] = 0.0
-            Tlm[l+1, m+1] = 0.0
-        end
+    # Normalization conversion — must match analysis_sphtor behavior
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        S2 = similar(Slm); T2 = similar(Tlm)
+        convert_alm_norm!(S2, Slm, cfg; to_internal=false)
+        convert_alm_norm!(T2, Tlm, cfg; to_internal=false)
+        return S2, T2
     end
-
     return Slm, Tlm
 end
 

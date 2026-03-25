@@ -515,7 +515,7 @@ function Nlm_table(lmax::Int, mmax::Int)
                 # Compute normalization factor in log space for numerical stability
                 # log(N_{l,m}) = 0.5 * [log(2l+1) - log(4π) + log(Γ(l-m+1)) - log(Γ(l+m+1))]
                 # Using Γ(n) = (n-1)! for integer n
-                lr = 0.5 * (log(2l + 1.0) - log(4π)) + 0.5 * (loggamma(l - m + 1) - loggamma(l + m + 1))
+                lr = 0.5 * (log(2l + 1.0) - log(4π)) + 0.5 * (_loggamma(l - m + 1) - _loggamma(l + m + 1))
 
                 # Convert back from log space
                 N[l+1, m+1] = exp(lr)
@@ -596,6 +596,7 @@ function gausslegendre(n::Int)
         z = cos(pi * (k - 0.25) / (n + 0.5))
         z1 = 0.0
         # Newton iterations
+        converged = false
         for _ in 1:50
             pnm1 = 1.0
             pn = z
@@ -609,9 +610,11 @@ function gausslegendre(n::Int)
             z1 = z
             z -= pn / pd
             if abs(z - z1) < NEWTON_CONVERGENCE_TOL
+                converged = true
                 break
             end
         end
+        converged || @warn "Gauss-Legendre root $k did not converge in 50 iterations for n=$n"
         # Compute P_n and derivative at converged root for weights
         pnm1 = 1.0
         pn = z

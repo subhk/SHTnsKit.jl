@@ -80,8 +80,8 @@ using SHTnsKit
             alm[l+1, m+1] = 0.0
         end
 
-        # Gradient via synthesis_grad should match synthesis_sph
-        Gt, Gp = synthesis_grad(cfg, alm)
+        # Gradient via synthesis_sph (spheroidal-only synthesis)
+        Gt, Gp = synthesis_sph(cfg, alm)
         Gt_ref, Gp_ref = synthesis_sph(cfg, alm)
 
         @test isapprox(Gt, Gt_ref; rtol=1e-10, atol=1e-12)
@@ -370,14 +370,14 @@ using SHTnsKit
         @test isapprox(Vt_tor_l, Vt_tor_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_tor_l, Vp_tor_ref; rtol=1e-10, atol=1e-12)
 
-        # Test synthesis_grad_l: truncated gradient synthesis
-        Gt_l, Gp_l = synthesis_grad_l(cfg, alm, ltr)
+        # Test synthesis_sph_l: truncated spheroidal synthesis
+        Gt_l, Gp_l = synthesis_sph_l(cfg, alm, ltr)
         # Reference: zero high modes and use full gradient
         alm_z = copy(alm)
         for m in 0:lmax, l in (ltr+1):lmax
             alm_z[l+1, m+1] = 0
         end
-        Gt_ref, Gp_ref = synthesis_grad(cfg, alm_z)
+        Gt_ref, Gp_ref = synthesis_sph(cfg, alm_z)
         @test isapprox(Gt_l, Gt_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Gp_l, Gp_ref; rtol=1e-10, atol=1e-12)
     end

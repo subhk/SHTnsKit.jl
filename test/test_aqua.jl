@@ -13,9 +13,7 @@ using SHTnsKit
         ambiguities=false,  # Disable ambiguity tests (can be strict for complex packages)
         # Undefined exports: some symbols are defined in extensions (GPU, parallel, etc.)
         undefined_exports=false,
-        # Stale deps: BenchmarkTools for benchmarking, SparseArrays used conditionally
-        # MPI, PencilArrays, PencilFFTs are weak deps for the parallel extension
-        stale_deps=(ignore=[:BenchmarkTools, :SparseArrays, :MPI, :PencilArrays, :PencilFFTs],),
+        stale_deps=true,
         # Disable deps_compat check entirely - stdlib packages don't need compat entries
         deps_compat=false,
         piracies=false,  # Disable piracy tests for packages with many extensions

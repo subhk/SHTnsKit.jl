@@ -66,6 +66,20 @@ CREATING CONFIGURATIONS
 =#
 
 """
+    _default_nlon(lmax::Int) -> Int
+
+Compute a default nlon that satisfies the Nyquist requirement (≥ 2*lmax+1) and
+is efficient for FFT. FFTW performs best with sizes whose prime factors are small
+(2, 3, 5). We round up 2*lmax+1 to the next even number, which guarantees at
+least one factor of 2 and avoids the worst-case odd/prime sizes.
+"""
+function _default_nlon(lmax::Int)
+    min_nlon = 2 * lmax + 1
+    # Round up to the next even number for better FFT performance
+    return min_nlon + (min_nlon & 1)
+end
+
+"""
 Configuration for Spherical Harmonic Transforms.
 
 This struct contains all parameters and precomputed data needed for efficient
@@ -117,18 +131,15 @@ Base.@kwdef mutable struct SHTConfig
     φ::Vector{Float64}          # Azimuthal angles [0, 2π)
     x::Vector{Float64}          # Gauss-Legendre nodes: x = cos(θ) ∈ [-1,1]
     w::Vector{Float64}          # Gauss-Legendre integration weights
-    wlat::Vector{Float64}       # Alias: latitude weights (Gauss-Legendre) = w
     Nlm::Matrix{Float64}        # Normalization factors for Y_l^m
     cphi::Float64               # Longitude spacing: 2π / nlon
-    
+
     # SHTns-compatible helper fields for efficient indexing
     nlm::Int                    # Total number of (l,m) modes
     li::Vector{Int}             # Degree indices for flattened (l,m) arrays
-    mi::Vector{Int}             # Order indices for flattened (l,m) arrays  
+    mi::Vector{Int}             # Order indices for flattened (l,m) arrays
     nspat::Int                  # Total spatial grid points: nlat × nlon
-    ct::Vector{Float64}         # Precomputed cos(θ) values
     st::Vector{Float64}         # Precomputed sin(θ) values
-    sintheta::Vector{Float64}   # Alias: sin(θ) values = st
     
     # Transform normalization and phase conventions
     norm::Symbol                # Normalization type (:orthonormal, :schmidt, etc.)
@@ -160,14 +171,51 @@ Base.@kwdef mutable struct SHTConfig
     spat_dist::Int = 0                                        # Distance between spatial arrays in batch mode (0 = contiguous)
 end
 
+# ============================================================================
+# BACKWARD-COMPATIBLE PROPERTY FORWARDING
+# ============================================================================
+# Three fields were removed from SHTConfig to eliminate redundant aliases:
+#   wlat     → use w      (Gauss-Legendre weights)
+#   ct       → use x      (cos(θ) nodes)
+#   sintheta → use st     (sin(θ) values)
+# Property forwarding preserves backward compatibility so cfg.wlat still works.
+
+function Base.getproperty(cfg::SHTConfig, name::Symbol)
+    if name === :wlat
+        return getfield(cfg, :w)
+    elseif name === :ct
+        return getfield(cfg, :x)
+    elseif name === :sintheta
+        return getfield(cfg, :st)
+    else
+        return getfield(cfg, name)
+    end
+end
+
+function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
+    if name === :wlat
+        return setfield!(cfg, :w, val)
+    elseif name === :ct
+        return setfield!(cfg, :x, val)
+    elseif name === :sintheta
+        return setfield!(cfg, :st, val)
+    else
+        return setfield!(cfg, name, val)
+    end
+end
+
+function Base.propertynames(::SHTConfig, private::Bool=false)
+    return (fieldnames(SHTConfig)..., :wlat, :ct, :sintheta)
+end
+
 """
-    create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, nlon::Int=max(2*lmax+1, 4)) -> SHTConfig
+    create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, nlon::Int=_default_nlon(lmax)) -> SHTConfig
 
 Create a Gauss–Legendre based SHT configuration. Constraints:
 - `nlat ≥ lmax+1` for exactness up to `lmax` in θ integration.
 - `nlon ≥ 2*mmax+1` to resolve azimuthal orders up to `mmax`.
 """
-function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal, cs_phase::Bool=true, real_norm::Bool=false, robert_form::Bool=false)
+function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal, cs_phase::Bool=true, real_norm::Bool=false, robert_form::Bool=false)
     # Validate input parameters to ensure mathematical accuracy requirements
     lmax ≥ 0 || throw(ArgumentError("lmax must be ≥ 0"))
     mmax ≥ 0 || throw(ArgumentError("mmax must be ≥ 0"))
@@ -187,14 +235,13 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
     nlm = nlm_calc(lmax, mmax, mres)              # Total number of spectral modes
     li, mi = build_li_mi(lmax, mmax, mres)        # Degree and order index arrays
     
-    # Precompute trigonometric values for performance
-    ct = cos.(θ)  # cosine of colatitude
-    st = sin.(θ)  # sine of colatitude
-    
+    # Precompute sin(θ) for vector transforms
+    st = sin.(θ)
+
     # Construct and return the complete configuration
-    return SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type=:gauss, θ, φ, x, w, wlat = w, Nlm,
+    return SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type=:gauss, θ, φ, x, w, Nlm,
                      cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                     ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form, phi_scale=:dft,
+                     st, norm, cs_phase, real_norm, robert_form, phi_scale=:dft,
                      compute_device = :cpu, device_preference = [:cpu])
 end
 
@@ -231,7 +278,7 @@ alm = analysis(cfg, field)
 See also: [`create_gauss_config`](@ref), [`set_on_the_fly!`](@ref), [`set_use_tables!`](@ref)
 """
 function create_gauss_fly_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
-                                  nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                                  nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal,
                                   cs_phase::Bool=true, real_norm::Bool=false,
                                   robert_form::Bool=false)
     # Create base Gauss config
@@ -332,7 +379,7 @@ estimate_table_memory(cfg::SHTConfig) = estimate_table_memory(cfg.lmax, cfg.mmax
 Enable south-pole-first latitude ordering. In this mode, latitude data starts
 at the south pole (θ=π) instead of the default north pole (θ=0).
 
-This reverses the internal grid arrays (θ, x, w, ct, st) and recalculates
+This reverses the internal grid arrays (θ, x, w, st) and recalculates
 any precomputed Legendre tables if necessary. This matches the `SHT_SOUTH_POLE_FIRST`
 flag behavior in the SHTns C library.
 
@@ -350,12 +397,12 @@ function set_south_pole_first!(cfg::SHTConfig)
     end
 
     # Reverse latitude-dependent arrays in-place (avoids allocations)
+    # Note: cfg.wlat/ct/sintheta are property aliases for w/x/st, so reversing
+    # the canonical fields automatically updates the aliases.
     reverse!(cfg.θ)
     reverse!(cfg.w)
     reverse!(cfg.x)
-    reverse!(cfg.ct)
     reverse!(cfg.st)
-    # wlat and sintheta are aliases pointing to w and st, already updated
 
     # Mark as south-pole-first
     cfg.south_pole_first = true
@@ -395,9 +442,7 @@ function set_north_pole_first!(cfg::SHTConfig)
     reverse!(cfg.θ)
     reverse!(cfg.w)
     reverse!(cfg.x)
-    reverse!(cfg.ct)
     reverse!(cfg.st)
-    # wlat and sintheta are aliases pointing to w and st, already updated
 
     # Mark as north-pole-first
     cfg.south_pole_first = false
@@ -438,7 +483,7 @@ is_south_pole_first(cfg)  # true
 See also: [`create_gauss_config`](@ref), [`set_south_pole_first!`](@ref)
 """
 function create_gauss_config_spf(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
-                                  nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                                  nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal,
                                   cs_phase::Bool=true, real_norm::Bool=false,
                                   robert_form::Bool=false)
     cfg = create_gauss_config(lmax, nlat; mmax=mmax, mres=mres, nlon=nlon,
@@ -642,10 +687,10 @@ end
 Copy data from a contiguous spatial array to a padded spatial array.
 """
 function copy_to_padded!(dest::AbstractMatrix, src::AbstractMatrix, cfg::SHTConfig)
-    @assert size(src, 1) == cfg.nlat
-    @assert size(src, 2) == cfg.nlon
-    @assert size(dest, 1) >= cfg.nlat
-    @assert size(dest, 2) == cfg.nlon
+    size(src, 1) == cfg.nlat || throw(DimensionMismatch("src first dim must be nlat=$(cfg.nlat)"))
+    size(src, 2) == cfg.nlon || throw(DimensionMismatch("src second dim must be nlon=$(cfg.nlon)"))
+    size(dest, 1) >= cfg.nlat || throw(DimensionMismatch("dest first dim must be ≥ nlat=$(cfg.nlat)"))
+    size(dest, 2) == cfg.nlon || throw(DimensionMismatch("dest second dim must be nlon=$(cfg.nlon)"))
 
     dest[1:cfg.nlat, :] .= src
     return dest
@@ -657,10 +702,10 @@ end
 Copy data from a padded spatial array to a contiguous spatial array.
 """
 function copy_from_padded!(dest::AbstractMatrix, src::AbstractMatrix, cfg::SHTConfig)
-    @assert size(dest, 1) == cfg.nlat
-    @assert size(dest, 2) == cfg.nlon
-    @assert size(src, 1) >= cfg.nlat
-    @assert size(src, 2) == cfg.nlon
+    size(dest, 1) == cfg.nlat || throw(DimensionMismatch("dest first dim must be nlat=$(cfg.nlat)"))
+    size(dest, 2) == cfg.nlon || throw(DimensionMismatch("dest second dim must be nlon=$(cfg.nlon)"))
+    size(src, 1) >= cfg.nlat || throw(DimensionMismatch("src first dim must be ≥ nlat=$(cfg.nlat)"))
+    size(src, 2) == cfg.nlon || throw(DimensionMismatch("src second dim must be nlon=$(cfg.nlon)"))
 
     dest .= src[1:cfg.nlat, :]
     return dest
@@ -682,7 +727,7 @@ end
 
 """
     create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
-                          nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                          nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal,
                           cs_phase::Bool=true, real_norm::Bool=false,
                           robert_form::Bool=false, include_poles::Bool=false,
                           precompute_plm::Bool=true, use_dh_weights::Bool=false) -> SHTConfig
@@ -707,7 +752,7 @@ Reference: Driscoll & Healy (1994), "Computing Fourier transforms and convolutio
 on the 2-sphere", Adv. Appl. Math., 15, 202-250.
 """
 function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1,
-                               nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                               nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal,
                                cs_phase::Bool=true, real_norm::Bool=false,
                                robert_form::Bool=false, include_poles::Bool=false,
                                precompute_plm::Bool=true, use_dh_weights::Bool=false)
@@ -769,7 +814,7 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     Nlm = Nlm_table(lmax, mmax)
     nlm = nlm_calc(lmax, mmax, mres)
     li, mi = build_li_mi(lmax, mmax, mres)
-    ct = cos.(θ); st = sin.(θ)
+    st = sin.(θ)
 
     # Determine grid type and phi_scale based on configuration
     grid_type = if use_dh_weights
@@ -781,14 +826,12 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     end
 
     # Regular/equiangular grids use the same DFT scaling as Gauss grids
-    # The phi integral is handled via FFT, which requires inv_scaleφ = nlon
-    # to properly compensate for IFFT's 1/nlon normalization
     phi_scale = :dft
 
     cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
-                    θ, φ, x, w, wlat = w, Nlm,
+                    θ, φ, x, w, Nlm,
                     cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                    ct, st, sintheta = st, norm, cs_phase, real_norm, robert_form, phi_scale,
+                    st, norm, cs_phase, real_norm, robert_form, phi_scale,
                     compute_device = :cpu, device_preference = [:cpu])
 
     if precompute_plm
@@ -810,7 +853,7 @@ appropriate creator. `nlat`/`nlon` defaults are adjusted to satisfy accuracy
 constraints for the chosen grid.
 """
 function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
-                       nlon::Int=max(2*lmax+1, 4), norm::Symbol=:orthonormal,
+                       nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal,
                        cs_phase::Bool=true, real_norm::Bool=false,
                        robert_form::Bool=false, grid_type::Symbol=:gauss,
                        include_poles::Bool=false, precompute_plm::Bool=grid_type != :gauss)
@@ -926,10 +969,9 @@ function Base.copy(cfg::SHTConfig)
         lmax = cfg.lmax, mmax = cfg.mmax, mres = cfg.mres,
         nlat = cfg.nlat, nlon = cfg.nlon, grid_type = cfg.grid_type,
         θ = copy(cfg.θ), φ = copy(cfg.φ), x = copy(cfg.x), w = copy(cfg.w),
-        wlat = copy(cfg.w),  # fresh copy, not aliased to w
         Nlm = copy(cfg.Nlm), cphi = cfg.cphi,
         nlm = cfg.nlm, li = copy(cfg.li), mi = copy(cfg.mi), nspat = cfg.nspat,
-        ct = copy(cfg.ct), st = copy(cfg.st), sintheta = copy(cfg.st),
+        st = copy(cfg.st),
         norm = cfg.norm, cs_phase = cfg.cs_phase, real_norm = cfg.real_norm,
         robert_form = cfg.robert_form, phi_scale = cfg.phi_scale,
         use_plm_tables = cfg.use_plm_tables, on_the_fly = cfg.on_the_fly,
@@ -965,7 +1007,7 @@ function create_gauss_config_gpu(lmax::Int, nlat::Int;
                                 kwargs...)
 
     # Compute effective nlon: use provided value or default
-    nlon_eff = isnothing(nlon) ? max(2*lmax + 1, 4) : nlon
+    nlon_eff = isnothing(nlon) ? _default_nlon(lmax) : nlon
 
     # Create the base configuration
     cfg = create_gauss_config(lmax, nlat; nlon=nlon_eff, mres=mres, kwargs...)

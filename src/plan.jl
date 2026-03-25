@@ -461,22 +461,14 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     
     plan.fft_plan * plan.Fθk  # execute planned FFT in-place
     
-    # Compute alm
+    # Compute alm using shared scalar analysis kernel
     fill!(alm_out, 0)
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
     for m in 0:mmax
         col = m + 1
-        for i in 1:nlat
-            Plm_row!(plan.P, cfg.x[i], lmax, m)
-            Fi = plan.Fθk[i, col]
-            wi = cfg.w[i]
-            @inbounds for l in m:lmax
-                alm_out[l+1, col] += (wi * plan.P[l+1]) * Fi
-            end
-        end
-        @inbounds for l in m:lmax
-            alm_out[l+1, col] *= cfg.Nlm[l+1, col] * scaleφ
+        @inbounds for i in 1:nlat
+            _scalar_analysis_kernel_otf!(alm_out, cfg, plan.Fθk, plan.P, i, col, m, lmax, scaleφ)
         end
     end
     
@@ -515,21 +507,11 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
     
-    # Stream over m, fill k-bins directly
+    # Stream over m, fill k-bins directly using shared scalar synthesis kernel
     for m in 0:mmax
         col = m + 1
-        # Build Gm(θ)
-        for i in 1:nlat
-            Plm_row!(plan.P, cfg.x[i], lmax, m)
-            g = zero(ComplexF64)
-            @inbounds for l in m:lmax
-                g += (cfg.Nlm[l+1, col] * plan.P[l+1]) * alm_int[l+1, col]
-            end
-            plan.G[i] = g
-        end
-        # Place positive m Fourier modes
         @inbounds for i in 1:nlat
-            plan.Fθk[i, col] = inv_scaleφ * plan.G[i]
+            plan.Fθk[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(cfg, alm_int, plan.P, i, col, m, lmax)
         end
         # Hermitian conjugate for negative m to ensure real output
         if real_output && m > 0

@@ -84,16 +84,6 @@ using SHTnsKit
                 @test length(Qlm_rec_l) == cfg.nlm
             end
 
-            @testset "Fused vs unfused loops" begin
-                f_fused = synthesis(cfg, alm; real_output=true, use_fused_loops=true)
-                f_unfused = synthesis(cfg, alm; real_output=true, use_fused_loops=false)
-                @test isapprox(f_fused, f_unfused; rtol=1e-10, atol=1e-12)
-
-                alm_fused = analysis(cfg, f_fused; use_fused_loops=true)
-                alm_unfused = analysis(cfg, f_fused; use_fused_loops=false)
-                @test isapprox(alm_fused, alm_unfused; rtol=1e-10, atol=1e-12)
-            end
-
             @testset "PLM tables vs on-the-fly" begin
                 cfg_plm = create_gauss_config(lmax, nlat; nlon=nlon)
                 prepare_plm_tables!(cfg_plm)

@@ -208,27 +208,24 @@ function shtns_rotation_set_angle_axis(r::SHTRotation, theta::Real, Vx::Real, Vy
 end
 
 """
-    wigner_d_matrix(l::Int, beta::Float64) -> Matrix{Float64}
+    wigner_d_matrix!(d::AbstractMatrix{Float64}, l::Int, beta::Float64)
 
-Compute little Wigner-d matrix d^l_{m m'}(β) with m,m' in [-l..l], returned as a
-(2l+1)×(2l+1) real matrix where index is `m+l+1, m'+l+1`.
+In-place computation of little Wigner-d matrix d^l_{m m'}(β). Writes into the
+top-left (2l+1)×(2l+1) block of `d`. Caller must ensure `size(d,1) ≥ 2l+1`.
 """
-function wigner_d_matrix(l::Int, beta::Float64)
+function wigner_d_matrix!(d::AbstractMatrix{Float64}, l::Int, beta::Float64)
     l ≥ 0 || throw(ArgumentError("l must be ≥ 0"))
     n = 2l + 1
-    d = Matrix{Float64}(undef, n, n)
     cb = cos(beta/2)
     sb = sin(beta/2)
     for m in -l:l
         for mp in -l:l
             kmin = max(0, m - mp)
             kmax = min(l + m, l - mp)
-            # prefactor sqrt((l+m)! (l-m)! (l+mp)! (l-mp)!)
-            logpref = 0.5*(loggamma(l+m+1) + loggamma(l-m+1) + loggamma(l+mp+1) + loggamma(l-mp+1))
+            logpref = 0.5*(_loggamma(l+m+1) + _loggamma(l-m+1) + _loggamma(l+mp+1) + _loggamma(l-mp+1))
             s = 0.0
             for k in kmin:kmax
-                # denominator (l+m-k)! k! (mp-m+k)! (l-mp-k)!
-                logden = loggamma(l+m-k+1) + loggamma(k+1) + loggamma(mp-m+k+1) + loggamma(l-mp-k+1)
+                logden = _loggamma(l+m-k+1) + _loggamma(k+1) + _loggamma(mp-m+k+1) + _loggamma(l-mp-k+1)
                 p = 2l + m - mp - 2k
                 q = mp - m + 2k
                 term = (-1.0)^k * exp(logpref - logden) * (cb^p) * (sb^q)
@@ -238,6 +235,18 @@ function wigner_d_matrix(l::Int, beta::Float64)
         end
     end
     return d
+end
+
+"""
+    wigner_d_matrix(l::Int, beta::Float64) -> Matrix{Float64}
+
+Compute little Wigner-d matrix d^l_{m m'}(β) with m,m' in [-l..l], returned as a
+(2l+1)×(2l+1) real matrix where index is `m+l+1, m'+l+1`.
+"""
+function wigner_d_matrix(l::Int, beta::Float64)
+    n = 2l + 1
+    d = Matrix{Float64}(undef, n, n)
+    return wigner_d_matrix!(d, l, beta)
 end
 
 """
@@ -257,10 +266,10 @@ function wigner_d_matrix_deriv(l::Int, beta::Float64)
         for mp in -l:l
             kmin = max(0, m - mp)
             kmax = min(l + m, l - mp)
-            logpref = 0.5*(loggamma(l+m+1) + loggamma(l-m+1) + loggamma(l+mp+1) + loggamma(l-mp+1))
+            logpref = 0.5*(_loggamma(l+m+1) + _loggamma(l-m+1) + _loggamma(l+mp+1) + _loggamma(l-mp+1))
             s = 0.0
             for k in kmin:kmax
-                logden = loggamma(l+m-k+1) + loggamma(k+1) + loggamma(mp-m+k+1) + loggamma(l-mp-k+1)
+                logden = _loggamma(l+m-k+1) + _loggamma(k+1) + _loggamma(mp-m+k+1) + _loggamma(l-mp-k+1)
                 p = 2l + m - mp - 2k
                 q = mp - m + 2k
                 amp = (-1.0)^k * exp(logpref - logden)
@@ -330,10 +339,11 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
     length(Zlm) == expected || throw(DimensionMismatch("LM_cplx size mismatch"))
     α, β, γ = r.α, r.β, r.γ
 
-    # Pre-allocate working vectors at maximum size to avoid per-l allocations
+    # Pre-allocate working arrays at maximum size to avoid per-l allocations
     nmax = 2 * r.lmax + 1
     b = Vector{ComplexF64}(undef, nmax)
     c = Vector{ComplexF64}(undef, nmax)
+    dl = Matrix{Float64}(undef, nmax, nmax)  # Reusable Wigner d-matrix buffer
 
     # Apply R = diag(e^{-i m α}) * d^l(β) * diag(e^{-i m γ}) for each l
     for l in 0:r.lmax
@@ -345,8 +355,8 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
             idx = LM_cplx_index(r.lmax, r.mmax, l, mp) + 1
             b[mp + l + 1] = Zlm[idx] * cis(-mp * γ)
         end
-        # Multiply with d^l(β)
-        dl = wigner_d_matrix(l, β)
+        # Multiply with d^l(β) — computed in-place into pre-allocated buffer
+        wigner_d_matrix!(dl, l, β)
         fill!(view(c, 1:n), zero(ComplexF64))
         # c_m = sum_{m'} d_{m m'} b_{m'}
         for mi in -l:l

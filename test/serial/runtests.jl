@@ -27,4 +27,5 @@ using Test
     include("test_vorticity.jl")
     include("test_gradients.jl")
     include("test_complex_packed.jl")
+    include("test_local.jl")
 end

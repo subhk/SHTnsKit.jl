@@ -151,6 +151,7 @@ function phi_inv_scale(cfg::SHTConfig)
 end
 
 include("buffer_utils.jl")                   # Common buffer allocation patterns
+include("kernels.jl")                       # Legendre accumulation kernels
 include("plan.jl")                           # Transform planning and optimization
 include("core_transforms.jl")                # Core 2D grid ↔ spectral transforms
 include("transforms.jl")                     # Vector and point transforms
@@ -206,17 +207,16 @@ export fft_phi_backend
 export scratch_fft, scratch_spatial
 
 # ===== VECTOR FIELD TRANSFORMS =====
-export analysis_sphtor, synthesis_sphtor, synthesis_sph, synthesis_tor, synthesis_grad
+export analysis_sphtor, synthesis_sphtor, synthesis_sph, synthesis_tor
 export divergence_from_spheroidal, divergence_from_spheroidal!, spheroidal_from_divergence, spheroidal_from_divergence!
 export vorticity_from_toroidal, vorticity_from_toroidal!, toroidal_from_vorticity, toroidal_from_vorticity!
-export synthesis_grad_l
 export analysis_qst, synthesis_qst, analysis_qst_cplx, synthesis_qst_cplx  # Q,S,T decomposition
 
 # ===== LATITUDE-BAND AND M-MODE SPECIFIC TRANSFORMS =====
 export synthesis_sphtor_l, analysis_sphtor_l, synthesis_sph_l, synthesis_tor_l
 export analysis_sphtor_ml, synthesis_sphtor_ml, synthesis_sph_ml, synthesis_tor_ml
 export analysis_qst_l, synthesis_qst_l, analysis_qst_ml, synthesis_qst_ml
-export synthesis_sphtor_cplx, analysis_sphtor_cplx, synthesis_grad_ml
+export synthesis_sphtor_cplx, analysis_sphtor_cplx
 export suggest_pencil_grid, set_fft_plan_cache!, enable_fft_plan_cache!, disable_fft_plan_cache!, fft_plan_cache_enabled
 
 # ===== MATRIX OPERATIONS AND DIFFERENTIAL OPERATORS =====
@@ -453,8 +453,6 @@ spectral_pencil_to_matrix(cfg, Alm_p; kwargs...) = error("Parallel extension not
 
 # ===== PARALLEL ROTATION FUNCTIONS =====
 # Parallel rotations fallbacks (PencilArray-based)
-Dist = SHTnsKit  # Alias for distributed operations
-
 # Non-bang (out-of-place) and in-place rotation variants
 function dist_SH_Zrotate(::SHTConfig, ::Any, ::Any); error("Parallel extension not loaded"); end          # Out-of-place Z rotation
 function dist_SH_Zrotate(::SHTConfig, ::Any, ::Any, ::Any); error("Parallel extension not loaded"); end   # In-place Z rotation

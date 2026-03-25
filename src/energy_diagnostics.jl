@@ -70,8 +70,9 @@ Key assumptions:
 
 # ===== HERMITIAN SYMMETRY WEIGHTS =====
 # For real fields, we store only m≥0 coefficients but need to account for
-# the symmetric m<0 modes in energy calculations
-_wm_real(cfg::SHTConfig) = [m == 0 ? 1.0 : 2.0 for m in 0:cfg.mmax]
+# the symmetric m<0 modes in energy calculations.
+# Inline weight: avoids allocating a vector on every energy/gradient call.
+@inline _wm(m::Integer, real_field::Bool) = (real_field && m > 0) ? 2.0 : 1.0
 
 """
     energy_scalar(cfg, alm; real_field=true) -> Float64
@@ -86,11 +87,9 @@ spherical harmonic transforms (Parseval's identity).
 """
 function energy_scalar(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
     E = 0.0
     @inbounds for m in 0:mmax, l in m:lmax
-        E += wm[m+1] * abs2(alm[l+1, m+1])
+        E += _wm(m, real_field) * abs2(alm[l+1, m+1])
     end
     return 0.5 * E
 end
@@ -105,12 +104,10 @@ KE = (1/2) ∫ |V|² dΩ = (1/2) Σ [l(l+1)|S_lm|² + l(l+1)|T_lm|²]
 """
 function energy_vector(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
     E = 0.0
     @inbounds for m in 0:mmax, l in max(1,m):lmax  # Vector fields start at l=1
         ll1 = l * (l + 1)
-        E += wm[m+1] * ll1 * (abs2(Slm[l+1, m+1]) + abs2(Tlm[l+1, m+1]))
+        E += _wm(m, real_field) * ll1 * (abs2(Slm[l+1, m+1]) + abs2(Tlm[l+1, m+1]))
     end
     return 0.5 * E
 end
@@ -156,12 +153,10 @@ Returns ∂E/∂a_lm for use in optimization problems.
 """
 function grad_energy_scalar_alm(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-
     # Use zeros to ensure l < m positions are properly initialized to zero
     grad = zeros(eltype(alm), size(alm))
     for m in 0:mmax, l in m:lmax
-        grad[l+1, m+1] = wm[m+1] * conj(alm[l+1, m+1])
+        grad[l+1, m+1] = _wm(m, real_field) * conj(alm[l+1, m+1])
     end
     return grad
 end
@@ -173,11 +168,10 @@ Compute energy from packed spectral coefficients (1D vector format).
 """
 function energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
-    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     E = 0.0
     @inbounds for k in eachindex(Qlm)
         m = cfg.mi[k]
-        E += wm[m+1] * abs2(Qlm[k])
+        E += _wm(m, real_field) * abs2(Qlm[k])
     end
     return 0.5 * E
 end
@@ -189,11 +183,10 @@ Compute energy gradient for packed coefficients format.
 """
 function grad_energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
-    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     grad = similar(Qlm)
     @inbounds for k in eachindex(Qlm)
         m = cfg.mi[k]
-        grad[k] = wm[m+1] * conj(Qlm[k])
+        grad[k] = _wm(m, real_field) * conj(Qlm[k])
     end
     return grad
 end
@@ -205,15 +198,13 @@ Compute gradients of vector field kinetic energy with respect to S and T coeffic
 """
 function grad_energy_vector_Slm_Tlm(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    wm = real_field ? _wm_real(cfg) : ones(mmax+1)
-    
     grad_S, grad_T = allocate_spectral_pair(Slm, Tlm)
     fill!(grad_S, 0.0)
     fill!(grad_T, 0.0)
-    
+
     for m in 0:mmax, l in max(1,m):lmax
         ll1 = l * (l + 1)
-        w = wm[m+1] * ll1
+        w = _wm(m, real_field) * ll1
         grad_S[l+1, m+1] = w * conj(Slm[l+1, m+1])
         grad_T[l+1, m+1] = w * conj(Tlm[l+1, m+1])
     end
@@ -268,13 +259,12 @@ function energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}
 
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
-    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     E = 0.0
     @inbounds for k in eachindex(Spacked)
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1
             ll1 = l * (l + 1)
-            E += wm[m+1] * ll1 * (abs2(Spacked[k]) + abs2(Tpacked[k]))
+            E += _wm(m, real_field) * ll1 * (abs2(Spacked[k]) + abs2(Tpacked[k]))
         end
     end
     return 0.5 * E
@@ -292,7 +282,6 @@ function grad_energy_vector_packed(cfg::SHTConfig,
     
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
-    wm = real_field ? _wm_real(cfg) : ones(cfg.mmax+1)
     grad_S = similar(Spacked)
     grad_T = similar(Tpacked)
     fill!(grad_S, 0)
@@ -300,7 +289,7 @@ function grad_energy_vector_packed(cfg::SHTConfig,
     @inbounds for k in eachindex(Spacked)
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1
-            w = wm[m+1] * (l * (l + 1))
+            w = _wm(m, real_field) * (l * (l + 1))
             grad_S[k] = w * conj(Spacked[k])
             grad_T[k] = w * conj(Tpacked[k])
         end

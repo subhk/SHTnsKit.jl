@@ -141,18 +141,18 @@ end
     Slm = ComplexF64.(randn(rng, lmax+1, lmax+1) .+ 1im * randn(rng, lmax+1, lmax+1))
     Slm[:, 1] .= real.(Slm[:, 1])
     Gt_ref, Gp_ref = synthesis_sph(cfg, Slm)
-    Gt, Gp = synthesis_grad(cfg, Slm)
+    Gt, Gp = synthesis_sph(cfg, Slm)
     @test isapprox(Gt, Gt_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Gp, Gp_ref; rtol=1e-10, atol=1e-12)
 
     Gt_l_ref, Gp_l_ref = synthesis_sph_l(cfg, Slm, ltr)
-    Gt_l, Gp_l = synthesis_grad_l(cfg, Slm, ltr)
+    Gt_l, Gp_l = synthesis_sph_l(cfg, Slm, ltr)
     @test isapprox(Gt_l, Gt_l_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Gp_l, Gp_l_ref; rtol=1e-10, atol=1e-12)
 
     Sl_ml = ComplexF64.(randn(rng, len) .+ 1im * randn(rng, len))
     Vt_ml_ref, Vp_ml_ref = synthesis_sph_ml(cfg, azm, Sl_ml, ltr)
-    Vt_ml, Vp_ml = synthesis_grad_ml(cfg, azm, Sl_ml, ltr)
+    Vt_ml, Vp_ml = synthesis_sph_ml(cfg, azm, Sl_ml, ltr)
     @test isapprox(Vt_ml, Vt_ml_ref; rtol=1e-10, atol=1e-12)
     @test isapprox(Vp_ml, Vp_ml_ref; rtol=1e-10, atol=1e-12)
 end

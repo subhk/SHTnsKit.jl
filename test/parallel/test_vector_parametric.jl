@@ -134,7 +134,7 @@ using SHTnsKit
                     alm[l+1, m+1] = 0.0
                 end
 
-                Gt, Gp = synthesis_grad(cfg, alm)
+                Gt, Gp = synthesis_sph(cfg, alm)
                 @test size(Gt) == (nlat, nlon)
                 @test all(isfinite, Gt) && all(isfinite, Gp)
 

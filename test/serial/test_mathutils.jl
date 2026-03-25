@@ -1,5 +1,5 @@
 # SHTnsKit.jl - Math Utilities Tests
-# Tests for logfactorial, loggamma, driscoll_healy_weights
+# Tests for logfactorial, _loggamma, driscoll_healy_weights
 
 using Test
 using SHTnsKit
@@ -43,28 +43,28 @@ using SHTnsKit
         end
     end
 
-    @testset "loggamma integers" begin
+    @testset "_loggamma integers" begin
         # Γ(n) = (n-1)! for positive integers
-        @test SHTnsKit.loggamma(1) ≈ 0.0          # log(Γ(1)) = log(0!) = 0
-        @test SHTnsKit.loggamma(2) ≈ 0.0          # log(Γ(2)) = log(1!) = 0
-        @test SHTnsKit.loggamma(3) ≈ log(2.0)     # log(Γ(3)) = log(2!) = log(2)
-        @test SHTnsKit.loggamma(5) ≈ log(24.0)    # log(Γ(5)) = log(4!) = log(24)
+        @test SHTnsKit._loggamma(1) ≈ 0.0          # log(Γ(1)) = log(0!) = 0
+        @test SHTnsKit._loggamma(2) ≈ 0.0          # log(Γ(2)) = log(1!) = 0
+        @test SHTnsKit._loggamma(3) ≈ log(2.0)     # log(Γ(3)) = log(2!) = log(2)
+        @test SHTnsKit._loggamma(5) ≈ log(24.0)    # log(Γ(5)) = log(4!) = log(24)
     end
 
-    @testset "loggamma domain errors" begin
-        @test_throws DomainError SHTnsKit.loggamma(0)
-        @test_throws DomainError SHTnsKit.loggamma(-1)
+    @testset "_loggamma domain errors" begin
+        @test_throws DomainError SHTnsKit._loggamma(0)
+        @test_throws DomainError SHTnsKit._loggamma(-1)
     end
 
-    @testset "loggamma real integer-valued" begin
+    @testset "_loggamma real integer-valued" begin
         # Integer-valued reals should work
-        @test SHTnsKit.loggamma(5.0) ≈ log(24.0)
-        @test SHTnsKit.loggamma(3.0) ≈ log(2.0)
+        @test SHTnsKit._loggamma(5.0) ≈ log(24.0)
+        @test SHTnsKit._loggamma(3.0) ≈ log(2.0)
     end
 
-    @testset "loggamma non-integer real throws" begin
-        @test_throws ArgumentError SHTnsKit.loggamma(1.5)
-        @test_throws ArgumentError SHTnsKit.loggamma(0.5)
+    @testset "_loggamma non-integer real throws" begin
+        @test_throws ArgumentError SHTnsKit._loggamma(1.5)
+        @test_throws ArgumentError SHTnsKit._loggamma(0.5)
     end
 
     @testset "driscoll_healy_weights basic properties" begin

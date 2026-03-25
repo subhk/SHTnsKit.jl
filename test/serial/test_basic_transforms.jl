@@ -135,34 +135,6 @@ using SHTnsKit
         @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
     end
 
-    @testset "Unfused loop path" begin
-        lmax = 8
-        nlat = lmax + 2
-        nlon = 2*lmax + 1
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        rng = MersenneTwister(46)
-
-        # Random spectral coefficients
-        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
-        alm[:, 1] .= real.(alm[:, 1])
-        for m in 0:lmax, l in 0:(m-1)
-            alm[l+1, m+1] = 0
-        end
-
-        # Compare fused vs unfused synthesis
-        f_fused = synthesis(cfg, alm; real_output=true, use_fused_loops=true)
-        f_unfused = synthesis(cfg, alm; real_output=true, use_fused_loops=false)
-        @test isapprox(f_fused, f_unfused; rtol=1e-10, atol=1e-12)
-
-        # Compare fused vs unfused analysis
-        alm_fused = analysis(cfg, f_fused; use_fused_loops=true)
-        alm_unfused = analysis(cfg, f_fused; use_fused_loops=false)
-        @test isapprox(alm_fused, alm_unfused; rtol=1e-10, atol=1e-12)
-
-        # Verify roundtrip with unfused path
-        @test isapprox(alm_unfused, alm; rtol=1e-10, atol=1e-12)
-    end
-
     @testset "FFT scratch buffer reuse" begin
         lmax = 8
         nlat = lmax + 2

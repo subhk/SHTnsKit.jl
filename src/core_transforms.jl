@@ -165,377 +165,154 @@ end
 """
     analysis(cfg::SHTConfig, f::AbstractMatrix) -> Matrix{ComplexF64}
 
-Forward transform on Gauss–Legendre × equiangular grid.
+Forward transform on Gauss-Legendre x equiangular grid.
 Returns coefficients `alm[l+1, m+1]` with orthonormal normalization.
 
 Parallelizes over m-modes using static scheduling for consistent performance.
 """
-function analysis(cfg::SHTConfig, f::AbstractMatrix; use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
-    if use_fused_loops
-        return analysis_fused(cfg, f; fft_scratch=fft_scratch)
-    else
-        return analysis_unfused(cfg, f; fft_scratch=fft_scratch)
-    end
+function analysis(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+    nlat, nlon = cfg.nlat, cfg.nlon
+    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
+    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
+    Fph = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
+    CT = eltype(Fph)
+    alm = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+    _analysis_scalar_mloop!(alm, cfg, Fph)
+    return alm
 end
 
 """
-    analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; use_fused_loops=true)
+    analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix)
 
-In-place forward transform. Writes coefficients into `alm_out` to avoid allocating
-the output matrix each call. `alm_out` must be size `(lmax+1, mmax+1)`.
+In-place forward transform. Writes coefficients into `alm_out`.
+`alm_out` must be size `(lmax+1, mmax+1)`.
 """
-function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     size(alm_out, 1) == cfg.lmax + 1 || throw(DimensionMismatch("alm_out first dim must be lmax+1=$(cfg.lmax+1)"))
     size(alm_out, 2) == cfg.mmax + 1 || throw(DimensionMismatch("alm_out second dim must be mmax+1=$(cfg.mmax+1)"))
+    nlat, nlon = cfg.nlat, cfg.nlon
+    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
+    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
     fill!(alm_out, zero(eltype(alm_out)))
-    if use_fused_loops
-        return analysis_fused!(alm_out, cfg, f; fft_scratch=fft_scratch)
-    else
-        return analysis_unfused!(alm_out, cfg, f; fft_scratch=fft_scratch)
-    end
-end
-
-# ============================================================================
-# M-PARALLEL ANALYSIS (parallelizes over azimuthal modes m)
-# ============================================================================
-
-function analysis_unfused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
-    nlat, nlon = cfg.nlat, cfg.nlon
-    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
-    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
-
-    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    CT = eltype(Fφ)
-    alm = Matrix{CT}(undef, lmax + 1, mmax + 1)
-    fill!(alm, 0)
-    scaleφ = cfg.cphi
-
-    # Use maxthreadid() to handle all possible thread IDs
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-
-    @threads :static for m in 0:mmax
-        col = m + 1
-        P = thread_local_P[Threads.threadid()]
-        if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-            tbl = cfg.plm_tables[m+1]
-            @inbounds for i in 1:nlat
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                for l in m:lmax
-                    alm[l+1, col] += (wi * tbl[l+1, i]) * Fi
-                end
-            end
-        else
-            @inbounds for i in 1:nlat
-                x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                for l in m:lmax
-                    alm[l+1, col] += (wi * P[l+1]) * Fi
-                end
-            end
-        end
-        @inbounds for l in m:lmax
-            alm[l+1, col] *= cfg.Nlm[l+1, col] * scaleφ
-        end
-    end
-    return alm
-end
-
-function analysis_unfused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
-    nlat, nlon = cfg.nlat, cfg.nlon
-    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
-    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
-
-    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    scaleφ = cfg.cphi
-
-    # Use maxthreadid() to handle all possible thread IDs
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-
-    @threads :static for m in 0:mmax
-        col = m + 1
-        P = thread_local_P[Threads.threadid()]
-        if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-            tbl = cfg.plm_tables[m+1]
-            @inbounds for i in 1:nlat
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                for l in m:lmax
-                    alm[l+1, col] += (wi * tbl[l+1, i]) * Fi
-                end
-            end
-        else
-            @inbounds for i in 1:nlat
-                x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                for l in m:lmax
-                    alm[l+1, col] += (wi * P[l+1]) * Fi
-                end
-            end
-        end
-        @inbounds for l in m:lmax
-            alm[l+1, col] *= cfg.Nlm[l+1, col] * scaleφ
-        end
-    end
-    return alm
-end
-
-function analysis_fused(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
-    nlat, nlon = cfg.nlat, cfg.nlon
-    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
-    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
-
-    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    CT = eltype(Fφ)
-    alm = Matrix{CT}(undef, lmax + 1, mmax + 1)
-    fill!(alm, 0)
-    scaleφ = cfg.cphi
-
-    if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        # Parallelize over m-modes with static scheduling
-        @threads :static for m in 0:mmax
-            col = m + 1
-            tbl = cfg.plm_tables[m+1]
-            @inbounds for i in 1:nlat
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                for l in m:lmax
-                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * tbl[l+1, i] * scaleφ) * Fi
-                end
-            end
-        end
-    else
-        # Use maxthreadid() to handle all possible thread IDs
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        # Parallelize over m-modes with static scheduling
-        @threads :static for m in 0:mmax
-            col = m + 1
-            P = thread_local_P[Threads.threadid()]
-            for i in 1:nlat
-                x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                @inbounds for l in m:lmax
-                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * P[l+1] * scaleφ) * Fi
-                end
-            end
-        end
-    end
-    return alm
-end
-
-function analysis_fused!(alm::AbstractMatrix, cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
-    nlat, nlon = cfg.nlat, cfg.nlon
-    size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
-    size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
-
-    Fφ = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    scaleφ = cfg.cphi
-
-    if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        # Parallelize over m-modes with static scheduling
-        @threads :static for m in 0:mmax
-            col = m + 1
-            tbl = cfg.plm_tables[m+1]
-            @inbounds for i in 1:nlat
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                for l in m:lmax
-                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * tbl[l+1, i] * scaleφ) * Fi
-                end
-            end
-        end
-    else
-        # Use maxthreadid() to handle all possible thread IDs
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        # Parallelize over m-modes with static scheduling
-        @threads :static for m in 0:mmax
-            col = m + 1
-            P = thread_local_P[Threads.threadid()]
-            for i in 1:nlat
-                x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
-                Fi = Fφ[i, col]
-                wi = cfg.w[i]
-                @inbounds for l in m:lmax
-                    alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * P[l+1] * scaleφ) * Fi
-                end
-            end
-        end
-    end
-    return alm
+    Fph = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
+    _analysis_scalar_mloop!(alm_out, cfg, Fph)
+    return alm_out
 end
 
 """
     synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true) -> Matrix
 
 Inverse transform back to a grid `(nlat, nlon)`. If `real_output=true`,
-Hermitian symmetry is enforced before IFFT. Optional `fft_scratch` lets you
-reuse a preallocated `(nlat,nlon)` complex buffer for lower allocations.
-
-Parallelizes over m-modes using static scheduling for consistent performance.
+Hermitian symmetry is enforced before IFFT.
 """
-function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
-    if use_fused_loops
-        return synthesis_fused(cfg, alm; real_output=real_output, fft_scratch=fft_scratch)
-    else
-        return synthesis_unfused(cfg, alm; real_output=real_output, fft_scratch=fft_scratch)
-    end
+function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
+    size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    nlat, nlon = cfg.nlat, cfg.nlon
+    CT = eltype(alm)
+    Fph = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
+    size(Fph, 1) == nlat && size(Fph, 2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
+    fill!(Fph, zero(CT))
+    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output)
+    ifft_phi!(Fph, Fph)
+    return real_output ? real.(Fph) : Fph
 end
 
 """
-    synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix;
-               real_output::Bool=true, use_fused_loops::Bool=true)
+    synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true)
 
-In-place inverse transform. Writes the spatial field into `f_out` to reduce
-allocations. `f_out` must be `(nlat, nlon)` and real if `real_output=true`.
-You may pass a complex `fft_scratch` buffer of size `(nlat,nlon)` to reuse FFT
-workspace.
+In-place inverse transform. Writes the spatial field into `f_out`.
 """
-function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, use_fused_loops::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
     size(f_out, 1) == cfg.nlat || throw(DimensionMismatch("f_out first dim must be nlat=$(cfg.nlat)"))
     size(f_out, 2) == cfg.nlon || throw(DimensionMismatch("f_out second dim must be nlon=$(cfg.nlon)"))
-    # Use a complex scratch buffer for the Legendre summation + IFFT work.
-    # The allocating synthesis_fused/unfused functions write into fft_scratch,
-    # perform IFFT in-place, then allocate real.() for their return value.
-    # By passing our own scratch buffer and copying from it directly, we avoid
-    # relying on the discarded return value and make the data flow explicit.
-    Fφ = fft_scratch === nothing ? Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon) : fft_scratch
-    size(Fφ,1) == cfg.nlat && size(Fφ,2) == cfg.nlon || throw(DimensionMismatch("fft_scratch wrong size"))
-    fill!(Fφ, 0)
-    if use_fused_loops
-        synthesis_fused(cfg, alm; real_output=real_output, fft_scratch=Fφ)
-    else
-        synthesis_unfused(cfg, alm; real_output=real_output, fft_scratch=Fφ)
-    end
-    # Fφ now contains the complex IFFT result; copy to f_out
+    lmax, mmax = cfg.lmax, cfg.mmax
+    size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
+    size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    nlat, nlon = cfg.nlat, cfg.nlon
+    Fph = fft_scratch === nothing ? Matrix{ComplexF64}(undef, nlat, nlon) : fft_scratch
+    size(Fph, 1) == nlat && size(Fph, 2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
+    fill!(Fph, 0)
+    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output)
+    ifft_phi!(Fph, Fph)
     if real_output
-        @inbounds for j in 1:cfg.nlon, i in 1:cfg.nlat
-            f_out[i, j] = real(Fφ[i, j])
+        @inbounds for j in 1:nlon, i in 1:nlat
+            f_out[i, j] = real(Fph[i, j])
         end
     else
-        @inbounds for j in 1:cfg.nlon, i in 1:cfg.nlat
-            f_out[i, j] = Fφ[i, j]
+        @inbounds for j in 1:nlon, i in 1:nlat
+            f_out[i, j] = Fph[i, j]
         end
     end
     return f_out
 end
 
 # ============================================================================
-# M-PARALLEL SYNTHESIS (parallelizes over azimuthal modes m)
+# SCALAR ORCHESTRATORS
 # ============================================================================
 
-function synthesis_unfused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+"""Scalar analysis orchestrator. Parallelizes Legendre integration over m-modes."""
+function _analysis_scalar_mloop!(alm::AbstractMatrix, cfg::SHTConfig, Fph::AbstractMatrix)
     lmax, mmax = cfg.lmax, cfg.mmax
-    size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
-    size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    nlat = cfg.nlat
+    scale_phi = cfg.cphi
+    use_tbl = cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
 
-    nlat, nlon = cfg.nlat, cfg.nlon
-    CT = eltype(alm)
-    Fφ = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
-    size(Fφ,1) == nlat && size(Fφ,2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
-    fill!(Fφ, zero(CT))
-    inv_scaleφ = phi_inv_scale(cfg)
+    thread_local_P = use_tbl ? nothing :
+        [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
-    # Use maxthreadid() to handle all possible thread IDs
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
     @threads :static for m in 0:mmax
         col = m + 1
-        P = thread_local_P[Threads.threadid()]
-        if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+        if use_tbl
             tbl = cfg.plm_tables[m+1]
             @inbounds for i in 1:nlat
-                acc = zero(CT)
-                for l in m:lmax
-                    acc += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm[l+1, col]
-                end
-                Fφ[i, col] = inv_scaleφ * acc
+                _scalar_analysis_kernel!(alm, cfg, Fph, tbl, i, col, m, lmax, scale_phi)
             end
         else
+            P = thread_local_P[Threads.threadid()]
             @inbounds for i in 1:nlat
-                x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
-                acc = zero(CT)
-                for l in m:lmax
-                    acc += (cfg.Nlm[l+1, col] * P[l+1]) * alm[l+1, col]
-                end
-                Fφ[i, col] = inv_scaleφ * acc
+                _scalar_analysis_kernel_otf!(alm, cfg, Fph, P, i, col, m, lmax, scale_phi)
             end
         end
     end
-    if real_output
-        for m in 1:mmax
-            col = m + 1
-            conj_index = nlon - m + 1
-            @inbounds for i in 1:nlat
-                Fφ[i, conj_index] = conj(Fφ[i, col])
-            end
-        end
-    end
-    f = ifft_phi!(Fφ, Fφ)
-    return real_output ? real.(f) : f
+    return alm
 end
 
-function synthesis_fused(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+"""Scalar synthesis orchestrator. Parallelizes Legendre summation over m-modes."""
+function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::AbstractMatrix;
+                                   real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
-    size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
-
     nlat, nlon = cfg.nlat, cfg.nlon
-    CT = eltype(alm)
-    Fφ = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
-    size(Fφ,1) == nlat && size(Fφ,2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
-    fill!(Fφ, zero(CT))
-    inv_scaleφ = phi_inv_scale(cfg)
+    inv_scale_phi = phi_inv_scale(cfg)
+    use_tbl = cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
 
-    if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        # Parallelize over m-modes with static scheduling
-        @threads :static for m in 0:mmax
-            col = m + 1
+    thread_local_P = use_tbl ? nothing :
+        [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+
+    @threads :static for m in 0:mmax
+        col = m + 1
+        if use_tbl
             tbl = cfg.plm_tables[m+1]
-            @inbounds for i in 1:nlat, l in m:lmax
-                Fφ[i, col] += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm[l+1, col]
+            @inbounds for i in 1:nlat
+                Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(cfg, alm, tbl, i, col, m, lmax)
             end
-        end
-    else
-        # Use maxthreadid() to handle all possible thread IDs
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        # Parallelize over m-modes with static scheduling
-        @threads :static for m in 0:mmax
-            col = m + 1
+        else
             P = thread_local_P[Threads.threadid()]
-            for i in 1:nlat
-                x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
-                sum_val = zero(CT)
-                @inbounds for l in m:lmax
-                    sum_val += (cfg.Nlm[l+1, col] * P[l+1]) * alm[l+1, col]
-                end
-                Fφ[i, col] = sum_val
+            @inbounds for i in 1:nlat
+                Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax)
             end
         end
     end
-    @inbounds for j in 1:nlon, i in 1:nlat
-        Fφ[i, j] *= inv_scaleφ
-    end
+    # Fill Hermitian conjugate columns for real-output IFFT
     if real_output
         for m in 1:mmax
             col = m + 1
             conj_index = nlon - m + 1
             @inbounds for i in 1:nlat
-                Fφ[i, conj_index] = conj(Fφ[i, col])
+                Fph[i, conj_index] = conj(Fph[i, col])
             end
         end
     end
-    f = ifft_phi!(Fφ, Fφ)
-    return real_output ? real.(f) : f
+    return Fph
 end

@@ -37,6 +37,7 @@ Core files:
 - SHTnsKit.jl        : Main module, exports, and file includes
 - config.jl          : SHTConfig struct and configuration functions
 - legendre.jl        : Legendre polynomials and Gauss-Legendre quadrature
+- kernels.jl         : Shared Legendre accumulation kernels (single source of truth)
 - core_transforms.jl : Basic analysis/synthesis implementations
 - plan.jl            : SHTPlan for optimized repeated transforms
 

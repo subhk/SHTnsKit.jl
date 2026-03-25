@@ -29,21 +29,23 @@ KEY FUNCTIONS
 - synthesis(cfg, alm)    : Backward transform, allocates output
 - synthesis!(cfg, f, alm): Backward transform, in-place output
 
-IMPLEMENTATION VARIANTS
------------------------
-1. Fused loops (default, use_fused_loops=true):
-   - Combines operations to improve cache utilization
-   - Better for larger problems
+IMPLEMENTATION ARCHITECTURE
+---------------------------
+This file uses a 3-layer architecture:
+1. Public API (analysis, synthesis, analysis!, synthesis!)
+   - Input validation, FFT, output allocation
+2. Orchestrators (_analysis_scalar_mloop!, _synthesis_scalar_mloop!)
+   - Threading over m-modes, table vs on-the-fly dispatch
+3. Kernels (in kernels.jl)
+   - Per-latitude Legendre accumulation, single source of truth
 
-2. Unfused loops (use_fused_loops=false):
-   - Separate loops for each operation
-   - May be better for debugging or small problems
-
-3. Table-based (cfg.use_plm_tables=true):
+LEGENDRE COMPUTATION MODES
+---------------------------
+1. Table-based (cfg.use_plm_tables=true):
    - Uses precomputed Legendre polynomial tables
    - Faster but requires more memory
 
-4. On-the-fly (cfg.on_the_fly=true):
+2. On-the-fly (cfg.on_the_fly=true):
    - Computes Legendre polynomials during transform
    - Lower memory, slightly slower
 

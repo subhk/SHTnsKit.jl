@@ -5,8 +5,14 @@ using SHTnsKit
 using SHTnsKit: LM_index, LM_cplx_index, wigner_d_matrix
 import SHTnsKit: wigner_d_matrix_deriv
 
-    # Helper to ensure array eltype is complex for adjoints when needed
-    _to_complex(A) = eltype(A) <: Complex ? A : complex.(A)
+    # Materialize Thunk/InplaceableThunk tangents before we try to collect/index.
+    # ChainRules 1.x passes lazy tangents into pullbacks (e.g. from sum_abs2)
+    # and expects downstream code to `unthunk` before consuming.
+    _unthunk(A) = ChainRulesCore.unthunk(A)
+
+    # Helper to ensure array eltype is complex for adjoints when needed.
+    # Accepts Thunk tangents by unthunking first.
+    _to_complex(A) = let B = _unthunk(A); eltype(B) <: Complex ? B : complex.(B); end
 
     # Adjoint of analysis now lives in SHTnsKit proper (src/core_transforms.jl).
     # Local alias kept for backward compat with any users touching this symbol.
@@ -33,7 +39,8 @@ import SHTnsKit: wigner_d_matrix_deriv
                                 alm; real_output::Bool=true)
         y = SHTnsKit.synthesis(cfg, alm; real_output)
         function pullback(ȳ)
-            ȳA = ȳ isa AbstractMatrix ? ȳ : collect(ȳ)
+            ȳ_mat = ChainRulesCore.unthunk(ȳ)      # materialize Thunk/InplaceableThunk
+            ȳA = ȳ_mat isa AbstractMatrix ? ȳ_mat : collect(ȳ_mat)
             alm̄ = SHTnsKit._adjoint_synthesis(cfg, ȳA; real_output=real_output)
             return NoTangent(), NoTangent(), alm̄, (; real_output=NoTangent())
         end

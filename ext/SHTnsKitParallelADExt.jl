@@ -60,6 +60,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
     φ_is_local = (nlon_local == cfg.nlon)
 
     function dist_analysis_pullback(ȳ)
+        ȳ = ChainRulesCore.unthunk(ȳ)
         # Alm̄ may arrive replicated (standard) or as a partial tangent.
         Alm̄ = ȳ isa AbstractMatrix ? ȳ : collect(ȳ)
         f̄_parent = _local_adjoint_analysis(cfg, Alm̄, θ_globals,
@@ -82,6 +83,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis),
     comm = communicator(prototype_θφ)
 
     function dist_synthesis_pullback(ȳ)
+        ȳ = ChainRulesCore.unthunk(ȳ)
         # ȳ: spatial cotangent (PencilArray or Array). Adjoint of synthesis is
         # analysis of the cotangent summed across ranks to reconstruct the
         # replicated Ālm.
@@ -113,7 +115,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
     φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
 
     function dist_analysis_sphtor_pullback(ȳ)
-        Slm̄, Tlm̄ = ȳ isa Tuple ? ȳ : (ȳ[1], ȳ[2])
+        ȳ = ChainRulesCore.unthunk(ȳ)
+        Slm̄, Tlm̄ = ȳ isa Tuple ? ȳ : (ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2]))
         V̄t_parent, V̄p_parent = SHTnsKit._adjoint_analysis_sphtor(
             cfg, Matrix{ComplexF64}(Slm̄), Matrix{ComplexF64}(Tlm̄);
             θ_globals=θ_globals, φ_window=φ_window)
@@ -140,7 +143,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
                                         use_rfft=use_rfft)
 
     function dist_synthesis_sphtor_pullback(ȳ)
-        V̄t, V̄p = ȳ isa Tuple ? ȳ : (ȳ[1], ȳ[2])
+        ȳ = ChainRulesCore.unthunk(ȳ)
+        V̄t, V̄p = ȳ isa Tuple ? ȳ : (ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2]))
         V̄t_pa = V̄t isa PencilArray ? V̄t :
                 PencilArray(prototype_θφ.pencil, Matrix{Float64}(V̄t))
         V̄p_pa = V̄p isa PencilArray ? V̄p :

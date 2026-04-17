@@ -38,12 +38,10 @@ struct DistAnalysisPlan
 end
 
 function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false, use_packed_storage::Bool=true, with_spatial_scratch::Bool=false)
-    if use_rfft
-        # Flag is accepted by the API but the RFFT code path is not wired through
-        # the analysis/synthesis loops yet. Fail loud rather than silently producing
-        # wrong coefficients.
-        throw(ArgumentError("use_rfft=true is not implemented in dist_* transforms. Pass use_rfft=false."))
-    end
+    # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
+    # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
+    # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
+    # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     # Get local portion information from the prototype PencilArray
     θ_local_to_global = collect(globalindices(prototype_θφ, 1))

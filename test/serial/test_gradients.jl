@@ -4,10 +4,20 @@
 using Test
 using Random
 using SHTnsKit
-using Zygote
 
 @isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
+# Only run the synthesis-adjoint FD check if Zygote is reachable. `test_serial.jl`
+# (used in some CI profiles) does not load Zygote; skip cleanly instead of
+# erroring on the `using` statement.
+const _HAS_ZYGOTE = try
+    @eval using Zygote
+    true
+catch
+    false
+end
+
+if _HAS_ZYGOTE
 @testset "synthesis rrule: adjoint consistency with finite-difference" begin
     # Verifies that the rrule for `synthesis` implements the true mathematical
     # adjoint (not just `analysis`, which differs by Gauss-Legendre weights).
@@ -43,6 +53,9 @@ using Zygote
         dL_ad = real(sum(conj(g) .* h))
         @test isapprox(dL_ad, dL_fd; rtol=5e-4, atol=1e-7)
     end
+end
+else
+    @info "Skipping synthesis-rrule FD check (Zygote not available in this test context)"
 end
 
 @testset "Energy Gradients" begin

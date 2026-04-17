@@ -107,13 +107,9 @@ struct DistPlan
 end
 
 function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
-    if use_rfft
-        # Flag is plumbed through every dist_* call site but never branched on —
-        # both true and false currently execute the complex-FFT path. Keeping
-        # acceptance of the flag for API stability, but warning so callers know
-        # the real-FFT path is not wired yet and results match use_rfft=false.
-        Base.depwarn("use_rfft=true is accepted but not implemented — falling back to complex FFT.", :DistPlan)
-    end
+    # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
+    # for the φ-replicated (Case A) path. Distributed-φ (Case B) still falls back
+    # to complex FFT with a one-time warning emitted from the callee.
     _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     return DistPlan(cfg, prototype_θφ, use_rfft)
 end
@@ -130,13 +126,9 @@ struct DistSphtorPlan
 end
 
 function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; with_spatial_scratch::Bool=false, use_rfft::Bool=false)
-    if use_rfft
-        # Flag is plumbed through every dist_* call site but never branched on —
-        # both true and false currently execute the complex-FFT path. Keeping
-        # acceptance of the flag for API stability, but warning so callers know
-        # the real-FFT path is not wired yet and results match use_rfft=false.
-        Base.depwarn("use_rfft=true is accepted but not implemented — falling back to complex FFT.", :DistPlan)
-    end
+    # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
+    # for the φ-replicated (Case A) path. Distributed-φ (Case B) still falls back
+    # to complex FFT with a one-time warning emitted from the callee.
     _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     scratch = if with_spatial_scratch
         # Pre-allocate all scratch buffers needed for synthesis

@@ -168,7 +168,7 @@ Batch processing is more efficient than processing fields individually because:
 2. FFT plans are shared
 3. Better cache utilization from contiguous memory access patterns
 """
-function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3})
+function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rfft::Bool=false)
     nlat, nlon, nfields = size(fields)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
@@ -177,12 +177,19 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3})
     alm_batch = Array{ComplexF64,3}(undef, lmax + 1, mmax + 1, nfields)
     fill!(alm_batch, zero(ComplexF64))  # Initialize to zero for += accumulation in on-the-fly path
 
-    # Allocate FFT scratch buffer
-    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+    # Allocate FFT scratch buffer — half width when using rfft.
+    nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
+    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
 
     # Perform FFT on all fields
-    @inbounds for k in 1:nfields
-        Fφ_batch[:, :, k] .= fft_phi(complex.(view(fields, :, :, k)))
+    if use_rfft
+        @inbounds for k in 1:nfields
+            Fφ_batch[:, :, k] .= rfft_phi(view(fields, :, :, k))
+        end
+    else
+        @inbounds for k in 1:nfields
+            Fφ_batch[:, :, k] .= fft_phi(complex.(view(fields, :, :, k)))
+        end
     end
 
     scaleφ = cfg.cphi
@@ -244,7 +251,8 @@ In-place batch forward transform.
 """
 function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
                          fields::AbstractArray{<:Real,3};
-                         fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing)
+                         fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing,
+                         use_rfft::Bool=false)
     nlat, nlon, nfields = size(fields)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
@@ -257,16 +265,23 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     fill!(alm_out, zero(eltype(alm_out)))
 
     # Reuse caller-provided scratch if given, else allocate.
+    nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
     if fft_batch === nothing
-        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
     else
-        size(fft_batch) == (nlat, nlon, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, nlon, nfields)"))
+        size(fft_batch) == (nlat, nbins, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, $(nbins), nfields)"))
         Fφ_batch = fft_batch
     end
 
     # Perform FFT on all fields
-    @inbounds for k in 1:nfields
-        Fφ_batch[:, :, k] .= fft_phi(complex.(view(fields, :, :, k)))
+    if use_rfft
+        @inbounds for k in 1:nfields
+            Fφ_batch[:, :, k] .= rfft_phi(view(fields, :, :, k))
+        end
+    else
+        @inbounds for k in 1:nfields
+            Fφ_batch[:, :, k] .= fft_phi(complex.(view(fields, :, :, k)))
+        end
     end
 
     scaleφ = cfg.cphi
@@ -331,7 +346,7 @@ Batch inverse transform for multiple spectral coefficient sets.
 - 3D array of shape `(nlat, nlon, nfields)` with spatial data
 """
 function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
-                         real_output::Bool=true)
+                         real_output::Bool=true, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
@@ -339,8 +354,14 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
     nfields = size(alm_batch, 3)
     nlat, nlon = cfg.nlat, cfg.nlon
 
+    if use_rfft
+        real_output || throw(ArgumentError("use_rfft=true implies real_output"))
+        mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
+    end
+
     # Allocate FFT scratch buffer
-    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+    nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
+    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
     fill!(Fφ_batch, zero(ComplexF64))
     inv_scaleφ = phi_inv_scale(cfg)
 
@@ -380,8 +401,8 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
         end
     end
 
-    # Enforce Hermitian symmetry for real output
-    if real_output
+    # Enforce Hermitian symmetry for real output (complex path only; rfft buffer is half-spectrum)
+    if real_output && !use_rfft
         @inbounds for k in 1:nfields
             for m in 1:mmax
                 col = m + 1
@@ -393,8 +414,13 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
         end
     end
 
-    # Perform inverse FFT on all fields
-    if real_output
+    if use_rfft
+        f_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
+        @inbounds for k in 1:nfields
+            irfft_phi!(view(f_batch, :, :, k), view(Fφ_batch, :, :, k), nlon)
+        end
+        return f_batch
+    elseif real_output
         f_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
         @inbounds for k in 1:nfields
             f_view = view(Fφ_batch, :, :, k)
@@ -420,7 +446,8 @@ In-place batch inverse transform.
 function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                           alm_batch::AbstractArray{<:Complex,3};
                           real_output::Bool=true,
-                          fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing)
+                          fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing,
+                          use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
@@ -432,11 +459,18 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     size(f_out, 2) == nlon || throw(DimensionMismatch("f_out second dim must be nlon=$nlon"))
     size(f_out, 3) == nfields || throw(DimensionMismatch("f_out third dim must be nfields=$nfields"))
 
+    if use_rfft
+        real_output || throw(ArgumentError("use_rfft=true implies real_output"))
+        eltype(f_out) <: Real || throw(ArgumentError("use_rfft=true requires real-valued f_out"))
+        mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
+    end
+
     # Reuse caller-provided scratch if given, else allocate.
+    nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
     if fft_batch === nothing
-        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
     else
-        size(fft_batch) == (nlat, nlon, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, nlon, nfields)"))
+        size(fft_batch) == (nlat, nbins, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, $(nbins), nfields)"))
         Fφ_batch = fft_batch
     end
     fill!(Fφ_batch, zero(eltype(Fφ_batch)))
@@ -478,8 +512,8 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
         end
     end
 
-    # Enforce Hermitian symmetry for real output
-    if real_output
+    # Enforce Hermitian symmetry for real output (complex path only; rfft buffer is half-spectrum)
+    if real_output && !use_rfft
         @inbounds for k in 1:nfields
             for m in 1:mmax
                 col = m + 1
@@ -489,6 +523,13 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                 end
             end
         end
+    end
+
+    if use_rfft
+        @inbounds for k in 1:nfields
+            irfft_phi!(view(f_out, :, :, k), view(Fφ_batch, :, :, k), nlon)
+        end
+        return f_out
     end
 
     # Perform inverse FFT and copy to output

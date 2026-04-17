@@ -18,9 +18,23 @@ function _rand_real_alm(rng, lmax, mmax)
 end
 
 @testset "SHTPlan" begin
-    @testset "Constructor: use_rfft=true throws" begin
-        cfg = create_gauss_config(4, 6; nlon=9)
-        @test_throws ArgumentError SHTPlan(cfg; use_rfft=true)
+    @testset "Planned rfft scalar matches complex plan" begin
+        for (lmax, nlon) in ((6, 13), (8, 20), (12, 25))
+            cfg = create_gauss_config(lmax, lmax + 2; nlon=nlon)
+            plan_c = SHTPlan(cfg)
+            plan_r = SHTPlan(cfg; use_rfft=true)
+            rng = MersenneTwister(777 + lmax)
+
+            alm = _rand_real_alm(rng, lmax, lmax)
+
+            f_c = zeros(cfg.nlat, cfg.nlon); synthesis!(plan_c, f_c, alm)
+            f_r = zeros(cfg.nlat, cfg.nlon); synthesis!(plan_r, f_r, alm)
+            @test isapprox(f_c, f_r; rtol=1e-10, atol=1e-12)
+
+            alm_c = zeros(ComplexF64, lmax+1, lmax+1); analysis!(plan_c, alm_c, f_c)
+            alm_r = zeros(ComplexF64, lmax+1, lmax+1); analysis!(plan_r, alm_r, f_r)
+            @test isapprox(alm_c, alm_r; rtol=1e-10, atol=1e-12)
+        end
     end
 
     @testset "Planned scalar matches non-planned" begin

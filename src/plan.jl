@@ -54,13 +54,12 @@ for timestep in 1:10000
 end
 ```
 
-REAL FFT OPTIMIZATION (NOT YET IMPLEMENTED)
--------------------------------------------
-A future optimization (use_rfft=true) could enable RFFT for real-valued fields:
-- Fourier buffer reduced from nlon to nlon/2+1 complex numbers
-- ~2× memory reduction for the Fourier matrix
-- Slightly different code path using FFTW.rfft/irfft
-Currently only use_rfft=false is supported.
+REAL FFT OPTIMIZATION (use_rfft=true)
+-------------------------------------
+For real-valued scalar fields, pass `use_rfft=true` to `SHTPlan(cfg; ...)`.
+- Fourier buffer reduced from nlon to nlon÷2+1 complex numbers.
+- Uses pre-planned `FFTW.plan_rfft` / `FFTW.plan_irfft`.
+- Vector sphtor transforms on the same plan still use the complex buffer.
 
 DEBUGGING
 ---------
@@ -149,11 +148,9 @@ plan can then be reused for many transforms without additional allocations.
 
 Parameters:
 - cfg: SHTConfig defining the grid and spectral resolution
-- use_rfft: Reserved for future real-FFT optimization (currently not implemented, must be false)
-
-Note: The `use_rfft=true` option is reserved for a future optimization that would
-reduce memory usage for real-valued fields. Currently, only `use_rfft=false` is
-supported, which uses full complex FFT for maximum compatibility.
+- use_rfft: if true, use real-FFT along φ for scalar `analysis!`/`synthesis!`
+  (halves the Fourier buffer size). Vector (sphtor) transforms on the plan
+  still use the complex buffer. Requires `cfg.mmax ≤ cfg.nlon÷2`.
 """
 function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
     nlat, nlon = cfg.nlat, cfg.nlon

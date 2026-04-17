@@ -437,18 +437,23 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     nθ_local = length(θ_globals)
 
     # ===== STEP 2 & 3: FFT along longitude (φ) dimension =====
-    # After FFT, Fθm[i, m+1] contains the m-th Fourier coefficient at local θ index i
-    # Shape: (nlat_local, nlon) where column m+1 corresponds to azimuthal mode m
-    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    # After FFT, Fθm[i, m+1] contains the m-th Fourier coefficient at local θ index i.
+    # Complex path: shape (nlat_local, nlon). rfft path (Case A only): (nlat_local, nlon÷2+1).
+    use_rfft_effective = use_rfft && nlon_local == nlon && eltype(local_data) <: Real
+    if use_rfft && !use_rfft_effective && MPI.Comm_rank(comm) == 0
+        @warn "use_rfft=true ignored — rfft currently supported only in Case A (φ replicated) with real spatial data." maxlog=1
+    end
 
-    if nlon_local == nlon
-        # CASE A: Data is distributed along θ only (φ is complete on each rank)
-        # This is the fast path - no MPI communication needed for FFT
+    if use_rfft_effective
+        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon ÷ 2 + 1)
+        Fθm .= FFTW.rfft(local_data, 2)
+    elseif nlon_local == nlon
+        # CASE A: Data distributed along θ only (φ is complete on each rank).
+        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
-        # CASE B: Data is distributed along φ (longitude)
-        # Need to gather full longitude rows before FFT
-        # This requires MPI.Allgatherv! for each latitude row - more communication
+        # CASE B: Data distributed along φ — gather full longitude rows before FFT.
+        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
         φ_globals = collect(globalindices(fθφ, 2))
         φ_range = first(φ_globals):last(φ_globals)
         θ_range = first(θ_globals):last(θ_globals)
@@ -672,8 +677,15 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     # Check if φ is fully local or distributed
     φ_is_local = (nlon_local == nlon)
 
-    # Allocate Fourier coefficient matrix (local θ × full m)
-    Fθm = zeros(ComplexF64, nθ_local, nlon)
+    # rfft path only supported when φ is fully local on every rank.
+    use_rfft_effective = use_rfft && φ_is_local && real_output
+    if use_rfft && !use_rfft_effective && MPI.Comm_rank(comm) == 0
+        @warn "use_rfft=true ignored — requires φ replicated on every rank and real_output=true." maxlog=1
+    end
+
+    # Allocate Fourier coefficient matrix. Shape depends on rfft/complex path.
+    nbins = use_rfft_effective ? (nlon ÷ 2 + 1) : nlon
+    Fθm = zeros(ComplexF64, nθ_local, nbins)
 
     P = Vector{Float64}(undef, lmax + 1)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
@@ -702,8 +714,9 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
             # Store in Fourier coefficient array
             Fθm[ii, mval + 1] = inv_scaleφ * g
 
-            # For real output, set conjugate at m > 0
-            if real_output && mval > 0
+            # For real output (complex path only), mirror onto negative-m bin.
+            # rfft buffer has no slot for negative m — irfft reconstructs implicitly.
+            if real_output && !use_rfft_effective && mval > 0
                 conj_index = nlon - mval + 1
                 Fθm[ii, conj_index] = conj(Fθm[ii, mval + 1])
             end
@@ -712,7 +725,11 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 
     # Perform inverse FFT along φ (dimension 2)
     fθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
-    SHTnsKitParallelExt.ifft_along_dim2!(fθφ_local, Fθm)
+    if use_rfft_effective
+        fθφ_local .= FFTW.irfft(Fθm, nlon, 2)
+    else
+        SHTnsKitParallelExt.ifft_along_dim2!(fθφ_local, Fθm)
+    end
 
     # Apply Robert form scaling if enabled
     if cfg.robert_form

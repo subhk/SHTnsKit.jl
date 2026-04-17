@@ -87,6 +87,20 @@ using PencilFFTs: Transforms, PencilFFTPlan, allocate_input, allocate_output
 using FFTW                               # For 1D FFTs on local arrays
 using SHTnsKit                           # Core spherical harmonic functionality
 
+# `MPI.Comm_free` is present in MPI.jl 0.20.x but was removed from the public
+# API in some newer builds in favor of finalizer-driven cleanup. Use a shim so
+# subcomm cleanup doesn't crash either way.
+@inline function _safe_comm_free(c)
+    if isdefined(MPI, :Comm_free)
+        try
+            getfield(MPI, :Comm_free)(c)
+        catch
+            # Communicator may already be freed or auto-finalized; ignore.
+        end
+    end
+    return nothing
+end
+
 # ===== FFT PLAN CACHING =====
 # Optional plan caching to avoid repeated planning overhead in performance-critical code
 # Enabled by default; disable with ENV["SHTNSKIT_CACHE_PENCILFFTS"] = "0"
@@ -770,7 +784,7 @@ function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
 
         fft_along_dim2!(Fθm_out, gathered_data)
     finally
-        MPI.Comm_free(row_comm)
+        _safe_comm_free(row_comm)
     end
 
     return Fθm_out
@@ -837,7 +851,7 @@ function distributed_rfft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
 
         Fθm_out .= FFTW.rfft(gathered_data, 2)
     finally
-        MPI.Comm_free(row_comm)
+        _safe_comm_free(row_comm)
     end
 
     return Fθm_out
@@ -952,11 +966,11 @@ function hierarchical_spectral_reduce!(local_data::AbstractMatrix, comm, ppn::In
             tree_reduce!(local_data, inter_node_comm)
         end
         
-        MPI.Comm_free(inter_node_comm)
+        _safe_comm_free(inter_node_comm)
     else
         # Create dummy communicator for non-representatives and free it
         dummy_comm = MPI.Comm_split(comm, 1, 0)
-        MPI.Comm_free(dummy_comm)
+        _safe_comm_free(dummy_comm)
     end
 
     # Level 3: Broadcast results back within nodes
@@ -964,7 +978,7 @@ function hierarchical_spectral_reduce!(local_data::AbstractMatrix, comm, ppn::In
         MPI.Bcast!(local_data, 0, node_comm)
     end
     
-    MPI.Comm_free(node_comm)
+    _safe_comm_free(node_comm)
 end
 
 function tree_reduce!(data::AbstractMatrix, comm)
@@ -1188,11 +1202,11 @@ function hierarchical_spectral_reduce_vector!(data::AbstractVector, comm, ppn::I
             tree_reduce_vector!(data, inter_node_comm)
         end
         
-        MPI.Comm_free(inter_node_comm)
+        _safe_comm_free(inter_node_comm)
     else
         # Non-leaders create dummy communicator and free it
         dummy_comm = MPI.Comm_split(comm, 1, 0)
-        MPI.Comm_free(dummy_comm)
+        _safe_comm_free(dummy_comm)
     end
 
     # Broadcast results within nodes
@@ -1200,7 +1214,7 @@ function hierarchical_spectral_reduce_vector!(data::AbstractVector, comm, ppn::I
         MPI.Bcast!(data, 0, node_comm)
     end
     
-    MPI.Comm_free(node_comm)
+    _safe_comm_free(node_comm)
     return data
 end
 

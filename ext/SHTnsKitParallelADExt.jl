@@ -95,4 +95,60 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis),
     return y, dist_synthesis_pullback
 end
 
+# ----- dist_analysis_sphtor rrule -------------------------------------------
+# Adjoint: analogous to scalar dist_analysis. (Slm̄, Tlm̄) arrive replicated;
+# each rank reconstructs its own (V̄t, V̄p) θ rows × φ window locally using
+# the shared `_adjoint_analysis_sphtor` primitive, no inter-rank comms needed.
+
+function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
+                              cfg::SHTnsKit.SHTConfig,
+                              Vtθφ::PencilArray, Vpθφ::PencilArray;
+                              kwargs...)
+    y = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; kwargs...)
+    θ_globals = collect(globalindices(Vtθφ, 1))
+    φ_globals = collect(globalindices(Vtθφ, 2))
+    nlon_local = length(φ_globals)
+    φ_start = first(φ_globals)
+    φ_is_local = (nlon_local == cfg.nlon)
+    φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
+
+    function dist_analysis_sphtor_pullback(ȳ)
+        Slm̄, Tlm̄ = ȳ isa Tuple ? ȳ : (ȳ[1], ȳ[2])
+        V̄t_parent, V̄p_parent = SHTnsKit._adjoint_analysis_sphtor(
+            cfg, Matrix{ComplexF64}(Slm̄), Matrix{ComplexF64}(Tlm̄);
+            θ_globals=θ_globals, φ_window=φ_window)
+        V̄t = PencilArray(Vtθφ.pencil, V̄t_parent)
+        V̄p = PencilArray(Vpθφ.pencil, V̄p_parent)
+        return NoTangent(), NoTangent(), V̄t, V̄p
+    end
+    return y, dist_analysis_sphtor_pullback
+end
+
+# ----- dist_synthesis_sphtor rrule ------------------------------------------
+# Adjoint: analogous to scalar. dist_analysis_sphtor on the spatial cotangents
+# performs the per-rank analysis + Allreduce to produce replicated (Ālm_S, Ālm_T).
+
+function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
+                              cfg::SHTnsKit.SHTConfig,
+                              Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                              prototype_θφ::PencilArray,
+                              real_output::Bool=true,
+                              use_rfft::Bool=false)
+    y = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm;
+                                        prototype_θφ=prototype_θφ,
+                                        real_output=real_output,
+                                        use_rfft=use_rfft)
+
+    function dist_synthesis_sphtor_pullback(ȳ)
+        V̄t, V̄p = ȳ isa Tuple ? ȳ : (ȳ[1], ȳ[2])
+        V̄t_pa = V̄t isa PencilArray ? V̄t :
+                PencilArray(prototype_θφ.pencil, Matrix{Float64}(V̄t))
+        V̄p_pa = V̄p isa PencilArray ? V̄p :
+                PencilArray(prototype_θφ.pencil, Matrix{Float64}(V̄p))
+        S̄, T̄ = SHTnsKit.dist_analysis_sphtor(cfg, V̄t_pa, V̄p_pa; use_rfft=use_rfft)
+        return NoTangent(), NoTangent(), S̄, T̄
+    end
+    return y, dist_synthesis_sphtor_pullback
+end
+
 end # module

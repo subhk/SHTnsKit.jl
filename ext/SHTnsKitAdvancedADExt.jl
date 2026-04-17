@@ -99,66 +99,9 @@ end
     #   F̄φ[i,m] = φadj * w_i * sum_l { (1/ll1) * (conj(term) * S̄ + dθY * T̄) }
     #   V̄t, V̄p = real(ifft_phi(F̄θ)), real(ifft_phi(F̄φ))
     # where φadj = nlon * scaleφ = 2π (same as scalar adjoint)
-    function _adjoint_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Slm̄, Tlm̄)
-        nlat, nlon = cfg.nlat, cfg.nlon
-        lmax, mmax = cfg.lmax, cfg.mmax
-
-        # Output Fourier arrays
-        F̄θ = Matrix{ComplexF64}(undef, nlat, nlon)
-        F̄φ = Matrix{ComplexF64}(undef, nlat, nlon)
-        fill!(F̄θ, 0.0 + 0.0im)
-        fill!(F̄φ, 0.0 + 0.0im)
-
-        # Working arrays for Legendre functions
-        P = Vector{Float64}(undef, lmax + 1)
-        dPdtheta = Vector{Float64}(undef, lmax + 1)
-        P_over_sinth = Vector{Float64}(undef, lmax + 1)
-
-        # Scaling: φadj = nlon * scaleφ = nlon * (2π/nlon) = 2π
-        φadj = 2π
-
-        for m in 0:mmax
-            col = m + 1
-            for i in 1:nlat
-                x = cfg.x[i]
-                wi = cfg.w[i]
-
-                # Compute Legendre functions using pole-safe functions
-                SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
-
-                # Accumulate contribution from all l for this (i, m)
-                sθ = 0.0 + 0.0im
-                sφ = 0.0 + 0.0im
-
-                @inbounds for l in max(1, m):lmax
-                    N = cfg.Nlm[l+1, col]
-                    dθY = N * dPdtheta[l+1]
-                    Y_over_sθ = N * P_over_sinth[l+1]
-                    ll1 = l * (l + 1)
-                    term = 1.0im * m * Y_over_sθ
-
-                    S_bar = Slm̄[l+1, col]
-                    T_bar = Tlm̄[l+1, col]
-
-                    # Forward matrix: [dθY, conj(term); -conj(term), dθY] where term = im*m*Y/sinth is pure imaginary
-                    # Since conj(term) = -term, forward is: [dθY, -term; term, dθY]
-                    # This is Hermitian: M^H = [dθY, -term; term, dθY] = M
-                    # So adjoint uses same matrix: [F̄θ; F̄φ] = (1/ll1) * M @ [S̄; T̄]
-                    sθ += (dθY * S_bar + conj(term) * T_bar) / ll1
-                    sφ += (-conj(term) * S_bar + dθY * T_bar) / ll1
-                end
-
-                # Apply scaling φadj * w_i (same structure as scalar _adjoint_analysis)
-                F̄θ[i, col] = φadj * wi * sθ
-                F̄φ[i, col] = φadj * wi * sφ
-            end
-        end
-
-        # Apply adjoint of fft_phi (which is nlon * ifft_phi, but φadj accounts for this)
-        V̄t_c = SHTnsKit.ifft_phi(F̄θ)
-        V̄p_c = SHTnsKit.ifft_phi(F̄φ)
-        return real.(V̄t_c), real.(V̄p_c)
-    end
+    # sphtor adjoint analysis now lives in SHTnsKit proper (src/sphtor_transforms.jl).
+    # Keep local alias for any direct callers of the ext symbol.
+    const _adjoint_analysis_sphtor = SHTnsKit._adjoint_analysis_sphtor
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_sphtor), cfg::SHTnsKit.SHTConfig, Vt, Vp)
         Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Vt, Vp)

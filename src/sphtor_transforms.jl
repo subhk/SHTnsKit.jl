@@ -219,6 +219,67 @@ end
 # SPHTOR ORCHESTRATORS
 # ============================================================================
 
+"""
+    _adjoint_analysis_sphtor(cfg, Slm̄, Tlm̄; θ_globals=1:cfg.nlat, φ_window=nothing)
+      -> (V̄t, V̄p)
+
+Adjoint operator of `analysis_sphtor`. Maps replicated coefficient cotangents
+(Slm̄, Tlm̄) to a pair of spatial cotangents for this rank's θ rows (and
+optional φ window). Shared between non-plan scalar AD and the distributed
+AD extension; lives in src so both exts can reuse without circular deps.
+"""
+function _adjoint_analysis_sphtor(cfg::SHTConfig, Slm̄::AbstractMatrix, Tlm̄::AbstractMatrix;
+                                   θ_globals::AbstractVector{<:Integer}=1:cfg.nlat,
+                                   φ_window::Union{Nothing,UnitRange{Int}}=nothing)
+    nlon = cfg.nlon
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlat_local = length(θ_globals)
+
+    F̄θ = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    F̄φ = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    fill!(F̄θ, zero(ComplexF64)); fill!(F̄φ, zero(ComplexF64))
+
+    P = Vector{Float64}(undef, lmax + 1)
+    dPdtheta = Vector{Float64}(undef, lmax + 1)
+    P_over_sinth = Vector{Float64}(undef, lmax + 1)
+    φadj = 2π
+
+    for m in 0:mmax
+        col = m + 1
+        for (ii, iglob) in pairs(θ_globals)
+            Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[iglob], lmax, m)
+            wi = cfg.w[iglob]
+            sθ = zero(ComplexF64); sφ = zero(ComplexF64)
+            @inbounds for l in max(1, m):lmax
+                N = cfg.Nlm[l+1, col]
+                dθY = N * dPdtheta[l+1]
+                Y_over_sθ = N * P_over_sinth[l+1]
+                ll1 = l * (l + 1)
+                term = 1.0im * m * Y_over_sθ
+                S_bar = Slm̄[l+1, col]; T_bar = Tlm̄[l+1, col]
+                sθ += (dθY * S_bar + conj(term) * T_bar) / ll1
+                sφ += (-conj(term) * S_bar + dθY * T_bar) / ll1
+            end
+            F̄θ[ii, col] = φadj * wi * sθ
+            F̄φ[ii, col] = φadj * wi * sφ
+        end
+    end
+
+    ifft_phi!(F̄θ, F̄θ); ifft_phi!(F̄φ, F̄φ)
+    if φ_window === nothing
+        return real.(F̄θ), real.(F̄φ)
+    end
+    V̄t = Matrix{Float64}(undef, nlat_local, length(φ_window))
+    V̄p = Matrix{Float64}(undef, nlat_local, length(φ_window))
+    @inbounds for (jj, jglob) in pairs(φ_window)
+        for i in 1:nlat_local
+            V̄t[i, jj] = real(F̄θ[i, jglob])
+            V̄p[i, jj] = real(F̄φ[i, jglob])
+        end
+    end
+    return V̄t, V̄p
+end
+
 """Sphtor synthesis orchestrator. Parallelizes over m-modes."""
 function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
                                    cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix;

@@ -735,20 +735,6 @@ end
 # This reduces the number of MPI calls from O(nlat) to O(1).
 
 """
-    distributed_fft_phi!(Fθm_out, local_data, θ_range, φ_range, nlon, comm)
-
-Optimized distributed FFT along φ (longitude) dimension.
-Uses a single MPI_Alltoallv instead of per-row Allgatherv for better performance.
-
-After transform, each rank has complete Fourier modes (all m) for its local θ rows.
-
-# Algorithm
-1. Pack local data for all-to-all communication
-2. Single MPI_Alltoallv to redistribute data (each rank gets complete φ rows)
-3. FFT along φ for each local θ row
-4. Result: Fθm_out[i, m+1] = Fourier mode m at local θ index i
-"""
-"""
     _gather_phi_rows(local_data, θ_range, φ_range, nlon, comm) -> Matrix{Float64}
 
 Row-subcomm Allgatherv used by both `distributed_fft_phi!` and
@@ -813,6 +799,13 @@ function _gather_phi_rows(local_data::AbstractMatrix,
     return gathered_data
 end
 
+"""
+    distributed_fft_phi!(Fθm_out, local_data, θ_range, φ_range, nlon, comm)
+
+Distributed FFT along φ (longitude): gather full rows across the row subcomm,
+then FFT each local θ row in place. `Fθm_out[i, m+1]` holds the Fourier mode
+`m` at local θ index `i` on return.
+"""
 function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
                                local_data::AbstractMatrix,
                                θ_range::AbstractRange, φ_range::AbstractRange,

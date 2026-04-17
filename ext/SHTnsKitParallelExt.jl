@@ -715,62 +715,63 @@ function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
                                nlon::Int, comm)
     nlat_local = length(θ_range)
     nlon_local = length(φ_range)
-    nprocs = MPI.Comm_size(comm)
-    rank = MPI.Comm_rank(comm)
 
-    # Gather φ segment sizes from all processes
-    local_nlon = Int32(nlon_local)
-    all_nlons = MPI.Allgather(local_nlon, comm)
-    φ_displs = cumsum([Int32(0); all_nlons[1:end-1]])
+    # Build a row subcommunicator of ranks that share this θ-slab. Ranks in the
+    # same θ-slab have identical θ_range, and together their φ_range segments
+    # tile 1:nlon. Using the subcomm correctly handles both 1D (φ-only split,
+    # subcomm == global comm) and 2D (pθ×pφ, subcomm has pφ ranks).
+    θ_color = Int(first(θ_range))
+    row_comm = MPI.Comm_split(comm, θ_color, MPI.Comm_rank(comm))
+    try
+        row_nprocs = MPI.Comm_size(row_comm)
 
-    # For efficiency, transpose all data in a single all-to-all operation
-    # Each rank sends its local_data to appropriate ranks based on φ distribution
-
-    # Allocate buffer for gathered rows (all θ_local rows with complete φ)
-    gathered_data = Matrix{Float64}(undef, nlat_local, nlon)
-
-    # Build send/receive counts and displacements for Alltoallv
-    # Each rank r needs to receive φ data from all ranks for its local θ rows
-
-    # Strategy: Use MPI.Allgatherv with column-major packing for efficiency
-    # Pack all local columns together and do single Allgatherv
-    send_buf = Vector{Float64}(undef, nlat_local * nlon_local)
-    recv_buf = Vector{Float64}(undef, nlat_local * nlon)
-
-    # Pack local data (column-major for contiguous access)
-    idx = 1
-    @inbounds for j in 1:nlon_local
-        for i in 1:nlat_local
-            send_buf[idx] = local_data[i, j]
-            idx += 1
+        # Sanity: within row_comm, all ranks should see the same θ count.
+        all_nlats = MPI.Allgather(Int32(nlat_local), row_comm)
+        if !all(==(Int32(nlat_local)), all_nlats)
+            throw(ErrorException("distributed_fft_phi!: θ_range mismatch within row subcomm (nlat_local = $(Int.(all_nlats))). Pencil topology is inconsistent."))
         end
-    end
 
-    # Compute counts and displacements for recv buffer
-    recv_counts = [nlat_local * Int(all_nlons[r]) for r in 1:nprocs]
-    recv_displs = cumsum([0; recv_counts[1:end-1]])
+        # Gather φ segment sizes within the row.
+        all_nlons = MPI.Allgather(Int32(nlon_local), row_comm)
+        φ_displs = cumsum([Int32(0); all_nlons[1:end-1]])
+        sum(Int.(all_nlons)) == nlon || throw(ErrorException("distributed_fft_phi!: row subcomm φ segments sum to $(sum(Int.(all_nlons))), expected nlon=$nlon."))
 
-    # Single Allgatherv for all data
-    MPI.Allgatherv!(send_buf, VBuffer(recv_buf, recv_counts, recv_displs), comm)
+        send_buf = Vector{Float64}(undef, nlat_local * nlon_local)
+        recv_buf = Vector{Float64}(undef, nlat_local * nlon)
 
-    # Unpack received data into gathered_data matrix
-    @inbounds for r in 1:nprocs
-        offset = recv_displs[r]
-        r_nlon = all_nlons[r]
-        φ_start = φ_displs[r] + 1
-
+        # Pack local data column-major (contiguous).
         idx = 1
-        for j in 1:r_nlon
-            φ_idx = φ_start + j - 1
+        @inbounds for j in 1:nlon_local
             for i in 1:nlat_local
-                gathered_data[i, φ_idx] = recv_buf[offset + idx]
+                send_buf[idx] = local_data[i, j]
                 idx += 1
             end
         end
-    end
 
-    # Now perform FFT on complete rows
-    fft_along_dim2!(Fθm_out, gathered_data)
+        recv_counts = [nlat_local * Int(all_nlons[r]) for r in 1:row_nprocs]
+        recv_displs = cumsum([0; recv_counts[1:end-1]])
+
+        MPI.Allgatherv!(send_buf, VBuffer(recv_buf, recv_counts, recv_displs), row_comm)
+
+        gathered_data = Matrix{Float64}(undef, nlat_local, nlon)
+        @inbounds for r in 1:row_nprocs
+            offset = recv_displs[r]
+            r_nlon = Int(all_nlons[r])
+            φ_start = Int(φ_displs[r]) + 1
+            idx = 1
+            for j in 1:r_nlon
+                φ_idx = φ_start + j - 1
+                for i in 1:nlat_local
+                    gathered_data[i, φ_idx] = recv_buf[offset + idx]
+                    idx += 1
+                end
+            end
+        end
+
+        fft_along_dim2!(Fθm_out, gathered_data)
+    finally
+        MPI.Comm_free(row_comm)
+    end
 
     return Fθm_out
 end

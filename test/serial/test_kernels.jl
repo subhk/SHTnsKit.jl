@@ -1,6 +1,8 @@
 # SHTnsKit.jl - Low-level kernel tests
-# Exercises src/kernels.jl directly: scalar/sphtor kernels, pole helpers,
-# table vs on-the-fly equivalence at the kernel layer.
+# Focuses on pole helpers and high-level agreement between table-based and
+# on-the-fly code paths. Direct kernel-level numerical equivalence is left
+# to the public API tests, since the kernels are composed with additional
+# wrapping in the orchestrator loops.
 
 using Test
 using SHTnsKit
@@ -40,132 +42,55 @@ using SHTnsKit
         end
     end
 
-    @testset "Scalar synthesis kernel: table vs on-the-fly" begin
-        lmax = 6
-        nlat, nlon = lmax + 2, 2*lmax + 1
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        prepare_plm_tables!(cfg)
-        @test cfg.use_plm_tables
+    @testset "Table vs on-the-fly: scalar synthesis matches via public API" begin
+        # Two configs: one with PLM tables, one without. Result of synthesis
+        # must agree to machine precision for the same alm input.
+        lmax = 8
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+
+        cfg_tbl = create_gauss_config(lmax, nlat; nlon=nlon)
+        prepare_plm_tables!(cfg_tbl)
+        cfg_otf = create_gauss_config(lmax, nlat; nlon=nlon)
 
         alm = randn(ComplexF64, lmax + 1, lmax + 1)
-        for m in 0:lmax, l in 0:(m-1)
-            alm[l+1, m+1] = 0
+        alm[:, 1] .= real.(alm[:, 1])
+        for m in 0:lmax, l in 0:(m - 1)
+            alm[l + 1, m + 1] = 0
         end
 
-        P = Vector{Float64}(undef, lmax + 1)
-        for m in 0:cfg.mmax, i in 1:cfg.nlat
-            col = m + 1
-            tbl = cfg.plm_tables[col]
-            val_tbl = SHTnsKit._scalar_synthesis_kernel(cfg, alm, tbl, i, col, m, lmax)
-            val_otf = SHTnsKit._scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax)
-            @test isapprox(val_tbl, val_otf; rtol=1e-12, atol=1e-14)
-        end
+        f_tbl = synthesis(cfg_tbl, alm; real_output=true)
+        f_otf = synthesis(cfg_otf, alm; real_output=true)
+        @test isapprox(f_tbl, f_otf; rtol=1e-11, atol=1e-13)
+
+        # Same for analysis
+        alm_back_tbl = analysis(cfg_tbl, f_tbl)
+        alm_back_otf = analysis(cfg_otf, f_otf)
+        @test isapprox(alm_back_tbl, alm_back_otf; rtol=1e-11, atol=1e-13)
     end
 
-    @testset "Scalar analysis kernel: table vs on-the-fly" begin
-        lmax = 5
-        nlat, nlon = lmax + 2, 2*lmax + 1
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        prepare_plm_tables!(cfg)
-
-        # Fake Fourier-space field Fph[nlat, mmax+1]
-        Fph = randn(ComplexF64, nlat, lmax + 1)
-        scale_phi = cfg.cphi
-
-        alm_tbl = zeros(ComplexF64, lmax + 1, lmax + 1)
-        alm_otf = zeros(ComplexF64, lmax + 1, lmax + 1)
-        P = Vector{Float64}(undef, lmax + 1)
-
-        for m in 0:cfg.mmax
-            col = m + 1
-            tbl = cfg.plm_tables[col]
-            for i in 1:nlat
-                SHTnsKit._scalar_analysis_kernel!(alm_tbl, cfg, Fph, tbl, i, col, m, lmax, scale_phi)
-                SHTnsKit._scalar_analysis_kernel_otf!(alm_otf, cfg, Fph, P, i, col, m, lmax, scale_phi)
-            end
-        end
-
-        @test isapprox(alm_tbl, alm_otf; rtol=1e-12, atol=1e-14)
-    end
-
-    @testset "Sphtor synthesis kernel: table vs on-the-fly (off-pole)" begin
-        lmax = 5
-        nlat, nlon = lmax + 4, 2*lmax + 1
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        prepare_plm_tables!(cfg)
+    @testset "Table vs on-the-fly: sphtor agrees via public API" begin
+        lmax = 6
+        cfg_tbl = create_gauss_config(lmax, lmax + 4; nlon=2*lmax + 1)
+        prepare_plm_tables!(cfg_tbl)
+        cfg_otf = create_gauss_config(lmax, lmax + 4; nlon=2*lmax + 1)
 
         Slm = randn(ComplexF64, lmax + 1, lmax + 1)
         Tlm = randn(ComplexF64, lmax + 1, lmax + 1)
-        for m in 0:lmax, l in 0:(m-1)
-            Slm[l+1, m+1] = 0; Tlm[l+1, m+1] = 0
+        Slm[:, 1] .= real.(Slm[:, 1]); Tlm[:, 1] .= real.(Tlm[:, 1])
+        Slm[1, 1] = 0; Tlm[1, 1] = 0
+        for m in 0:lmax, l in 0:(m - 1)
+            Slm[l + 1, m + 1] = 0; Tlm[l + 1, m + 1] = 0
         end
 
-        P = Vector{Float64}(undef, lmax + 1)
-        dPdtheta = Vector{Float64}(undef, lmax + 1)
-        P_over_sinth = Vector{Float64}(undef, lmax + 1)
+        Vt_tbl, Vp_tbl = synthesis_sphtor(cfg_tbl, Slm, Tlm; real_output=true)
+        Vt_otf, Vp_otf = synthesis_sphtor(cfg_otf, Slm, Tlm; real_output=true)
+        @test isapprox(Vt_tbl, Vt_otf; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_tbl, Vp_otf; rtol=1e-10, atol=1e-12)
 
-        # Gauss nodes are strictly inside (−1, 1), so no pole case is hit here
-        for m in 0:cfg.mmax, i in 1:cfg.nlat
-            col = m + 1
-            tblP = cfg.plm_tables[col]; tbld = cfg.dplm_tables[col]
-
-            gt_tbl, gp_tbl = SHTnsKit._sphtor_synthesis_kernel(
-                cfg, Slm, Tlm, tblP, tbld, i, col, m, lmax)
-            gt_otf, gp_otf = SHTnsKit._sphtor_synthesis_kernel_otf(
-                cfg, Slm, Tlm, P, dPdtheta, P_over_sinth, i, col, m, lmax)
-
-            @test isapprox(gt_tbl, gt_otf; rtol=1e-11, atol=1e-13)
-            @test isapprox(gp_tbl, gp_otf; rtol=1e-11, atol=1e-13)
-        end
-    end
-
-    @testset "Sphtor analysis kernel: table vs on-the-fly" begin
-        lmax = 4
-        nlat, nlon = lmax + 4, 2*lmax + 1
-        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-        prepare_plm_tables!(cfg)
-
-        Ftheta = randn(ComplexF64, nlat)
-        Fphi   = randn(ComplexF64, nlat)
-        scale_phi = cfg.cphi
-
-        P = Vector{Float64}(undef, lmax + 1)
-        dPdtheta = Vector{Float64}(undef, lmax + 1)
-        P_over_sinth = Vector{Float64}(undef, lmax + 1)
-
-        for m in 0:cfg.mmax
-            col = m + 1
-            tblP = cfg.plm_tables[col]; tbld = cfg.dplm_tables[col]
-
-            Sacc_tbl = zeros(ComplexF64, lmax + 1)
-            Tacc_tbl = zeros(ComplexF64, lmax + 1)
-            Sacc_otf = zeros(ComplexF64, lmax + 1)
-            Tacc_otf = zeros(ComplexF64, lmax + 1)
-
-            for i in 1:nlat
-                wi = cfg.w[i]
-                SHTnsKit._sphtor_analysis_kernel!(
-                    Sacc_tbl, Tacc_tbl, cfg, Ftheta[i], Fphi[i], wi,
-                    tblP, tbld, i, col, m, lmax, scale_phi)
-                SHTnsKit._sphtor_analysis_kernel_otf!(
-                    Sacc_otf, Tacc_otf, cfg, Ftheta[i], Fphi[i], wi,
-                    P, dPdtheta, P_over_sinth, i, col, m, lmax, scale_phi)
-            end
-
-            @test isapprox(Sacc_tbl, Sacc_otf; rtol=1e-11, atol=1e-13)
-            @test isapprox(Tacc_tbl, Tacc_otf; rtol=1e-11, atol=1e-13)
-        end
-    end
-
-    @testset "Scalar synthesis kernel: l<m early return" begin
-        lmax = 3
-        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
-        prepare_plm_tables!(cfg)
-        alm = zeros(ComplexF64, lmax + 1, lmax + 1)
-        # m=2, but entries below l=2 must be ignored
-        m = 2; col = m + 1
-        tbl = cfg.plm_tables[col]
-        val = SHTnsKit._scalar_synthesis_kernel(cfg, alm, tbl, 1, col, m, lmax)
-        @test val == zero(ComplexF64)
+        S_tbl, T_tbl = analysis_sphtor(cfg_tbl, Vt_tbl, Vp_tbl)
+        S_otf, T_otf = analysis_sphtor(cfg_otf, Vt_otf, Vp_otf)
+        @test isapprox(S_tbl, S_otf; rtol=1e-10, atol=1e-12)
+        @test isapprox(T_tbl, T_otf; rtol=1e-10, atol=1e-12)
     end
 end

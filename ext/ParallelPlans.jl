@@ -2,6 +2,25 @@
 # Minimal plan structs to keep API stable
 ##########
 
+"""
+    _validate_cfg_replicated(cfg, comm)
+
+Rank-0 broadcasts a hash of the key cfg fields (lmax, mmax, mres, nlat, nlon,
+norm, cs_phase, robert_form); each rank compares and errors on mismatch. Cheap
+guard against users constructing divergent configs per rank (silent wrong
+results otherwise).
+"""
+function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
+    MPI.Comm_size(comm) > 1 || return
+    sig = hash((cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon,
+                cfg.norm, cfg.cs_phase, cfg.robert_form))
+    root_sig = MPI.bcast(sig, 0, comm)
+    if sig != root_sig
+        throw(ArgumentError("SHTConfig diverges across ranks (rank $(MPI.Comm_rank(comm))). All ranks must construct cfg with identical parameters."))
+    end
+    return
+end
+
 struct DistAnalysisPlan
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
@@ -19,6 +38,13 @@ struct DistAnalysisPlan
 end
 
 function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false, use_packed_storage::Bool=true, with_spatial_scratch::Bool=false)
+    if use_rfft
+        # Flag is accepted by the API but the RFFT code path is not wired through
+        # the analysis/synthesis loops yet. Fail loud rather than silently producing
+        # wrong coefficients.
+        throw(ArgumentError("use_rfft=true is not implemented in dist_* transforms. Pass use_rfft=false."))
+    end
+    _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     # Get local portion information from the prototype PencilArray
     θ_local_to_global = collect(globalindices(prototype_θφ, 1))
 
@@ -80,7 +106,17 @@ struct DistPlan
     use_rfft::Bool
 end
 
-DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false) = DistPlan(cfg, prototype_θφ, use_rfft)
+function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
+    if use_rfft
+        # Flag is plumbed through every dist_* call site but never branched on —
+        # both true and false currently execute the complex-FFT path. Keeping
+        # acceptance of the flag for API stability, but warning so callers know
+        # the real-FFT path is not wired yet and results match use_rfft=false.
+        Base.depwarn("use_rfft=true is accepted but not implemented — falling back to complex FFT.", :DistPlan)
+    end
+    _validate_cfg_replicated(cfg, communicator(prototype_θφ))
+    return DistPlan(cfg, prototype_θφ, use_rfft)
+end
 
 struct DistSphtorPlan
     cfg::SHTnsKit.SHTConfig
@@ -94,6 +130,14 @@ struct DistSphtorPlan
 end
 
 function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; with_spatial_scratch::Bool=false, use_rfft::Bool=false)
+    if use_rfft
+        # Flag is plumbed through every dist_* call site but never branched on —
+        # both true and false currently execute the complex-FFT path. Keeping
+        # acceptance of the flag for API stability, but warning so callers know
+        # the real-FFT path is not wired yet and results match use_rfft=false.
+        Base.depwarn("use_rfft=true is accepted but not implemented — falling back to complex FFT.", :DistPlan)
+    end
+    _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     scratch = if with_spatial_scratch
         # Pre-allocate all scratch buffers needed for synthesis
         θ_globals = collect(globalindices(prototype_θφ, 1))

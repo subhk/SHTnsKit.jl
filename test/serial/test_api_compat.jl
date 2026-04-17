@@ -232,31 +232,33 @@ using SHTnsKit
         Qlm[1:cfg.lmax+1] .= real.(Qlm[1:cfg.lmax+1])
 
         Vr = zeros(cfg.nspat)
-        t = synthesis_packed_time(cfg, Qlm, Vr)
+        t = SHTnsKit.synthesis_packed_time(cfg, Qlm, Vr)
         @test t ≥ 0
         @test all(isfinite, Vr)
 
         Qlm_back = zeros(ComplexF64, cfg.nlm)
-        t2 = analysis_packed_time(cfg, Vr, Qlm_back)
+        t2 = SHTnsKit.analysis_packed_time(cfg, Vr, Qlm_back)
         @test t2 ≥ 0
         @test isapprox(Qlm_back, Qlm; rtol=1e-10, atol=1e-12)
     end
 
     @testset "Profiling stubs" begin
         cfg = shtns_create(2, 2, 1, 0)
-        @test shtns_profiling(cfg, 1) === nothing
+        @test SHTnsKit.shtns_profiling(cfg, 1) === nothing
         t1 = Ref(1.0); t2 = Ref(2.0)
-        r = shtns_profiling_read_time(cfg, t1, t2)
+        r = SHTnsKit.shtns_profiling_read_time(cfg, t1, t2)
         @test r == 0.0
         @test t1[] == 0.0 && t2[] == 0.0
     end
 
     @testset "Coordinate macros" begin
         cfg = shtns_init(SHT_GAUSS, 4, 4, 1, 6, 8)
+        nlon = cfg.nlon
         @test PHI_DEG(cfg, 0) == 0.0
-        @test PHI_DEG(cfg, 4) == 180.0
+        @test PHI_DEG(cfg, nlon) ≈ 360.0
         @test PHI_RAD(cfg, 0) == 0.0
-        @test isapprox(PHI_RAD(cfg, 4), π; atol=1e-14)
+        @test PHI_RAD(cfg, nlon) ≈ 2π
+        @test PHI_DEG(cfg, 2) ≈ rad2deg(PHI_RAD(cfg, 2))
         @test THETA_RAD(cfg, 1) == cfg.θ[1]
         @test isapprox(THETA_DEG(cfg, 1), rad2deg(cfg.θ[1]); atol=1e-14)
     end

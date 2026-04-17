@@ -648,6 +648,22 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     nlon = cfg.nlon
     nlat = cfg.nlat
 
+    # Contract: Alm must be replicated identically on every rank. Sample-hash a
+    # bounded prefix + a small tail slice instead of the full matrix so the check
+    # stays O(1) regardless of lmax.
+    comm = communicator(prototype_θφ)
+    if MPI.Comm_size(comm) > 1
+        n = length(Alm)
+        k = min(n, 128)
+        probe_head = n == 0 ? UInt64(0) : hash(view(Alm, 1:k))
+        probe_tail = n <= k ? UInt64(0) : hash(view(Alm, (n - k + 1):n))
+        local_sig = hash((size(Alm, 1), size(Alm, 2), probe_head, probe_tail))
+        rank0_sig = MPI.bcast(local_sig, 0, comm)
+        if local_sig != rank0_sig
+            throw(ArgumentError("dist_synthesis requires Alm replicated across ranks (signature mismatch on rank $(MPI.Comm_rank(comm)))."))
+        end
+    end
+
     # Get the local portion info from the prototype
     θ_globals = collect(globalindices(prototype_θφ, 1))  # Global θ indices this process owns
     nθ_local = length(θ_globals)

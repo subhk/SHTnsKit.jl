@@ -437,16 +437,24 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     nθ_local = length(θ_globals)
 
     # ===== STEP 2 & 3: FFT along longitude (φ) dimension =====
-    # After FFT, Fθm[i, m+1] contains the m-th Fourier coefficient at local θ index i.
-    # Complex path: shape (nlat_local, nlon). rfft path (Case A only): (nlat_local, nlon÷2+1).
-    use_rfft_effective = use_rfft && nlon_local == nlon && eltype(local_data) <: Real
+    # Complex path: Fθm shape (nlat_local, nlon). rfft path: (nlat_local, nlon÷2+1).
+    # rfft requires real spatial data; both Case A (φ replicated) and Case B (φ split) supported.
+    use_rfft_effective = use_rfft && eltype(local_data) <: Real
     if use_rfft && !use_rfft_effective && MPI.Comm_rank(comm) == 0
-        @warn "use_rfft=true ignored — rfft currently supported only in Case A (φ replicated) with real spatial data." maxlog=1
+        @warn "use_rfft=true ignored — spatial data is not real." maxlog=1
     end
 
     if use_rfft_effective
-        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon ÷ 2 + 1)
-        Fθm .= FFTW.rfft(local_data, 2)
+        nbins = nlon ÷ 2 + 1
+        Fθm = Matrix{ComplexF64}(undef, nlat_local, nbins)
+        if nlon_local == nlon
+            Fθm .= FFTW.rfft(local_data, 2)
+        else
+            φ_globals = collect(globalindices(fθφ, 2))
+            φ_range = first(φ_globals):last(φ_globals)
+            θ_range = first(θ_globals):last(θ_globals)
+            SHTnsKitParallelExt.distributed_rfft_phi!(Fθm, local_data, θ_range, φ_range, nlon, comm)
+        end
     elseif nlon_local == nlon
         # CASE A: Data distributed along θ only (φ is complete on each rank).
         Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
@@ -677,10 +685,10 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     # Check if φ is fully local or distributed
     φ_is_local = (nlon_local == nlon)
 
-    # rfft path only supported when φ is fully local on every rank.
-    use_rfft_effective = use_rfft && φ_is_local && real_output
-    if use_rfft && !use_rfft_effective && MPI.Comm_rank(comm) == 0
-        @warn "use_rfft=true ignored — requires φ replicated on every rank and real_output=true." maxlog=1
+    # rfft now supported in both Case A and Case B (it only needs real output).
+    use_rfft_effective = use_rfft && real_output
+    if use_rfft && !real_output && MPI.Comm_rank(comm) == 0
+        @warn "use_rfft=true ignored — requires real_output=true." maxlog=1
     end
 
     # Allocate Fourier coefficient matrix. Shape depends on rfft/complex path.
@@ -723,7 +731,10 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
         end
     end
 
-    # Perform inverse FFT along φ (dimension 2)
+    # Perform inverse FFT along φ (dimension 2). fθφ_local always carries the
+    # FULL nlon width; downstream slicing (Case B below) extracts this rank's
+    # local φ window. Keeping the same shape for complex and rfft paths means
+    # robert_form application and result slicing don't need to branch.
     fθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
     if use_rfft_effective
         fθφ_local .= FFTW.irfft(Fθm, nlon, 2)

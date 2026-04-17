@@ -108,8 +108,9 @@ end
 
 function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
     # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
-    # for the φ-replicated (Case A) path. Distributed-φ (Case B) still falls back
-    # to complex FFT with a one-time warning emitted from the callee.
+    # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
+    # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
+    # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     return DistPlan(cfg, prototype_θφ, use_rfft)
 end
@@ -127,8 +128,9 @@ end
 
 function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; with_spatial_scratch::Bool=false, use_rfft::Bool=false)
     # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
-    # for the φ-replicated (Case A) path. Distributed-φ (Case B) still falls back
-    # to complex FFT with a one-time warning emitted from the callee.
+    # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
+    # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
+    # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     scratch = if with_spatial_scratch
         # Pre-allocate all scratch buffers needed for synthesis

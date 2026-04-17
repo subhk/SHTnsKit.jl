@@ -160,6 +160,9 @@ Base.@kwdef mutable struct SHTConfig
     # Pre-fused Nlm × P_l^m(x_i) tables: NP_tables[m+1][l+1, lat_idx].
     # Built by prepare_plm_tables! so scalar kernels can skip the Nlm multiply.
     NP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]
+    # Cached cfg→internal scale: norm_scale[l+1, m+1] = norm_scale_from_orthonormal(l, m, norm) * cs_phase_factor(m, true, cs_phase).
+    # Populated lazily by _ensure_norm_scale_matrix!; empty Matrix{Float64}[] means not yet built.
+    norm_scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 
     # Batch transform configuration (for processing multiple fields simultaneously)
     howmany::Int = 1                                          # Number of fields to process in batch

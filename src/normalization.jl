@@ -166,17 +166,44 @@ Convert coefficient matrix `src` between cfg's normalization/phase and internal
 orthonormal+CS. If `to_internal=true`, maps from cfg to internal. Otherwise maps
 from internal to cfg. Writes into `dest` which must match `src` size.
 """
+"""
+    _ensure_norm_scale_matrix!(cfg) -> Matrix{Float64}
+
+Lazily build (or return cached) `(lmax+1, mmax+1)` matrix holding
+`norm_scale_from_orthonormal(l, m, cfg.norm) * cs_phase_factor(m, true, cfg.cs_phase)`
+so `convert_alm_norm!` reduces to one elementwise multiply per coefficient.
+"""
+function _ensure_norm_scale_matrix!(cfg)
+    M = cfg.norm_scale_matrix
+    if size(M, 1) == cfg.lmax + 1 && size(M, 2) == cfg.mmax + 1
+        return M
+    end
+    lmax, mmax = cfg.lmax, cfg.mmax
+    M = Matrix{Float64}(undef, lmax + 1, mmax + 1)
+    fill!(M, 1.0)  # entries with l < m stay at 1 but are never consumed
+    @inbounds for m in 0:mmax
+        α = cs_phase_factor(m, true, cfg.cs_phase)
+        for l in m:lmax
+            M[l+1, m+1] = norm_scale_from_orthonormal(l, m, cfg.norm) * α
+        end
+    end
+    cfg.norm_scale_matrix = M
+    return M
+end
+
 function convert_alm_norm!(dest::AbstractMatrix, src::AbstractMatrix, cfg; to_internal::Bool=false)
     size(dest) == size(src) || throw(DimensionMismatch("dest/src dims mismatch"))
     lmax, mmax = cfg.lmax, cfg.mmax
-    # From orthonormal+CS to cfg: alm_cfg = alm_int / k_norm / α_cs
-    # To internal: alm_int = alm_cfg * k_norm * α_cs
-    for m in 0:mmax
-        α = cs_phase_factor(m, true, cfg.cs_phase)  # Y_cfg = α * Y_int if toggling CS
+    M = _ensure_norm_scale_matrix!(cfg)
+    z = zero(eltype(dest))
+    # to_internal=true: alm_int = alm_cfg * M. to_internal=false: alm_cfg = alm_int / M.
+    @inbounds for m in 0:mmax
+        for l in 0:(m-1)
+            dest[l+1, m+1] = z  # l<m entries are unused; zero them to avoid uninitialized garbage
+        end
         for l in m:lmax
-            k = norm_scale_from_orthonormal(l, m, cfg.norm)
-            s = to_internal ? (k * α) : (1.0 / (k * α))
-            dest[l+1, m+1] = s * src[l+1, m+1]
+            s = M[l+1, m+1]
+            dest[l+1, m+1] = to_internal ? s * src[l+1, m+1] : src[l+1, m+1] / s
         end
     end
     return dest

@@ -9,39 +9,33 @@ import SHTnsKit: wigner_d_matrix_deriv
     _to_complex(A) = eltype(A) <: Complex ? A : complex.(A)
 
     # analysis(cfg, f) :: (nlat×nlon) -> (lmax+1)×(mmax+1)
-    # Helper: exact adjoint of analysis (no Hermitian duplication)
+    # Adjoint of analysis: shares the scalar synthesis kernels; only the per-row
+    # scale differs (φadj * cfg.w[i] instead of inv_scale_phi). Negative-m
+    # columns stay zero — adjoint places mass only in measured bins.
     function _adjoint_analysis(cfg::SHTnsKit.SHTConfig, Alm̄)
         nlat, nlon = cfg.nlat, cfg.nlon
         Fφ = Matrix{ComplexF64}(undef, nlat, nlon)
-        fill!(Fφ, 0.0 + 0.0im)
+        fill!(Fφ, zero(eltype(Fφ)))
         lmax, mmax = cfg.lmax, cfg.mmax
-        P = Vector{Float64}(undef, lmax + 1)
-        # scaling for adjoint: nlon (adjoint of fft) × scaleφ (2π/nlon) = 2π
-        φadj = 2π
+        φadj = 2π  # nlon (ifft adjoint) × cphi (2π/nlon) = 2π
+        use_tbl = cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+        P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
         for m in 0:mmax
             col = m + 1
-            if cfg.use_plm_tables && length(cfg.plm_tables) == mmax+1
-                tbl = cfg.plm_tables[m+1]
-                for i in 1:nlat
-                    s = 0.0 + 0.0im
-                    @inbounds for l in m:lmax
-                        s += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * Alm̄[l+1, col]
-                    end
-                    Fφ[i, col] = φadj * cfg.w[i] * s
+            if use_tbl
+                NP = cfg.NP_tables[m+1]
+                @inbounds for i in 1:nlat
+                    Fφ[i, col] = (φadj * cfg.w[i]) *
+                        SHTnsKit._scalar_synthesis_kernel(cfg, Alm̄, NP, i, col, m, lmax)
                 end
             else
-                for i in 1:nlat
-                    SHTnsKit.Plm_row!(P, cfg.x[i], lmax, m)
-                    s = 0.0 + 0.0im
-                    @inbounds for l in m:lmax
-                        s += (cfg.Nlm[l+1, col] * P[l+1]) * Alm̄[l+1, col]
-                    end
-                    Fφ[i, col] = φadj * cfg.w[i] * s
+                @inbounds for i in 1:nlat
+                    Fφ[i, col] = (φadj * cfg.w[i]) *
+                        SHTnsKit._scalar_synthesis_kernel_otf(cfg, Alm̄, P, i, col, m, lmax)
                 end
             end
-            # Do NOT fill negative-m columns: adjoint places mass only in measured bins
         end
-        f̄c = SHTnsKit.ifft_phi(Fφ)  # includes 1/nlon scaling already accounted via φadj
+        f̄c = SHTnsKit.ifft_phi(Fφ)
         return real.(f̄c)
     end
 

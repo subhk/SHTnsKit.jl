@@ -258,27 +258,40 @@ end
 """Scalar analysis orchestrator. Parallelizes Legendre integration over m-modes."""
 function _analysis_scalar_mloop!(alm::AbstractMatrix, cfg::SHTConfig, Fph::AbstractMatrix)
     lmax, mmax = cfg.lmax, cfg.mmax
-    nlat = cfg.nlat
     scale_phi = cfg.cphi
-    use_tbl = cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
-
-    thread_local_P = use_tbl ? nothing :
-        [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-
     m_order = balanced_m_order(mmax)
+    if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+        _analysis_scalar_mloop_tbl!(alm, cfg, Fph, m_order, scale_phi)
+    else
+        _analysis_scalar_mloop_otf!(alm, cfg, Fph, m_order, scale_phi)
+    end
+    return alm
+end
+
+@inline function _analysis_scalar_mloop_tbl!(alm, cfg, Fph, m_order, scale_phi)
+    lmax = cfg.lmax
+    nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
-        if use_tbl
-            NP = cfg.NP_tables[m+1]
-            @inbounds for i in 1:nlat
-                _scalar_analysis_kernel!(alm, cfg, Fph, NP, i, col, m, lmax, scale_phi)
-            end
-        else
-            P = thread_local_P[Threads.threadid()]
-            @inbounds for i in 1:nlat
-                _scalar_analysis_kernel_otf!(alm, cfg, Fph, P, i, col, m, lmax, scale_phi)
-            end
+        NP = cfg.NP_tables[m+1]
+        @inbounds for i in 1:nlat
+            _scalar_analysis_kernel!(alm, cfg, Fph, NP, i, col, m, lmax, scale_phi)
+        end
+    end
+    return alm
+end
+
+@inline function _analysis_scalar_mloop_otf!(alm, cfg, Fph, m_order, scale_phi)
+    lmax = cfg.lmax
+    nlat = cfg.nlat
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
+        col = m + 1
+        P = thread_local_P[Threads.threadid()]
+        @inbounds for i in 1:nlat
+            _scalar_analysis_kernel_otf!(alm, cfg, Fph, P, i, col, m, lmax, scale_phi)
         end
     end
     return alm
@@ -290,26 +303,11 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat, nlon = cfg.nlat, cfg.nlon
     inv_scale_phi = phi_inv_scale(cfg)
-    use_tbl = cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
-
-    thread_local_P = use_tbl ? nothing :
-        [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-
     m_order = balanced_m_order(mmax)
-    @threads :static for idx in 1:length(m_order)
-        m = m_order[idx]
-        col = m + 1
-        if use_tbl
-            NP = cfg.NP_tables[m+1]
-            @inbounds for i in 1:nlat
-                Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, lmax)
-            end
-        else
-            P = thread_local_P[Threads.threadid()]
-            @inbounds for i in 1:nlat
-                Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax)
-            end
-        end
+    if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+        _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi)
+    else
+        _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi)
     end
     # Fill Hermitian conjugate columns for real-output IFFT
     if real_output
@@ -322,4 +320,31 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
         end
     end
     return Fph
+end
+
+@inline function _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi)
+    lmax = cfg.lmax
+    nlat = cfg.nlat
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
+        col = m + 1
+        NP = cfg.NP_tables[m+1]
+        @inbounds for i in 1:nlat
+            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, lmax)
+        end
+    end
+end
+
+@inline function _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi)
+    lmax = cfg.lmax
+    nlat = cfg.nlat
+    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
+        col = m + 1
+        P = thread_local_P[Threads.threadid()]
+        @inbounds for i in 1:nlat
+            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax)
+        end
+    end
 end

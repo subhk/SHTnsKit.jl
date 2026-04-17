@@ -204,36 +204,24 @@ function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
                                    cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix;
                                    ltr::Int=cfg.lmax, real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    nlat, nlon = cfg.nlat, cfg.nlon
+    nlon = cfg.nlon
     ltr_eff = min(ltr, lmax)
     inv_scale_phi = phi_inv_scale(cfg)
+    m_order = balanced_m_order(mmax)
 
     use_tbl = cfg.use_plm_tables &&
               length(cfg.plm_tables) == mmax + 1 &&
               length(cfg.dplm_tables) == mmax + 1
+    if use_tbl
+        _synthesis_sphtor_mloop_tbl!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
+    else
+        _synthesis_sphtor_mloop_otf!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
+    end
 
-    nthreads = Threads.maxthreadid()
-    thread_P = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_dP = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Ps = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-
-    m_order = balanced_m_order(mmax)
-    @threads :static for idx in 1:length(m_order)
-        m = m_order[idx]
-        col = m + 1
-        for i in 1:nlat
-            if use_tbl
-                g_theta, g_phi = _sphtor_synthesis_kernel(cfg, Slm, Tlm,
-                    cfg.plm_tables[col], cfg.dplm_tables[col], i, col, m, ltr_eff)
-            else
-                tid = Threads.threadid()
-                g_theta, g_phi = _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm,
-                    thread_P[tid], thread_dP[tid], thread_Ps[tid], i, col, m, ltr_eff)
-            end
-            Ftheta[i, col] = inv_scale_phi * g_theta
-            Fphi[i, col] = inv_scale_phi * g_phi
-        end
-        if real_output && m > 0
+    if real_output
+        nlat = cfg.nlat
+        for m in 1:mmax
+            col = m + 1
             conj_index = nlon - m + 1
             @inbounds for i in 1:nlat
                 Ftheta[i, conj_index] = conj(Ftheta[i, col])
@@ -244,63 +232,126 @@ function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
     return Ftheta, Fphi
 end
 
+@inline function _synthesis_sphtor_mloop_tbl!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
+    nlat = cfg.nlat
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
+        col = m + 1
+        tbl_P = cfg.plm_tables[col]
+        tbl_dP = cfg.dplm_tables[col]
+        @inbounds for i in 1:nlat
+            g_theta, g_phi = _sphtor_synthesis_kernel(cfg, Slm, Tlm, tbl_P, tbl_dP, i, col, m, ltr_eff)
+            Ftheta[i, col] = inv_scale_phi * g_theta
+            Fphi[i, col] = inv_scale_phi * g_phi
+        end
+    end
+end
+
+@inline function _synthesis_sphtor_mloop_otf!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
+    lmax = cfg.lmax
+    nlat = cfg.nlat
+    nthreads = Threads.maxthreadid()
+    thread_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_dP = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Ps = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
+        col = m + 1
+        tid = Threads.threadid()
+        P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]
+        @inbounds for i in 1:nlat
+            g_theta, g_phi = _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm, P, dP, Ps, i, col, m, ltr_eff)
+            Ftheta[i, col] = inv_scale_phi * g_theta
+            Fphi[i, col] = inv_scale_phi * g_phi
+        end
+    end
+end
+
 """Sphtor analysis orchestrator. Parallelizes over m-modes."""
 function _analysis_sphtor_mloop!(Slm::AbstractMatrix, Tlm::AbstractMatrix,
                                   cfg::SHTConfig, Fthetam::AbstractMatrix, Fphim::AbstractMatrix;
                                   ltr::Int=cfg.lmax)
     lmax, mmax = cfg.lmax, cfg.mmax
-    nlat = cfg.nlat
     ltr_eff = min(ltr, lmax)
     scale_phi = cfg.cphi
+    m_order = balanced_m_order(mmax)
 
     use_tbl = cfg.use_plm_tables &&
               length(cfg.plm_tables) == mmax + 1 &&
               length(cfg.dplm_tables) == mmax + 1 &&
               !isempty(cfg.plm_tables)
+    if use_tbl
+        _analysis_sphtor_mloop_tbl!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
+    else
+        _analysis_sphtor_mloop_otf!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
+    end
+    return Slm, Tlm
+end
 
+@inline function _analysis_sphtor_mloop_tbl!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
+    lmax = cfg.lmax
+    nlat = cfg.nlat
     nthreads = Threads.maxthreadid()
-    thread_P = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_dP = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Ps = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
-
-    m_order = balanced_m_order(mmax)
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
         tid = Threads.threadid()
         Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
         Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
-
+        tbl_P = cfg.plm_tables[col]
+        tbl_dP = cfg.dplm_tables[col]
         for i in 1:nlat
             wi = cfg.w[i]
-            Ftheta_i = Fthetam[i, col]
-            Fphi_i = Fphim[i, col]
-
+            Ftheta_i = Fthetam[i, col]; Fphi_i = Fphim[i, col]
             if cfg.robert_form
                 s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
                 if s_theta > 0
-                    Ftheta_i /= s_theta
-                    Fphi_i /= s_theta
+                    Ftheta_i /= s_theta; Fphi_i /= s_theta
                 end
             end
-
-            if use_tbl
-                _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
-                    cfg.plm_tables[col], cfg.dplm_tables[col], i, col, m, ltr_eff, scale_phi)
-            else
-                _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
-                    thread_P[tid], thread_dP[tid], thread_Ps[tid], i, col, m, ltr_eff, scale_phi)
-            end
+            _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
+                tbl_P, tbl_dP, i, col, m, ltr_eff, scale_phi)
         end
-
         for l in max(1, m):ltr_eff
-            Slm[l+1, col] = Sacc[l+1]
-            Tlm[l+1, col] = Tacc[l+1]
+            Slm[l+1, col] = Sacc[l+1]; Tlm[l+1, col] = Tacc[l+1]
         end
     end
-    return Slm, Tlm
+end
+
+@inline function _analysis_sphtor_mloop_otf!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
+    lmax = cfg.lmax
+    nlat = cfg.nlat
+    nthreads = Threads.maxthreadid()
+    thread_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_dP = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Ps = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
+        col = m + 1
+        tid = Threads.threadid()
+        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
+        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
+        P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]
+        for i in 1:nlat
+            wi = cfg.w[i]
+            Ftheta_i = Fthetam[i, col]; Fphi_i = Fphim[i, col]
+            if cfg.robert_form
+                s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
+                if s_theta > 0
+                    Ftheta_i /= s_theta; Fphi_i /= s_theta
+                end
+            end
+            _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
+                P, dP, Ps, i, col, m, ltr_eff, scale_phi)
+        end
+        for l in max(1, m):ltr_eff
+            Slm[l+1, col] = Sacc[l+1]; Tlm[l+1, col] = Tacc[l+1]
+        end
+    end
 end
 
 """

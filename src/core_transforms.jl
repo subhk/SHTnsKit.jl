@@ -301,21 +301,32 @@ analysis operator carries quadrature weights `w_i` and the `cphi = 2π/nlon`
 azimuthal scaling, neither of which belongs in the synthesis adjoint.
 
 Forward (real output, `inv_scaleφ = nlon` cancels the `1/nlon` in `ifft`):
-    f[i,j] = c_0[i] + 2 Σ_{m=1..mmax} Re(c_m[i] exp(i·m·φ_j))
+    f[i,j] = Re(c_0[i]) + 2 Σ_{m=1..mmax} Re(c_m[i] · exp(i·m·φ_j))
     where c_m[i] = Σ_l Nlm · P_l^m(θ_i) · alm[l,m]
 
-Adjoint (for real f̄, using Wirtinger conventions so `real_output=true` yields
-the factor of 2 on positive-m from the implicit Hermitian fill):
-    ālm[l,0] = Σ_i Nlm · P_l^m · FFT(f̄[i,:])[1]
-    ālm[l,m>0] = Σ_i Nlm · P_l^m · conj(FFT(f̄[i,:])[m+1])
+Wirtinger adjoint, Zygote convention (`g = 2 · ∂L/∂ā`):
 
-The `conj` comes from `∂f/∂alm` carrying `exp(+imφ)` whereas FFT uses `exp(-imφ)`.
+For m > 0, forward synthesis writes both `alm[l,m]·q` (at bin m) AND
+`ā[l,m]·conj(q)` (at bin nlon-m via Hermitian fill), with `q = Nlm·P·exp(imφ)`.
+Both halves contribute to the Wirtinger gradient:
+    ∂L/∂ā[l,m>0] = Σ ȳ · conj(q) = Σ_i Nlm·P_l^m · FFT(f̄)[m+1]
+    g[l,m>0]     = 2 · ∂L/∂ā                                    (Zygote scaling)
+
+For m = 0, `alm[l,0]` is a complex parameter but only Re(alm[l,0]) enters f
+(because the forward pipeline takes `real.(Fph)` at the end). That gives
+`∂f/∂alm = ∂f/∂ā = ½ Nlm·P_l^0`, so `g[l,0] = 2 · ½ · FFT(ȳ)[1] · Σ = FFT(ȳ)[1] · Σ`.
+
+Net effect:
+    g[l,m]  = wm(m) · Σ_i Nlm · P_l^m · FFT(f̄[i,:])[m+1]
+    wm(0) = 1,  wm(m>0) = 2
+
+No `conj` on the FFT bin (FFT already carries `exp(-imφ)`). No quadrature
+weights or `cphi` — those belong to `analysis`, not the synthesis adjoint.
 """
 function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
                             θ_globals::AbstractVector{<:Integer}=1:cfg.nlat,
                             real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    nlat_local = length(θ_globals)
     # FFT along φ. For real f̄ the FFTW rfft would be enough, but we accept
     # complex f̄ too so use the general routine.
     Fph̄ = fft_phi(_as_complex(f̄))
@@ -324,26 +335,21 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
     for m in 0:mmax
         col = m + 1
-        # conj-fill during forward synthesis injects ālm[l,m] twice for m > 0 (once
-        # from bin m, once from conj of bin nlon-m). For a real input Fph̄ those two
-        # bins are already conjugates, so the easy way to express this is to take
-        # 2·conj(FFT[m+1]) for m > 0 (real case) or bin m alone otherwise.
+        wm = (m == 0 || !real_output) ? 1.0 : 2.0
         if use_tbl
             NP = cfg.NP_tables[col]
             @inbounds for (ii, iglob) in pairs(θ_globals)
-                Fi = Fph̄[ii, col]
-                contrib = (m == 0 || !real_output) ? Fi : 2 * conj(Fi)
+                Fi = wm * Fph̄[ii, col]
                 for l in m:lmax
-                    ālm[l+1, col] += NP[l+1, iglob] * contrib
+                    ālm[l+1, col] += NP[l+1, iglob] * Fi
                 end
             end
         else
             @inbounds for (ii, iglob) in pairs(θ_globals)
                 Plm_row!(P, cfg.x[iglob], lmax, m)
-                Fi = Fph̄[ii, col]
-                contrib = (m == 0 || !real_output) ? Fi : 2 * conj(Fi)
+                Fi = wm * Fph̄[ii, col]
                 for l in m:lmax
-                    ālm[l+1, col] += cfg.Nlm[l+1, col] * P[l+1] * contrib
+                    ālm[l+1, col] += cfg.Nlm[l+1, col] * P[l+1] * Fi
                 end
             end
         end

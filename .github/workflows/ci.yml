@@ -123,14 +123,33 @@ jobs:
           SHTNSKIT_TEST_VERBOSE: "1"
           JULIA_NUM_THREADS: 2
 
+      - name: Run parallel (non-MPI) test suite (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          julia --project=. -t 4 -e 'include("test/parallel/runtests.jl")'
+        env:
+          SHTNSKIT_TEST_VERBOSE: "1"
+          JULIA_NUM_THREADS: "4"
+          OMP_NUM_THREADS: "2"
+          OPENBLAS_NUM_THREADS: "1"
+
       - name: Run MPI comprehensive tests (Linux only)
         if: runner.os == 'Linux'
         run: |
           mpiexec -n 4 julia --project=. test/parallel/test_mpi_comprehensive.jl
         env:
           SHTNSKIT_TEST_VERBOSE: "1"
-          OMP_NUM_THREADS: 1
-          OPENBLAS_NUM_THREADS: 1
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+
+      - name: Run MPI extended tests (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          mpiexec -n 4 julia --project=. test/parallel/test_mpi_extended.jl
+        env:
+          SHTNSKIT_TEST_VERBOSE: "1"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
 
       - name: Test advanced optimizations (if available)
         run: |

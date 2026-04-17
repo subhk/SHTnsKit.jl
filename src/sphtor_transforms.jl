@@ -229,10 +229,7 @@ function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
     inv_scale_phi = phi_inv_scale(cfg)
     m_order = balanced_m_order(mmax)
 
-    use_tbl = cfg.use_plm_tables &&
-              length(cfg.plm_tables) == mmax + 1 &&
-              length(cfg.dplm_tables) == mmax + 1
-    if use_tbl
+    if has_fused_vector_tables(cfg)
         _synthesis_sphtor_mloop_tbl!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
     else
         _synthesis_sphtor_mloop_otf!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
@@ -257,10 +254,10 @@ end
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
-        tbl_P = cfg.plm_tables[col]
-        tbl_dP = cfg.dplm_tables[col]
+        NP = cfg.NP_tables[col]
+        NdP = cfg.NdP_tables[col]
         @inbounds for i in 1:nlat
-            g_theta, g_phi = _sphtor_synthesis_kernel(cfg, Slm, Tlm, tbl_P, tbl_dP, i, col, m, ltr_eff)
+            g_theta, g_phi = _sphtor_synthesis_kernel(cfg, Slm, Tlm, NP, NdP, i, col, m, ltr_eff)
             Ftheta[i, col] = inv_scale_phi * g_theta
             Fphi[i, col] = inv_scale_phi * g_phi
         end
@@ -295,11 +292,7 @@ function _analysis_sphtor_mloop!(Slm::AbstractMatrix, Tlm::AbstractMatrix,
     scale_phi = cfg.cphi
     m_order = balanced_m_order(mmax)
 
-    use_tbl = cfg.use_plm_tables &&
-              length(cfg.plm_tables) == mmax + 1 &&
-              length(cfg.dplm_tables) == mmax + 1 &&
-              !isempty(cfg.plm_tables)
-    if use_tbl
+    if has_fused_vector_tables(cfg)
         _analysis_sphtor_mloop_tbl!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
     else
         _analysis_sphtor_mloop_otf!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
@@ -319,8 +312,8 @@ end
         tid = Threads.threadid()
         Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
         Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
-        tbl_P = cfg.plm_tables[col]
-        tbl_dP = cfg.dplm_tables[col]
+        NP = cfg.NP_tables[col]
+        NdP = cfg.NdP_tables[col]
         for i in 1:nlat
             wi = cfg.w[i]
             Ftheta_i = Fthetam[i, col]; Fphi_i = Fphim[i, col]
@@ -331,7 +324,7 @@ end
                 end
             end
             _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
-                tbl_P, tbl_dP, i, col, m, ltr_eff, scale_phi)
+                NP, NdP, i, col, m, ltr_eff, scale_phi)
         end
         for l in max(1, m):ltr_eff
             Slm[l+1, col] = Sacc[l+1]; Tlm[l+1, col] = Tacc[l+1]

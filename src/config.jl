@@ -160,6 +160,9 @@ Base.@kwdef mutable struct SHTConfig
     # Pre-fused Nlm × P_l^m(x_i) tables: NP_tables[m+1][l+1, lat_idx].
     # Built by prepare_plm_tables! so scalar kernels can skip the Nlm multiply.
     NP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]
+    # Pre-fused Nlm × dP_l^m/dx(x_i) tables: NdP_tables[m+1][l+1, lat_idx].
+    # Enables sphtor kernel to skip the Nlm multiply on the derivative term.
+    NdP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]
     # Cached cfg→internal scale: norm_scale[l+1, m+1] = norm_scale_from_orthonormal(l, m, norm) * cs_phase_factor(m, true, cs_phase).
     # Populated lazily by _ensure_norm_scale_matrix!; empty Matrix{Float64}[] means not yet built.
     norm_scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
@@ -232,6 +235,29 @@ end
 
 function Base.propertynames(::SHTConfig, private::Bool=false)
     return (fieldnames(SHTConfig)..., :wlat, :ct, :sintheta)
+end
+
+"""
+    has_fused_scalar_tables(cfg) -> Bool
+
+Returns true iff the scalar `NP_tables` cache is populated AND the user hasn't
+disabled table lookup. Collapses the `cfg.use_plm_tables && length(cfg.NP_tables) == mmax+1`
+idiom into one call so the two fields can't silently disagree.
+"""
+@inline function has_fused_scalar_tables(cfg::SHTConfig)
+    return cfg.use_plm_tables && length(cfg.NP_tables) == cfg.mmax + 1
+end
+
+"""
+    has_fused_vector_tables(cfg) -> Bool
+
+Returns true iff both `NP_tables` and `NdP_tables` are populated (vector/sphtor
+kernels need the derivative table too).
+"""
+@inline function has_fused_vector_tables(cfg::SHTConfig)
+    return cfg.use_plm_tables &&
+           length(cfg.NP_tables) == cfg.mmax + 1 &&
+           length(cfg.NdP_tables) == cfg.mmax + 1
 end
 
 """
@@ -318,6 +344,7 @@ function create_gauss_fly_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int
     cfg.plm_tables = Matrix{Float64}[]
     cfg.dplm_tables = Matrix{Float64}[]
     cfg.NP_tables = Matrix{Float64}[]
+    cfg.NdP_tables = Matrix{Float64}[]
 
     return cfg
 end
@@ -341,6 +368,7 @@ function set_on_the_fly!(cfg::SHTConfig)
     cfg.plm_tables = Matrix{Float64}[]
     cfg.dplm_tables = Matrix{Float64}[]
     cfg.NP_tables = Matrix{Float64}[]
+    cfg.NdP_tables = Matrix{Float64}[]
     return cfg
 end
 
@@ -949,14 +977,19 @@ function prepare_plm_tables!(cfg::SHTConfig)
         end
     end
     
-    # Pre-fuse Nlm so scalar kernels can read a single product per element.
+    # Pre-fuse Nlm so scalar and sphtor kernels can read a single product per
+    # element on both the P and dP/dx tables.
     NP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
+    NdP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
     @inbounds for m in 0:mmax
         NP = NP_tables[m+1]
+        NdP = NdP_tables[m+1]
         tbl = tables[m+1]
+        dtbl = dtables[m+1]
         for i in 1:nlat
             for l in m:lmax
                 NP[l+1, i] = cfg.Nlm[l+1, m+1] * tbl[l+1, i]
+                NdP[l+1, i] = cfg.Nlm[l+1, m+1] * dtbl[l+1, i]
             end
         end
     end
@@ -965,6 +998,7 @@ function prepare_plm_tables!(cfg::SHTConfig)
     cfg.plm_tables = tables
     cfg.dplm_tables = dtables
     cfg.NP_tables = NP_tables
+    cfg.NdP_tables = NdP_tables
     cfg.use_plm_tables = true
     return cfg
 end
@@ -986,6 +1020,7 @@ function disable_plm_tables!(cfg::SHTConfig)
     cfg.plm_tables = Matrix{Float64}[]
     cfg.dplm_tables = Matrix{Float64}[]
     cfg.NP_tables = Matrix{Float64}[]
+    cfg.NdP_tables = Matrix{Float64}[]
     return cfg
 end
 

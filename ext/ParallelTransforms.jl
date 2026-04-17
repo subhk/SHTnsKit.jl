@@ -801,16 +801,31 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     θ_globals = collect(globalindices(Vtθφ, 1))  # Global θ indices
     nθ_local = length(θ_globals)
 
-    # Perform 1D FFT along φ (longitude) dimension
-    Ftθm = Matrix{ComplexF64}(undef, nθ_local, nlon)
-    Fpθm = Matrix{ComplexF64}(undef, nθ_local, nlon)
+    # Perform FFT along φ (longitude) dimension. Real inputs + use_rfft → half spectrum.
+    use_rfft_effective = use_rfft && eltype(local_Vt) <: Real && eltype(local_Vp) <: Real
+    if use_rfft && !use_rfft_effective && MPI.Comm_rank(comm) == 0
+        @warn "use_rfft=true ignored — Vt/Vp are not real-valued." maxlog=1
+    end
 
-    if nlon_local == nlon
-        # Data is distributed along θ only - can do FFT directly
+    nbins = use_rfft_effective ? (nlon ÷ 2 + 1) : nlon
+    Ftθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
+    Fpθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
+
+    if use_rfft_effective
+        if nlon_local == nlon
+            Ftθm .= FFTW.rfft(local_Vt, 2)
+            Fpθm .= FFTW.rfft(local_Vp, 2)
+        else
+            φ_globals = collect(globalindices(Vtθφ, 2))
+            φ_range = first(φ_globals):last(φ_globals)
+            θ_range = first(θ_globals):last(θ_globals)
+            SHTnsKitParallelExt.distributed_rfft_phi!(Ftθm, local_Vt, θ_range, φ_range, nlon, comm)
+            SHTnsKitParallelExt.distributed_rfft_phi!(Fpθm, local_Vp, θ_range, φ_range, nlon, comm)
+        end
+    elseif nlon_local == nlon
         SHTnsKitParallelExt.fft_along_dim2!(Ftθm, local_Vt)
         SHTnsKitParallelExt.fft_along_dim2!(Fpθm, local_Vp)
     else
-        # Data is distributed along φ - need MPI Allgather along φ first
         φ_globals = collect(globalindices(Vtθφ, 2))
         φ_range = first(φ_globals):last(φ_globals)
         θ_range = first(θ_globals):last(θ_globals)
@@ -957,10 +972,17 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     nθ_local = length(θ_globals)
     nlon_local = size(parent(prototype_θφ), 2)
     φ_is_local = (nlon_local == nlon)
+    comm = communicator(prototype_θφ)
 
-    # Allocate Fourier coefficient matrices
-    Fθm = zeros(ComplexF64, nθ_local, nlon)
-    Fφm = zeros(ComplexF64, nθ_local, nlon)
+    use_rfft_effective = use_rfft && real_output
+    if use_rfft && !real_output && MPI.Comm_rank(comm) == 0
+        @warn "use_rfft=true ignored — requires real_output=true." maxlog=1
+    end
+
+    # Allocate Fourier coefficient matrices (half-width when rfft).
+    nbins = use_rfft_effective ? (nlon ÷ 2 + 1) : nlon
+    Fθm = zeros(ComplexF64, nθ_local, nbins)
+    Fφm = zeros(ComplexF64, nθ_local, nbins)
 
     P = Vector{Float64}(undef, lmax + 1)
     dPdx = Vector{Float64}(undef, lmax + 1)
@@ -1014,8 +1036,8 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
             Fθm[ii, mval + 1] = inv_scaleφ * gθ
             Fφm[ii, mval + 1] = inv_scaleφ * gφ
 
-            # Hermitian conjugate for negative m to ensure real output
-            if real_output && mval > 0
+            # Hermitian conjugate for negative m (complex path only; rfft buffer is half-spectrum).
+            if real_output && !use_rfft_effective && mval > 0
                 conj_index = nlon - mval + 1
                 Fθm[ii, conj_index] = conj(Fθm[ii, mval + 1])
                 Fφm[ii, conj_index] = conj(Fφm[ii, mval + 1])
@@ -1026,8 +1048,13 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     # Perform inverse FFT along φ
     Vtθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
     Vpθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
-    SHTnsKitParallelExt.ifft_along_dim2!(Vtθφ_local, Fθm)
-    SHTnsKitParallelExt.ifft_along_dim2!(Vpθφ_local, Fφm)
+    if use_rfft_effective
+        Vtθφ_local .= FFTW.irfft(Fθm, nlon, 2)
+        Vpθφ_local .= FFTW.irfft(Fφm, nlon, 2)
+    else
+        SHTnsKitParallelExt.ifft_along_dim2!(Vtθφ_local, Fθm)
+        SHTnsKitParallelExt.ifft_along_dim2!(Vpθφ_local, Fφm)
+    end
 
     # Apply Robert form scaling if enabled
     if cfg.robert_form

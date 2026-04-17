@@ -8,36 +8,9 @@ import SHTnsKit: wigner_d_matrix_deriv
     # Helper to ensure array eltype is complex for adjoints when needed
     _to_complex(A) = eltype(A) <: Complex ? A : complex.(A)
 
-    # analysis(cfg, f) :: (nlat×nlon) -> (lmax+1)×(mmax+1)
-    # Adjoint of analysis: shares the scalar synthesis kernels; only the per-row
-    # scale differs (φadj * cfg.w[i] instead of inv_scale_phi). Negative-m
-    # columns stay zero — adjoint places mass only in measured bins.
-    function _adjoint_analysis(cfg::SHTnsKit.SHTConfig, Alm̄)
-        nlat, nlon = cfg.nlat, cfg.nlon
-        Fφ = Matrix{ComplexF64}(undef, nlat, nlon)
-        fill!(Fφ, zero(eltype(Fφ)))
-        lmax, mmax = cfg.lmax, cfg.mmax
-        φadj = 2π  # nlon (ifft adjoint) × cphi (2π/nlon) = 2π
-        use_tbl = cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
-        P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
-        for m in 0:mmax
-            col = m + 1
-            if use_tbl
-                NP = cfg.NP_tables[m+1]
-                @inbounds for i in 1:nlat
-                    Fφ[i, col] = (φadj * cfg.w[i]) *
-                        SHTnsKit._scalar_synthesis_kernel(cfg, Alm̄, NP, i, col, m, lmax)
-                end
-            else
-                @inbounds for i in 1:nlat
-                    Fφ[i, col] = (φadj * cfg.w[i]) *
-                        SHTnsKit._scalar_synthesis_kernel_otf(cfg, Alm̄, P, i, col, m, lmax)
-                end
-            end
-        end
-        SHTnsKit.ifft_phi!(Fφ, Fφ)
-        return real.(Fφ)
-    end
+    # Adjoint of analysis now lives in SHTnsKit proper (src/core_transforms.jl).
+    # Local alias kept for backward compat with any users touching this symbol.
+    const _adjoint_analysis = SHTnsKit._adjoint_analysis
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis), cfg::SHTnsKit.SHTConfig, f)
         y = SHTnsKit.analysis(cfg, f)
@@ -60,6 +33,38 @@ import SHTnsKit: wigner_d_matrix_deriv
 end
         return y, pullback
 end
+
+    # Batch scalar transforms: analysis_batch, synthesis_batch
+    # Each field is an independent scalar transform; adjoint applies the scalar
+    # adjoint per slice. Simple and correct; not allocation-optimal (doesn't
+    # share Legendre work across fields in the backward pass).
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_batch), cfg::SHTnsKit.SHTConfig, fields::AbstractArray{<:Real,3})
+        y = SHTnsKit.analysis_batch(cfg, fields)
+        function pullback(ȳ)
+            ȳA = eltype(ȳ) <: Complex ? ȳ : complex.(ȳ)
+            nfields = size(ȳA, 3)
+            f̄ = Array{Float64,3}(undef, cfg.nlat, cfg.nlon, nfields)
+            @inbounds for k in 1:nfields
+                f̄[:, :, k] .= _adjoint_analysis(cfg, @view ȳA[:, :, k])
+            end
+            return NoTangent(), NoTangent(), f̄
+        end
+        return y, pullback
+    end
+
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_batch), cfg::SHTnsKit.SHTConfig, alm_batch::AbstractArray{<:Complex,3}; real_output::Bool=true)
+        y = SHTnsKit.synthesis_batch(cfg, alm_batch; real_output)
+        function pullback(ȳ)
+            ȳA = eltype(ȳ) <: Complex ? ȳ : complex.(ȳ)
+            nfields = size(ȳA, 3)
+            ālm = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1, nfields)
+            @inbounds for k in 1:nfields
+                ālm[:, :, k] .= SHTnsKit.analysis(cfg, @view ȳA[:, :, k])
+            end
+            return NoTangent(), NoTangent(), ālm, (; real_output=NoTangent())
+        end
+        return y, pullback
+    end
 
     # Packed scalar transforms: analysis_packed, synthesis_packed
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_packed), cfg::SHTnsKit.SHTConfig, Vr)

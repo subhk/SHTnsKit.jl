@@ -34,4 +34,11 @@ using Test
     include("test_kernels.jl")
     include("test_plan.jl")
     include("test_sphtor_extended.jl")
+    include("test_operators_extended.jl")
+    include("test_synthesis_point_extended.jl")
+    include("test_pole_ordering.jl")
+    include("test_padding_extended.jl")
+    include("test_ml_modes.jl")
+    include("test_batch_qst.jl")
+    include("test_config_copy.jl")
 end

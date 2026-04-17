@@ -111,6 +111,26 @@ const _pfft_cache = IdDict{Any,Any}()
 const _cache_lock = Threads.ReentrantLock()
 const _sparse_gather_cache = Dict{Any, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}()
 
+# Soft cap on cached FFT plans. The cache is keyed on (kind, shape, eltype, comm
+# size, decomposition hash); a single long-running Julia session that cycles
+# through many configurations can grow this unboundedly. When the cap is hit
+# we evict in FIFO order by clearing the whole cache — simple, predictable,
+# and cheap compared to tracking LRU metadata per entry.
+const _PFFT_CACHE_MAX = Ref{Int}(parse(Int, get(ENV, "SHTNSKIT_PFFT_CACHE_MAX", "64")))
+
+"""
+    pfft_cache_max!(n::Int) -> Int
+
+Set the maximum number of cached FFT plans (shared across all grids and
+communicators). Set `n <= 0` to disable the cap entirely. Returns the previous
+value.
+"""
+function pfft_cache_max!(n::Int)
+    prev = _PFFT_CACHE_MAX[]
+    _PFFT_CACHE_MAX[] = n
+    return prev
+end
+
 # Compat helper: `ceildiv` was added in Julia 1.11
 const _ceildiv = isdefined(Base, :ceildiv) ? Base.ceildiv : (a, b) -> cld(a, b)
 ceildiv(a::Integer, b::Integer) = _ceildiv(a, b)
@@ -198,7 +218,12 @@ function _get_or_plan(kind::Symbol, A)
                kind === :rfft ? (try plan_rfft(A; dims=2) catch; nothing end) :   # Real-to-complex FFT
                kind === :irfft ? (try plan_irfft(A; dims=2) catch; nothing end) : # Complex-to-real IFFT
                error("unknown plan kind")
-        
+
+        # Enforce the soft cap: flush before inserting so the fresh entry survives.
+        cap = _PFFT_CACHE_MAX[]
+        if cap > 0 && length(_pfft_cache) >= cap
+            empty!(_pfft_cache)
+        end
         _pfft_cache[key] = plan
         return plan
     end
@@ -723,37 +748,38 @@ After transform, each rank has complete Fourier modes (all m) for its local θ r
 3. FFT along φ for each local θ row
 4. Result: Fθm_out[i, m+1] = Fourier mode m at local θ index i
 """
-function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
-                               local_data::AbstractMatrix,
-                               θ_range::AbstractRange, φ_range::AbstractRange,
-                               nlon::Int, comm)
+"""
+    _gather_phi_rows(local_data, θ_range, φ_range, nlon, comm) -> Matrix{Float64}
+
+Row-subcomm Allgatherv used by both `distributed_fft_phi!` and
+`distributed_rfft_phi!`. Ranks that share the θ-slab exchange their φ segments
+so every rank in the row ends up with a full `(nlat_local, nlon)` matrix along
+its own θ rows. Handles 1D (φ-only split, subcomm == global comm) and 2D
+(pθ×pφ, subcomm has pφ ranks) decompositions uniformly.
+"""
+function _gather_phi_rows(local_data::AbstractMatrix,
+                          θ_range::AbstractRange, φ_range::AbstractRange,
+                          nlon::Int, comm)
     nlat_local = length(θ_range)
     nlon_local = length(φ_range)
 
-    # Build a row subcommunicator of ranks that share this θ-slab. Ranks in the
-    # same θ-slab have identical θ_range, and together their φ_range segments
-    # tile 1:nlon. Using the subcomm correctly handles both 1D (φ-only split,
-    # subcomm == global comm) and 2D (pθ×pφ, subcomm has pφ ranks).
     θ_color = Int(first(θ_range))
     row_comm = MPI.Comm_split(comm, θ_color, MPI.Comm_rank(comm))
-    try
+    gathered_data = try
         row_nprocs = MPI.Comm_size(row_comm)
 
-        # Sanity: within row_comm, all ranks should see the same θ count.
         all_nlats = MPI.Allgather(Int32(nlat_local), row_comm)
         if !all(==(Int32(nlat_local)), all_nlats)
-            throw(ErrorException("distributed_fft_phi!: θ_range mismatch within row subcomm (nlat_local = $(Int.(all_nlats))). Pencil topology is inconsistent."))
+            throw(ErrorException("_gather_phi_rows: θ_range mismatch within row subcomm (nlat_local = $(Int.(all_nlats))). Pencil topology is inconsistent."))
         end
 
-        # Gather φ segment sizes within the row.
         all_nlons = MPI.Allgather(Int32(nlon_local), row_comm)
         φ_displs = cumsum([Int32(0); all_nlons[1:end-1]])
-        sum(Int.(all_nlons)) == nlon || throw(ErrorException("distributed_fft_phi!: row subcomm φ segments sum to $(sum(Int.(all_nlons))), expected nlon=$nlon."))
+        sum(Int.(all_nlons)) == nlon || throw(ErrorException("_gather_phi_rows: row subcomm φ segments sum to $(sum(Int.(all_nlons))), expected nlon=$nlon."))
 
         send_buf = Vector{Float64}(undef, nlat_local * nlon_local)
         recv_buf = Vector{Float64}(undef, nlat_local * nlon)
 
-        # Pack local data column-major (contiguous).
         idx = 1
         @inbounds for j in 1:nlon_local
             for i in 1:nlat_local
@@ -764,10 +790,9 @@ function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
 
         recv_counts = [nlat_local * Int(all_nlons[r]) for r in 1:row_nprocs]
         recv_displs = cumsum([0; recv_counts[1:end-1]])
-
         MPI.Allgatherv!(send_buf, VBuffer(recv_buf, recv_counts, recv_displs), row_comm)
 
-        gathered_data = Matrix{Float64}(undef, nlat_local, nlon)
+        out = Matrix{Float64}(undef, nlat_local, nlon)
         @inbounds for r in 1:row_nprocs
             offset = recv_displs[r]
             r_nlon = Int(all_nlons[r])
@@ -776,17 +801,24 @@ function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
             for j in 1:r_nlon
                 φ_idx = φ_start + j - 1
                 for i in 1:nlat_local
-                    gathered_data[i, φ_idx] = recv_buf[offset + idx]
+                    out[i, φ_idx] = recv_buf[offset + idx]
                     idx += 1
                 end
             end
         end
-
-        fft_along_dim2!(Fθm_out, gathered_data)
+        out
     finally
         _safe_comm_free(row_comm)
     end
+    return gathered_data
+end
 
+function distributed_fft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
+                               local_data::AbstractMatrix,
+                               θ_range::AbstractRange, φ_range::AbstractRange,
+                               nlon::Int, comm)
+    gathered = _gather_phi_rows(local_data, θ_range, φ_range, nlon, comm)
+    fft_along_dim2!(Fθm_out, gathered)
     return Fθm_out
 end
 
@@ -802,58 +834,10 @@ function distributed_rfft_phi!(Fθm_out::AbstractMatrix{ComplexF64},
                                 θ_range::AbstractRange, φ_range::AbstractRange,
                                 nlon::Int, comm)
     nlat_local = length(θ_range)
-    nlon_local = length(φ_range)
-    nbins = nlon ÷ 2 + 1
-    size(Fθm_out) == (nlat_local, nbins) || throw(DimensionMismatch("Fθm_out must be (nlat_local, nlon÷2+1)"))
-
-    θ_color = Int(first(θ_range))
-    row_comm = MPI.Comm_split(comm, θ_color, MPI.Comm_rank(comm))
-    try
-        row_nprocs = MPI.Comm_size(row_comm)
-        all_nlats = MPI.Allgather(Int32(nlat_local), row_comm)
-        if !all(==(Int32(nlat_local)), all_nlats)
-            throw(ErrorException("distributed_rfft_phi!: θ_range mismatch within row subcomm (nlat_local = $(Int.(all_nlats)))."))
-        end
-
-        all_nlons = MPI.Allgather(Int32(nlon_local), row_comm)
-        φ_displs = cumsum([Int32(0); all_nlons[1:end-1]])
-        sum(Int.(all_nlons)) == nlon || throw(ErrorException("distributed_rfft_phi!: row subcomm φ segments sum to $(sum(Int.(all_nlons))), expected nlon=$nlon."))
-
-        send_buf = Vector{Float64}(undef, nlat_local * nlon_local)
-        recv_buf = Vector{Float64}(undef, nlat_local * nlon)
-
-        idx = 1
-        @inbounds for j in 1:nlon_local
-            for i in 1:nlat_local
-                send_buf[idx] = local_data[i, j]
-                idx += 1
-            end
-        end
-
-        recv_counts = [nlat_local * Int(all_nlons[r]) for r in 1:row_nprocs]
-        recv_displs = cumsum([0; recv_counts[1:end-1]])
-        MPI.Allgatherv!(send_buf, VBuffer(recv_buf, recv_counts, recv_displs), row_comm)
-
-        gathered_data = Matrix{Float64}(undef, nlat_local, nlon)
-        @inbounds for r in 1:row_nprocs
-            offset = recv_displs[r]
-            r_nlon = Int(all_nlons[r])
-            φ_start = Int(φ_displs[r]) + 1
-            idx = 1
-            for j in 1:r_nlon
-                φ_idx = φ_start + j - 1
-                for i in 1:nlat_local
-                    gathered_data[i, φ_idx] = recv_buf[offset + idx]
-                    idx += 1
-                end
-            end
-        end
-
-        Fθm_out .= FFTW.rfft(gathered_data, 2)
-    finally
-        _safe_comm_free(row_comm)
-    end
-
+    size(Fθm_out) == (nlat_local, nlon ÷ 2 + 1) ||
+        throw(DimensionMismatch("Fθm_out must be (nlat_local, nlon÷2+1)"))
+    gathered = _gather_phi_rows(local_data, θ_range, φ_range, nlon, comm)
+    Fθm_out .= FFTW.rfft(gathered, 2)
     return Fθm_out
 end
 

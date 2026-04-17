@@ -292,12 +292,63 @@ end
 # SCALAR ORCHESTRATORS
 # ============================================================================
 
+"""
+    _adjoint_analysis(cfg, Alm̄; θ_globals=1:cfg.nlat, φ_window=nothing)
+
+Adjoint operator of `analysis`. Shares the scalar synthesis kernels; only the
+per-row scale differs (`φadj * cfg.w[i]` instead of `inv_scale_phi`). Negative-m
+columns stay zero — the adjoint places mass only in measured bins.
+
+Parametric over the θ set we integrate against so the distributed adjoint
+(rank-local θ slab) can reuse this exact helper with a different `θ_globals`
+range and optional φ-window slice. Lives in src so AD extensions don't have
+to duplicate it.
+"""
+function _adjoint_analysis(cfg::SHTConfig, Alm̄::AbstractMatrix;
+                           θ_globals::AbstractVector{<:Integer}=1:cfg.nlat,
+                           φ_window::Union{Nothing,UnitRange{Int}}=nothing)
+    nlon = cfg.nlon
+    nlat_local = length(θ_globals)
+    Fφ = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    fill!(Fφ, zero(eltype(Fφ)))
+    lmax, mmax = cfg.lmax, cfg.mmax
+    φadj = 2π  # nlon (ifft adjoint) × cphi (2π/nlon) = 2π
+    use_tbl = has_fused_scalar_tables(cfg)
+    P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
+    for m in 0:mmax
+        col = m + 1
+        if use_tbl
+            NP = cfg.NP_tables[m+1]
+            @inbounds for (ii, iglob) in pairs(θ_globals)
+                Fφ[ii, col] = (φadj * cfg.w[iglob]) *
+                    _scalar_synthesis_kernel(cfg, Alm̄, NP, iglob, col, m, lmax)
+            end
+        else
+            @inbounds for (ii, iglob) in pairs(θ_globals)
+                Fφ[ii, col] = (φadj * cfg.w[iglob]) *
+                    _scalar_synthesis_kernel_otf(cfg, Alm̄, P, iglob, col, m, lmax)
+            end
+        end
+    end
+    ifft_phi!(Fφ, Fφ)
+    if φ_window === nothing
+        return real.(Fφ)
+    end
+    out = Matrix{Float64}(undef, nlat_local, length(φ_window))
+    @inbounds for (jj, jglob) in pairs(φ_window)
+        for i in 1:nlat_local
+            out[i, jj] = real(Fφ[i, jglob])
+        end
+    end
+    return out
+end
+
 """Scalar analysis orchestrator. Parallelizes Legendre integration over m-modes."""
 function _analysis_scalar_mloop!(alm::AbstractMatrix, cfg::SHTConfig, Fph::AbstractMatrix)
     lmax, mmax = cfg.lmax, cfg.mmax
     scale_phi = cfg.cphi
     m_order = balanced_m_order(mmax)
-    if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+    if has_fused_scalar_tables(cfg)
         _analysis_scalar_mloop_tbl!(alm, cfg, Fph, m_order, scale_phi)
     else
         _analysis_scalar_mloop_otf!(alm, cfg, Fph, m_order, scale_phi)
@@ -341,7 +392,7 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
     nlat, nlon = cfg.nlat, cfg.nlon
     inv_scale_phi = phi_inv_scale(cfg)
     m_order = balanced_m_order(mmax)
-    if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+    if has_fused_scalar_tables(cfg)
         _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi)
     else
         _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi)

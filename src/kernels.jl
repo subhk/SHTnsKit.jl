@@ -100,8 +100,8 @@ end
 # SPHTOR SYNTHESIS KERNELS
 # ============================================================================
 
-"""Sphtor synthesis kernel using precomputed tables. Returns (g_theta, g_phi)."""
-@inline function _sphtor_synthesis_kernel(cfg, Slm, Tlm, tblP, tbld, i, col, m, ltr)
+"""Sphtor synthesis kernel using Nlm-fused tables (`NP = Nlm*P_l^m`, `NdP = Nlm*dP_l^m/dx`)."""
+@inline function _sphtor_synthesis_kernel(cfg, Slm, Tlm, NP, NdP, i, col, m, ltr)
     x = cfg.x[i]
     s_theta = sqrt(max(0.0, 1 - x*x))
     is_pole = s_theta < POLE_TOLERANCE_FACTOR * eps(Float64)
@@ -109,13 +109,13 @@ end
     g_theta = zero(ComplexF64)
     g_phi = zero(ComplexF64)
     @inbounds for l in max(1, m):ltr
-        N = cfg.Nlm[l+1, col]
         if is_pole
+            N = cfg.Nlm[l+1, col]  # pole-safe closed forms still need N explicitly
             dtheta_Y = _dPdtheta_at_pole(l, m, x, N)
             Y_over_s = _P_over_sinth_at_pole(l, m, x, N)
         else
-            dtheta_Y = -s_theta * N * tbld[l+1, i]
-            Y_over_s = N * tblP[l+1, i] * inv_s_theta
+            dtheta_Y = -s_theta * NdP[l+1, i]
+            Y_over_s = NP[l+1, i] * inv_s_theta
         end
         Sl = Slm[l+1, col]; Tl = Tlm[l+1, col]
         g_theta += dtheta_Y * Sl - 1.0im * m * Y_over_s * Tl
@@ -144,20 +144,20 @@ end
 # SPHTOR ANALYSIS KERNELS
 # ============================================================================
 
-"""Sphtor analysis kernel using precomputed tables. Accumulates into Sacc, Tacc."""
-@inline function _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi, tblP, tbld, i, col, m, ltr, scale_phi)
+"""Sphtor analysis kernel using Nlm-fused tables. Accumulates into Sacc, Tacc."""
+@inline function _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi, NP, NdP, i, col, m, ltr, scale_phi)
     x = cfg.x[i]
     s_theta = sqrt(max(0.0, 1 - x*x))
     is_pole = s_theta < POLE_TOLERANCE_FACTOR * eps(Float64)
     inv_s_theta = is_pole ? 0.0 : 1.0 / s_theta
     @inbounds for l in max(1, m):ltr
-        N = cfg.Nlm[l+1, col]
         if is_pole
+            N = cfg.Nlm[l+1, col]
             dtheta_Y = _dPdtheta_at_pole(l, m, x, N)
             Y_over_s = _P_over_sinth_at_pole(l, m, x, N)
         else
-            dtheta_Y = -s_theta * N * tbld[l+1, i]
-            Y_over_s = N * tblP[l+1, i] * inv_s_theta
+            dtheta_Y = -s_theta * NdP[l+1, i]
+            Y_over_s = NP[l+1, i] * inv_s_theta
         end
         coeff = wi * scale_phi / (l * (l + 1))
         term = 1.0im * m * Y_over_s

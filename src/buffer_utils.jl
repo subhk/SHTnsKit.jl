@@ -47,6 +47,24 @@ Safe to call repeatedly; resizes only when maxthreadid() increases.
 end
 
 """
+    warmup!(cfg::SHTConfig) -> cfg
+
+Eagerly populate every lazily-built cache on `cfg` up to the current
+`Threads.maxthreadid()`. After this call the hot-path transforms are guaranteed
+to hit cached data and will not allocate to initialise scratch buffers,
+normalization matrices, or per-thread OTF Legendre storage. Call once after
+config construction in multi-threaded workflows to avoid first-iteration
+surprises and the (benign) races on concurrent first-touch lazy init.
+"""
+function warmup!(cfg::SHTConfig)
+    _ensure_otf_scratch!(cfg._otf_scratch_P, cfg.lmax)
+    _ensure_otf_scratch!(cfg._otf_scratch_dP, cfg.lmax)
+    _ensure_otf_scratch!(cfg._otf_scratch_Ps, cfg.lmax)
+    _ensure_norm_scale_matrix!(cfg)
+    return cfg
+end
+
+"""
     allocate_spectral_pair(template1, template2) -> (buf1, buf2)
 
 Allocate a pair of spectral coefficient buffers based on template arrays.

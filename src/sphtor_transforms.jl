@@ -227,7 +227,7 @@ function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
     nlon = cfg.nlon
     ltr_eff = min(ltr, lmax)
     inv_scale_phi = phi_inv_scale(cfg)
-    m_order = balanced_m_order(mmax)
+    m_order = cached_m_order(cfg)
 
     if has_fused_vector_tables(cfg)
         _synthesis_sphtor_mloop_tbl!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
@@ -290,7 +290,7 @@ function _analysis_sphtor_mloop!(Slm::AbstractMatrix, Tlm::AbstractMatrix,
     lmax, mmax = cfg.lmax, cfg.mmax
     ltr_eff = min(ltr, lmax)
     scale_phi = cfg.cphi
-    m_order = balanced_m_order(mmax)
+    m_order = cached_m_order(cfg)
 
     if has_fused_vector_tables(cfg)
         _analysis_sphtor_mloop_tbl!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)

@@ -277,6 +277,191 @@ function test_vector_and_enstrophy_spectra(cfg, pen)
     return (sum(Ev_l), sum(En_l))
 end
 
+# ======================= PENCIL-FORM ROTATIONS =======================
+
+function test_pencil_euler_rotation(cfg, pen)
+    root_println("  Testing dist_SH_rotate_euler (ZYZ) on PencilArray ...")
+    alm = _make_random_alm(cfg, 1600)
+    Ap = _fill_spec_pencil(cfg, alm)
+    Rp = PencilArray{ComplexF64}(undef, pencil(Ap))
+
+    α, β, γ = 0.3, 0.7, -0.4
+    SHTnsKit.dist_SH_rotate_euler(cfg, Ap, α, β, γ, Rp)
+
+    # Inverse rotation: R(-γ, -β, -α) should recover Ap
+    Bp = PencilArray{ComplexF64}(undef, pencil(Ap))
+    SHTnsKit.dist_SH_rotate_euler(cfg, Rp, -γ, -β, -α, Bp)
+
+    # Gather Bp → matrix, compare to alm
+    lmax, mmax = cfg.lmax, cfg.mmax
+    recovered = zeros(ComplexF64, lmax + 1, mmax + 1)
+    for (ii, il) in enumerate(axes(Bp, 1)), (jj, jm) in enumerate(axes(Bp, 2))
+        lval = ParExt.globalindices(Bp, 1)[ii] - 1
+        mval = ParExt.globalindices(Bp, 2)[jj] - 1
+        if lval >= mval && mval <= mmax && lval <= lmax
+            recovered[lval + 1, mval + 1] = Bp[il, jm]
+        end
+    end
+    MPI.Allreduce!(recovered, +, communicator(Bp))
+
+    if rank == 0
+        err = maximum(abs.(recovered .- alm))
+        @test err < 1e-8
+    end
+    return true
+end
+
+function test_pencil_y_rotation(cfg, pen)
+    root_println("  Testing dist_SH_Yrotate / dist_SH_Yrotate90 on PencilArray ...")
+    alm = _make_random_alm(cfg, 1601)
+    Ap = _fill_spec_pencil(cfg, alm)
+    Rp = PencilArray{ComplexF64}(undef, pencil(Ap))
+
+    # Four successive Y90 rotations = identity
+    SHTnsKit.dist_SH_Yrotate90(cfg, Ap, Rp)
+    tmp = PencilArray{ComplexF64}(undef, pencil(Ap))
+    SHTnsKit.dist_SH_Yrotate90(cfg, Rp, tmp)
+    SHTnsKit.dist_SH_Yrotate90(cfg, tmp, Rp)
+    SHTnsKit.dist_SH_Yrotate90(cfg, Rp, tmp)
+
+    lmax, mmax = cfg.lmax, cfg.mmax
+    recovered = zeros(ComplexF64, lmax + 1, mmax + 1)
+    for (ii, il) in enumerate(axes(tmp, 1)), (jj, jm) in enumerate(axes(tmp, 2))
+        lval = ParExt.globalindices(tmp, 1)[ii] - 1
+        mval = ParExt.globalindices(tmp, 2)[jj] - 1
+        if lval >= mval && mval <= mmax && lval <= lmax
+            recovered[lval + 1, mval + 1] = tmp[il, jm]
+        end
+    end
+    MPI.Allreduce!(recovered, +, communicator(tmp))
+
+    if rank == 0
+        err = maximum(abs.(recovered .- alm))
+        @test err < 1e-7
+    end
+    return true
+end
+
+# ======================= IN-PLACE QST / LAPLACIAN =======================
+
+function test_dist_analysis_synthesis_qst_inplace(cfg, pen)
+    root_println("  Testing dist_analysis_qst! / dist_synthesis_qst! ...")
+    lmax, mmax = cfg.lmax, cfg.mmax
+
+    Q = _make_random_alm(cfg, 1700)
+    S = _make_random_alm(cfg, 1701); S[1, 1] = 0
+    T = _make_random_alm(cfg, 1702); T[1, 1] = 0
+
+    # Build spatial fields via serial synthesis_qst
+    Vr_full, Vt_full, Vp_full = SHTnsKit.synthesis_qst(cfg, Q, S, T; real_output=true)
+    ranges = PencilArrays.range_local(pen)
+    θr, φr = ranges[1], ranges[2]
+    Vr_loc = zeros(PencilArrays.size_local(pen)...)
+    Vt_loc = similar(Vr_loc); Vp_loc = similar(Vr_loc)
+    for (il, ig) in enumerate(θr), (jl, jg) in enumerate(φr)
+        Vr_loc[il, jl] = Vr_full[ig, jg]
+        Vt_loc[il, jl] = Vt_full[ig, jg]
+        Vp_loc[il, jl] = Vp_full[ig, jg]
+    end
+    Vr = PencilArray(pen, Vr_loc); Vt = PencilArray(pen, Vt_loc); Vp = PencilArray(pen, Vp_loc)
+
+    plan = ParExt.DistQstPlan(cfg, Vr)
+    Q_out = zeros(ComplexF64, lmax + 1, mmax + 1)
+    S_out = zeros(ComplexF64, lmax + 1, mmax + 1)
+    T_out = zeros(ComplexF64, lmax + 1, mmax + 1)
+    SHTnsKit.dist_analysis_qst!(plan, Q_out, S_out, T_out, Vr, Vt, Vp)
+
+    if rank == 0
+        @test isapprox(Q_out, Q; rtol=1e-8, atol=1e-10)
+        @test isapprox(S_out, S; rtol=1e-8, atol=1e-10)
+        @test isapprox(T_out, T; rtol=1e-8, atol=1e-10)
+    end
+    return true
+end
+
+function test_dist_scalar_laplacian_inplace(cfg, pen)
+    root_println("  Testing dist_scalar_laplacian! (in-place) ...")
+    alm = _make_random_alm(cfg, 1800)
+    Ap = _fill_spec_pencil(cfg, alm)
+
+    # Apply Laplacian in-place via dist_scalar_laplacian! on a spectral pencil
+    Out = PencilArray{ComplexF64}(undef, pencil(Ap))
+    SHTnsKit.dist_scalar_laplacian!(cfg, Out, Ap)
+
+    # Verify each (l,m) scaled by -l(l+1)
+    local_err = 0.0
+    for (ii, il) in enumerate(axes(Out, 1)), (jj, jm) in enumerate(axes(Out, 2))
+        lval = ParExt.globalindices(Out, 1)[ii] - 1
+        mval = ParExt.globalindices(Out, 2)[jj] - 1
+        if lval >= mval && mval <= cfg.mmax && lval <= cfg.lmax
+            expected = -lval * (lval + 1) * alm[lval + 1, mval + 1]
+            local_err = max(local_err, abs(Out[il, jm] - expected))
+        end
+    end
+    global_err = MPI.Allreduce(local_err, MPI.MAX, comm)
+    if rank == 0
+        @test global_err < 1e-10
+    end
+    return global_err
+end
+
+# ======================= Y-ROTATION IMPLEMENTATION VARIANTS =======================
+
+function test_yrotate_allgatherm_vs_truncgatherm(cfg, pen)
+    root_println("  Testing dist_SH_Yrotate_allgatherm! vs dist_SH_Yrotate_truncgatherm! ...")
+    alm = _make_random_alm(cfg, 1900)
+    Ap = _fill_spec_pencil(cfg, alm)
+    R_all = PencilArray{ComplexF64}(undef, pencil(Ap))
+    R_trunc = PencilArray{ComplexF64}(undef, pencil(Ap))
+
+    β = 0.7
+    SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg, Ap, β, R_all)
+    SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg, Ap, β, R_trunc)
+
+    # Both strategies must produce bit-close spectral results
+    local_err = 0.0
+    for (ii, il) in enumerate(axes(R_all, 1)), (jj, jm) in enumerate(axes(R_all, 2))
+        local_err = max(local_err, abs(R_all[il, jm] - R_trunc[il, jm]))
+    end
+    global_err = MPI.Allreduce(local_err, MPI.MAX, comm)
+    if rank == 0
+        @test global_err < 1e-10
+    end
+    return global_err
+end
+
+# ======================= ANALYSIS STRATEGY VARIANTS =======================
+
+function test_analysis_strategy_variants(cfg, pen)
+    root_println("  Testing dist_analysis_standard / _cache_blocked / _fused_cache_blocked ...")
+    alm = _make_random_alm(cfg, 2000)
+    f_full = SHTnsKit.synthesis(cfg, alm; real_output=true)
+
+    # Distribute to pencil
+    ranges = PencilArrays.range_local(pen)
+    θr, φr = ranges[1], ranges[2]
+    floc = zeros(Float64, PencilArrays.size_local(pen)...)
+    for (il, ig) in enumerate(θr), (jl, jg) in enumerate(φr)
+        floc[il, jl] = f_full[ig, jg]
+    end
+    f_pa = PencilArray(pen, floc)
+
+    # Reference via public dist_analysis
+    A_ref = SHTnsKit.dist_analysis(cfg, f_pa)
+
+    # Each internal strategy should produce identical results
+    A_std = ParExt.dist_analysis_standard(cfg, f_pa)
+    A_cb  = ParExt.dist_analysis_cache_blocked(cfg, f_pa)
+    A_fcb = ParExt.dist_analysis_fused_cache_blocked(cfg, f_pa)
+
+    if rank == 0
+        @test isapprox(A_std, A_ref; rtol=1e-12, atol=1e-14)
+        @test isapprox(A_cb,  A_ref; rtol=1e-12, atol=1e-14)
+        @test isapprox(A_fcb, A_ref; rtol=1e-12, atol=1e-14)
+    end
+    return true
+end
+
 # ======================= LAPLACIAN / SH_MUL_MX =======================
 
 function test_dist_apply_laplacian(cfg, pen)
@@ -344,6 +529,12 @@ function run_extended_tests(lmax::Int, nlat::Int, nlon::Int)
         ("Vector + enstrophy spectra",  () -> test_vector_and_enstrophy_spectra(cfg, pen)),
         ("dist_apply_laplacian!",       () -> test_dist_apply_laplacian(cfg, pen)),
         ("dist_SH_mul_mx! identity",    () -> test_dist_SH_mul_mx_identity(cfg, pen)),
+        ("Pencil Euler rotation",       () -> test_pencil_euler_rotation(cfg, pen)),
+        ("Pencil Y90 four-fold",        () -> test_pencil_y_rotation(cfg, pen)),
+        ("dist_analysis_qst! in-place", () -> test_dist_analysis_synthesis_qst_inplace(cfg, pen)),
+        ("dist_scalar_laplacian!",      () -> test_dist_scalar_laplacian_inplace(cfg, pen)),
+        ("Y-rotate gather variants",    () -> test_yrotate_allgatherm_vs_truncgatherm(cfg, pen)),
+        ("Analysis strategy variants",  () -> test_analysis_strategy_variants(cfg, pen)),
     ]
 
     for (name, f) in specs

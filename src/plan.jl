@@ -214,75 +214,66 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
     fill!(Slm_out, zero(eltype(Slm_out))); fill!(Tlm_out, zero(eltype(Tlm_out)))
-    # First pass: FFT(Vt) -> partial contributions using Fθ only
-    @inbounds for i in 1:nlat, j in 1:nlon
-        plan.Fθk[i,j] = Vt[i,j]
-    end
-    
-    # Robert form: divide by sinθ before analysis
-    if cfg.robert_form
-        @inbounds for i in 1:nlat
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
-            if sθ > 0
-                plan.Fθk[i, :] ./= sθ
+
+    # Two passes over (Vt, Vp): each packs the component into a real/complex
+    # FFT buffer, applies Robert form if needed, transforms to k-space, then
+    # adds that component's contribution to Slm/Tlm. Both buffers have bins
+    # 0..mmax at positions 1..mmax+1 in the FFT output — identical indexing
+    # between complex and rfft paths so the kernel needs no change.
+    for pass in 1:2
+        V = pass == 1 ? Vt : Vp
+        if plan.use_rfft
+            eltype(V) <: Real || throw(ArgumentError("use_rfft plan requires real-valued Vt/Vp"))
+            @inbounds for i in 1:nlat, j in 1:nlon
+                plan.real_scratch[i,j] = V[i,j]
             end
-        end
-    end
-    
-    plan.fft_plan * plan.Fθk
-
-    for m in 0:mmax
-        col = m + 1
-        for i in 1:nlat
-            # Use pole-safe functions
-            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
-            fourier_coeff_θ = plan.Fθk[i, col]
-            quad_weight = cfg.w[i]
-            @inbounds for l in max(1,m):lmax
-                norm_factor = cfg.Nlm[l+1, col]
-                legendre_deriv = norm_factor * plan.dPdtheta[l+1]
-                legendre_poly = norm_factor * plan.P[l+1]
-                legendre_over_sinθ = norm_factor * plan.P_over_sinth[l+1]
-                weight_coeff = quad_weight * scaleφ / (l*(l+1))
-                # From synthesis Vθ = dθY*S - (im*m/sinθ)*T, the adjoint contribution
-                # from Vθ to T is conj(-(im*m/sinθ)) = +(im*m/sinθ)
-                Tlm_out[l+1, col] += weight_coeff * (1.0im * m * legendre_over_sinθ * fourier_coeff_θ)
-                Slm_out[l+1, col] += weight_coeff * (fourier_coeff_θ * legendre_deriv)
+            if cfg.robert_form
+                @inbounds for i in 1:nlat
+                    sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
+                    if sθ > 0
+                        plan.real_scratch[i, :] ./= sθ
+                    end
+                end
             end
-        end
-    end
-
-    # Second pass: FFT(Vp) -> add remaining contributions using Fφ
-    @inbounds for i in 1:nlat, j in 1:nlon
-        plan.Fθk[i,j] = Vp[i,j]
-    end
-    if cfg.robert_form
-        @inbounds for i in 1:nlat
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
-            if sθ > 0
-                plan.Fθk[i, :] ./= sθ
+            mul!(plan.Fθk_r, plan.rfft_plan, plan.real_scratch)
+            Fbuf = plan.Fθk_r
+        else
+            @inbounds for i in 1:nlat, j in 1:nlon
+                plan.Fθk[i,j] = V[i,j]
             end
+            if cfg.robert_form
+                @inbounds for i in 1:nlat
+                    sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
+                    if sθ > 0
+                        plan.Fθk[i, :] ./= sθ
+                    end
+                end
+            end
+            plan.fft_plan * plan.Fθk
+            Fbuf = plan.Fθk
         end
-    end
 
-    plan.fft_plan * plan.Fθk
-
-    for m in 0:mmax
-        col = m + 1
-        for i in 1:nlat
-            # Use pole-safe functions
-            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
-            fourier_coeff_φ = plan.Fθk[i, col]
-            quad_weight = cfg.w[i]
-            @inbounds for l in max(1,m):lmax
-                norm_factor = cfg.Nlm[l+1, col]
-                legendre_deriv = norm_factor * plan.dPdtheta[l+1]
-                legendre_poly = norm_factor * plan.P[l+1]
-                legendre_over_sinθ = norm_factor * plan.P_over_sinth[l+1]
-                weight_coeff = quad_weight * scaleφ / (l*(l+1))
-                # Adjoint: S gets -term*Vφ, T gets +dθY*Vφ
-                Slm_out[l+1, col] += -weight_coeff * (1.0im * m * legendre_over_sinθ * fourier_coeff_φ)
-                Tlm_out[l+1, col] += weight_coeff * (fourier_coeff_φ * legendre_deriv)
+        for m in 0:mmax
+            col = m + 1
+            for i in 1:nlat
+                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
+                fourier_coeff = Fbuf[i, col]
+                quad_weight = cfg.w[i]
+                @inbounds for l in max(1,m):lmax
+                    norm_factor = cfg.Nlm[l+1, col]
+                    legendre_deriv = norm_factor * plan.dPdtheta[l+1]
+                    legendre_over_sinθ = norm_factor * plan.P_over_sinth[l+1]
+                    weight_coeff = quad_weight * scaleφ / (l*(l+1))
+                    if pass == 1
+                        # From Vθ: S gets +dθY*Vθ, T gets +(im*m/sinθ)*Vθ
+                        Tlm_out[l+1, col] += weight_coeff * (1.0im * m * legendre_over_sinθ * fourier_coeff)
+                        Slm_out[l+1, col] += weight_coeff * (fourier_coeff * legendre_deriv)
+                    else
+                        # From Vφ: S gets -(im*m/sinθ)*Vφ, T gets +dθY*Vφ
+                        Slm_out[l+1, col] += -weight_coeff * (1.0im * m * legendre_over_sinθ * fourier_coeff)
+                        Tlm_out[l+1, col] += weight_coeff * (fourier_coeff * legendre_deriv)
+                    end
+                end
             end
         end
     end
@@ -321,119 +312,94 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
         Slm_int = plan.norm_tmp1; Tlm_int = plan.norm_tmp2
     end
     
-    # Synthesize Vt: stream m→k then inverse FFT
-    fill!(plan.Fθk, zero(eltype(plan.Fθk)))
-    for m in 0:mmax
-        col = m + 1
-        for i in 1:nlat
-            # Use pole-safe functions
-            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
-            g = zero(ComplexF64)
-            @inbounds for l in max(1,m):lmax
-                N = cfg.Nlm[l+1, col]
-                dθY = N * plan.dPdtheta[l+1]
-                Y = N * plan.P[l+1]
-                Y_over_sθ = N * plan.P_over_sinth[l+1]
-                # Vθ = ∂S/∂θ - (im/sinθ) * T
-                g += dθY * Slm_int[l+1, col] - 1.0im * m * Y_over_sθ * Tlm_int[l+1, col]
-            end
-            plan.G[i] = g
-        end
-
-        @inbounds for i in 1:nlat
-            plan.Fθk[i, col] = inv_scaleφ * plan.G[i]
-        end
-
-        if real_output && m > 0
-            conj_index = nlon - m + 1
-            @inbounds for i in 1:nlat
-                plan.Fθk[i, conj_index] = conj(plan.Fθk[i, col])
-            end
-        end
+    # Two sibling passes: build Vt's Fourier buffer then Vp's, each with its
+    # own m-loop formula. rfft path writes to the half-spectrum buffer and uses
+    # irfft directly; complex path mirrors negative-m via Hermitian fill.
+    if plan.use_rfft
+        real_output || throw(ArgumentError("synthesis_sphtor! with use_rfft plan requires real_output=true"))
+        eltype(Vt_out) <: Real && eltype(Vp_out) <: Real ||
+            throw(ArgumentError("use_rfft plan requires real-valued Vt_out, Vp_out"))
     end
 
-    if plan.use_rfft && real_output
-        Vt_tmp = FFTW.irfft(plan.Fθk, nlon, 2)
-        @inbounds for i in 1:nlat, j in 1:nlon
-            plan.Fθk[i,j] = Vt_tmp[i,j]
+    for pass in 1:2
+        if plan.use_rfft
+            fill!(plan.Fθk_r, zero(eltype(plan.Fθk_r)))
+        else
+            fill!(plan.Fθk, zero(eltype(plan.Fθk)))
         end
-    else
-        plan.ifft_plan * plan.Fθk
-    end
 
-    if cfg.robert_form
-        @inbounds for i in 1:nlat
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
-            for j in 1:nlon
-                plan.Fθk[i,j] *= sθ
+        for m in 0:mmax
+            col = m + 1
+            for i in 1:nlat
+                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
+                g = zero(ComplexF64)
+                @inbounds for l in max(1,m):lmax
+                    N = cfg.Nlm[l+1, col]
+                    dθY = N * plan.dPdtheta[l+1]
+                    Y_over_sθ = N * plan.P_over_sinth[l+1]
+                    Sl = Slm_int[l+1, col]; Tl = Tlm_int[l+1, col]
+                    if pass == 1
+                        # Vθ = ∂S/∂θ - (im/sinθ) * T
+                        g += dθY * Sl - 1.0im * m * Y_over_sθ * Tl
+                    else
+                        # Vφ = (im/sinθ) * S + ∂T/∂θ
+                        g += 1.0im * m * Y_over_sθ * Sl + dθY * Tl
+                    end
+                end
+                plan.G[i] = g
             end
-        end
-    end
 
-    if real_output
-        @inbounds for i in 1:nlat, j in 1:nlon
-            Vt_out[i,j] = real(plan.Fθk[i,j])
+            if plan.use_rfft
+                @inbounds for i in 1:nlat
+                    plan.Fθk_r[i, col] = inv_scaleφ * plan.G[i]
+                end
+            else
+                @inbounds for i in 1:nlat
+                    plan.Fθk[i, col] = inv_scaleφ * plan.G[i]
+                end
+                if real_output && m > 0
+                    conj_index = nlon - m + 1
+                    @inbounds for i in 1:nlat
+                        plan.Fθk[i, conj_index] = conj(plan.Fθk[i, col])
+                    end
+                end
+            end
         end
-    else
-        @inbounds for i in 1:nlat, j in 1:nlon
-            Vt_out[i,j] = plan.Fθk[i,j]
-        end
-    end
 
-    # Synthesize Vp similarly
-    fill!(plan.Fθk, zero(eltype(plan.Fθk)))
-    for m in 0:mmax
-        col = m + 1
-        for i in 1:nlat
-            # Use pole-safe functions
-            Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
-            g = zero(ComplexF64)
-            @inbounds for l in max(1,m):lmax
-                N = cfg.Nlm[l+1, col]
-                dθY = N * plan.dPdtheta[l+1]
-                Y = N * plan.P[l+1]
-                Y_over_sθ = N * plan.P_over_sinth[l+1]
-                # Vφ = (im/sinθ) * S + ∂T/∂θ
-                g += 1.0im * m * Y_over_sθ * Slm_int[l+1, col] + dθY * Tlm_int[l+1, col]
+        V_target = pass == 1 ? Vt_out : Vp_out
+
+        if plan.use_rfft
+            mul!(plan.real_scratch, plan.irfft_plan, plan.Fθk_r)
+            if cfg.robert_form
+                @inbounds for i in 1:nlat
+                    sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
+                    for j in 1:nlon
+                        plan.real_scratch[i,j] *= sθ
+                    end
+                end
             end
-            plan.G[i] = g
-        end
-        @inbounds for i in 1:nlat
-            plan.Fθk[i, col] = inv_scaleφ * plan.G[i]
-        end
-        if real_output && m > 0
-            conj_index = nlon - m + 1
-            @inbounds for i in 1:nlat
-                plan.Fθk[i, conj_index] = conj(plan.Fθk[i, col])
+            @inbounds for i in 1:nlat, j in 1:nlon
+                V_target[i,j] = plan.real_scratch[i,j]
             end
-        end
-    end
-    
-    if plan.use_rfft && real_output
-        Vt_tmp = FFTW.irfft(plan.Fθk, nlon, 2)
-        @inbounds for i in 1:nlat, j in 1:nlon
-            plan.Fθk[i,j] = Vt_tmp[i,j]
-        end
-    else
-        plan.ifft_plan * plan.Fθk
-    end
-    
-    if cfg.robert_form
-        @inbounds for i in 1:nlat
-            sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
-            for j in 1:nlon
-                plan.Fθk[i,j] *= sθ
+        else
+            plan.ifft_plan * plan.Fθk
+            if cfg.robert_form
+                @inbounds for i in 1:nlat
+                    sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
+                    for j in 1:nlon
+                        plan.Fθk[i,j] *= sθ
+                    end
+                end
             end
-        end
-    end
-    
-    if real_output
-        @inbounds for i in 1:nlat, j in 1:nlon
-            Vp_out[i,j] = real(plan.Fθk[i,j])
-        end
-    else
-        @inbounds for i in 1:nlat, j in 1:nlon
-            Vp_out[i,j] = plan.Fθk[i,j]
+            if real_output
+                @inbounds for i in 1:nlat, j in 1:nlon
+                    V_target[i,j] = real(plan.Fθk[i,j])
+                end
+            else
+                @inbounds for i in 1:nlat, j in 1:nlon
+                    V_target[i,j] = plan.Fθk[i,j]
+                end
+            end
         end
     end
     return Vt_out, Vp_out

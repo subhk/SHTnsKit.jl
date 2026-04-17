@@ -347,7 +347,7 @@ end
 function _analysis_scalar_mloop!(alm::AbstractMatrix, cfg::SHTConfig, Fph::AbstractMatrix)
     lmax, mmax = cfg.lmax, cfg.mmax
     scale_phi = cfg.cphi
-    m_order = balanced_m_order(mmax)
+    m_order = cached_m_order(cfg)
     if has_fused_scalar_tables(cfg)
         _analysis_scalar_mloop_tbl!(alm, cfg, Fph, m_order, scale_phi)
     else
@@ -391,7 +391,7 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat, nlon = cfg.nlat, cfg.nlon
     inv_scale_phi = phi_inv_scale(cfg)
-    m_order = balanced_m_order(mmax)
+    m_order = cached_m_order(cfg)
     if has_fused_scalar_tables(cfg)
         _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi)
     else

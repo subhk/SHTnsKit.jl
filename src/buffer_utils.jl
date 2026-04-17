@@ -23,24 +23,46 @@ function balanced_m_order(mmax::Int)
 end
 
 """
+    cached_m_order(cfg::SHTConfig) -> Vector{Int}
+
+Return the cfg's cached balanced m-ordering, building it on first use. Callers
+should not mutate the returned vector.
+"""
+@inline function cached_m_order(cfg)
+    if length(cfg._m_order) != cfg.mmax + 1
+        cfg._m_order = balanced_m_order(cfg.mmax)
+    end
+    return cfg._m_order
+end
+
+"""
     _ensure_otf_scratch!(buffers::Vector{Vector{Float64}}, lmax::Int) -> Vector
 
 Lazily grow `buffers` so it has `Threads.maxthreadid()` entries, each length
 `lmax + 1`. Caller holds `buffers` across calls to skip per-call allocation.
 Safe to call repeatedly; resizes only when maxthreadid() increases.
 """
+const _OTF_SCRATCH_LOCK = Threads.ReentrantLock()
+
 @inline function _ensure_otf_scratch!(buffers::Vector{Vector{Float64}}, lmax::Int)
+    # Fast path: common case, no resize needed — read-only check avoids lock
+    # on every transform call. Only lock when we actually have to mutate.
     n = Threads.maxthreadid()
     cur = length(buffers)
-    if cur < n
-        resize!(buffers, n)
-        @inbounds for i in (cur + 1):n
-            buffers[i] = Vector{Float64}(undef, lmax + 1)
-        end
-    elseif cur > 0 && length(buffers[1]) != lmax + 1
-        # lmax grew (shouldn't in practice) — rebuild.
-        @inbounds for i in 1:n
-            buffers[i] = Vector{Float64}(undef, lmax + 1)
+    if cur >= n && (cur == 0 || length(buffers[1]) == lmax + 1)
+        return buffers
+    end
+    lock(_OTF_SCRATCH_LOCK) do
+        cur2 = length(buffers)
+        if cur2 < n
+            resize!(buffers, n)
+            @inbounds for i in (cur2 + 1):n
+                buffers[i] = Vector{Float64}(undef, lmax + 1)
+            end
+        elseif cur2 > 0 && length(buffers[1]) != lmax + 1
+            @inbounds for i in 1:n
+                buffers[i] = Vector{Float64}(undef, lmax + 1)
+            end
         end
     end
     return buffers
@@ -61,6 +83,7 @@ function warmup!(cfg::SHTConfig)
     _ensure_otf_scratch!(cfg._otf_scratch_dP, cfg.lmax)
     _ensure_otf_scratch!(cfg._otf_scratch_Ps, cfg.lmax)
     _ensure_norm_scale_matrix!(cfg)
+    cached_m_order(cfg)
     return cfg
 end
 

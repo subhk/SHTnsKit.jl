@@ -171,6 +171,8 @@ Base.@kwdef mutable struct SHTConfig
     _otf_scratch_P::Vector{Vector{Float64}} = Vector{Float64}[]
     _otf_scratch_dP::Vector{Vector{Float64}} = Vector{Float64}[]
     _otf_scratch_Ps::Vector{Vector{Float64}} = Vector{Float64}[]
+    # Cached balanced m-ordering for @threads :static chunking (alloc once per cfg).
+    _m_order::Vector{Int} = Int[]
 
     # Batch transform configuration (for processing multiple fields simultaneously)
     howmany::Int = 1                                          # Number of fields to process in batch

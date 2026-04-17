@@ -121,9 +121,10 @@ end
         @test a1 == a3
     end
 
-    @testset "Concurrent unrelated configs don't interfere" begin
-        # Two different configs used in parallel tasks. Each task must produce the
-        # same result as its serial counterpart.
+    @testset "Sequential unrelated configs don't interfere" begin
+        # `analysis` itself uses `@threads :static` internally, which disallows
+        # nesting inside another task. This test verifies that switching cfg
+        # between calls doesn't leak state — not concurrent safety.
         lmax_a, lmax_b = 5, 7
         cfg_a = create_gauss_config(lmax_a, lmax_a + 2; nlon=2*lmax_a + 1)
         cfg_b = create_gauss_config(lmax_b, lmax_b + 2; nlon=2*lmax_b + 1)
@@ -134,15 +135,14 @@ end
 
         ref_a = analysis(cfg_a, f_a)
         ref_b = analysis(cfg_b, f_b)
+        # Interleave calls, expect identical results to the references
+        got_a = analysis(cfg_a, f_a)
+        got_b = analysis(cfg_b, f_b)
+        got_a2 = analysis(cfg_a, f_a)
 
-        results = Vector{Any}(undef, 2)
-        @sync begin
-            Threads.@spawn results[1] = analysis(cfg_a, f_a)
-            Threads.@spawn results[2] = analysis(cfg_b, f_b)
-        end
-
-        @test isapprox(results[1], ref_a; rtol=1e-12, atol=1e-14)
-        @test isapprox(results[2], ref_b; rtol=1e-12, atol=1e-14)
+        @test got_a == ref_a
+        @test got_b == ref_b
+        @test got_a2 == ref_a
     end
 
     @testset "Per-thread sphtor plan: concurrent vector synthesis" begin

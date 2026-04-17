@@ -20,12 +20,12 @@ orchestrator's loop without function-call overhead.
 # SCALAR ANALYSIS KERNELS
 # ============================================================================
 
-"""Scalar analysis kernel using precomputed Legendre tables."""
-@inline function _scalar_analysis_kernel!(alm, cfg, Fph, tbl, i, col, m, lmax, scale_phi)
+"""Scalar analysis kernel using Nlm-fused tables (`NP[l+1, i] = Nlm * P_l^m`)."""
+@inline function _scalar_analysis_kernel!(alm, cfg, Fph, NP, i, col, m, lmax, scale_phi)
     Fi = Fph[i, col]
     wi = cfg.w[i]
     @inbounds for l in m:lmax
-        alm[l+1, col] += (wi * cfg.Nlm[l+1, col] * tbl[l+1, i] * scale_phi) * Fi
+        alm[l+1, col] += (wi * NP[l+1, i] * scale_phi) * Fi
     end
 end
 
@@ -43,11 +43,11 @@ end
 # SCALAR SYNTHESIS KERNELS
 # ============================================================================
 
-"""Scalar synthesis kernel using precomputed Legendre tables. Returns accumulated value."""
-@inline function _scalar_synthesis_kernel(cfg, alm, tbl, i, col, m, lmax)
+"""Scalar synthesis kernel using Nlm-fused tables (`NP[l+1, i] = Nlm * P_l^m`)."""
+@inline function _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, lmax)
     acc = zero(eltype(alm))
     @inbounds for l in m:lmax
-        acc += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm[l+1, col]
+        acc += NP[l+1, i] * alm[l+1, col]
     end
     return acc
 end

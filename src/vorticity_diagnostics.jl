@@ -69,7 +69,7 @@ Z = (1/2) ∫ ζ² dΩ using Gauss-Legendre integration.
 """
 function grid_enstrophy(cfg::SHTConfig, ζ::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat = cfg.wlat  # Gauss-Legendre weights
+    wlat = cfg.w  # Gauss-Legendre weights
     
     Z = 0.0
     for j in 1:nlon, i in 1:nlat
@@ -105,7 +105,7 @@ Returns ∂Z/∂ζ for each grid point.
 """
 function grad_grid_enstrophy_zeta(cfg::SHTConfig, ζ::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat = cfg.wlat
+    wlat = cfg.w
     scale = (2π / nlon)
     
     grad = similar(ζ)

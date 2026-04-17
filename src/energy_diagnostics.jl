@@ -120,7 +120,7 @@ Uses Gauss-Legendre quadrature for accurate integration.
 """
 function grid_energy_scalar(cfg::SHTConfig, f::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat = cfg.wlat  # Gauss-Legendre weights
+    wlat = cfg.w  # Gauss-Legendre weights
     
     E = 0.0
     for j in 1:nlon, i in 1:nlat
@@ -136,7 +136,7 @@ Compute kinetic energy of a vector field from its θ and φ components.
 """
 function grid_energy_vector(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat = cfg.wlat
+    wlat = cfg.w
     
     E = 0.0
     for j in 1:nlon, i in 1:nlat
@@ -218,7 +218,7 @@ Compute gradient of grid-based scalar energy with respect to spatial field value
 """
 function grad_grid_energy_scalar_field(cfg::SHTConfig, f::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat = cfg.wlat
+    wlat = cfg.w
     scale = (2π / nlon)
     
     grad = similar(f)
@@ -235,7 +235,7 @@ Compute gradients of grid-based vector energy with respect to vector components.
 """
 function grad_grid_energy_vector_fields(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     nlat, nlon = cfg.nlat, cfg.nlon
-    wlat = cfg.wlat
+    wlat = cfg.w
     scale = (2π / nlon)
     
     grad_Vt, grad_Vp = allocate_spatial_pair(Vt, Vp)

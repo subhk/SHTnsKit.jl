@@ -7,6 +7,22 @@ and provide consistent, optimized buffer management.
 """
 
 """
+    balanced_m_order(mmax::Int) -> Vector{Int}
+
+Interleave (0, mmax, 1, mmax-1, …) so contiguous `@threads :static` chunks
+receive roughly equal total work when inner work per m is (lmax - m + 1).
+Returns a length-(mmax+1) vector of m values.
+"""
+function balanced_m_order(mmax::Int)
+    n = mmax + 1
+    order = Vector{Int}(undef, n)
+    @inbounds for i in 0:mmax
+        order[i+1] = iseven(i) ? div(i, 2) : mmax - div(i, 2)
+    end
+    return order
+end
+
+"""
     allocate_spectral_pair(template1, template2) -> (buf1, buf2)
 
 Allocate a pair of spectral coefficient buffers based on template arrays.

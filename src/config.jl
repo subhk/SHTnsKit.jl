@@ -157,6 +157,9 @@ Base.@kwdef mutable struct SHTConfig
     device_preference::Vector{Symbol} = [:cpu]               # Preferred device order
     plm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]   # P_l^m values: [m+1][l+1, lat_idx]
     dplm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]  # dP_l^m/dx values: [m+1][l+1, lat_idx]
+    # Pre-fused Nlm × P_l^m(x_i) tables: NP_tables[m+1][l+1, lat_idx].
+    # Built by prepare_plm_tables! so scalar kernels can skip the Nlm multiply.
+    NP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]
 
     # Batch transform configuration (for processing multiple fields simultaneously)
     howmany::Int = 1                                          # Number of fields to process in batch
@@ -180,12 +183,24 @@ end
 #   sintheta → use st     (sin(θ) values)
 # Property forwarding preserves backward compatibility so cfg.wlat still works.
 
+const _SHTCONFIG_ALIAS_WARNED = Ref(false)
+@inline function _warn_alias_once(old::Symbol, new::Symbol)
+    if !_SHTCONFIG_ALIAS_WARNED[]
+        _SHTCONFIG_ALIAS_WARNED[] = true
+        Base.depwarn("cfg.$old is deprecated; use cfg.$new instead", :getproperty)
+    end
+    return nothing
+end
+
 function Base.getproperty(cfg::SHTConfig, name::Symbol)
     if name === :wlat
+        _warn_alias_once(:wlat, :w)
         return getfield(cfg, :w)
     elseif name === :ct
+        _warn_alias_once(:ct, :x)
         return getfield(cfg, :x)
     elseif name === :sintheta
+        _warn_alias_once(:sintheta, :st)
         return getfield(cfg, :st)
     else
         return getfield(cfg, name)
@@ -194,10 +209,13 @@ end
 
 function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
     if name === :wlat
+        _warn_alias_once(:wlat, :w)
         return setfield!(cfg, :w, val)
     elseif name === :ct
+        _warn_alias_once(:ct, :x)
         return setfield!(cfg, :x, val)
     elseif name === :sintheta
+        _warn_alias_once(:sintheta, :st)
         return setfield!(cfg, :st, val)
     else
         return setfield!(cfg, name, val)
@@ -291,6 +309,7 @@ function create_gauss_fly_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int
     cfg.use_plm_tables = false
     cfg.plm_tables = Matrix{Float64}[]
     cfg.dplm_tables = Matrix{Float64}[]
+    cfg.NP_tables = Matrix{Float64}[]
 
     return cfg
 end
@@ -313,6 +332,7 @@ function set_on_the_fly!(cfg::SHTConfig)
     cfg.use_plm_tables = false
     cfg.plm_tables = Matrix{Float64}[]
     cfg.dplm_tables = Matrix{Float64}[]
+    cfg.NP_tables = Matrix{Float64}[]
     return cfg
 end
 
@@ -921,9 +941,22 @@ function prepare_plm_tables!(cfg::SHTConfig)
         end
     end
     
+    # Pre-fuse Nlm so scalar kernels can read a single product per element.
+    NP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
+    @inbounds for m in 0:mmax
+        NP = NP_tables[m+1]
+        tbl = tables[m+1]
+        for i in 1:nlat
+            for l in m:lmax
+                NP[l+1, i] = cfg.Nlm[l+1, m+1] * tbl[l+1, i]
+            end
+        end
+    end
+
     # Enable table usage and store in configuration
     cfg.plm_tables = tables
     cfg.dplm_tables = dtables
+    cfg.NP_tables = NP_tables
     cfg.use_plm_tables = true
     return cfg
 end
@@ -944,6 +977,7 @@ function disable_plm_tables!(cfg::SHTConfig)
     cfg.use_plm_tables = false
     cfg.plm_tables = Matrix{Float64}[]
     cfg.dplm_tables = Matrix{Float64}[]
+    cfg.NP_tables = Matrix{Float64}[]
     return cfg
 end
 

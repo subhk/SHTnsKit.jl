@@ -195,6 +195,7 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
         cfg.use_plm_tables = false
         cfg.plm_tables = Matrix{Float64}[]
         cfg.dplm_tables = Matrix{Float64}[]
+        cfg.NP_tables = Matrix{Float64}[]
     end
 
     # Apply south_pole_first if requested

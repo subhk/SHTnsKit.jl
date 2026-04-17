@@ -29,18 +29,7 @@ Result: Near-zero allocations per transform call.
 
 SHTPlan STRUCTURE
 -----------------
-```julia
-struct SHTPlan
-    cfg::SHTConfig          # Transform configuration
-    P::Vector{Float64}      # Legendre polynomial buffer
-    dPdx::Vector{Float64}   # Legendre derivative buffer
-    G::Vector{ComplexF64}   # Latitude profile buffer
-    Fθk::Matrix{ComplexF64} # Fourier coefficient matrix
-    fft_plan::Any           # Pre-optimized forward FFT plan
-    ifft_plan::Any          # Pre-optimized inverse FFT plan
-    use_rfft::Bool          # Use real-FFT optimization?
-end
-```
+See the `struct SHTPlan` definition below for the authoritative field list.
 
 IN-PLACE TRANSFORM FUNCTIONS
 ----------------------------

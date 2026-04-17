@@ -94,7 +94,7 @@ function analysis_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
         x = cfg.x[i]
         Plm_row!(P, x, lmax, 0)  # m=0 case (axisymmetric)
 
-        weighted_Vr = Vr[i] * cfg.wlat[i]
+        weighted_Vr = Vr[i] * cfg.w[i]
         @inbounds for l in 0:lmax
             Ql[l+1] += weighted_Vr * cfg.Nlm[l+1, 1] * P[l+1]
         end
@@ -236,7 +236,7 @@ function analysis_axisym_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
         x = cfg.x[i]
         Plm_row!(P, x, ltr, 0)
 
-        weighted_Vr = Vr[i] * cfg.wlat[i]
+        weighted_Vr = Vr[i] * cfg.w[i]
         @inbounds for l in 0:ltr
             Ql[l+1] += weighted_Vr * cfg.Nlm[l+1, 1] * P[l+1]
         end
@@ -299,7 +299,7 @@ function analysis_packed_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Comp
         x = cfg.x[i]
         Plm_row!(P, x, ltr, im)
 
-        weighted_Vr = Vr_m[i] * cfg.wlat[i]
+        weighted_Vr = Vr_m[i] * cfg.w[i]
         @inbounds for l in im:ltr
             Ql[l-im+1] += weighted_Vr * cfg.Nlm[l+1, im+1] * P[l+1]
         end

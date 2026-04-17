@@ -105,21 +105,21 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     # Scale continuous Fourier coefficients to DFT bins for ifft
     inv_scaleφ = phi_inv_scale(cfg)
 
+    need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
     for m in -mmax:mmax
         # build G_m(θ) = sum_l Nlm P_l^{|m|} alm(l,m)
         am = abs(m)
         # skip if no degrees for given am
         if am > lmax; continue; end
+        αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for i in 1:nlat
             Plm_row!(P, cfg.x[i], lmax, am)
             g = zero(CT)
             @inbounds for l in am:lmax
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
                 a = alm_packed[idx]
-                if cfg.norm !== :orthonormal || cfg.cs_phase == false
-                    k = norm_scale_from_orthonormal(l, am, cfg.norm)
-                    α = cs_phase_factor(m, true, cfg.cs_phase)
-                    a *= (k * α)
+                if need_norm
+                    a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
                 end
                 g += (cfg.Nlm[l+1, am+1] * P[l+1]) * a
             end
@@ -157,9 +157,11 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     P = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
 
+    need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
     for m in -mmax:mmax
         am = abs(m)
         col = m ≥ 0 ? (m + 1) : (cfg.nlon + m + 1)
+        αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for i in 1:cfg.nlat
             Plm_row!(P, cfg.x[i], lmax, am)
             Fi = Fφ[i, col]
@@ -168,10 +170,8 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
                 a = (wi * P[l+1]) * Fi * cfg.Nlm[l+1, am+1] * scaleφ
                 # Convert from internal to cfg normalization if needed when storing
-                if cfg.norm !== :orthonormal || cfg.cs_phase == false
-                    k = norm_scale_from_orthonormal(l, am, cfg.norm)
-                    α = cs_phase_factor(m, true, cfg.cs_phase)
-                    a /= (k * α)
+                if need_norm
+                    a /= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
                 end
                 alm[idx] += a
             end
@@ -193,18 +193,18 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     CT = eltype(alm)
     P = Vector{Float64}(undef, lmax + 1)
     acc = zero(CT)
+    need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
     # m from -mmax..mmax
     for m in -mmax:mmax
         am = abs(m)
         Plm_row!(P, x, lmax, am)
         gm = zero(CT)
+        αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         @inbounds for l in am:lmax
             idx = LM_cplx_index(lmax, mmax, l, m) + 1
             a = alm[idx]
-            if cfg.norm !== :orthonormal || cfg.cs_phase == false
-                k = norm_scale_from_orthonormal(l, am, cfg.norm)
-                α = cs_phase_factor(m, true, cfg.cs_phase)
-                a *= (k * α)
+            if need_norm
+                a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
             end
             gm += cfg.Nlm[l+1, am+1] * P[l+1] * a
         end

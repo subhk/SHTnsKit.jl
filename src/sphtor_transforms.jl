@@ -217,7 +217,9 @@ function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
     thread_dP = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_Ps = use_tbl ? nothing : [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
 
-    @threads :static for m in 0:mmax
+    m_order = balanced_m_order(mmax)
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
         col = m + 1
         for i in 1:nlat
             if use_tbl
@@ -263,7 +265,9 @@ function _analysis_sphtor_mloop!(Slm::AbstractMatrix, Tlm::AbstractMatrix,
     thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
 
-    @threads :static for m in 0:mmax
+    m_order = balanced_m_order(mmax)
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
         col = m + 1
         tid = Threads.threadid()
         Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
@@ -580,10 +584,9 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
 
     # Convert from internal to user normalization if needed
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        α = cs_phase_factor(im, true, cfg.cs_phase)
         @inbounds for l in max(1, im):ltr
-            k = norm_scale_from_orthonormal(l, im, cfg.norm)
-            α = cs_phase_factor(im, true, cfg.cs_phase)
-            s = k * α
+            s = norm_scale_from_orthonormal(l, im, cfg.norm) * α
             Sl[l-im+1] /= s
             Tl[l-im+1] /= s
         end
@@ -610,10 +613,9 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     Sl_int = Sl; Tl_int = Tl
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         Sl_int = copy(Sl); Tl_int = copy(Tl)
+        α = cs_phase_factor(im, true, cfg.cs_phase)
         @inbounds for l in max(1, im):ltr
-            k = norm_scale_from_orthonormal(l, im, cfg.norm)
-            α = cs_phase_factor(im, true, cfg.cs_phase)
-            s = k * α
+            s = norm_scale_from_orthonormal(l, im, cfg.norm) * α
             Sl_int[l-im+1] *= s
             Tl_int[l-im+1] *= s
         end

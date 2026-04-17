@@ -218,14 +218,18 @@ function wigner_d_matrix!(d::AbstractMatrix{Float64}, l::Int, beta::Float64)
     n = 2l + 1
     cb = cos(beta/2)
     sb = sin(beta/2)
+    # Precompute log-factorials: lg[i+1] = loggamma(i+1) for i in 0:2l.
+    # Each (m, mp) pair previously invoked 4 _loggamma calls per iteration plus
+    # 4 more per k-term; vectorizing drops them to O(l) total.
+    lg = [_loggamma(i + 1) for i in 0:(2l)]
     for m in -l:l
         for mp in -l:l
             kmin = max(0, m - mp)
             kmax = min(l + m, l - mp)
-            logpref = 0.5*(_loggamma(l+m+1) + _loggamma(l-m+1) + _loggamma(l+mp+1) + _loggamma(l-mp+1))
+            logpref = 0.5*(lg[l+m+1] + lg[l-m+1] + lg[l+mp+1] + lg[l-mp+1])
             s = 0.0
             for k in kmin:kmax
-                logden = _loggamma(l+m-k+1) + _loggamma(k+1) + _loggamma(mp-m+k+1) + _loggamma(l-mp-k+1)
+                logden = lg[l+m-k+1] + lg[k+1] + lg[mp-m+k+1] + lg[l-mp-k+1]
                 p = 2l + m - mp - 2k
                 q = mp - m + 2k
                 term = (-1.0)^k * exp(logpref - logden) * (cb^p) * (sb^q)
@@ -250,6 +254,38 @@ function wigner_d_matrix(l::Int, beta::Float64)
 end
 
 """
+    WignerCache(lmax::Int, β::Real) -> WignerCache
+
+Precompute Wigner-d matrices `d^l(β)` for `l = 0:lmax` and hand them out via
+[`wigner_d(cache, l)`]. Reuse across many rotations at fixed β (e.g.
+time-stepping), amortizing the per-call construction cost.
+"""
+struct WignerCache
+    β::Float64
+    matrices::Vector{Matrix{Float64}}
+end
+
+function WignerCache(lmax::Int, β::Real)
+    lmax ≥ 0 || throw(ArgumentError("lmax must be ≥ 0"))
+    βf = float(β)
+    mats = Vector{Matrix{Float64}}(undef, lmax + 1)
+    for l in 0:lmax
+        mats[l + 1] = wigner_d_matrix(l, βf)
+    end
+    return WignerCache(βf, mats)
+end
+
+"""
+    wigner_d(cache::WignerCache, l::Int) -> Matrix{Float64}
+
+Retrieve cached `d^l(β)`. Errors if `l` exceeds the cache's `lmax`.
+"""
+@inline function wigner_d(cache::WignerCache, l::Int)
+    (0 ≤ l < length(cache.matrices)) || throw(ArgumentError("l=$l outside cache (lmax=$(length(cache.matrices) - 1))"))
+    return cache.matrices[l + 1]
+end
+
+"""
     wigner_d_matrix_deriv(l::Int, beta::Float64) -> Matrix{Float64}
 
 Derivative d/dβ of little Wigner-d matrix d^l_{m m'}(β).
@@ -262,14 +298,15 @@ function wigner_d_matrix_deriv(l::Int, beta::Float64)
     sb = sin(beta/2)
     dcb = -0.5 * sb
     dsb =  0.5 * cb
+    lg = [_loggamma(i + 1) for i in 0:(2l)]
     for m in -l:l
         for mp in -l:l
             kmin = max(0, m - mp)
             kmax = min(l + m, l - mp)
-            logpref = 0.5*(_loggamma(l+m+1) + _loggamma(l-m+1) + _loggamma(l+mp+1) + _loggamma(l-mp+1))
+            logpref = 0.5*(lg[l+m+1] + lg[l-m+1] + lg[l+mp+1] + lg[l-mp+1])
             s = 0.0
             for k in kmin:kmax
-                logden = _loggamma(l+m-k+1) + _loggamma(k+1) + _loggamma(mp-m+k+1) + _loggamma(l-mp-k+1)
+                logden = lg[l+m-k+1] + lg[k+1] + lg[mp-m+k+1] + lg[l-mp-k+1]
                 p = 2l + m - mp - 2k
                 q = mp - m + 2k
                 amp = (-1.0)^k * exp(logpref - logden)

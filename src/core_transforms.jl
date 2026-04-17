@@ -260,17 +260,19 @@ function _analysis_scalar_mloop!(alm::AbstractMatrix, cfg::SHTConfig, Fph::Abstr
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat = cfg.nlat
     scale_phi = cfg.cphi
-    use_tbl = cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+    use_tbl = cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
 
     thread_local_P = use_tbl ? nothing :
         [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
-    @threads :static for m in 0:mmax
+    m_order = balanced_m_order(mmax)
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
         col = m + 1
         if use_tbl
-            tbl = cfg.plm_tables[m+1]
+            NP = cfg.NP_tables[m+1]
             @inbounds for i in 1:nlat
-                _scalar_analysis_kernel!(alm, cfg, Fph, tbl, i, col, m, lmax, scale_phi)
+                _scalar_analysis_kernel!(alm, cfg, Fph, NP, i, col, m, lmax, scale_phi)
             end
         else
             P = thread_local_P[Threads.threadid()]
@@ -288,17 +290,19 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat, nlon = cfg.nlat, cfg.nlon
     inv_scale_phi = phi_inv_scale(cfg)
-    use_tbl = cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
+    use_tbl = cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
 
     thread_local_P = use_tbl ? nothing :
         [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
 
-    @threads :static for m in 0:mmax
+    m_order = balanced_m_order(mmax)
+    @threads :static for idx in 1:length(m_order)
+        m = m_order[idx]
         col = m + 1
         if use_tbl
-            tbl = cfg.plm_tables[m+1]
+            NP = cfg.NP_tables[m+1]
             @inbounds for i in 1:nlat
-                Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(cfg, alm, tbl, i, col, m, lmax)
+                Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, lmax)
             end
         else
             P = thread_local_P[Threads.threadid()]

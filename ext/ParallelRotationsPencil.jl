@@ -46,13 +46,19 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
     displs_m = cumsum([0; counts_m[1:end-1]])
     a_full = Vector{ComplexF64}(undef, mmax + 1)
 
+    # Hoisted scratch buffers reused across l-rows.
+    a_local = Vector{ComplexF64}(undef, nm_local)
+    max_n2 = 2*lmax + 1
+    b_buf = Vector{ComplexF64}(undef, max_n2)
+    c_buf = Vector{ComplexF64}(undef, max_n2)
+
     for (ii, il) in enumerate(lloc)
         lval = gl_l[ii] - 1
-        a_local = Array(view(Alm_pencil, il, :))
+        copyto!(a_local, view(Alm_pencil, il, :))
         Allgatherv!(a_local, VBuffer(a_full, counts_m), comm)
         mm = min(lval, mmax)
         n2 = 2*lval + 1
-        b = Vector{ComplexF64}(undef, n2); fill!(b, 0.0 + 0.0im)
+        b = view(b_buf, 1:n2); fill!(b, 0.0 + 0.0im)
         if lval >= 0
             k0 = SHTnsKit.norm_scale_from_orthonormal(lval, 0, cfg.norm)
             α0 = SHTnsKit.cs_phase_factor(0, true, cfg.cs_phase)
@@ -68,7 +74,7 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
         end
 
         dl = SHTnsKit.wigner_d_matrix(lval, float(beta))
-        c = Vector{ComplexF64}(undef, n2)
+        c = view(c_buf, 1:n2)
         @inbounds for mi in -lval:lval
             acc = 0.0 + 0.0im
             for mp in -lval:lval
@@ -109,6 +115,10 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
     gl_l = globalindices(Alm_pencil, 1)
     gl_m = globalindices(Alm_pencil, 2)
 
+    max_n2 = 2*lmax + 1
+    b_buf = Vector{ComplexF64}(undef, max_n2)
+    c_buf = Vector{ComplexF64}(undef, max_n2)
+
     for (ii, il) in enumerate(lloc)
         lval = gl_l[ii] - 1
         mm = min(lval, mmax)
@@ -139,7 +149,7 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
         end
         # Build symmetric b of size 2l+1 from positive m part
         n2 = 2*lval + 1
-        b = Vector{ComplexF64}(undef, n2); fill!(b, 0.0 + 0.0im)
+        b = view(b_buf, 1:n2); fill!(b, 0.0 + 0.0im)
         if lval >= 0
             k0 = SHTnsKit.norm_scale_from_orthonormal(lval, 0, cfg.norm)
             α0 = SHTnsKit.cs_phase_factor(0, true, cfg.cs_phase)
@@ -154,7 +164,7 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
         end
         # d-matrix multiply
         dl = SHTnsKit.wigner_d_matrix(lval, float(beta))
-        c = Vector{ComplexF64}(undef, n2)
+        c = view(c_buf, 1:n2)
         @inbounds for mi in -lval:lval
             acc = 0.0 + 0.0im
             for mp in -lval:lval

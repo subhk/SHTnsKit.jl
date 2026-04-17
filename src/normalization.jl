@@ -160,13 +160,6 @@ function cs_phase_factor(m::Int, cs_from::Bool, cs_to::Bool)
 end
 
 """
-    convert_alm_norm!(dest, src, cfg; to_internal::Bool=false)
-
-Convert coefficient matrix `src` between cfg's normalization/phase and internal
-orthonormal+CS. If `to_internal=true`, maps from cfg to internal. Otherwise maps
-from internal to cfg. Writes into `dest` which must match `src` size.
-"""
-"""
     _ensure_norm_scale_matrix!(cfg) -> Matrix{Float64}
 
 Lazily build (or return cached) `(lmax+1, mmax+1)` matrix holding
@@ -191,6 +184,13 @@ function _ensure_norm_scale_matrix!(cfg)
     return M
 end
 
+"""
+    convert_alm_norm!(dest, src, cfg; to_internal::Bool=false)
+
+Convert coefficient matrix `src` between cfg's normalization/phase and internal
+orthonormal+CS. If `to_internal=true`, maps from cfg to internal. Otherwise maps
+from internal to cfg. Writes into `dest` which must match `src` size.
+"""
 function convert_alm_norm!(dest::AbstractMatrix, src::AbstractMatrix, cfg; to_internal::Bool=false)
     size(dest) == size(src) || throw(DimensionMismatch("dest/src dims mismatch"))
     lmax, mmax = cfg.lmax, cfg.mmax

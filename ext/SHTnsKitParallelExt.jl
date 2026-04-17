@@ -74,6 +74,12 @@ ENVIRONMENT VARIABLES
 
 Parallel extension module providing MPI-distributed spherical harmonic transforms.
 See module-level comments for architecture overview and debugging tips.
+
+# Module state
+All mutable module-level state lives in the `_STATE` constant (a struct with
+fields for plan caches, locks, and toggles). Individual `const _xxx` names
+below are kept as aliases pointing at `_STATE` fields so existing call sites
+don't have to change while the bundling reads more clearly in one place.
 """
 
 using Base.Threads                       # Threads.@threads and locks/macros
@@ -101,22 +107,35 @@ using SHTnsKit                           # Core spherical harmonic functionality
     return nothing
 end
 
-# ===== FFT PLAN CACHING =====
-# Optional plan caching to avoid repeated planning overhead in performance-critical code
-# Enabled by default; disable with ENV["SHTNSKIT_CACHE_PENCILFFTS"] = "0"
-const _CACHE_PENCILFFTS = Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "1") == "1")
+# ===== MODULE STATE =====
+# All mutable module-level state grouped into one struct for easier reasoning
+# about lifecycle, teardown in tests, and to collect all tunables in one place.
+# The individual `_pfft_cache` / `_cache_lock` / ... const names below are
+# preserved as aliases for backward-compatible call sites.
+struct _ParallelExtState
+    cache_enabled::Base.RefValue{Bool}                  # toggle plan caching
+    pfft_cache::IdDict{Any,Any}                         # FFT plan cache (keyed by shape/type/comm)
+    pfft_cache_max::Base.RefValue{Int}                  # soft cap on pfft_cache entries
+    cache_lock::Threads.ReentrantLock                   # guards pfft_cache + sparse_gather_cache
+    sparse_gather_cache::Dict{Any, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}
+    fftw_cache_lock::Threads.ReentrantLock              # guards local-FFTW plan caches
+end
 
-# Thread-safe cache storage for FFT plans indexed by array characteristics
-const _pfft_cache = IdDict{Any,Any}()
-const _cache_lock = Threads.ReentrantLock()
-const _sparse_gather_cache = Dict{Any, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}()
+const _STATE = _ParallelExtState(
+    Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "1") == "1"),
+    IdDict{Any,Any}(),
+    Ref{Int}(parse(Int, get(ENV, "SHTNSKIT_PFFT_CACHE_MAX", "64"))),
+    Threads.ReentrantLock(),
+    Dict{Any, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}(),
+    Threads.ReentrantLock(),
+)
 
-# Soft cap on cached FFT plans. The cache is keyed on (kind, shape, eltype, comm
-# size, decomposition hash); a single long-running Julia session that cycles
-# through many configurations can grow this unboundedly. When the cap is hit
-# we evict in FIFO order by clearing the whole cache — simple, predictable,
-# and cheap compared to tracking LRU metadata per entry.
-const _PFFT_CACHE_MAX = Ref{Int}(parse(Int, get(ENV, "SHTNSKIT_PFFT_CACHE_MAX", "64")))
+# Back-compat aliases — exact same objects, just reachable under the old names.
+const _CACHE_PENCILFFTS    = _STATE.cache_enabled
+const _pfft_cache          = _STATE.pfft_cache
+const _PFFT_CACHE_MAX      = _STATE.pfft_cache_max
+const _cache_lock          = _STATE.cache_lock
+const _sparse_gather_cache = _STATE.sparse_gather_cache
 
 """
     pfft_cache_max!(n::Int) -> Int
@@ -540,7 +559,7 @@ end
 
 # Cache for FFTW 1D plans (key includes inplace flag)
 const _fftw_plan_cache = Dict{Tuple{Symbol, Int, DataType, Bool}, Any}()
-const _fftw_cache_lock = Threads.ReentrantLock()
+const _fftw_cache_lock = _STATE.fftw_cache_lock
 
 """
     get_fftw_plan(kind, n, T) -> plan

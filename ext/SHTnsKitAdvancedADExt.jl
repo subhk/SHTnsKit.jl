@@ -23,16 +23,22 @@ import SHTnsKit: wigner_d_matrix_deriv
     end
 
 # synthesis(cfg, alm; real_output=true) :: (lmax+1)×(mmax+1) -> (nlat×nlon)
-    function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis), cfg::SHTnsKit.SHTConfig, 
+    #
+    # The mathematical adjoint of `synthesis` is NOT `analysis`: analysis
+    # carries Gauss-Legendre quadrature weights and the cphi azimuthal factor,
+    # neither of which appears in the synthesis adjoint. Use the dedicated
+    # `_adjoint_synthesis` helper instead. (See `test_adjoint_consistency`
+    # in the test suite for an FD verification.)
+    function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis), cfg::SHTnsKit.SHTConfig,
                                 alm; real_output::Bool=true)
         y = SHTnsKit.synthesis(cfg, alm; real_output)
         function pullback(ȳ)
-            ȳA = _to_complex(ȳ)
-            alm̄ = SHTnsKit.analysis(cfg, ȳA)
+            ȳA = ȳ isa AbstractMatrix ? ȳ : collect(ȳ)
+            alm̄ = SHTnsKit._adjoint_synthesis(cfg, ȳA; real_output=real_output)
             return NoTangent(), NoTangent(), alm̄, (; real_output=NoTangent())
-end
+        end
         return y, pullback
-end
+    end
 
     # Batch scalar transforms: analysis_batch, synthesis_batch
     # Each field is an independent scalar transform; adjoint applies the scalar

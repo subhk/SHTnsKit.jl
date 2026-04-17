@@ -4,8 +4,46 @@
 using Test
 using Random
 using SHTnsKit
+using Zygote
 
 @isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
+
+@testset "synthesis rrule: adjoint consistency with finite-difference" begin
+    # Verifies that the rrule for `synthesis` implements the true mathematical
+    # adjoint (not just `analysis`, which differs by Gauss-Legendre weights).
+    # Before this test existed, the rrule returned `analysis(cfg, ȳ)` which is
+    # off by a lat-dependent factor of w_i * cphi — silent on dot-product-only
+    # tests but visible in any direct FD check against alm.
+    for lmax in (4, 8)
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(1 + lmax)
+
+        # Real-field-compatible alm (m=0 real, l<m zeroed)
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
+
+        loss(a) = sum(abs2, synthesis(cfg, a; real_output=true))
+        g = Zygote.gradient(loss, alm)[1]
+
+        # Directional FD check
+        h = randn(rng, ComplexF64, lmax+1, lmax+1)
+        h[:, 1] .= real.(h[:, 1])
+        for m in 0:lmax, l in 0:(m-1)
+            h[l+1, m+1] = 0
+        end
+        ϵ = 1e-6
+        L(ξ) = loss(alm .+ ξ .* h)
+        dL_fd = (L(ϵ) - L(-ϵ)) / (2ϵ)
+        # Zygote/ChainRules convention: L(a + ϵh) ≈ L(a) + ϵ Re(sum(conj(g) ⋅ h))
+        dL_ad = real(sum(conj(g) .* h))
+        @test isapprox(dL_ad, dL_fd; rtol=5e-4, atol=1e-7)
+    end
+end
 
 @testset "Energy Gradients" begin
     @testset "Scalar energy gradient (matrix form)" begin

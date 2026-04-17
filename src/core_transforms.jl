@@ -293,6 +293,65 @@ end
 # ============================================================================
 
 """
+    _adjoint_synthesis(cfg, f̄; θ_globals=1:cfg.nlat, real_output=true)
+        -> Matrix{ComplexF64}
+
+True mathematical adjoint of `synthesis`. NOT the same as `analysis` — the
+analysis operator carries quadrature weights `w_i` and the `cphi = 2π/nlon`
+azimuthal scaling, neither of which belongs in the synthesis adjoint.
+
+Forward (real output, `inv_scaleφ = nlon` cancels the `1/nlon` in `ifft`):
+    f[i,j] = c_0[i] + 2 Σ_{m=1..mmax} Re(c_m[i] exp(i·m·φ_j))
+    where c_m[i] = Σ_l Nlm · P_l^m(θ_i) · alm[l,m]
+
+Adjoint (for real f̄, using Wirtinger conventions so `real_output=true` yields
+the factor of 2 on positive-m from the implicit Hermitian fill):
+    ālm[l,0] = Σ_i Nlm · P_l^m · FFT(f̄[i,:])[1]
+    ālm[l,m>0] = Σ_i Nlm · P_l^m · conj(FFT(f̄[i,:])[m+1])
+
+The `conj` comes from `∂f/∂alm` carrying `exp(+imφ)` whereas FFT uses `exp(-imφ)`.
+"""
+function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
+                            θ_globals::AbstractVector{<:Integer}=1:cfg.nlat,
+                            real_output::Bool=true)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    nlat_local = length(θ_globals)
+    # FFT along φ. For real f̄ the FFTW rfft would be enough, but we accept
+    # complex f̄ too so use the general routine.
+    Fph̄ = fft_phi(_as_complex(f̄))
+    ālm = zeros(ComplexF64, lmax + 1, mmax + 1)
+    use_tbl = has_fused_scalar_tables(cfg)
+    P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
+    for m in 0:mmax
+        col = m + 1
+        # conj-fill during forward synthesis injects ālm[l,m] twice for m > 0 (once
+        # from bin m, once from conj of bin nlon-m). For a real input Fph̄ those two
+        # bins are already conjugates, so the easy way to express this is to take
+        # 2·conj(FFT[m+1]) for m > 0 (real case) or bin m alone otherwise.
+        if use_tbl
+            NP = cfg.NP_tables[col]
+            @inbounds for (ii, iglob) in pairs(θ_globals)
+                Fi = Fph̄[ii, col]
+                contrib = (m == 0 || !real_output) ? Fi : 2 * conj(Fi)
+                for l in m:lmax
+                    ālm[l+1, col] += NP[l+1, iglob] * contrib
+                end
+            end
+        else
+            @inbounds for (ii, iglob) in pairs(θ_globals)
+                Plm_row!(P, cfg.x[iglob], lmax, m)
+                Fi = Fph̄[ii, col]
+                contrib = (m == 0 || !real_output) ? Fi : 2 * conj(Fi)
+                for l in m:lmax
+                    ālm[l+1, col] += cfg.Nlm[l+1, col] * P[l+1] * contrib
+                end
+            end
+        end
+    end
+    return ālm
+end
+
+"""
     _adjoint_analysis(cfg, Alm̄; θ_globals=1:cfg.nlat, φ_window=nothing)
 
 Adjoint operator of `analysis`. Shares the scalar synthesis kernels; only the

@@ -117,74 +117,155 @@ end
 set_on_the_fly!(cfg)
 ```
 """
-Base.@kwdef mutable struct SHTConfig
+# ============================================================================
+# ROLE-TYPED SUB-STRUCTS
+# ============================================================================
+# SHTConfig previously held ~35 flat fields mixing grid geometry,
+# normalization state, precomputed tables, and lazy scratch buffers. These
+# sub-structs group them by concern so reading the main struct no longer
+# requires scanning 40+ lines. All old flat-field access (cfg.x, cfg.Nlm,
+# cfg.NP_tables, cfg.use_plm_tables, ...) is preserved via getproperty /
+# setproperty! forwarding in the next section — no call-site changes needed.
+
+"""Grid geometry: coordinates, quadrature nodes/weights, azimuthal spacing."""
+mutable struct SHTGrid
+    θ::Vector{Float64}
+    φ::Vector{Float64}
+    x::Vector{Float64}
+    w::Vector{Float64}
+    st::Vector{Float64}
+    cphi::Float64
+end
+
+"""Normalization + phase convention. `scale_matrix` is lazily built."""
+Base.@kwdef mutable struct SHTNorm
+    Nlm::Matrix{Float64}
+    norm::Symbol
+    cs_phase::Bool
+    real_norm::Bool
+    robert_form::Bool
+    scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
+end
+
+"""Precomputed Legendre tables (raw and Nlm-fused)."""
+Base.@kwdef mutable struct SHTTables
+    enabled::Bool = false
+    plm::Vector{Matrix{Float64}} = Matrix{Float64}[]
+    dplm::Vector{Matrix{Float64}} = Matrix{Float64}[]
+    NP::Vector{Matrix{Float64}} = Matrix{Float64}[]
+    NdP::Vector{Matrix{Float64}} = Matrix{Float64}[]
+end
+
+"""Lazy per-cfg scratch buffers for OTF Legendre eval + m-order cache."""
+Base.@kwdef mutable struct SHTScratch
+    otf_P::Vector{Vector{Float64}} = Vector{Float64}[]
+    otf_dP::Vector{Vector{Float64}} = Vector{Float64}[]
+    otf_Ps::Vector{Vector{Float64}} = Vector{Float64}[]
+    m_order::Vector{Int} = Int[]
+end
+
+mutable struct SHTConfig
     # Core spherical harmonic parameters
-    lmax::Int                    # Maximum spherical harmonic degree
-    mmax::Int                    # Maximum spherical harmonic order  
-    mres::Int                    # M-resolution parameter
-    nlat::Int                    # Number of latitude points (Gauss-Legendre)
-    nlon::Int                    # Number of longitude points (equiangular)
-    grid_type::Symbol = :gauss   # Grid type (:gauss, :regular, :regular_poles)
-    
-    # Grid coordinates and quadrature
-    θ::Vector{Float64}          # Polar angles (colatitude) [0, π]
-    φ::Vector{Float64}          # Azimuthal angles [0, 2π)
-    x::Vector{Float64}          # Gauss-Legendre nodes: x = cos(θ) ∈ [-1,1]
-    w::Vector{Float64}          # Gauss-Legendre integration weights
-    Nlm::Matrix{Float64}        # Normalization factors for Y_l^m
-    cphi::Float64               # Longitude spacing: 2π / nlon
+    lmax::Int
+    mmax::Int
+    mres::Int
+    nlat::Int
+    nlon::Int
+    grid_type::Symbol
 
-    # SHTns-compatible helper fields for efficient indexing
-    nlm::Int                    # Total number of (l,m) modes
-    li::Vector{Int}             # Degree indices for flattened (l,m) arrays
-    mi::Vector{Int}             # Order indices for flattened (l,m) arrays
-    nspat::Int                  # Total spatial grid points: nlat × nlon
-    st::Vector{Float64}         # Precomputed sin(θ) values
-    
-    # Transform normalization and phase conventions
-    norm::Symbol                # Normalization type (:orthonormal, :schmidt, etc.)
-    cs_phase::Bool              # Condon-Shortley phase convention
-    real_norm::Bool             # Real-valued normalization
-    robert_form::Bool           # Robert form for spectral derivatives
-    phi_scale::Symbol = :auto    # :dft, :quad, or :auto (grid-driven)
+    # SHTns-compatible indexing helpers
+    nlm::Int
+    li::Vector{Int}
+    mi::Vector{Int}
+    nspat::Int
 
-    # Performance optimization: Legendre polynomial computation mode
-    use_plm_tables::Bool = false                              # Enable/disable table lookup
-    on_the_fly::Bool = false                                  # Force on-the-fly computation (never use tables)
+    phi_scale::Symbol
+    on_the_fly::Bool
 
-    # GPU Computing support
-    compute_device::Symbol = :cpu                             # Computing device: :cpu, :cuda, :amdgpu
-    device_preference::Vector{Symbol} = [:cpu]               # Preferred device order
-    plm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]   # P_l^m values: [m+1][l+1, lat_idx]
-    dplm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]  # dP_l^m/dx values: [m+1][l+1, lat_idx]
-    # Pre-fused Nlm × P_l^m(x_i) tables: NP_tables[m+1][l+1, lat_idx].
-    # Built by prepare_plm_tables! so scalar kernels can skip the Nlm multiply.
-    NP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]
-    # Pre-fused Nlm × dP_l^m/dx(x_i) tables: NdP_tables[m+1][l+1, lat_idx].
-    # Enables sphtor kernel to skip the Nlm multiply on the derivative term.
-    NdP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[]
-    # Cached cfg→internal scale: norm_scale[l+1, m+1] = norm_scale_from_orthonormal(l, m, norm) * cs_phase_factor(m, true, cs_phase).
-    # Populated lazily by _ensure_norm_scale_matrix!; empty Matrix{Float64}[] means not yet built.
-    norm_scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
-    # Per-thread scratch for on-the-fly Legendre evaluation. Built lazily by
-    # _otf_scratch_P/_dP/_Ps; sized (lmax+1) × Threads.maxthreadid().
-    _otf_scratch_P::Vector{Vector{Float64}} = Vector{Float64}[]
-    _otf_scratch_dP::Vector{Vector{Float64}} = Vector{Float64}[]
-    _otf_scratch_Ps::Vector{Vector{Float64}} = Vector{Float64}[]
-    # Cached balanced m-ordering for @threads :static chunking (alloc once per cfg).
-    _m_order::Vector{Int} = Int[]
+    # GPU computing
+    compute_device::Symbol
+    device_preference::Vector{Symbol}
 
-    # Batch transform configuration (for processing multiple fields simultaneously)
-    howmany::Int = 1                                          # Number of fields to process in batch
-    spec_dist::Int = 0                                        # Distance between spectral arrays (0 = contiguous)
+    # Batch transform configuration
+    howmany::Int
+    spec_dist::Int
 
-    # Data ordering configuration
-    south_pole_first::Bool = false                            # If true, latitude data starts at south pole (θ=π) instead of north pole (θ=0)
+    # Data ordering
+    south_pole_first::Bool
 
-    # Memory padding configuration (for cache optimization)
-    allow_padding::Bool = false                               # If true, arrays may have padding for cache optimization
-    nlat_padded::Int = 0                                      # Padded nlat value (stride between phi values), 0 means no padding (use nlat)
-    spat_dist::Int = 0                                        # Distance between spatial arrays in batch mode (0 = contiguous)
+    # Memory padding
+    allow_padding::Bool
+    nlat_padded::Int
+    spat_dist::Int
+
+    # Grouped sub-struct fields (under private-looking names so the old flat
+    # field names are free for property forwarding).
+    _grid::SHTGrid
+    _norm::SHTNorm
+    _tables::SHTTables
+    _scratch::SHTScratch
+end
+
+"""
+    SHTConfig(; lmax, mmax, mres, nlat, nlon, θ, φ, x, w, Nlm, cphi, st,
+              norm, cs_phase, real_norm, robert_form,
+              nlm, li, mi, nspat,
+              grid_type=:gauss, phi_scale=:auto, on_the_fly=false,
+              compute_device=:cpu, device_preference=[:cpu],
+              use_plm_tables=false, plm_tables=[], dplm_tables=[],
+              NP_tables=[], NdP_tables=[], norm_scale_matrix=Matrix{Float64}(undef,0,0),
+              _otf_scratch_P=[], _otf_scratch_dP=[], _otf_scratch_Ps=[], _m_order=[],
+              howmany=1, spec_dist=0, south_pole_first=false,
+              allow_padding=false, nlat_padded=0, spat_dist=0) -> SHTConfig
+
+Flat-kwargs constructor that packages the grid/normalization/tables/scratch
+kwargs into their respective sub-structs. Keeps the call-site syntax used by
+`create_gauss_config`, `create_regular_config`, `copy(::SHTConfig)`, etc.
+identical to the pre-restructure behaviour.
+"""
+function SHTConfig(;
+    lmax::Int, mmax::Int, mres::Int, nlat::Int, nlon::Int,
+    θ::Vector{Float64}, φ::Vector{Float64}, x::Vector{Float64}, w::Vector{Float64},
+    Nlm::Matrix{Float64}, cphi::Float64, st::Vector{Float64},
+    nlm::Int, li::Vector{Int}, mi::Vector{Int}, nspat::Int,
+    norm::Symbol, cs_phase::Bool, real_norm::Bool, robert_form::Bool,
+    grid_type::Symbol = :gauss,
+    phi_scale::Symbol = :auto,
+    on_the_fly::Bool = false,
+    compute_device::Symbol = :cpu,
+    device_preference::Vector{Symbol} = [:cpu],
+    use_plm_tables::Bool = false,
+    plm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
+    dplm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
+    NP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
+    NdP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
+    norm_scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0),
+    _otf_scratch_P::Vector{Vector{Float64}} = Vector{Float64}[],
+    _otf_scratch_dP::Vector{Vector{Float64}} = Vector{Float64}[],
+    _otf_scratch_Ps::Vector{Vector{Float64}} = Vector{Float64}[],
+    _m_order::Vector{Int} = Int[],
+    howmany::Int = 1,
+    spec_dist::Int = 0,
+    south_pole_first::Bool = false,
+    allow_padding::Bool = false,
+    nlat_padded::Int = 0,
+    spat_dist::Int = 0,
+)
+    grid = SHTGrid(θ, φ, x, w, st, cphi)
+    norm_group = SHTNorm(; Nlm=Nlm, norm=norm, cs_phase=cs_phase,
+                          real_norm=real_norm, robert_form=robert_form,
+                          scale_matrix=norm_scale_matrix)
+    tables = SHTTables(; enabled=use_plm_tables, plm=plm_tables, dplm=dplm_tables,
+                         NP=NP_tables, NdP=NdP_tables)
+    scratch = SHTScratch(; otf_P=_otf_scratch_P, otf_dP=_otf_scratch_dP,
+                           otf_Ps=_otf_scratch_Ps, m_order=_m_order)
+    return SHTConfig(lmax, mmax, mres, nlat, nlon, grid_type,
+                     nlm, li, mi, nspat,
+                     phi_scale, on_the_fly,
+                     compute_device, device_preference,
+                     howmany, spec_dist, south_pole_first,
+                     allow_padding, nlat_padded, spat_dist,
+                     grid, norm_group, tables, scratch)
 end
 
 # ============================================================================
@@ -206,15 +287,63 @@ const _SHTCONFIG_ALIAS_WARNED = Ref(false)
 end
 
 function Base.getproperty(cfg::SHTConfig, name::Symbol)
+    # ----- old aliases (deprecated) -----
     if name === :wlat
         _warn_alias_once(:wlat, :w)
-        return getfield(cfg, :w)
+        return getfield(cfg, :_grid).w
     elseif name === :ct
         _warn_alias_once(:ct, :x)
-        return getfield(cfg, :x)
+        return getfield(cfg, :_grid).x
     elseif name === :sintheta
         _warn_alias_once(:sintheta, :st)
-        return getfield(cfg, :st)
+        return getfield(cfg, :_grid).st
+    # ----- grid fields -----
+    elseif name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
+        return getproperty(getfield(cfg, :_grid), name)
+    # ----- normalization fields -----
+    elseif name === :Nlm
+        return getfield(cfg, :_norm).Nlm
+    elseif name === :norm
+        return getfield(cfg, :_norm).norm
+    elseif name === :cs_phase
+        return getfield(cfg, :_norm).cs_phase
+    elseif name === :real_norm
+        return getfield(cfg, :_norm).real_norm
+    elseif name === :robert_form
+        return getfield(cfg, :_norm).robert_form
+    elseif name === :norm_scale_matrix
+        return getfield(cfg, :_norm).scale_matrix
+    # ----- tables fields -----
+    elseif name === :use_plm_tables
+        return getfield(cfg, :_tables).enabled
+    elseif name === :plm_tables
+        return getfield(cfg, :_tables).plm
+    elseif name === :dplm_tables
+        return getfield(cfg, :_tables).dplm
+    elseif name === :NP_tables
+        return getfield(cfg, :_tables).NP
+    elseif name === :NdP_tables
+        return getfield(cfg, :_tables).NdP
+    # ----- scratch fields -----
+    elseif name === :_otf_scratch_P
+        return getfield(cfg, :_scratch).otf_P
+    elseif name === :_otf_scratch_dP
+        return getfield(cfg, :_scratch).otf_dP
+    elseif name === :_otf_scratch_Ps
+        return getfield(cfg, :_scratch).otf_Ps
+    elseif name === :_m_order
+        return getfield(cfg, :_scratch).m_order
+    # ----- sub-struct direct access (new API) -----
+    elseif name === :grid
+        return getfield(cfg, :_grid)
+    # Note: `cfg.norm` returns the Symbol (legacy). Use `cfg.normalization`
+    # for the sub-struct to avoid name collision.
+    elseif name === :normalization
+        return getfield(cfg, :_norm)
+    elseif name === :tables
+        return getfield(cfg, :_tables)
+    elseif name === :scratch
+        return getfield(cfg, :_scratch)
     else
         return getfield(cfg, name)
     end
@@ -223,21 +352,114 @@ end
 function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
     if name === :wlat
         _warn_alias_once(:wlat, :w)
-        return setfield!(cfg, :w, val)
+        return setfield!(getfield(cfg, :_grid), :w, val)
     elseif name === :ct
         _warn_alias_once(:ct, :x)
-        return setfield!(cfg, :x, val)
+        return setfield!(getfield(cfg, :_grid), :x, val)
     elseif name === :sintheta
         _warn_alias_once(:sintheta, :st)
-        return setfield!(cfg, :st, val)
+        return setfield!(getfield(cfg, :_grid), :st, val)
+    elseif name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
+        return setproperty!(getfield(cfg, :_grid), name, val)
+    elseif name === :Nlm
+        return setfield!(getfield(cfg, :_norm), :Nlm, val)
+    elseif name === :norm
+        return setfield!(getfield(cfg, :_norm), :norm, val)
+    elseif name === :cs_phase
+        return setfield!(getfield(cfg, :_norm), :cs_phase, val)
+    elseif name === :real_norm
+        return setfield!(getfield(cfg, :_norm), :real_norm, val)
+    elseif name === :robert_form
+        return setfield!(getfield(cfg, :_norm), :robert_form, val)
+    elseif name === :norm_scale_matrix
+        return setfield!(getfield(cfg, :_norm), :scale_matrix, val)
+    elseif name === :use_plm_tables
+        return setfield!(getfield(cfg, :_tables), :enabled, val)
+    elseif name === :plm_tables
+        return setfield!(getfield(cfg, :_tables), :plm, val)
+    elseif name === :dplm_tables
+        return setfield!(getfield(cfg, :_tables), :dplm, val)
+    elseif name === :NP_tables
+        return setfield!(getfield(cfg, :_tables), :NP, val)
+    elseif name === :NdP_tables
+        return setfield!(getfield(cfg, :_tables), :NdP, val)
+    elseif name === :_otf_scratch_P
+        return setfield!(getfield(cfg, :_scratch), :otf_P, val)
+    elseif name === :_otf_scratch_dP
+        return setfield!(getfield(cfg, :_scratch), :otf_dP, val)
+    elseif name === :_otf_scratch_Ps
+        return setfield!(getfield(cfg, :_scratch), :otf_Ps, val)
+    elseif name === :_m_order
+        return setfield!(getfield(cfg, :_scratch), :m_order, val)
     else
         return setfield!(cfg, name, val)
     end
 end
 
 function Base.propertynames(::SHTConfig, private::Bool=false)
-    return (fieldnames(SHTConfig)..., :wlat, :ct, :sintheta)
+    return (fieldnames(SHTConfig)...,
+            :θ, :φ, :x, :w, :st, :cphi,
+            :Nlm, :norm, :cs_phase, :real_norm, :robert_form, :norm_scale_matrix,
+            :use_plm_tables, :plm_tables, :dplm_tables, :NP_tables, :NdP_tables,
+            :_otf_scratch_P, :_otf_scratch_dP, :_otf_scratch_Ps, :_m_order,
+            :grid, :normalization, :tables, :scratch,
+            :wlat, :ct, :sintheta)
 end
+
+# ============================================================================
+# LOGICAL GROUPING ACCESSORS
+# ============================================================================
+# SHTConfig accumulates ~35 fields across grid, normalization, tables, and
+# scratch concerns. A full role-typed restructure (struct SHTGrid; ...;
+# mutable struct SHTConfig; grid::SHTGrid; end) would break every call site.
+# These accessors give the same conceptual grouping for documentation and new
+# code without breaking the flat-field API everything else depends on.
+
+"""
+    grid_view(cfg::SHTConfig) -> NamedTuple
+
+Grid-related fields: grid type, θ/φ coordinates, Gauss nodes/weights, sin(θ),
+azimuthal spacing. Use for read-only access when writing new code that wants
+an explicit "grid" abstraction.
+"""
+@inline grid_view(cfg::SHTConfig) = (
+    type = cfg.grid_type,
+    θ = cfg.θ, φ = cfg.φ, x = cfg.x, w = cfg.w, st = cfg.st,
+    nlat = cfg.nlat, nlon = cfg.nlon, cphi = cfg.cphi,
+)
+
+"""
+    norm_view(cfg::SHTConfig) -> NamedTuple
+
+Normalization / phase convention fields.
+"""
+@inline norm_view(cfg::SHTConfig) = (
+    Nlm = cfg.Nlm, norm = cfg.norm, cs_phase = cfg.cs_phase,
+    real_norm = cfg.real_norm, robert_form = cfg.robert_form,
+    phi_scale = cfg.phi_scale,
+)
+
+"""
+    tables_view(cfg::SHTConfig) -> NamedTuple
+
+Precomputed table caches (plm, dplm, Nlm-fused NP/NdP) plus the toggle flag.
+"""
+@inline tables_view(cfg::SHTConfig) = (
+    enabled = cfg.use_plm_tables,
+    plm = cfg.plm_tables, dplm = cfg.dplm_tables,
+    NP = cfg.NP_tables, NdP = cfg.NdP_tables,
+)
+
+"""
+    scratch_view(cfg::SHTConfig) -> NamedTuple
+
+Lazily-built scratch buffers: per-thread on-the-fly Legendre storage,
+norm-scale matrix, balanced m ordering.
+"""
+@inline scratch_view(cfg::SHTConfig) = (
+    otf_P = cfg._otf_scratch_P, otf_dP = cfg._otf_scratch_dP, otf_Ps = cfg._otf_scratch_Ps,
+    norm_scale = cfg.norm_scale_matrix, m_order = cfg._m_order,
+)
 
 """
     has_fused_scalar_tables(cfg) -> Bool

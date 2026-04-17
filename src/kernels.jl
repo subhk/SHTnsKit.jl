@@ -100,7 +100,28 @@ end
 # SPHTOR SYNTHESIS KERNELS
 # ============================================================================
 
+"""
+    SphtorKernelCtx(NP, NdP, i, col, m, ltr)
+
+Bundles the per-(m, i) loop context sphtor kernels receive. Julia compiles
+field access for free; this keeps the kernel signatures readable and avoids
+6-way positional-argument ordering bugs. Callers may still use the old
+positional form — methods accepting both remain defined.
+"""
+struct SphtorKernelCtx{TP,TD}
+    NP::TP
+    NdP::TD
+    i::Int
+    col::Int
+    m::Int
+    ltr::Int
+end
+
 """Sphtor synthesis kernel using Nlm-fused tables (`NP = Nlm*P_l^m`, `NdP = Nlm*dP_l^m/dx`)."""
+@inline function _sphtor_synthesis_kernel(cfg, Slm, Tlm, ctx::SphtorKernelCtx)
+    return _sphtor_synthesis_kernel(cfg, Slm, Tlm, ctx.NP, ctx.NdP, ctx.i, ctx.col, ctx.m, ctx.ltr)
+end
+
 @inline function _sphtor_synthesis_kernel(cfg, Slm, Tlm, NP, NdP, i, col, m, ltr)
     x = cfg.x[i]
     s_theta = sqrt(max(0.0, 1 - x*x))
@@ -145,6 +166,11 @@ end
 # ============================================================================
 
 """Sphtor analysis kernel using Nlm-fused tables. Accumulates into Sacc, Tacc."""
+@inline function _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi, ctx::SphtorKernelCtx, scale_phi)
+    return _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
+                                     ctx.NP, ctx.NdP, ctx.i, ctx.col, ctx.m, ctx.ltr, scale_phi)
+end
+
 @inline function _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi, NP, NdP, i, col, m, ltr, scale_phi)
     x = cfg.x[i]
     s_theta = sqrt(max(0.0, 1 - x*x))

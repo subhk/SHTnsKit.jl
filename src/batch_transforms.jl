@@ -413,7 +413,8 @@ In-place batch inverse transform.
 """
 function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                           alm_batch::AbstractArray{<:Complex,3};
-                          real_output::Bool=true)
+                          real_output::Bool=true,
+                          fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
@@ -425,8 +426,14 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     size(f_out, 2) == nlon || throw(DimensionMismatch("f_out second dim must be nlon=$nlon"))
     size(f_out, 3) == nfields || throw(DimensionMismatch("f_out third dim must be nfields=$nfields"))
 
-    # Allocate Fourier space buffer
-    Fφ_batch = zeros(ComplexF64, nlat, nlon, nfields)
+    # Reuse caller-provided scratch if given, else allocate.
+    if fft_batch === nothing
+        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+    else
+        size(fft_batch) == (nlat, nlon, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, nlon, nfields)"))
+        Fφ_batch = fft_batch
+    end
+    fill!(Fφ_batch, zero(eltype(Fφ_batch)))
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1

@@ -70,7 +70,7 @@ function dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Al
     size(Alm,1)==lmax+1 && size(Alm,2)==mmax+1 || throw(DimensionMismatch("Alm dims"))
     size(Rlm,1)==lmax+1 && size(Rlm,2)==mmax+1 || throw(DimensionMismatch("Rlm dims"))
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
-    fill!(Rlm, 0)
+    fill!(Rlm, zero(eltype(Rlm)))
     # Key insight: mx stores coefficients describing how (l,m) contributes to its neighbors.
     # For R_l^m = (Op * A)_lm, we need coefficients from neighbors that contribute TO (l,m):
     # - Y_{l-1}^m contributes to Y_l^m via b_{l-1}^m (the upward coefficient from l-1)

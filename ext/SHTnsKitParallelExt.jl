@@ -128,6 +128,18 @@ SHTnsKit._fft_plan_cache_set_cb[] = _fft_plan_cache_set_impl
 SHTnsKit._fft_plan_cache_enable_cb[] = _fft_plan_cache_enable_impl
 SHTnsKit._fft_plan_cache_disable_cb[] = _fft_plan_cache_disable_impl
 
+@inline function _decomp_hash(A)
+    if hasfield(typeof(A), :pencil)
+        pencil = getfield(A, :pencil)
+        if hasfield(typeof(pencil), :decomposition)
+            return hash(getfield(pencil, :decomposition))
+        elseif hasfield(typeof(pencil), :plan)
+            return hash(getfield(pencil, :plan))
+        end
+    end
+    return hash(size(A))
+end
+
 # Generate cache key based on array characteristics for FFT plan reuse
 function _cache_key(kind::Symbol, A)
     # Basic array characteristics
@@ -140,24 +152,8 @@ function _cache_key(kind::Symbol, A)
         1  # Default to single process
     end
     
-    # Add decomposition hash with multiple fallback patterns
-    decomp_hash = try
-        hash(A.pencil.decomposition)
-    catch
-        try
-            # Alternative field access patterns
-            pencil = getfield(A, :pencil)
-            if hasfield(typeof(pencil), :decomposition)
-                hash(getfield(pencil, :decomposition))
-            elseif hasfield(typeof(pencil), :plan)
-                hash(getfield(pencil, :plan))
-            else
-                hash(size(A))  # Use array size as fallback identifier
-            end
-        catch
-            hash(size(A))  # Ultimate fallback
-        end
-    end
+    # Decomposition hash — no try/catch to avoid closure-box allocations on hot path.
+    decomp_hash = _decomp_hash(A)
     
     return (base_key..., comm_size, decomp_hash)
 end
@@ -1003,49 +999,56 @@ function segmented_spectral_reduce!(data::AbstractArray, comm, operation)
     prev_buf = nothing  # :a or :b
     prev_len = 0
     prev_start = 0
-    
-    for seg in 1:num_segments
-        start_idx = (seg - 1) * segment_size + 1
-        end_idx = min(seg * segment_size, length(data))
-        segment_data = view(data, start_idx:end_idx)
-        cur_len = length(segment_data)
-        
-        # Choose buffer not in use by previous outstanding request
-        buf_sym = (prev_buf == :a) ? :b : :a
-        temp_view = buf_sym === :a ? view(temp_a, 1:cur_len) : view(temp_b, 1:cur_len)
-        copyto!(temp_view, segment_data)
-        
-        # Launch nonblocking reduction for current segment
-        req = MPI.Iallreduce!(temp_view, operation, comm)
-        
-        # Complete previous request and write back
+
+    try
+        for seg in 1:num_segments
+            start_idx = (seg - 1) * segment_size + 1
+            end_idx = min(seg * segment_size, length(data))
+            segment_data = view(data, start_idx:end_idx)
+            cur_len = length(segment_data)
+
+            # Choose buffer not in use by previous outstanding request
+            buf_sym = (prev_buf == :a) ? :b : :a
+            temp_view = buf_sym === :a ? view(temp_a, 1:cur_len) : view(temp_b, 1:cur_len)
+            copyto!(temp_view, segment_data)
+
+            # Launch nonblocking reduction for current segment
+            req = MPI.Iallreduce!(temp_view, operation, comm)
+
+            # Complete previous request and write back
+            if prev_req !== nothing
+                MPI.Wait(prev_req)
+                pstart = prev_start
+                pend = min(pstart + prev_len - 1, length(data))
+                prev_data = view(data, pstart:pend)
+                prev_view = (prev_buf === :a ? view(temp_a, 1:prev_len) : view(temp_b, 1:prev_len))
+                copyto!(prev_data, prev_view)
+            end
+
+            # Promote current to previous
+            prev_req = req
+            prev_buf = buf_sym
+            prev_len = cur_len
+            prev_start = start_idx
+        end
+
+        # Final pending segment
         if prev_req !== nothing
             MPI.Wait(prev_req)
-            # previous segment range
+            prev_req = nothing
             pstart = prev_start
             pend = min(pstart + prev_len - 1, length(data))
             prev_data = view(data, pstart:pend)
             prev_view = (prev_buf === :a ? view(temp_a, 1:prev_len) : view(temp_b, 1:prev_len))
             copyto!(prev_data, prev_view)
         end
-        
-        # Promote current to previous
-        prev_req = req
-        prev_buf = buf_sym
-        prev_len = cur_len
-        prev_start = start_idx
+    finally
+        # Drain any outstanding request so MPI doesn't retain buffer refs on error paths.
+        if prev_req !== nothing
+            try MPI.Wait(prev_req) catch end
+        end
     end
-    
-    # Final pending segment
-    if prev_req !== nothing
-        MPI.Wait(prev_req)
-        pstart = prev_start
-        pend = min(pstart + prev_len - 1, length(data))
-        prev_data = view(data, pstart:pend)
-        prev_view = (prev_buf === :a ? view(temp_a, 1:prev_len) : view(temp_b, 1:prev_len))
-        copyto!(prev_data, prev_view)
-    end
-    
+
     return data
 end
 

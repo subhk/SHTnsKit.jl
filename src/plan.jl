@@ -185,7 +185,7 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
 
     # Full complex FFT path
     Fθk = Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon)
-    fill!(Fθk, 0)  # Initialize to zero
+    fill!(Fθk, zero(ComplexF64))
 
     # Pre-optimize FFTW plans for this specific array layout
     # Planning may take time but subsequent transforms will be faster
@@ -216,7 +216,7 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
     
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
-    fill!(Slm_out, 0); fill!(Tlm_out, 0)
+    fill!(Slm_out, zero(eltype(Slm_out))); fill!(Tlm_out, zero(eltype(Tlm_out)))
     # First pass: FFT(Vt) -> partial contributions using Fθ only
     @inbounds for i in 1:nlat, j in 1:nlon
         plan.Fθk[i,j] = Vt[i,j]
@@ -325,7 +325,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     end
     
     # Synthesize Vt: stream m→k then inverse FFT
-    fill!(plan.Fθk, 0)
+    fill!(plan.Fθk, zero(eltype(plan.Fθk)))
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
@@ -384,7 +384,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     end
 
     # Synthesize Vp similarly
-    fill!(plan.Fθk, 0)
+    fill!(plan.Fθk, zero(eltype(plan.Fθk)))
     for m in 0:mmax
         col = m + 1
         for i in 1:nlat
@@ -462,7 +462,7 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     plan.fft_plan * plan.Fθk  # execute planned FFT in-place
     
     # Compute alm using shared scalar analysis kernel
-    fill!(alm_out, 0)
+    fill!(alm_out, zero(eltype(alm_out)))
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
     for m in 0:mmax
@@ -503,7 +503,7 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     end
     
     # Zero Fourier buffer
-    fill!(plan.Fθk, 0)
+    fill!(plan.Fθk, zero(eltype(plan.Fθk)))
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
     

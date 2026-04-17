@@ -233,9 +233,10 @@ function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; 
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
     nlat, nlon = cfg.nlat, cfg.nlon
-    Fph = fft_scratch === nothing ? Matrix{ComplexF64}(undef, nlat, nlon) : fft_scratch
+    CT = eltype(alm)
+    Fph = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
     size(Fph, 1) == nlat && size(Fph, 2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
-    fill!(Fph, 0)
+    fill!(Fph, zero(eltype(Fph)))
     _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output)
     ifft_phi!(Fph, Fph)
     if real_output

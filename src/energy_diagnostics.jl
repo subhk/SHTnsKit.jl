@@ -284,8 +284,8 @@ function grad_energy_vector_packed(cfg::SHTConfig,
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
     grad_S = similar(Spacked)
     grad_T = similar(Tpacked)
-    fill!(grad_S, 0)
-    fill!(grad_T, 0)
+    fill!(grad_S, zero(eltype(grad_S)))
+    fill!(grad_T, zero(eltype(grad_T)))
     @inbounds for k in eachindex(Spacked)
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1

@@ -119,16 +119,20 @@ Threads.@threads for i in 1:n
 end
 ```
 """
-struct SHTPlan{FP, IP}
+struct SHTPlan{FP, IP, RP, IRP}
     cfg::SHTConfig                # Configuration parameters
     P::Vector{Float64}            # Working array for Legendre polynomials P_l^m(x)
     dPdx::Vector{Float64}         # Working array for derivatives dP_l^m/dx (legacy, kept for compatibility)
     dPdtheta::Vector{Float64}     # Working array for pole-safe derivatives dP_l^m/dθ
     P_over_sinth::Vector{Float64} # Working array for pole-safe P_l^m/sin(θ)
     G::Vector{ComplexF64}         # Temporary array for latitudinal profiles
-    Fθk::Matrix{ComplexF64}       # Fourier coefficient matrix [latitude × longitude]
+    Fθk::Matrix{ComplexF64}       # Fourier coefficient matrix [latitude × longitude] (complex path)
+    Fθk_r::Matrix{ComplexF64}     # (nlat, nlon÷2+1) buffer for rfft path; 0×0 when use_rfft=false
+    real_scratch::Matrix{Float64} # (nlat, nlon) real scratch for rfft path; 0×0 when use_rfft=false
     fft_plan::FP                  # Pre-optimized forward FFT plan
     ifft_plan::IP                 # Pre-optimized inverse FFT plan
+    rfft_plan::RP                 # Real→complex FFT plan (nothing when use_rfft=false)
+    irfft_plan::IRP               # Complex→real inverse FFT plan (nothing when use_rfft=false)
     use_rfft::Bool                # Flag: true = use real FFT optimization, false = complex FFT
     norm_tmp1::Matrix{ComplexF64} # Scratch buffer for normalization conversion
     norm_tmp2::Matrix{ComplexF64} # Second scratch buffer for vector normalization conversion
@@ -152,13 +156,9 @@ reduce memory usage for real-valued fields. Currently, only `use_rfft=false` is
 supported, which uses full complex FFT for maximum compatibility.
 """
 function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
-    # Real FFT optimization is not yet fully implemented
-    if use_rfft
-        throw(ArgumentError(
-            "use_rfft=true is not yet fully implemented. " *
-            "The RFFT code paths in analysis!, synthesis!, and vector transforms are incomplete. " *
-            "Please use use_rfft=false (the default) for now."
-        ))
+    nlat, nlon = cfg.nlat, cfg.nlon
+    if use_rfft && cfg.mmax > nlon ÷ 2
+        throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2, got mmax=$(cfg.mmax), nlon=$nlon"))
     end
 
     # Allocate working arrays for Legendre polynomial computation
@@ -166,22 +166,37 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
     dPdx = Vector{Float64}(undef, cfg.lmax + 1)         # dP_l^m/d(cos θ) derivatives (legacy)
     dPdtheta = Vector{Float64}(undef, cfg.lmax + 1)     # dP_l^m/dθ pole-safe derivatives
     P_over_sinth = Vector{Float64}(undef, cfg.lmax + 1) # P_l^m/sin(θ) pole-safe
-    G = Vector{ComplexF64}(undef, cfg.nlat)             # Temporary latitudinal profiles
+    G = Vector{ComplexF64}(undef, nlat)                 # Temporary latitudinal profiles
 
-    # Full complex FFT path
-    Fθk = Matrix{ComplexF64}(undef, cfg.nlat, cfg.nlon)
+    # Full complex FFT path — always present for vector (sphtor) transforms
+    # which reuse Fθk as streaming m→k buffer regardless of use_rfft.
+    Fθk = Matrix{ComplexF64}(undef, nlat, nlon)
     fill!(Fθk, zero(ComplexF64))
+    fft_plan = FFTW.plan_fft!(Fθk, 2)
+    ifft_plan = FFTW.plan_ifft!(Fθk, 2)
 
-    # Pre-optimize FFTW plans for this specific array layout
-    # Planning may take time but subsequent transforms will be faster
-    fft_plan = FFTW.plan_fft!(Fθk, 2)   # Forward FFT along longitude (dim 2)
-    ifft_plan = FFTW.plan_ifft!(Fθk, 2) # Inverse FFT along longitude (dim 2)
+    # RFFT-specific buffers and plans
+    if use_rfft
+        real_scratch = Matrix{Float64}(undef, nlat, nlon)
+        fill!(real_scratch, 0.0)
+        Fθk_r = Matrix{ComplexF64}(undef, nlat, nlon ÷ 2 + 1)
+        fill!(Fθk_r, zero(ComplexF64))
+        rfft_plan = FFTW.plan_rfft(real_scratch, 2)
+        irfft_plan = FFTW.plan_irfft(Fθk_r, nlon, 2)
+    else
+        real_scratch = Matrix{Float64}(undef, 0, 0)
+        Fθk_r = Matrix{ComplexF64}(undef, 0, 0)
+        rfft_plan = nothing
+        irfft_plan = nothing
+    end
 
     # Pre-allocate normalization scratch buffers for zero-allocation in-place transforms
     norm_tmp1 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
     norm_tmp2 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
 
-    return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, G, Fθk, fft_plan, ifft_plan, false, norm_tmp1, norm_tmp2)
+    return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, G, Fθk, Fθk_r, real_scratch,
+                   fft_plan, ifft_plan, rfft_plan, irfft_plan, use_rfft,
+                   norm_tmp1, norm_tmp2)
 end
 
 """
@@ -439,24 +454,37 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     size(f,2)==nlon || throw(DimensionMismatch("f second dim must be nlon"))
     size(alm_out,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm_out,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
-    # Copy f into complex buffer and FFT along φ in-place
-    @inbounds for i in 1:nlat, j in 1:nlon
-        plan.Fθk[i,j] = f[i,j]
-    end
-    
-    plan.fft_plan * plan.Fθk  # execute planned FFT in-place
-    
-    # Compute alm using shared scalar analysis kernel
-    fill!(alm_out, zero(eltype(alm_out)))
+
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
-    for m in 0:mmax
-        col = m + 1
-        @inbounds for i in 1:nlat
-            _scalar_analysis_kernel_otf!(alm_out, cfg, plan.Fθk, plan.P, i, col, m, lmax, scaleφ)
+    fill!(alm_out, zero(eltype(alm_out)))
+
+    if plan.use_rfft
+        eltype(f) <: Real || throw(ArgumentError("use_rfft plan requires real-valued f"))
+        @inbounds for i in 1:nlat, j in 1:nlon
+            plan.real_scratch[i,j] = f[i,j]
+        end
+        # Half-spectrum FFT — bins 0..mmax match full-FFT values for real input.
+        mul!(plan.Fθk_r, plan.rfft_plan, plan.real_scratch)
+        for m in 0:mmax
+            col = m + 1
+            @inbounds for i in 1:nlat
+                _scalar_analysis_kernel_otf!(alm_out, cfg, plan.Fθk_r, plan.P, i, col, m, lmax, scaleφ)
+            end
+        end
+    else
+        @inbounds for i in 1:nlat, j in 1:nlon
+            plan.Fθk[i,j] = f[i,j]
+        end
+        plan.fft_plan * plan.Fθk
+        for m in 0:mmax
+            col = m + 1
+            @inbounds for i in 1:nlat
+                _scalar_analysis_kernel_otf!(alm_out, cfg, plan.Fθk, plan.P, i, col, m, lmax, scaleφ)
+            end
         end
     end
-    
+
     # Convert to cfg normalization if needed (using pre-allocated scratch buffer)
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         convert_alm_norm!(plan.norm_tmp1, alm_out, cfg; to_internal=false)
@@ -474,31 +502,46 @@ Streams m→k directly without building a (θ×m) intermediate.
 function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
-    
+
     size(f_out,1)==nlat || throw(DimensionMismatch("f_out first dim must be nlat"))
     size(f_out,2)==nlon || throw(DimensionMismatch("f_out second dim must be nlon"))
     size(alm,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
-    
+
     # Convert alm to internal normalization if needed (using pre-allocated scratch buffer)
     alm_int = alm
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         convert_alm_norm!(plan.norm_tmp1, alm, cfg; to_internal=true)
         alm_int = plan.norm_tmp1
     end
-    
-    # Zero Fourier buffer
-    fill!(plan.Fθk, zero(eltype(plan.Fθk)))
+
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
-    
-    # Stream over m, fill k-bins directly using shared scalar synthesis kernel
+
+    if plan.use_rfft
+        real_output || throw(ArgumentError("synthesis! with use_rfft plan requires real_output=true"))
+        eltype(f_out) <: Real || throw(ArgumentError("use_rfft plan requires real-valued f_out"))
+        fill!(plan.Fθk_r, zero(eltype(plan.Fθk_r)))
+        for m in 0:mmax
+            col = m + 1
+            @inbounds for i in 1:nlat
+                plan.Fθk_r[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(cfg, alm_int, plan.P, i, col, m, lmax)
+            end
+        end
+        # No Hermitian fill — irfft reconstructs implicitly.
+        mul!(plan.real_scratch, plan.irfft_plan, plan.Fθk_r)
+        @inbounds for i in 1:nlat, j in 1:nlon
+            f_out[i,j] = plan.real_scratch[i,j]
+        end
+        return f_out
+    end
+
+    fill!(plan.Fθk, zero(eltype(plan.Fθk)))
     for m in 0:mmax
         col = m + 1
         @inbounds for i in 1:nlat
             plan.Fθk[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(cfg, alm_int, plan.P, i, col, m, lmax)
         end
-        # Hermitian conjugate for negative m to ensure real output
         if real_output && m > 0
             conj_index = nlon - m + 1
             @inbounds for i in 1:nlat
@@ -506,11 +549,8 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
             end
         end
     end
-    
-    # Inverse FFT along φ in-place
     plan.ifft_plan * plan.Fθk
-    
-    # Write result
+
     if real_output
         @inbounds for i in 1:nlat, j in 1:nlon
             f_out[i,j] = real(plan.Fθk[i,j])

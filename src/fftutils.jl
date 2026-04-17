@@ -252,6 +252,77 @@ function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
 end
 
 """
+    rfft_phi(A::AbstractMatrix{<:Real}) -> Matrix{<:Complex}
+
+Real-to-complex FFT along longitude. Returns `(nlat, nlon÷2+1)` complex array
+with the positive-frequency half of the spectrum (bin k matches full FFT bin k
+for `k = 0..nlon÷2`). Falls back to a DFT-then-truncate path when FFTW cannot
+handle the input element type (AD).
+"""
+function rfft_phi(A::AbstractMatrix{<:Real})
+    try
+        Y = rfft(A, 2)
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+        return Y
+    catch e
+        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
+            rethrow(e)
+        end
+        Y_full = _dft_phi(A, -1)
+        nlon = size(A, 2)
+        Y = Y_full[:, 1:(nlon ÷ 2 + 1)]
+        _FFT_BACKEND[] = _FFT_BACKEND_DFT
+        return Y
+    end
+end
+
+"""
+    irfft_phi!(dest::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Complex}, nlon::Int)
+
+Complex-to-real inverse FFT along longitude. `A` has `nlon÷2+1` columns (the
+positive-frequency half); `dest` is `(size(A,1), nlon)`. Writes real output
+in place. DFT fallback reconstructs the negative-frequency half via Hermitian
+symmetry then inverse-transforms.
+"""
+function irfft_phi!(dest::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Complex}, nlon::Int)
+    size(A, 2) == nlon ÷ 2 + 1 || throw(DimensionMismatch("A must have nlon÷2+1 columns"))
+    size(dest) == (size(A, 1), nlon) || throw(DimensionMismatch("dest shape must be (size(A,1), nlon)"))
+    try
+        dest .= irfft(A, nlon, 2)
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+        return dest
+    catch e
+        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
+            rethrow(e)
+        end
+        nlat = size(A, 1)
+        CT = eltype(A)
+        Full = Matrix{CT}(undef, nlat, nlon)
+        @inbounds for i in 1:nlat
+            for k in 0:(nlon - 1)
+                if k <= nlon ÷ 2
+                    Full[i, k + 1] = A[i, k + 1]
+                else
+                    # Hermitian: bin k (k > nlon/2) = conj(bin nlon-k)
+                    Full[i, k + 1] = conj(A[i, nlon - k + 1])
+                end
+            end
+        end
+        @inbounds for i in 1:nlat
+            for j in 0:(nlon - 1)
+                s = zero(CT)
+                @simd for k in 0:(nlon - 1)
+                    s += Full[i, k + 1] * cis(_TWO_PI * k * j / nlon)
+                end
+                dest[i, j + 1] = real(s) / nlon
+            end
+        end
+        _FFT_BACKEND[] = _FFT_BACKEND_DFT
+        return dest
+    end
+end
+
+"""
     ifft_phi(A::AbstractMatrix)
 
 Inverse FFT along the longitude dimension with automatic differentiation support.

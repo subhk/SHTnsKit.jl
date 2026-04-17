@@ -128,7 +128,7 @@ so spheroidal/toroidal spectra are directly tied to divergence and vorticity.
 Transform spheroidal/toroidal coefficients to horizontal vector field components.
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
-function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
@@ -144,14 +144,28 @@ function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
 
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(Slm_int)
-    Ftheta = zeros(CT, nlat, nlon)
-    Fphi = zeros(CT, nlat, nlon)
 
-    _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
-                              ltr=lmax, real_output=real_output)
-
-    Vt = real_output ? real.(ifft_phi(Ftheta)) : ifft_phi(Ftheta)
-    Vp = real_output ? real.(ifft_phi(Fphi)) : ifft_phi(Fphi)
+    if use_rfft
+        real_output || throw(ArgumentError("use_rfft=true implies real_output"))
+        mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
+        nbins = nlon ÷ 2 + 1
+        Ftheta = zeros(CT, nlat, nbins)
+        Fphi   = zeros(CT, nlat, nbins)
+        _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
+                                  ltr=lmax, real_output=false)  # skip Hermitian fill
+        RT = real(CT)
+        Vt = Matrix{RT}(undef, nlat, nlon)
+        Vp = Matrix{RT}(undef, nlat, nlon)
+        irfft_phi!(Vt, Ftheta, nlon)
+        irfft_phi!(Vp, Fphi, nlon)
+    else
+        Ftheta = zeros(CT, nlat, nlon)
+        Fphi = zeros(CT, nlat, nlon)
+        _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
+                                  ltr=lmax, real_output=real_output)
+        Vt = real_output ? real.(ifft_phi(Ftheta)) : ifft_phi(Ftheta)
+        Vp = real_output ? real.(ifft_phi(Fphi)) : ifft_phi(Fphi)
+    end
 
     if cfg.robert_form
         @inbounds for i in 1:nlat
@@ -168,7 +182,7 @@ end
 
 Transform horizontal vector field components to spheroidal/toroidal coefficients.
 """
-function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
+function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix; use_rfft::Bool=false)
     if is_gpu_config(cfg)
         return gpu_analysis_sphtor(cfg, Vt, Vp)
     end
@@ -177,8 +191,14 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
 
-    Fthetam = fft_phi(_as_complex(Vt))
-    Fphim = fft_phi(_as_complex(Vp))
+    if use_rfft
+        eltype(Vt) <: Real && eltype(Vp) <: Real || throw(ArgumentError("use_rfft=true requires real-valued Vt, Vp"))
+        Fthetam = rfft_phi(Vt)
+        Fphim = rfft_phi(Vp)
+    else
+        Fthetam = fft_phi(_as_complex(Vt))
+        Fphim = fft_phi(_as_complex(Vp))
+    end
 
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm_int = zeros(ComplexF64, lmax + 1, mmax + 1)

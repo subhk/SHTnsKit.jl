@@ -172,11 +172,17 @@ Returns coefficients `alm[l+1, m+1]` with orthonormal normalization.
 
 Parallelizes over m-modes using static scheduling for consistent performance.
 """
-function analysis(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+function analysis(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing, use_rfft::Bool=false)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
-    Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
+    if use_rfft
+        eltype(f) <: Real || throw(ArgumentError("use_rfft=true requires a real-valued input"))
+        fft_scratch === nothing || throw(ArgumentError("fft_scratch is not supported with use_rfft=true"))
+        Fph = rfft_phi(f)                   # (nlat, nlon÷2+1)
+    else
+        Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
+    end
     CT = eltype(Fph)
     alm = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
     _analysis_scalar_mloop!(alm, cfg, Fph)
@@ -189,14 +195,20 @@ end
 In-place forward transform. Writes coefficients into `alm_out`.
 `alm_out` must be size `(lmax+1, mmax+1)`.
 """
-function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing, use_rfft::Bool=false)
     size(alm_out, 1) == cfg.lmax + 1 || throw(DimensionMismatch("alm_out first dim must be lmax+1=$(cfg.lmax+1)"))
     size(alm_out, 2) == cfg.mmax + 1 || throw(DimensionMismatch("alm_out second dim must be mmax+1=$(cfg.mmax+1)"))
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
     fill!(alm_out, zero(eltype(alm_out)))
-    Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
+    if use_rfft
+        eltype(f) <: Real || throw(ArgumentError("use_rfft=true requires a real-valued input"))
+        fft_scratch === nothing || throw(ArgumentError("fft_scratch is not supported with use_rfft=true"))
+        Fph = rfft_phi(f)
+    else
+        Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
+    end
     _analysis_scalar_mloop!(alm_out, cfg, Fph)
     return alm_out
 end
@@ -207,12 +219,25 @@ end
 Inverse transform back to a grid `(nlat, nlon)`. If `real_output=true`,
 Hermitian symmetry is enforced before IFFT.
 """
-function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
+    if use_rfft
+        real_output || throw(ArgumentError("use_rfft=true implies real_output"))
+        fft_scratch === nothing || throw(ArgumentError("fft_scratch is not supported with use_rfft=true"))
+        mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2, got mmax=$mmax, nlon=$nlon"))
+        nbins = nlon ÷ 2 + 1
+        Fph = Matrix{CT}(undef, nlat, nbins)
+        fill!(Fph, zero(CT))
+        _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=false, use_rfft=true)
+        RT = real(CT)
+        out = Matrix{RT}(undef, nlat, nlon)
+        irfft_phi!(out, Fph, nlon)
+        return out
+    end
     Fph = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
     size(Fph, 1) == nlat && size(Fph, 2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
     fill!(Fph, zero(CT))
@@ -226,7 +251,7 @@ end
 
 In-place inverse transform. Writes the spatial field into `f_out`.
 """
-function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing)
+function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing, use_rfft::Bool=false)
     size(f_out, 1) == cfg.nlat || throw(DimensionMismatch("f_out first dim must be nlat=$(cfg.nlat)"))
     size(f_out, 2) == cfg.nlon || throw(DimensionMismatch("f_out second dim must be nlon=$(cfg.nlon)"))
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -234,6 +259,18 @@ function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; 
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
+    if use_rfft
+        real_output || throw(ArgumentError("use_rfft=true implies real_output"))
+        fft_scratch === nothing || throw(ArgumentError("fft_scratch is not supported with use_rfft=true"))
+        eltype(f_out) <: Real || throw(ArgumentError("use_rfft=true requires real-valued f_out"))
+        mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2, got mmax=$mmax, nlon=$nlon"))
+        nbins = nlon ÷ 2 + 1
+        Fph = Matrix{CT}(undef, nlat, nbins)
+        fill!(Fph, zero(eltype(Fph)))
+        _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=false, use_rfft=true)
+        irfft_phi!(f_out, Fph, nlon)
+        return f_out
+    end
     Fph = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
     size(Fph, 1) == nlat && size(Fph, 2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
     fill!(Fph, zero(eltype(Fph)))
@@ -299,7 +336,7 @@ end
 
 """Scalar synthesis orchestrator. Parallelizes Legendre summation over m-modes."""
 function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::AbstractMatrix;
-                                   real_output::Bool=true)
+                                   real_output::Bool=true, use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat, nlon = cfg.nlat, cfg.nlon
     inv_scale_phi = phi_inv_scale(cfg)
@@ -309,8 +346,10 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
     else
         _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi)
     end
-    # Fill Hermitian conjugate columns for real-output IFFT
-    if real_output
+    # Fill Hermitian conjugate columns for real-output IFFT — only the full
+    # complex buffer (size nlon) can hold these. rfft's output half has no
+    # slot for the negative-m bins; irfft_phi! reconstructs them implicitly.
+    if real_output && !use_rfft
         for m in 1:mmax
             col = m + 1
             conj_index = nlon - m + 1

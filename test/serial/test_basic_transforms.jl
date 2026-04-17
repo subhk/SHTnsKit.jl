@@ -198,6 +198,44 @@ using SHTnsKit
         @test isapprox(alm_plm, alm; rtol=1e-10, atol=1e-12)
     end
 
+    @testset "use_rfft=true matches complex path (scalar analysis/synthesis)" begin
+        for (lmax, nlat, nlon) in ((6, 8, 13), (12, 14, 25), (8, 10, 20))
+            cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+            rng = MersenneTwister(101 + lmax)
+
+            # Random real-valued spatial field
+            f = randn(rng, nlat, nlon)
+
+            # Analysis: rfft path vs complex path
+            alm_c = analysis(cfg, f)
+            alm_r = analysis(cfg, f; use_rfft=true)
+            @test isapprox(alm_c, alm_r; rtol=1e-10, atol=1e-12)
+
+            # Synthesis: rfft path vs complex path (from same alm)
+            f_c = synthesis(cfg, alm_c; real_output=true)
+            f_r = synthesis(cfg, alm_c; real_output=true, use_rfft=true)
+            @test isapprox(f_c, f_r; rtol=1e-10, atol=1e-12)
+
+            # In-place variants mirror the out-of-place contract
+            alm_out = zeros(ComplexF64, lmax+1, lmax+1)
+            analysis!(cfg, alm_out, f; use_rfft=true)
+            @test isapprox(alm_out, alm_r; rtol=1e-10, atol=1e-12)
+
+            f_out = zeros(Float64, nlat, nlon)
+            synthesis!(cfg, f_out, alm_c; real_output=true, use_rfft=true)
+            @test isapprox(f_out, f_r; rtol=1e-10, atol=1e-12)
+
+            # Round-trip via rfft path
+            alm_rt = analysis(cfg, f_r; use_rfft=true)
+            @test isapprox(alm_rt, alm_r; rtol=1e-10, atol=1e-12)
+
+            # Error cases
+            @test_throws ArgumentError analysis(cfg, complex.(f); use_rfft=true)
+            @test_throws ArgumentError synthesis(cfg, alm_c; real_output=false, use_rfft=true)
+            @test_throws ArgumentError synthesis(cfg, alm_c; fft_scratch=zeros(ComplexF64, nlat, nlon), use_rfft=true)
+        end
+    end
+
     @testset "Axisymmetric transforms (analysis_axisym/synthesis_axisym)" begin
         lmax = 10
         nlat = lmax + 2

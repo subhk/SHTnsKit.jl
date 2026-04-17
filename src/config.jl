@@ -224,47 +224,59 @@ kwargs into their respective sub-structs. Keeps the call-site syntax used by
 identical to the pre-restructure behaviour.
 """
 function SHTConfig(;
-    lmax::Int, mmax::Int, mres::Int, nlat::Int, nlon::Int,
-    θ::Vector{Float64}, φ::Vector{Float64}, x::Vector{Float64}, w::Vector{Float64},
-    Nlm::Matrix{Float64}, cphi::Float64, st::Vector{Float64},
-    nlm::Int, li::Vector{Int}, mi::Vector{Int}, nspat::Int,
+    lmax::Integer, mmax::Integer, mres::Integer, nlat::Integer, nlon::Integer,
+    θ::AbstractVector, φ::AbstractVector, x::AbstractVector, w::AbstractVector,
+    Nlm::AbstractMatrix, cphi::Real, st::AbstractVector,
+    nlm::Integer, li::AbstractVector{<:Integer}, mi::AbstractVector{<:Integer}, nspat::Integer,
     norm::Symbol, cs_phase::Bool, real_norm::Bool, robert_form::Bool,
     grid_type::Symbol = :gauss,
     phi_scale::Symbol = :auto,
     on_the_fly::Bool = false,
     compute_device::Symbol = :cpu,
-    device_preference::Vector{Symbol} = [:cpu],
+    device_preference::AbstractVector{Symbol} = [:cpu],
     use_plm_tables::Bool = false,
-    plm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
-    dplm_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
-    NP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
-    NdP_tables::Vector{Matrix{Float64}} = Matrix{Float64}[],
-    norm_scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0),
-    _otf_scratch_P::Vector{Vector{Float64}} = Vector{Float64}[],
-    _otf_scratch_dP::Vector{Vector{Float64}} = Vector{Float64}[],
-    _otf_scratch_Ps::Vector{Vector{Float64}} = Vector{Float64}[],
-    _m_order::Vector{Int} = Int[],
-    howmany::Int = 1,
-    spec_dist::Int = 0,
+    plm_tables::AbstractVector = Matrix{Float64}[],
+    dplm_tables::AbstractVector = Matrix{Float64}[],
+    NP_tables::AbstractVector = Matrix{Float64}[],
+    NdP_tables::AbstractVector = Matrix{Float64}[],
+    norm_scale_matrix::AbstractMatrix = Matrix{Float64}(undef, 0, 0),
+    _otf_scratch_P::AbstractVector = Vector{Float64}[],
+    _otf_scratch_dP::AbstractVector = Vector{Float64}[],
+    _otf_scratch_Ps::AbstractVector = Vector{Float64}[],
+    _m_order::AbstractVector{<:Integer} = Int[],
+    howmany::Integer = 1,
+    spec_dist::Integer = 0,
     south_pole_first::Bool = false,
     allow_padding::Bool = false,
-    nlat_padded::Int = 0,
-    spat_dist::Int = 0,
+    nlat_padded::Integer = 0,
+    spat_dist::Integer = 0,
 )
-    grid = SHTGrid(θ, φ, x, w, st, cphi)
-    norm_group = SHTNorm(; Nlm=Nlm, norm=norm, cs_phase=cs_phase,
+    # Concretize vectors/matrices so SHTGrid/SHTNorm/SHTTables fields always
+    # carry the exact declared types. Lets callers pass ranges, views, etc.
+    grid = SHTGrid(collect(Float64, θ), collect(Float64, φ),
+                   collect(Float64, x), collect(Float64, w),
+                   collect(Float64, st), Float64(cphi))
+    norm_group = SHTNorm(; Nlm=convert(Matrix{Float64}, Nlm),
+                          norm=norm, cs_phase=cs_phase,
                           real_norm=real_norm, robert_form=robert_form,
-                          scale_matrix=norm_scale_matrix)
-    tables = SHTTables(; enabled=use_plm_tables, plm=plm_tables, dplm=dplm_tables,
-                         NP=NP_tables, NdP=NdP_tables)
-    scratch = SHTScratch(; otf_P=_otf_scratch_P, otf_dP=_otf_scratch_dP,
-                           otf_Ps=_otf_scratch_Ps, m_order=_m_order)
-    return SHTConfig(lmax, mmax, mres, nlat, nlon, grid_type,
-                     nlm, li, mi, nspat,
+                          scale_matrix=convert(Matrix{Float64}, norm_scale_matrix))
+    tables = SHTTables(;
+        enabled=use_plm_tables,
+        plm=convert(Vector{Matrix{Float64}}, collect(plm_tables)),
+        dplm=convert(Vector{Matrix{Float64}}, collect(dplm_tables)),
+        NP=convert(Vector{Matrix{Float64}}, collect(NP_tables)),
+        NdP=convert(Vector{Matrix{Float64}}, collect(NdP_tables)))
+    scratch = SHTScratch(;
+        otf_P=convert(Vector{Vector{Float64}}, collect(_otf_scratch_P)),
+        otf_dP=convert(Vector{Vector{Float64}}, collect(_otf_scratch_dP)),
+        otf_Ps=convert(Vector{Vector{Float64}}, collect(_otf_scratch_Ps)),
+        m_order=collect(Int, _m_order))
+    return SHTConfig(Int(lmax), Int(mmax), Int(mres), Int(nlat), Int(nlon), grid_type,
+                     Int(nlm), collect(Int, li), collect(Int, mi), Int(nspat),
                      phi_scale, on_the_fly,
-                     compute_device, device_preference,
-                     howmany, spec_dist, south_pole_first,
-                     allow_padding, nlat_padded, spat_dist,
+                     compute_device, collect(Symbol, device_preference),
+                     Int(howmany), Int(spec_dist), south_pole_first,
+                     allow_padding, Int(nlat_padded), Int(spat_dist),
                      grid, norm_group, tables, scratch)
 end
 

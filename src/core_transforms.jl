@@ -176,7 +176,7 @@ function analysis(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
-    Fph = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
+    Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
     CT = eltype(Fph)
     alm = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
     _analysis_scalar_mloop!(alm, cfg, Fph)
@@ -196,7 +196,7 @@ function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; f
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
     fill!(alm_out, zero(eltype(alm_out)))
-    Fph = fft_scratch === nothing ? fft_phi(complex.(f)) : fft_phi!(fft_scratch, f)
+    Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
     _analysis_scalar_mloop!(alm_out, cfg, Fph)
     return alm_out
 end
@@ -285,7 +285,7 @@ end
 @inline function _analysis_scalar_mloop_otf!(alm, cfg, Fph, m_order, scale_phi)
     lmax = cfg.lmax
     nlat = cfg.nlat
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
@@ -338,7 +338,7 @@ end
 @inline function _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi)
     lmax = cfg.lmax
     nlat = cfg.nlat
-    thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
+    thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1

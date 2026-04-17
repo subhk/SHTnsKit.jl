@@ -131,6 +131,15 @@ function _dft_phi(A::AbstractMatrix, dir::Int)
 end
 
 """
+    _as_complex(A) -> AbstractMatrix{<:Complex}
+
+Return `A` unchanged if already complex; otherwise `complex.(A)`. Avoids a
+redundant copy when callers pass complex arrays through real-valued code paths.
+"""
+@inline _as_complex(A::AbstractArray{<:Complex}) = A
+@inline _as_complex(A::AbstractArray) = complex.(A)
+
+"""
     ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
 
 In-place inverse FFT into preallocated `dest` (complex). Writes the transform of

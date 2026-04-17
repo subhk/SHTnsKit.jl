@@ -243,7 +243,8 @@ end
 In-place batch forward transform.
 """
 function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
-                         fields::AbstractArray{<:Real,3})
+                         fields::AbstractArray{<:Real,3};
+                         fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing)
     nlat, nlon, nfields = size(fields)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
@@ -255,8 +256,13 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
 
     fill!(alm_out, zero(eltype(alm_out)))
 
-    # Allocate FFT scratch buffer
-    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+    # Reuse caller-provided scratch if given, else allocate.
+    if fft_batch === nothing
+        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+    else
+        size(fft_batch) == (nlat, nlon, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, nlon, nfields)"))
+        Fφ_batch = fft_batch
+    end
 
     # Perform FFT on all fields
     @inbounds for k in 1:nfields

@@ -6,10 +6,13 @@
 # - test_vector_parametric.jl  : Vector (sphtor) transforms across multiple grid sizes
 # - test_qst_parametric.jl     : QST (3D vector) transforms across multiple grid sizes
 # - test_packed_storage.jl     : Non-MPI tests for packed storage utilities
+# - test_threading.jl          : Native-thread correctness (run with `julia -t N`)
 # - test_mpi_comprehensive.jl  : MPI distributed tests (run separately with mpiexec)
+# - test_mpi_extended.jl       : Extended MPI tests (run separately with mpiexec)
 #
 # To run MPI tests:
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_comprehensive.jl
+#   mpiexec -n 4 julia --project test/parallel/test_mpi_extended.jl
 
 using Test
 
@@ -18,7 +21,10 @@ using Test
     include("test_vector_parametric.jl")
     include("test_qst_parametric.jl")
     include("test_packed_storage.jl")
+    include("test_threading.jl")
 end
 
 # Note: MPI tests are not included here as they require mpiexec to run.
-# Run them separately with: mpiexec -n 4 julia --project test/parallel/test_mpi_comprehensive.jl
+# Run them separately with:
+#   mpiexec -n 4 julia --project test/parallel/test_mpi_comprehensive.jl
+#   mpiexec -n 4 julia --project test/parallel/test_mpi_extended.jl

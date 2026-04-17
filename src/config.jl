@@ -163,6 +163,11 @@ Base.@kwdef mutable struct SHTConfig
     # Cached cfg→internal scale: norm_scale[l+1, m+1] = norm_scale_from_orthonormal(l, m, norm) * cs_phase_factor(m, true, cs_phase).
     # Populated lazily by _ensure_norm_scale_matrix!; empty Matrix{Float64}[] means not yet built.
     norm_scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
+    # Per-thread scratch for on-the-fly Legendre evaluation. Built lazily by
+    # _otf_scratch_P/_dP/_Ps; sized (lmax+1) × Threads.maxthreadid().
+    _otf_scratch_P::Vector{Vector{Float64}} = Vector{Float64}[]
+    _otf_scratch_dP::Vector{Vector{Float64}} = Vector{Float64}[]
+    _otf_scratch_Ps::Vector{Vector{Float64}} = Vector{Float64}[]
 
     # Batch transform configuration (for processing multiple fields simultaneously)
     howmany::Int = 1                                          # Number of fields to process in batch

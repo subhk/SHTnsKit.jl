@@ -35,8 +35,8 @@ import SHTnsKit: wigner_d_matrix_deriv
                 end
             end
         end
-        f̄c = SHTnsKit.ifft_phi(Fφ)
-        return real.(f̄c)
+        SHTnsKit.ifft_phi!(Fφ, Fφ)
+        return real.(Fφ)
     end
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis), cfg::SHTnsKit.SHTConfig, f)

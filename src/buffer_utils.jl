@@ -23,6 +23,30 @@ function balanced_m_order(mmax::Int)
 end
 
 """
+    _ensure_otf_scratch!(buffers::Vector{Vector{Float64}}, lmax::Int) -> Vector
+
+Lazily grow `buffers` so it has `Threads.maxthreadid()` entries, each length
+`lmax + 1`. Caller holds `buffers` across calls to skip per-call allocation.
+Safe to call repeatedly; resizes only when maxthreadid() increases.
+"""
+@inline function _ensure_otf_scratch!(buffers::Vector{Vector{Float64}}, lmax::Int)
+    n = Threads.maxthreadid()
+    cur = length(buffers)
+    if cur < n
+        resize!(buffers, n)
+        @inbounds for i in (cur + 1):n
+            buffers[i] = Vector{Float64}(undef, lmax + 1)
+        end
+    elseif cur > 0 && length(buffers[1]) != lmax + 1
+        # lmax grew (shouldn't in practice) — rebuild.
+        @inbounds for i in 1:n
+            buffers[i] = Vector{Float64}(undef, lmax + 1)
+        end
+    end
+    return buffers
+end
+
+"""
     allocate_spectral_pair(template1, template2) -> (buf1, buf2)
 
 Allocate a pair of spectral coefficient buffers based on template arrays.

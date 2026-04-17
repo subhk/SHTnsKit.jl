@@ -177,8 +177,8 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix)
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
 
-    Fthetam = fft_phi(complex.(Vt))
-    Fphim = fft_phi(complex.(Vp))
+    Fthetam = fft_phi(_as_complex(Vt))
+    Fphim = fft_phi(_as_complex(Vp))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm_int = zeros(ComplexF64, lmax + 1, mmax + 1)
@@ -250,10 +250,9 @@ end
 @inline function _synthesis_sphtor_mloop_otf!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
     lmax = cfg.lmax
     nlat = cfg.nlat
-    nthreads = Threads.maxthreadid()
-    thread_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_dP = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Ps = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
+    thread_dP = _ensure_otf_scratch!(cfg._otf_scratch_dP, lmax)
+    thread_Ps = _ensure_otf_scratch!(cfg._otf_scratch_Ps, lmax)
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
@@ -324,9 +323,9 @@ end
     lmax = cfg.lmax
     nlat = cfg.nlat
     nthreads = Threads.maxthreadid()
-    thread_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_dP = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Ps = [Vector{Float64}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
+    thread_dP = _ensure_otf_scratch!(cfg._otf_scratch_dP, lmax)
+    thread_Ps = _ensure_otf_scratch!(cfg._otf_scratch_Ps, lmax)
     thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     @threads :static for idx in 1:length(m_order)
@@ -518,8 +517,8 @@ function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatri
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
-    Fthetam = fft_phi(complex.(Vt))
-    Fphim = fft_phi(complex.(Vp))
+    Fthetam = fft_phi(_as_complex(Vt))
+    Fphim = fft_phi(_as_complex(Vp))
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm = zeros(ComplexF64, lmax + 1, mmax + 1)
     Tlm = zeros(ComplexF64, lmax + 1, mmax + 1)

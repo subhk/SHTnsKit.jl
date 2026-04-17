@@ -27,10 +27,6 @@ Inspired by FFTW: spend time upfront to optimize repeated operations.
 
 Result: Near-zero allocations per transform call.
 
-SHTPlan STRUCTURE
------------------
-See the `struct SHTPlan` definition below for the authoritative field list.
-
 IN-PLACE TRANSFORM FUNCTIONS
 ----------------------------
     analysis!(plan, alm_out, f)             : f → alm (scalar)
@@ -123,7 +119,7 @@ Threads.@threads for i in 1:n
 end
 ```
 """
-struct SHTPlan
+struct SHTPlan{FP, IP}
     cfg::SHTConfig                # Configuration parameters
     P::Vector{Float64}            # Working array for Legendre polynomials P_l^m(x)
     dPdx::Vector{Float64}         # Working array for derivatives dP_l^m/dx (legacy, kept for compatibility)
@@ -131,8 +127,8 @@ struct SHTPlan
     P_over_sinth::Vector{Float64} # Working array for pole-safe P_l^m/sin(θ)
     G::Vector{ComplexF64}         # Temporary array for latitudinal profiles
     Fθk::Matrix{ComplexF64}       # Fourier coefficient matrix [latitude × longitude]
-    fft_plan::Any                 # Pre-optimized forward FFT plan (or nothing for RFFT)
-    ifft_plan::Any                # Pre-optimized inverse FFT plan (or nothing for RFFT)
+    fft_plan::FP                  # Pre-optimized forward FFT plan
+    ifft_plan::IP                 # Pre-optimized inverse FFT plan
     use_rfft::Bool                # Flag: true = use real FFT optimization, false = complex FFT
     norm_tmp1::Matrix{ComplexF64} # Scratch buffer for normalization conversion
     norm_tmp2::Matrix{ComplexF64} # Second scratch buffer for vector normalization conversion

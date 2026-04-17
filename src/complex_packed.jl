@@ -153,7 +153,7 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     fill!(alm, zero(CT))
 
     # FFT along φ
-    Fφ = fft_phi(complex.(z))
+    Fφ = fft_phi(_as_complex(z))
     P = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
 

@@ -261,13 +261,11 @@ function _scatter_from_fft_phi(Fθm::AbstractMatrix{<:Complex}, θ_range::Abstra
 end
 
 function SHTnsKit.dist_analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false, use_cache_blocking::Bool=true, use_loop_fusion::Bool=true)
-    if use_loop_fusion && use_cache_blocking
-        return dist_analysis_fused_cache_blocked(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
-    elseif use_cache_blocking
-        return dist_analysis_cache_blocked(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
-    else
-        return dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
-    end
+    # Keep strategy keywords in the public signature, but route through the
+    # single maintained implementation until alternate kernels diverge again.
+    _ = use_cache_blocking
+    _ = use_loop_fusion
+    return dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
 end
 
 # ===== FUNCTION BARRIER HELPERS FOR TYPE-STABLE INNER LOOPS =====
@@ -631,13 +629,9 @@ end
 
 
 function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    if plan.with_spatial_scratch && plan.spatial_scratch !== nothing
-        # Use scratch buffers from plan to eliminate allocations
-        Alm = dist_analysis_with_scratch_buffers(plan, fθφ; use_tables)
-    else
-        # Fall back to regular analysis
-        Alm = SHTnsKit.dist_analysis(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft)
-    end
+    Alm = dist_analysis_standard(plan.cfg, fθφ; use_tables,
+                                 use_rfft=plan.use_rfft,
+                                 use_packed_storage=plan.use_packed_storage)
     copyto!(Alm_out, Alm)
     return Alm_out
 end
@@ -645,13 +639,11 @@ end
 """
     dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ; use_tables)
 
-Optimized analysis using pre-allocated scratch buffers from the plan.
-Eliminates all temporary allocations by reusing plan-based buffers.
-
-Note: Currently redirects to dist_analysis_standard for correct PencilArrays API usage.
+Compatibility wrapper for older scalar-plan code paths.
+Scalar analysis plans no longer own separate scratch buffers, so this simply
+forwards to `dist_analysis_standard`.
 """
 function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    # Redirect to standard implementation which has proper PencilArrays API usage
     return dist_analysis_standard(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft, use_packed_storage=plan.use_packed_storage)
 end
 

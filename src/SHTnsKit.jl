@@ -312,21 +312,30 @@ export matrix_to_spectral_pencil, spectral_pencil_to_matrix                 # Di
 # ===== EXTENSION FALLBACK FUNCTIONS =====
 # These provide informative error messages when extension packages are not loaded
 
-# Parallel extension fallbacks
-_fft_plan_cache_enabled_fallback() = false
-_fft_plan_cache_set_fallback(flag::Bool; clear::Bool=true) = error("Parallel extension not loaded")
-_fft_plan_cache_enable_fallback() = error("Parallel extension not loaded")
-_fft_plan_cache_disable_fallback(; clear::Bool=true) = error("Parallel extension not loaded")
+@inline _parallel_ext_module() = Base.get_extension(@__MODULE__, :SHTnsKitParallelExt)
 
-const _fft_plan_cache_enabled_cb = Ref{Function}(_fft_plan_cache_enabled_fallback)
-const _fft_plan_cache_set_cb = Ref{Function}(_fft_plan_cache_set_fallback)
-const _fft_plan_cache_enable_cb = Ref{Function}(_fft_plan_cache_enable_fallback)
-const _fft_plan_cache_disable_cb = Ref{Function}(_fft_plan_cache_disable_fallback)
+function fft_plan_cache_enabled()
+    ext = _parallel_ext_module()
+    return ext === nothing ? false : getproperty(ext, :_fft_plan_cache_enabled_impl)()
+end
 
-fft_plan_cache_enabled() = _fft_plan_cache_enabled_cb[]()
-set_fft_plan_cache!(flag::Bool; clear::Bool=true) = (_fft_plan_cache_set_cb[])(flag; clear=clear)
-enable_fft_plan_cache!() = (_fft_plan_cache_enable_cb[])()
-disable_fft_plan_cache!(; clear::Bool=true) = (_fft_plan_cache_disable_cb[])(; clear=clear)
+function set_fft_plan_cache!(flag::Bool; clear::Bool=true)
+    ext = _parallel_ext_module()
+    ext === nothing && error("Parallel extension not loaded")
+    return getproperty(ext, :_fft_plan_cache_set_impl)(flag; clear=clear)
+end
+
+function enable_fft_plan_cache!()
+    ext = _parallel_ext_module()
+    ext === nothing && error("Parallel extension not loaded")
+    return getproperty(ext, :_fft_plan_cache_enable_impl)()
+end
+
+function disable_fft_plan_cache!(; clear::Bool=true)
+    ext = _parallel_ext_module()
+    ext === nothing && error("Parallel extension not loaded")
+    return getproperty(ext, :_fft_plan_cache_disable_impl)(; clear=clear)
+end
 
 Base.@doc """
     fft_plan_cache_enabled() -> Bool
@@ -359,14 +368,14 @@ function _suggest_pencil_grid_fallback(comm_or_nprocs::Any, nlat::Integer, nlon:
     return (1, 1)
 end
 
-const _suggest_pencil_grid_cb = Ref{Function}(_suggest_pencil_grid_fallback)
-
 function suggest_pencil_grid(comm_or_nprocs::Any, nlat::Integer, nlon::Integer;
                               prefer_square::Bool=true,
                               allow_one_dim::Bool=true)
-    return (_suggest_pencil_grid_cb[])(comm_or_nprocs, Int(nlat), Int(nlon);
-                                       prefer_square=prefer_square,
-                                       allow_one_dim=allow_one_dim)
+    ext = _parallel_ext_module()
+    impl = ext === nothing ? _suggest_pencil_grid_fallback : getproperty(ext, :_suggest_pencil_grid_impl)
+    return impl(comm_or_nprocs, Int(nlat), Int(nlon);
+                prefer_square=prefer_square,
+                allow_one_dim=allow_one_dim)
 end
 
 """

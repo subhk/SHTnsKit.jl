@@ -196,11 +196,6 @@ function _fft_plan_cache_disable_impl(; clear::Bool=true)
     return _fft_plan_cache_set_impl(false; clear=clear)
 end
 
-SHTnsKit._fft_plan_cache_enabled_cb[] = _fft_plan_cache_enabled_impl
-SHTnsKit._fft_plan_cache_set_cb[] = _fft_plan_cache_set_impl
-SHTnsKit._fft_plan_cache_enable_cb[] = _fft_plan_cache_enable_impl
-SHTnsKit._fft_plan_cache_disable_cb[] = _fft_plan_cache_disable_impl
-
 @inline function _decomp_hash(A)
     if hasfield(typeof(A), :pencil)
         pencil = getfield(A, :pencil)
@@ -376,10 +371,6 @@ function _suggest_pencil_grid_impl(comm_or_nprocs::Any, nlat::Integer, nlon::Int
     end
 
     return best
-end
-
-function __init__()
-    SHTnsKit._suggest_pencil_grid_cb[] = _suggest_pencil_grid_impl
 end
 
 # Diagnostic function to detect PencilArrays version and capabilities

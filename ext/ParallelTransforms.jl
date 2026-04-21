@@ -629,9 +629,7 @@ end
 
 
 function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    Alm = dist_analysis_standard(plan.cfg, fθφ; use_tables,
-                                 use_rfft=plan.use_rfft,
-                                 use_packed_storage=plan.use_packed_storage)
+    Alm = dist_analysis_standard(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft)
     copyto!(Alm_out, Alm)
     return Alm_out
 end
@@ -644,7 +642,7 @@ Scalar analysis plans no longer own separate scratch buffers, so this simply
 forwards to `dist_analysis_standard`.
 """
 function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    return dist_analysis_standard(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft, use_packed_storage=plan.use_packed_storage)
+    return dist_analysis_standard(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft)
 end
 
 

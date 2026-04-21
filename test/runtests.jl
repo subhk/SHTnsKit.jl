@@ -277,11 +277,15 @@ end
 
             Alm_c = zeros(ComplexF64, lmax+1, lmax+1)
             Alm_r = similar(Alm_c)
+            Alm_kw = similar(Alm_c)
             plan_c = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=false)
             plan_r = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=true)
+            plan_kw = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_packed_storage=true)
             SHTnsKit.dist_analysis!(plan_c, Alm_c, fθφ)
             SHTnsKit.dist_analysis!(plan_r, Alm_r, fθφ)
+            SHTnsKit.dist_analysis!(plan_kw, Alm_kw, fθφ)
             @test isapprox(Alm_c, Alm_r; rtol=1e-10, atol=1e-12)
+            @test isapprox(Alm_c, Alm_kw; rtol=1e-10, atol=1e-12)
 
             # Vector - use global indices for consistent field across processes
             Vt = PencilArrays.PencilArray{Float64}(undef, P)

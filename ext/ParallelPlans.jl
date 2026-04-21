@@ -25,7 +25,6 @@ struct DistAnalysisPlan
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
     use_rfft::Bool
-    use_packed_storage::Bool
 end
 
 function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false, use_packed_storage::Bool=true, with_spatial_scratch::Bool=false)
@@ -35,9 +34,10 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     _validate_cfg_replicated(cfg, communicator(prototype_θφ))
     # Keep the keyword for API compatibility, but analysis plans currently use
-    # the standard implementation regardless of scratch selection.
+    # the standard dense-matrix implementation regardless of scratch/packed selection.
+    _ = use_packed_storage
     _ = with_spatial_scratch
-    return DistAnalysisPlan(cfg, prototype_θφ, use_rfft, use_packed_storage)
+    return DistAnalysisPlan(cfg, prototype_θφ, use_rfft)
 end
 
 struct DistPlan

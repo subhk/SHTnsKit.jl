@@ -380,6 +380,19 @@ end
                 fθφ_back = PencilArrays.PencilArray{Float64}(undef, topo)
                 SHTnsKit.dist_synthesis!(spln, fθφ_back, Alm_p)
 
+                ext = _get_parallel_ext()
+                plan2d = ext.create_distributed_spectral_plan_2d(lmax, cfg.mmax, comm; p_l=pθ, p_m=pφ)
+                plan2d_scratch = ext.create_distributed_spectral_plan_2d(
+                    lmax, cfg.mmax, comm;
+                    p_l=pθ, p_m=pφ,
+                    with_scratch=true,
+                    prototype_θφ=fθφ,
+                    cfg=cfg,
+                )
+                @test plan2d_scratch.with_scratch
+                @test plan2d_scratch.scratch !== nothing
+                @test hasproperty(plan2d_scratch.scratch, :P_complex)
+
                 loc_diff = sum(abs2, Array(fθφ_back) .- Array(fθφ))
                 loc_ref  = sum(abs2, Array(fθφ))
                 glob_diff = MPI.Allreduce(loc_diff, +, comm)
@@ -423,6 +436,9 @@ end
                 SHTnsKit.disable_fft_plan_cache!()
                 @test !SHTnsKit.fft_plan_cache_enabled()
                 SHTnsKit.set_fft_plan_cache!(initial_cache)
+
+                close(plan2d_scratch)
+                close(plan2d)
             end
             # MPI.Finalize() - removed, finalize at process exit
         else

@@ -1767,7 +1767,20 @@ When created with `with_scratch=true` and a `prototype_θφ`, the plan pre-alloc
 all temporary arrays needed for analysis and synthesis operations. This eliminates
 per-call allocations for repeated transforms.
 """
-struct DistributedSpectralPlan2D
+const _DistributedSpectralPlan2DScratch = NamedTuple{
+    (:nθ_local, :nlon, :n_m_valid, :n_valid_coeffs,
+     :θ_globals, :weights_cache, :x_cache,
+     :Fθm, :local_contrib, :P, :P_complex,
+     :gather_buffer, :fθφ_local, :fθφ_result,
+     :packed_contrib, :pack_offsets, :m_values),
+    Tuple{Int, Int, Int, Int,
+          Vector{Int}, Vector{Float64}, Vector{Float64},
+          Matrix{ComplexF64}, Matrix{ComplexF64}, Vector{Float64}, Vector{ComplexF64},
+          Vector{ComplexF64}, Matrix{Float64}, Matrix{Float64},
+          Vector{ComplexF64}, Vector{Int}, Vector{Int}}
+}
+
+mutable struct DistributedSpectralPlan2D
     lmax::Int
     mmax::Int
     mres::Int                        # m resolution (usually 1)
@@ -1803,18 +1816,37 @@ struct DistributedSpectralPlan2D
 
     # Pre-allocated scratch buffers (optional - set when with_scratch=true)
     with_scratch::Bool
-    scratch::Union{Nothing, NamedTuple{
-        (:nθ_local, :nlon, :n_m_valid, :n_valid_coeffs,
-         :θ_globals, :weights_cache, :x_cache,
-         :Fθm, :local_contrib, :P,
-         :gather_buffer, :fθφ_local, :fθφ_result,
-         :packed_contrib, :pack_offsets, :m_values),
-        Tuple{Int, Int, Int, Int,
-              Vector{Int}, Vector{Float64}, Vector{Float64},
-              Matrix{ComplexF64}, Matrix{ComplexF64}, Vector{Float64},
-              Vector{ComplexF64}, Matrix{Float64}, Matrix{Float64},
-              Vector{ComplexF64}, Vector{Int}, Vector{Int}}
-    }}
+    scratch::Union{Nothing, _DistributedSpectralPlan2DScratch}
+    closed::Bool
+end
+
+@inline function _comm_is_null(comm)
+    if isdefined(MPI, :COMM_NULL)
+        try
+            return comm == getfield(MPI, :COMM_NULL)
+        catch
+        end
+    end
+    return false
+end
+
+function Base.close(plan::DistributedSpectralPlan2D)
+    plan.closed && return nothing
+    plan.closed = true
+
+    if !_comm_is_null(plan.l_comm)
+        _safe_comm_free(plan.l_comm)
+        if isdefined(MPI, :COMM_NULL)
+            plan.l_comm = getfield(MPI, :COMM_NULL)
+        end
+    end
+    if !_comm_is_null(plan.m_comm)
+        _safe_comm_free(plan.m_comm)
+        if isdefined(MPI, :COMM_NULL)
+            plan.m_comm = getfield(MPI, :COMM_NULL)
+        end
+    end
+    return nothing
 end
 
 """
@@ -1973,126 +2005,139 @@ function create_distributed_spectral_plan_2d(lmax::Int, mmax::Int, comm::MPI.Com
     # m_comm: ranks in same row (same l_rank) - for m-direction operations
     m_comm = MPI.Comm_split(comm, l_rank, m_rank)
 
-    # Determine m-range for this m-group
-    # Divide m values [0, mmax] into p_m groups
-    # Account for mres: only m values where m % mres == 0 are valid
-    valid_m_values = [m for m in 0:mmax if m % mres == 0]
-    n_valid_m = length(valid_m_values)
+    try
+        # Determine m-range for this m-group
+        # Divide m values [0, mmax] into p_m groups
+        # Account for mres: only m values where m % mres == 0 are valid
+        valid_m_values = [m for m in 0:mmax if m % mres == 0]
+        n_valid_m = length(valid_m_values)
 
-    # Divide valid m values among m-groups
-    m_per_group = ceildiv(n_valid_m, p_m)
-    m_start_idx = m_rank * m_per_group + 1
-    m_end_idx = min((m_rank + 1) * m_per_group, n_valid_m)
+        # Divide valid m values among m-groups
+        m_per_group = ceildiv(n_valid_m, p_m)
+        m_start_idx = m_rank * m_per_group + 1
+        m_end_idx = min((m_rank + 1) * m_per_group, n_valid_m)
 
-    if m_start_idx <= n_valid_m
-        m_start = valid_m_values[m_start_idx]
-        m_end = valid_m_values[min(m_end_idx, n_valid_m)]
-        m_range = m_start:m_end
-    else
-        # This m-group has no m values (more m-groups than valid m values)
-        m_range = 1:0  # Empty range
-    end
+        if m_start_idx <= n_valid_m
+            m_start = valid_m_values[m_start_idx]
+            m_end = valid_m_values[min(m_end_idx, n_valid_m)]
+            m_range = m_start:m_end
+        else
+            # This m-group has no m values (more m-groups than valid m values)
+            m_range = 1:0  # Empty range
+        end
 
-    # Compute local (l,m) ownership
-    # Within this m-group, l is distributed cyclically: l % p_l == l_rank
-    local_lm_indices = Tuple{Int,Int}[]
+        # Compute local (l,m) ownership
+        # Within this m-group, l is distributed cyclically: l % p_l == l_rank
+        local_lm_indices = Tuple{Int,Int}[]
 
-    for m in m_range
-        (m % mres == 0) || continue  # Skip invalid m values
-        for l in m:lmax
-            if l % p_l == l_rank  # This rank owns this l within the m-group
-                push!(local_lm_indices, (l, m))
+        for m in m_range
+            (m % mres == 0) || continue  # Skip invalid m values
+            for l in m:lmax
+                if l % p_l == l_rank  # This rank owns this l within the m-group
+                    push!(local_lm_indices, (l, m))
+                end
             end
         end
-    end
 
-    local_nlm = length(local_lm_indices)
+        local_nlm = length(local_lm_indices)
 
-    # Compute communication patterns for l-communicator
-    # recv_counts[r+1] = number of coefficients rank r in l_comm owns
-    l_recv_counts = zeros(Int, p_l)
+        # Compute communication patterns for l-communicator
+        # recv_counts[r+1] = number of coefficients rank r in l_comm owns
+        l_recv_counts = zeros(Int, p_l)
 
-    for m in m_range
-        (m % mres == 0) || continue
-        for l in m:lmax
-            owner_l_rank = l % p_l
-            l_recv_counts[owner_l_rank + 1] += 1
-        end
-    end
-
-    l_recv_displs = cumsum([0; l_recv_counts[1:end-1]])
-
-    # Total coefficients in this m-group
-    m_group_nlm = sum(l_recv_counts)
-
-    # Create scratch buffers if requested
-    scratch = if with_scratch
-        θ_globals = collect(globalindices(prototype_θφ, 1))
-        nθ_local = length(θ_globals)
-        nlon = cfg.nlon
-        n_m_valid = count(m -> m % mres == 0, m_range)
-
-        # Pre-cache weights and x values
-        weights_cache = Vector{Float64}(undef, nθ_local)
-        x_cache = Vector{Float64}(undef, nθ_local)
-        for (ii, iglob) in enumerate(θ_globals)
-            weights_cache[ii] = cfg.w[iglob]
-            x_cache[ii] = cfg.x[iglob]
+        for m in m_range
+            (m % mres == 0) || continue
+            for l in m:lmax
+                owner_l_rank = l % p_l
+                l_recv_counts[owner_l_rank + 1] += 1
+            end
         end
 
-        # Compute packed buffer size and offsets for triangular storage
-        # For each valid m, we have (lmax - m + 1) coefficients
-        m_values = Int[m for m in m_range if m % mres == 0]
-        n_valid_coeffs = sum(lmax - m + 1 for m in m_values; init=0)
-        pack_offsets = Vector{Int}(undef, max(length(m_values), 1))
-        offset = 0
-        for (i, m) in enumerate(m_values)
-            pack_offsets[i] = offset
-            offset += lmax - m + 1
+        l_recv_displs = cumsum([0; l_recv_counts[1:end-1]])
+
+        # Total coefficients in this m-group
+        m_group_nlm = sum(l_recv_counts)
+
+        # Create scratch buffers if requested
+        scratch = if with_scratch
+            θ_globals = collect(globalindices(prototype_θφ, 1))
+            nθ_local = length(θ_globals)
+            nlon = cfg.nlon
+            n_m_valid = count(m -> m % mres == 0, m_range)
+
+            # Pre-cache weights and x values
+            weights_cache = Vector{Float64}(undef, nθ_local)
+            x_cache = Vector{Float64}(undef, nθ_local)
+            for (ii, iglob) in enumerate(θ_globals)
+                weights_cache[ii] = cfg.w[iglob]
+                x_cache[ii] = cfg.x[iglob]
+            end
+
+            # Compute packed buffer size and offsets for triangular storage
+            # For each valid m, we have (lmax - m + 1) coefficients
+            m_values = Int[m for m in m_range if m % mres == 0]
+            n_valid_coeffs = sum(lmax - m + 1 for m in m_values; init=0)
+            pack_offsets = Vector{Int}(undef, max(length(m_values), 1))
+            offset = 0
+            for (i, m) in enumerate(m_values)
+                pack_offsets[i] = offset
+                offset += lmax - m + 1
+            end
+
+            (
+                nθ_local = nθ_local,
+                nlon = nlon,
+                n_m_valid = max(n_m_valid, 1),  # At least 1 to avoid zero-size arrays
+                n_valid_coeffs = max(n_valid_coeffs, 1),
+
+                # Cached indices
+                θ_globals = θ_globals,
+                weights_cache = weights_cache,
+                x_cache = x_cache,
+
+                # Analysis buffers
+                Fθm = Matrix{ComplexF64}(undef, nθ_local, nlon),
+                local_contrib = Matrix{ComplexF64}(undef, lmax + 1, max(n_m_valid, 1)),
+                P = Vector{Float64}(undef, lmax + 1),
+                P_complex = Vector{ComplexF64}(undef, lmax + 1),
+
+                # Gather/synthesis buffers
+                gather_buffer = Vector{ComplexF64}(undef, m_group_nlm),
+                fθφ_local = Matrix{Float64}(undef, nθ_local, nlon),
+                fθφ_result = Matrix{Float64}(undef, nθ_local, nlon),  # Separate result buffer
+
+                # Packed communication buffers (triangular storage)
+                packed_contrib = Vector{ComplexF64}(undef, max(n_valid_coeffs, 1)),
+                pack_offsets = pack_offsets,
+                m_values = m_values,
+            )
+        else
+            nothing
         end
 
-        (
-            nθ_local = nθ_local,
-            nlon = nlon,
-            n_m_valid = max(n_m_valid, 1),  # At least 1 to avoid zero-size arrays
-            n_valid_coeffs = max(n_valid_coeffs, 1),
-
-            # Cached indices
-            θ_globals = θ_globals,
-            weights_cache = weights_cache,
-            x_cache = x_cache,
-
-            # Analysis buffers
-            Fθm = Matrix{ComplexF64}(undef, nθ_local, nlon),
-            local_contrib = Matrix{ComplexF64}(undef, lmax + 1, max(n_m_valid, 1)),
-            P = Vector{Float64}(undef, lmax + 1),
-            P_complex = Vector{ComplexF64}(undef, lmax + 1),
-
-            # Gather/synthesis buffers
-            gather_buffer = Vector{ComplexF64}(undef, m_group_nlm),
-            fθφ_local = Matrix{Float64}(undef, nθ_local, nlon),
-            fθφ_result = Matrix{Float64}(undef, nθ_local, nlon),  # Separate result buffer
-
-            # Packed communication buffers (triangular storage)
-            packed_contrib = Vector{ComplexF64}(undef, max(n_valid_coeffs, 1)),
-            pack_offsets = pack_offsets,
-            m_values = m_values,
+        plan = DistributedSpectralPlan2D(
+            lmax, mmax, mres,
+            comm, nprocs, rank,
+            p_l, p_m, l_rank, m_rank,
+            l_comm, m_comm,
+            m_range,
+            local_lm_indices, local_nlm,
+            l_recv_counts, l_recv_displs,
+            m_group_nlm,
+            with_scratch, scratch, false
         )
-    else
-        nothing
+        finalizer(plan) do p
+            try
+                close(p)
+            catch
+            end
+        end
+        return plan
+    catch
+        _safe_comm_free(l_comm)
+        _safe_comm_free(m_comm)
+        rethrow()
     end
-
-    return DistributedSpectralPlan2D(
-        lmax, mmax, mres,
-        comm, nprocs, rank,
-        p_l, p_m, l_rank, m_rank,
-        l_comm, m_comm,
-        m_range,
-        local_lm_indices, local_nlm,
-        l_recv_counts, l_recv_displs,
-        m_group_nlm,
-        with_scratch, scratch
-    )
 end
 
 """

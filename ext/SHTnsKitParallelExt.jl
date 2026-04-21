@@ -97,6 +97,26 @@ using SHTnsKit                           # Core spherical harmonic functionality
 # API in some newer builds in favor of finalizer-driven cleanup. Use a shim so
 # subcomm cleanup doesn't crash either way.
 @inline function _safe_comm_free(c)
+    if isdefined(MPI, :Initialized)
+        try
+            MPI.Initialized() || return nothing
+        catch
+            return nothing
+        end
+    end
+    if isdefined(MPI, :Finalized)
+        try
+            MPI.Finalized() && return nothing
+        catch
+            return nothing
+        end
+    end
+    if isdefined(MPI, :COMM_NULL)
+        try
+            c == getfield(MPI, :COMM_NULL) && return nothing
+        catch
+        end
+    end
     if isdefined(MPI, :Comm_free)
         try
             getfield(MPI, :Comm_free)(c)

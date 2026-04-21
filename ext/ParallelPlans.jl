@@ -52,50 +52,13 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     θ_range = 1:length(θ_local_to_global)
     m_range = 1:length(m_local_to_global)
 
-    # Create comprehensive scratch buffers if requested
-    scratch = if with_spatial_scratch
-        lmax, mmax = cfg.lmax, cfg.mmax
-        nθ_local = length(θ_local_to_global)
-
-        # Pre-allocate all temporary arrays used in analysis transforms
-        scratch_buffers = (
-            # Legendre polynomial buffer (fallback when tables not available)
-            legendre_buffer = Vector{Float64}(undef, lmax + 1),
-
-            # Pre-cached weights and derived values
-            weights_cache = Vector{Float64}(undef, nθ_local),
-
-            # Storage for spectral coefficients
-            temp_dense = zeros(ComplexF64, lmax+1, mmax+1),
-
-            # Table view cache for plm_tables optimization (lazily populated during transforms)
-            table_view_cache = Dict{Tuple{Int,Int}, Any}(),
-
-            # Valid m-value information cache
-            valid_m_cache = Tuple{Int, Int, Int}[],
-        )
-
-        # Pre-populate weights cache
-        for (ii, iglob) in enumerate(θ_local_to_global)
-            scratch_buffers.weights_cache[ii] = cfg.w[iglob]
-        end
-
-        # Pre-populate valid m-values cache
-        for (jj, mglob) in enumerate(m_local_to_global)
-            mval = mglob - 1
-            if mval <= mmax
-                col = mval + 1
-                push!(scratch_buffers.valid_m_cache, (jj, mval, col))
-            end
-        end
-
-        scratch_buffers
-    else
-        nothing
-    end
+    # Scratch-backed analysis still routes through dist_analysis_standard, so
+    # avoid pinning dead buffers until a dedicated scratch implementation lands.
+    active_spatial_scratch = false
+    scratch = nothing
 
     return DistAnalysisPlan(cfg, prototype_θφ, use_rfft, θ_local_to_global, m_local_to_global,
-                           m_range, θ_range, use_packed_storage, with_spatial_scratch, scratch)
+                           m_range, θ_range, use_packed_storage, active_spatial_scratch, scratch)
 end
 
 struct DistPlan

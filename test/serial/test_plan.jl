@@ -118,6 +118,7 @@ end
         Slm_ref, Tlm_ref = analysis_sphtor(cfg, Vt, Vp)
         @test isapprox(Slm_out, Slm_ref; rtol=1e-11, atol=1e-13)
         @test isapprox(Tlm_out, Tlm_ref; rtol=1e-11, atol=1e-13)
+        @inferred synthesis_sphtor(cfg, Slm, Tlm)
     end
 
     @testset "Planned vector dimension checks" begin
@@ -177,6 +178,22 @@ end
         Slm_ref, Tlm_ref = analysis_sphtor(cfg, Vt, Vp)
         @test isapprox(Slm_back, Slm_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Tlm_back, Tlm_ref; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "Planned sphtor: robert_form analysis does not allocate row slices" begin
+        lmax = 5
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1, robert_form=true)
+        plan = SHTPlan(cfg)
+        rng = MersenneTwister(207)
+
+        Vt = randn(rng, cfg.nlat, cfg.nlon)
+        Vp = randn(rng, cfg.nlat, cfg.nlon)
+        Slm = zeros(ComplexF64, lmax + 1, lmax + 1)
+        Tlm = zeros(ComplexF64, lmax + 1, lmax + 1)
+
+        analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)
+        GC.gc()
+        @test @allocated(analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)) <= 128
     end
 
     @testset "Planned scalar: complex output path (real_output=false) runs" begin

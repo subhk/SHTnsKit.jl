@@ -93,6 +93,104 @@ multiple fields, improving cache utilization and reducing function call overhead
 This mirrors the `shtns_set_many` functionality from the SHTns C library.
 """
 
+@inline _batch_fft_fallback_error(e) = e isa MethodError || e isa ArgumentError || e isa InexactError
+
+function _batch_fft_phi!(Fφ_batch::AbstractArray{<:Complex,3}, fields::AbstractArray{<:Real,3})
+    nfields = size(fields, 3)
+    nfields == 0 && return Fφ_batch
+
+    try
+        plan = plan_fft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE)
+        @inbounds for k in 1:nfields
+            Fk = view(Fφ_batch, :, :, k)
+            Xk = view(fields, :, :, k)
+            @. Fk = complex(Xk)
+            mul!(Fk, plan, Fk)
+        end
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+    catch e
+        _batch_fft_fallback_error(e) || rethrow(e)
+        @inbounds for k in 1:nfields
+            fft_phi!(view(Fφ_batch, :, :, k), view(fields, :, :, k))
+        end
+    end
+    return Fφ_batch
+end
+
+function _batch_rfft_phi!(Fφ_batch::AbstractArray{<:Complex,3}, fields::AbstractArray{<:Real,3})
+    nfields = size(fields, 3)
+    nfields == 0 && return Fφ_batch
+
+    try
+        plan = plan_rfft(view(fields, :, :, 1), 2; flags=FFTW.ESTIMATE)
+        @inbounds for k in 1:nfields
+            mul!(view(Fφ_batch, :, :, k), plan, view(fields, :, :, k))
+        end
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+    catch e
+        _batch_fft_fallback_error(e) || rethrow(e)
+        @inbounds for k in 1:nfields
+            view(Fφ_batch, :, :, k) .= rfft_phi(view(fields, :, :, k))
+        end
+    end
+    return Fφ_batch
+end
+
+function _batch_ifft_phi!(Fφ_batch::AbstractArray{<:Complex,3})
+    nfields = size(Fφ_batch, 3)
+    nfields == 0 && return Fφ_batch
+
+    try
+        plan = plan_ifft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE)
+        @inbounds for k in 1:nfields
+            Fk = view(Fφ_batch, :, :, k)
+            mul!(Fk, plan, Fk)
+        end
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+    catch e
+        _batch_fft_fallback_error(e) || rethrow(e)
+        @inbounds for k in 1:nfields
+            Fk = view(Fφ_batch, :, :, k)
+            ifft_phi!(Fk, Fk)
+        end
+    end
+    return Fφ_batch
+end
+
+function _batch_ifft_phi_to_output!(f_out::AbstractArray, Fφ_batch::AbstractArray{<:Complex,3}, real_output::Bool)
+    _batch_ifft_phi!(Fφ_batch)
+    nlat, nlon, nfields = size(Fφ_batch)
+    if real_output
+        @inbounds for k in 1:nfields, j in 1:nlon, i in 1:nlat
+            f_out[i, j, k] = real(Fφ_batch[i, j, k])
+        end
+    else
+        @inbounds for k in 1:nfields, j in 1:nlon, i in 1:nlat
+            f_out[i, j, k] = Fφ_batch[i, j, k]
+        end
+    end
+    return f_out
+end
+
+function _batch_irfft_phi!(f_out::AbstractArray{<:Real,3}, Fφ_batch::AbstractArray{<:Complex,3}, nlon::Int)
+    nfields = size(Fφ_batch, 3)
+    nfields == 0 && return f_out
+
+    try
+        plan = plan_irfft(view(Fφ_batch, :, :, 1), nlon, 2; flags=FFTW.ESTIMATE)
+        @inbounds for k in 1:nfields
+            mul!(view(f_out, :, :, k), plan, view(Fφ_batch, :, :, k))
+        end
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+    catch e
+        _batch_fft_fallback_error(e) || rethrow(e)
+        @inbounds for k in 1:nfields
+            irfft_phi!(view(f_out, :, :, k), view(Fφ_batch, :, :, k), nlon)
+        end
+    end
+    return f_out
+end
+
 """
     set_batch_size!(cfg::SHTConfig, howmany::Int; spec_dist::Int=0)
 
@@ -183,20 +281,16 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
 
     # Perform FFT on all fields
     if use_rfft
-        @inbounds for k in 1:nfields
-            Fφ_batch[:, :, k] .= rfft_phi(view(fields, :, :, k))
-        end
+        _batch_rfft_phi!(Fφ_batch, fields)
     else
-        @inbounds for k in 1:nfields
-            Fφ_batch[:, :, k] .= fft_phi(complex.(view(fields, :, :, k)))
-        end
+        _batch_fft_phi!(Fφ_batch, fields)
     end
 
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # Use precomputed tables - most efficient path
-        @threads :static for m in 0:mmax
+        for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
@@ -212,8 +306,8 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
     else
         # Compute Legendre polynomials on the fly
         # Use maxthreadid() to handle all possible thread IDs
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        @threads :static for m in 0:mmax
+        thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
+        for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -275,19 +369,15 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
 
     # Perform FFT on all fields
     if use_rfft
-        @inbounds for k in 1:nfields
-            Fφ_batch[:, :, k] .= rfft_phi(view(fields, :, :, k))
-        end
+        _batch_rfft_phi!(Fφ_batch, fields)
     else
-        @inbounds for k in 1:nfields
-            Fφ_batch[:, :, k] .= fft_phi(complex.(view(fields, :, :, k)))
-        end
+        _batch_fft_phi!(Fφ_batch, fields)
     end
 
     scaleφ = cfg.cphi
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads :static for m in 0:mmax
+        for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
@@ -302,8 +392,8 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
         end
     else
         # Use maxthreadid() to handle all possible thread IDs
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        @threads :static for m in 0:mmax
+        thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
+        for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -345,8 +435,24 @@ Batch inverse transform for multiple spectral coefficient sets.
 # Returns
 - 3D array of shape `(nlat, nlon, nfields)` with spatial data
 """
-function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
+Base.@constprop :aggressive function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
                          real_output::Bool=true, use_rfft::Bool=false)
+    return _synthesis_batch(cfg, alm_batch, Val(real_output), Val(use_rfft))
+end
+
+"""
+    synthesis_batch_cplx(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3}) -> Array{ComplexF64,3}
+
+Complex-output batch inverse transform. Equivalent to
+`synthesis_batch(cfg, alm_batch; real_output=false)` with a concrete return
+type for inference-sensitive callers.
+"""
+function synthesis_batch_cplx(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3})
+    return _synthesis_batch(cfg, alm_batch, Val(false), Val(false))
+end
+
+function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
+                          ::Val{real_output}, ::Val{use_rfft}) where {real_output, use_rfft}
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
@@ -355,7 +461,7 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
     nlat, nlon = cfg.nlat, cfg.nlon
 
     if use_rfft
-        real_output || throw(ArgumentError("use_rfft=true implies real_output"))
+        real_output === true || throw(ArgumentError("use_rfft=true implies real_output"))
         mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
     end
 
@@ -366,7 +472,7 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads :static for m in 0:mmax
+        for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
@@ -381,8 +487,8 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
         end
     else
         # Use maxthreadid() to handle all possible thread IDs
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        @threads :static for m in 0:mmax
+        thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
+        for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -416,24 +522,12 @@ function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
 
     if use_rfft
         f_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-        @inbounds for k in 1:nfields
-            irfft_phi!(view(f_batch, :, :, k), view(Fφ_batch, :, :, k), nlon)
-        end
-        return f_batch
+        return _batch_irfft_phi!(f_batch, Fφ_batch, nlon)
     elseif real_output
         f_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-        @inbounds for k in 1:nfields
-            f_view = view(Fφ_batch, :, :, k)
-            ifft_phi!(f_view, f_view)
-            f_batch[:, :, k] .= real.(f_view)
-        end
-        return f_batch
+        return _batch_ifft_phi_to_output!(f_batch, Fφ_batch, true)
     else
-        @inbounds for k in 1:nfields
-            f_view = view(Fφ_batch, :, :, k)
-            ifft_phi!(f_view, f_view)
-        end
-        return Fφ_batch
+        return _batch_ifft_phi!(Fφ_batch)
     end
 end
 
@@ -477,7 +571,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-        @threads :static for m in 0:mmax
+        for m in 0:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
@@ -492,8 +586,8 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
         end
     else
         # Use maxthreadid() to handle all possible thread IDs with static scheduling
-        thread_local_P = [Vector{Float64}(undef, lmax + 1) for _ in 1:Threads.maxthreadid()]
-        @threads :static for m in 0:mmax
+        thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
+        for m in 0:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -526,26 +620,11 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     end
 
     if use_rfft
-        @inbounds for k in 1:nfields
-            irfft_phi!(view(f_out, :, :, k), view(Fφ_batch, :, :, k), nlon)
-        end
-        return f_out
+        return _batch_irfft_phi!(f_out, Fφ_batch, nlon)
     end
 
     # Perform inverse FFT and copy to output
-    @inbounds for k in 1:nfields
-        f_view = view(Fφ_batch, :, :, k)
-        ifft_phi!(f_view, f_view)
-        if real_output
-            for j in 1:nlon, i in 1:nlat
-                f_out[i, j, k] = real(f_view[i, j])
-            end
-        else
-            f_out[:, :, k] .= f_view
-        end
-    end
-
-    return f_out
+    return _batch_ifft_phi_to_output!(f_out, Fφ_batch, real_output)
 end
 
 # ============================================================================
@@ -577,14 +656,11 @@ function analysis_sphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3}
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
     Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
+    plan = SHTPlan(cfg)
 
-    # Process each field serially; analysis_sphtor already uses @threads :static internally
     for k in 1:nfields
-        Vt = view(Vt_batch, :, :, k)
-        Vp = view(Vp_batch, :, :, k)
-        Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
-        Slm_batch[:, :, k] .= Slm
-        Tlm_batch[:, :, k] .= Tlm
+        analysis_sphtor!(plan, view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k),
+                         view(Vt_batch, :, :, k), view(Vp_batch, :, :, k))
     end
 
     return Slm_batch, Tlm_batch
@@ -600,8 +676,19 @@ Batch spheroidal-toroidal synthesis for multiple vector fields.
 - `(Vt_batch, Vp_batch)`: Tuple of 3D arrays `(nlat, nlon, nfields)`
   containing theta and phi components
 """
-function synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
+Base.@constprop :aggressive function synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
                                 Tlm_batch::AbstractArray{<:Complex,3}; real_output::Bool=true)
+    return _synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch, Val(real_output))
+end
+
+function synthesis_sphtor_batch_cplx(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
+                                     Tlm_batch::AbstractArray{<:Complex,3})
+    return _synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch, Val(false))
+end
+
+function _synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
+                                 Tlm_batch::AbstractArray{<:Complex,3},
+                                 ::Val{real_output}) where {real_output}
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1"))
     size(Slm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1"))
@@ -617,14 +704,12 @@ function synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Compl
         Vt_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
         Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
     end
+    plan = SHTPlan(cfg)
 
-    # Process each field serially; synthesis_sphtor already uses @threads :static internally
     for k in 1:nfields
-        Slm = view(Slm_batch, :, :, k)
-        Tlm = view(Tlm_batch, :, :, k)
-        Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=real_output)
-        Vt_batch[:, :, k] .= Vt
-        Vp_batch[:, :, k] .= Vp
+        synthesis_sphtor!(plan, view(Vt_batch, :, :, k), view(Vp_batch, :, :, k),
+                          view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k);
+                          real_output=real_output)
     end
 
     return Vt_batch, Vp_batch
@@ -655,16 +740,12 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     Qlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
     Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
     Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
+    plan = SHTPlan(cfg)
 
-    # Process each field serially; analysis_qst already uses @threads :static internally
     for k in 1:nfields
-        Vr = view(Vr_batch, :, :, k)
-        Vt = view(Vt_batch, :, :, k)
-        Vp = view(Vp_batch, :, :, k)
-        Qlm, Slm, Tlm = analysis_qst(cfg, Vr, Vt, Vp)
-        Qlm_batch[:, :, k] .= Qlm
-        Slm_batch[:, :, k] .= Slm
-        Tlm_batch[:, :, k] .= Tlm
+        analysis!(plan, view(Qlm_batch, :, :, k), view(Vr_batch, :, :, k))
+        analysis_sphtor!(plan, view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k),
+                         view(Vt_batch, :, :, k), view(Vp_batch, :, :, k))
     end
 
     return Qlm_batch, Slm_batch, Tlm_batch
@@ -680,9 +761,21 @@ Batch QST synthesis for multiple 3D vector fields.
 # Returns
 - `(Vr_batch, Vt_batch, Vp_batch)`: Tuple of 3D arrays with spatial components
 """
-function synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
+Base.@constprop :aggressive function synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
                              Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3};
                              real_output::Bool=true)
+    return _synthesis_qst_batch(cfg, Qlm_batch, Slm_batch, Tlm_batch, Val(real_output))
+end
+
+function synthesis_qst_batch_cplx(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
+                                  Slm_batch::AbstractArray{<:Complex,3},
+                                  Tlm_batch::AbstractArray{<:Complex,3})
+    return _synthesis_qst_batch(cfg, Qlm_batch, Slm_batch, Tlm_batch, Val(false))
+end
+
+function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
+                              Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3},
+                              ::Val{real_output}) where {real_output}
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Qlm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1"))
     size(Qlm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1"))
@@ -701,18 +794,15 @@ function synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,
         Vt_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
         Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
     end
+    plan = SHTPlan(cfg)
 
-    # Process each field serially; synthesis_qst already uses @threads :static internally
     for k in 1:nfields
-        Qlm = view(Qlm_batch, :, :, k)
-        Slm = view(Slm_batch, :, :, k)
-        Tlm = view(Tlm_batch, :, :, k)
-        Vr, Vt, Vp = synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=real_output)
-        Vr_batch[:, :, k] .= Vr
-        Vt_batch[:, :, k] .= Vt
-        Vp_batch[:, :, k] .= Vp
+        synthesis!(plan, view(Vr_batch, :, :, k), view(Qlm_batch, :, :, k);
+                   real_output=real_output)
+        synthesis_sphtor!(plan, view(Vt_batch, :, :, k), view(Vp_batch, :, :, k),
+                          view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k);
+                          real_output=real_output)
     end
 
     return Vr_batch, Vt_batch, Vp_batch
 end
-

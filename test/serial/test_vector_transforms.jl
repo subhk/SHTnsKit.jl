@@ -57,6 +57,10 @@ using SHTnsKit
         @test isapprox(Vt_s, Vt_full; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_s, Vp_full; rtol=1e-10, atol=1e-12)
 
+        Vt_s_cplx, Vp_s_cplx = @inferred synthesis_sph_cplx(cfg, Slm)
+        @test isapprox(Vt_s_cplx, Vt_full; rtol=0, atol=0)
+        @test isapprox(Vp_s_cplx, Vp_full; rtol=0, atol=0)
+
         # Only T component - use consistent real_output setting
         fill!(Slm, 0)
         Tlm[5, 3] = 0.8 - 0.3im  # l=4, m=2
@@ -64,6 +68,27 @@ using SHTnsKit
         Vt_full2, Vp_full2 = synthesis_sphtor(cfg, Slm, Tlm; real_output=false)
         @test isapprox(Vt_t, Vt_full2; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_t, Vp_full2; rtol=1e-10, atol=1e-12)
+
+        Vt_t_cplx, Vp_t_cplx = @inferred synthesis_tor_cplx(cfg, Tlm)
+        @test isapprox(Vt_t_cplx, Vt_full2; rtol=0, atol=0)
+        @test isapprox(Vp_t_cplx, Vp_full2; rtol=0, atol=0)
+    end
+
+    @testset "Spheroidal/toroidal-only synthesis avoids dense zero spectra" begin
+        lmax = 10
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(51)
+
+        Slm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        Tlm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        synthesis_sph(cfg, Slm)
+        synthesis_tor(cfg, Tlm)
+        GC.gc()
+
+        @test @allocated(synthesis_sph(cfg, Slm)) <= 15_000
+        @test @allocated(synthesis_tor(cfg, Tlm)) <= 15_000
     end
 
     @testset "Gradient transform" begin
@@ -107,6 +132,7 @@ using SHTnsKit
 
         # Truncated synthesis (default real_output=true)
         Vt_l, Vp_l = synthesis_sphtor_l(cfg, Slm, Tlm, ltr)
+        @inferred synthesis_sphtor_l(cfg, Slm, Tlm, ltr)
 
         # Reference: zero high modes and synthesize with same real_output setting
         Slm_z = copy(Slm); Tlm_z = copy(Tlm)
@@ -150,6 +176,36 @@ using SHTnsKit
         # Combined should match sum
         @test isapprox(Vt_ml, Vt_s .+ Vt_t; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_ml, Vp_s .+ Vp_t; rtol=1e-10, atol=1e-12)
+
+        synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
+        synthesis_sph_ml(cfg, im, Sl, ltr)
+        synthesis_tor_ml(cfg, im, Tl, ltr)
+        GC.gc()
+        @test @allocated(synthesis_sph_ml(cfg, im, Sl, ltr)) <= @allocated(synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)) + 128
+        @test @allocated(synthesis_tor_ml(cfg, im, Tl, ltr)) <= @allocated(synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)) + 128
+    end
+
+    @testset "Mode-limited single-component synthesis avoids dense zero vectors" begin
+        lmax = 32
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(57)
+
+        im = 3
+        ltr = lmax - 2
+        len = ltr - im + 1
+        Sl = randn(rng, ComplexF64, len)
+        Tl = randn(rng, ComplexF64, len)
+
+        synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
+        synthesis_sph_ml(cfg, im, Sl, ltr)
+        synthesis_tor_ml(cfg, im, Tl, ltr)
+        GC.gc()
+
+        full_alloc = @allocated(synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr))
+        @test @allocated(synthesis_sph_ml(cfg, im, Sl, ltr)) <= full_alloc + 128
+        @test @allocated(synthesis_tor_ml(cfg, im, Tl, ltr)) <= full_alloc + 128
     end
 
     @testset "Divergence and vorticity from S/T" begin
@@ -359,6 +415,11 @@ using SHTnsKit
         @test isapprox(Vt_sph_l, Vt_sph_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_sph_l, Vp_sph_ref; rtol=1e-10, atol=1e-12)
 
+        Vt_sph_l_cplx, Vp_sph_l_cplx = @inferred synthesis_sph_l_cplx(cfg, Slm, ltr)
+        Vt_sph_ref_cplx, Vp_sph_ref_cplx = synthesis_sph(cfg, Slm_z; real_output=false)
+        @test isapprox(Vt_sph_l_cplx, Vt_sph_ref_cplx; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_sph_l_cplx, Vp_sph_ref_cplx; rtol=1e-10, atol=1e-12)
+
         # Test synthesis_tor_l: truncated toroidal synthesis
         Vt_tor_l, Vp_tor_l = synthesis_tor_l(cfg, Tlm, ltr)
         # Reference: zero high modes and use full synthesis
@@ -369,6 +430,16 @@ using SHTnsKit
         Vt_tor_ref, Vp_tor_ref = synthesis_tor(cfg, Tlm_z)
         @test isapprox(Vt_tor_l, Vt_tor_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_tor_l, Vp_tor_ref; rtol=1e-10, atol=1e-12)
+
+        Vt_tor_l_cplx, Vp_tor_l_cplx = @inferred synthesis_tor_l_cplx(cfg, Tlm, ltr)
+        Vt_tor_ref_cplx, Vp_tor_ref_cplx = synthesis_tor(cfg, Tlm_z; real_output=false)
+        @test isapprox(Vt_tor_l_cplx, Vt_tor_ref_cplx; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_tor_l_cplx, Vp_tor_ref_cplx; rtol=1e-10, atol=1e-12)
+
+        Vt_l_cplx, Vp_l_cplx = @inferred synthesis_sphtor_l_cplx(cfg, Slm, Tlm, ltr)
+        Vt_ref_cplx, Vp_ref_cplx = synthesis_sphtor(cfg, Slm_z, Tlm_z; real_output=false)
+        @test isapprox(Vt_l_cplx, Vt_ref_cplx; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_l_cplx, Vp_ref_cplx; rtol=1e-10, atol=1e-12)
 
         # Test synthesis_sph_l: truncated spheroidal synthesis
         Gt_l, Gp_l = synthesis_sph_l(cfg, alm, ltr)

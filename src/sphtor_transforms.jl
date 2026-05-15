@@ -122,13 +122,46 @@ The corresponding scalar invariants are:
 so spheroidal/toroidal spectra are directly tied to divergence and vorticity.
 """
 
+struct _ZeroSpectralMatrix{T} <: AbstractMatrix{T}
+    nrows::Int
+    ncols::Int
+end
+
+struct _ZeroSpectralVector{T} <: AbstractVector{T}
+    len::Int
+end
+
+Base.size(A::_ZeroSpectralMatrix) = (A.nrows, A.ncols)
+Base.axes(A::_ZeroSpectralMatrix) = (Base.OneTo(A.nrows), Base.OneTo(A.ncols))
+@inline Base.getindex(::_ZeroSpectralMatrix{T}, ::Int, ::Int) where {T} = zero(T)
+Base.similar(A::_ZeroSpectralMatrix{T}) where {T} = zeros(T, size(A))
+Base.similar(A::_ZeroSpectralMatrix, ::Type{T}) where {T} = zeros(T, size(A))
+Base.similar(::_ZeroSpectralMatrix, ::Type{T}, dims::Dims) where {T} = zeros(T, dims)
+
+Base.size(A::_ZeroSpectralVector) = (A.len,)
+Base.axes(A::_ZeroSpectralVector) = (Base.OneTo(A.len),)
+@inline Base.getindex(::_ZeroSpectralVector{T}, ::Int) where {T} = zero(T)
+Base.similar(A::_ZeroSpectralVector{T}) where {T} = zeros(T, size(A))
+Base.similar(A::_ZeroSpectralVector, ::Type{T}) where {T} = zeros(T, size(A))
+Base.copy(A::_ZeroSpectralVector{T}) where {T} = zeros(T, length(A))
+
+@inline _zero_spectral_matrix(::Type{T}, cfg::SHTConfig) where {T} =
+    _ZeroSpectralMatrix{T}(cfg.lmax + 1, cfg.mmax + 1)
+@inline _zero_spectral_vector(::Type{T}, len::Int) where {T} =
+    _ZeroSpectralVector{T}(len)
+
 """
     synthesis_sphtor(cfg, Slm, Tlm; real_output=true) -> (Vt, Vp)
 
 Transform spheroidal/toroidal coefficients to horizontal vector field components.
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
-function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true, use_rfft::Bool=false)
+Base.@constprop :aggressive function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true, use_rfft::Bool=false)
+    return _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(use_rfft))
+end
+
+function _synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix,
+                           ::Val{real_output}, ::Val{use_rfft}) where {real_output, use_rfft}
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
@@ -146,14 +179,14 @@ function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
     CT = eltype(Slm_int)
 
     if use_rfft
-        real_output || throw(ArgumentError("use_rfft=true implies real_output"))
+        real_output === true || throw(ArgumentError("use_rfft=true implies real_output"))
         mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
         nbins = nlon ÷ 2 + 1
         Ftheta = zeros(CT, nlat, nbins)
         Fphi   = zeros(CT, nlat, nbins)
         _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
                                   ltr=lmax, real_output=false)  # skip Hermitian fill
-        RT = real(CT)
+        RT = typeof(real(zero(CT)))
         Vt = Matrix{RT}(undef, nlat, nlon)
         Vp = Matrix{RT}(undef, nlat, nlon)
         irfft_phi!(Vt, Ftheta, nlon)
@@ -163,15 +196,29 @@ function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatr
         Fphi = zeros(CT, nlat, nlon)
         _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
                                   ltr=lmax, real_output=real_output)
-        Vt = real_output ? real.(ifft_phi(Ftheta)) : ifft_phi(Ftheta)
-        Vp = real_output ? real.(ifft_phi(Fphi)) : ifft_phi(Fphi)
+        ifft_phi!(Ftheta, Ftheta)
+        ifft_phi!(Fphi, Fphi)
+        if real_output
+            RT = typeof(real(zero(CT)))
+            Vt = Matrix{RT}(undef, nlat, nlon)
+            Vp = Matrix{RT}(undef, nlat, nlon)
+            @inbounds for j in 1:nlon, i in 1:nlat
+                Vt[i, j] = real(Ftheta[i, j])
+                Vp[i, j] = real(Fphi[i, j])
+            end
+        else
+            Vt = Ftheta
+            Vp = Fphi
+        end
     end
 
     if cfg.robert_form
         @inbounds for i in 1:nlat
             s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
-            Vt[i, :] .*= s_theta
-            Vp[i, :] .*= s_theta
+            for j in 1:nlon
+                Vt[i, j] *= s_theta
+                Vp[i, j] *= s_theta
+            end
         end
     end
     return Vt, Vp
@@ -433,7 +480,7 @@ end
 Complex version preserving complex values in output.
 """
 function synthesis_sphtor_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix)
-    return synthesis_sphtor(cfg, Slm, Tlm; real_output=false)
+    return _synthesis_sphtor(cfg, Slm, Tlm, Val(false), Val(false))
 end
 
 """
@@ -451,9 +498,19 @@ end
 Transform only spheroidal component to spatial vector field (Tlm = 0).
 """
 function synthesis_sph(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    Tlm_zero = zeros(eltype(Slm), lmax+1, mmax+1)
+    Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return synthesis_sphtor(cfg, Slm, Tlm_zero; real_output=real_output)
+end
+
+"""
+    synthesis_sph_cplx(cfg, Slm) -> (Vt, Vp)
+
+Complex-output spheroidal-only synthesis without allocating a dense zero
+toroidal spectrum.
+"""
+function synthesis_sph_cplx(cfg::SHTConfig, Slm::AbstractMatrix)
+    Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
+    return _synthesis_sphtor(cfg, Slm, Tlm_zero, Val(false), Val(false))
 end
 
 """
@@ -462,9 +519,19 @@ end
 Transform only toroidal component to spatial vector field (Slm = 0).
 """
 function synthesis_tor(cfg::SHTConfig, Tlm::AbstractMatrix; real_output::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    Slm_zero = zeros(eltype(Tlm), lmax+1, mmax+1)
+    Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return synthesis_sphtor(cfg, Slm_zero, Tlm; real_output=real_output)
+end
+
+"""
+    synthesis_tor_cplx(cfg, Tlm) -> (Vt, Vp)
+
+Complex-output toroidal-only synthesis without allocating a dense zero
+spheroidal spectrum.
+"""
+function synthesis_tor_cplx(cfg::SHTConfig, Tlm::AbstractMatrix)
+    Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
+    return _synthesis_sphtor(cfg, Slm_zero, Tlm, Val(false), Val(false))
 end
 
 """
@@ -554,7 +621,16 @@ function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::Abs
     return Tlm
 end
 
-function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+Base.@constprop :aggressive function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+    return _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(real_output))
+end
+
+function synthesis_sphtor_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int)
+    return _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(false))
+end
+
+function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int,
+                             ::Val{real_output}) where {real_output}
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
@@ -573,15 +649,29 @@ function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMa
     Fphi = zeros(CT, nlat, nlon)
     _synthesis_sphtor_mloop!(Ftheta, Fphi, cfg, Slm_int, Tlm_int;
                               ltr=ltr, real_output=real_output)
-    Vt = real_output ? real.(ifft_phi(Ftheta)) : ifft_phi(Ftheta)
-    Vp = real_output ? real.(ifft_phi(Fphi)) : ifft_phi(Fphi)
+    ifft_phi!(Ftheta, Ftheta)
+    ifft_phi!(Fphi, Fphi)
+    if real_output
+        RT = typeof(real(zero(CT)))
+        Vt = Matrix{RT}(undef, nlat, nlon)
+        Vp = Matrix{RT}(undef, nlat, nlon)
+        @inbounds for j in 1:nlon, i in 1:nlat
+            Vt[i, j] = real(Ftheta[i, j])
+            Vp[i, j] = real(Fphi[i, j])
+        end
+    else
+        Vt = Ftheta
+        Vp = Fphi
+    end
 
     # Robert form: scale by sin(theta) — must match synthesis_sphtor behavior
     if cfg.robert_form
         @inbounds for i in 1:nlat
             s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
-            Vt[i, :] .*= s_theta
-            Vp[i, :] .*= s_theta
+            for j in 1:nlon
+                Vt[i, j] *= s_theta
+                Vp[i, j] *= s_theta
+            end
         end
     end
     return Vt, Vp
@@ -614,8 +704,13 @@ end
 Degree-limited spheroidal-only transform.
 """
 function synthesis_sph_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
-    Tlm_zero = zeros(eltype(Slm), cfg.lmax+1, cfg.mmax+1)
+    Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr; real_output=real_output)
+end
+
+function synthesis_sph_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int)
+    Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
+    return _synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr, Val(false))
 end
 
 """
@@ -624,8 +719,13 @@ end
 Degree-limited toroidal-only transform.
 """
 function synthesis_tor_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
-    Slm_zero = zeros(eltype(Tlm), cfg.lmax+1, cfg.mmax+1)
+    Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr; real_output=real_output)
+end
+
+function synthesis_tor_l_cplx(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int)
+    Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
+    return _synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr, Val(false))
 end
 
 """
@@ -634,7 +734,7 @@ end
 Mode-limited spheroidal-only synthesis wrapper.
 """
 function synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
-    Tl_zero = zeros(eltype(Sl), length(Sl))
+    Tl_zero = _zero_spectral_vector(eltype(Sl), length(Sl))
     return synthesis_sphtor_ml(cfg, im, Sl, Tl_zero, ltr)
 end
 
@@ -644,7 +744,7 @@ end
 Mode-limited toroidal-only synthesis wrapper.
 """
 function synthesis_tor_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
-    Sl_zero = zeros(eltype(Tl), length(Tl))
+    Sl_zero = _zero_spectral_vector(eltype(Tl), length(Tl))
     return synthesis_sphtor_ml(cfg, im, Sl_zero, Tl, ltr)
 end
 

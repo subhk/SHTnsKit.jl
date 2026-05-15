@@ -40,6 +40,7 @@ end
 
         Vr_b, Vt_b, Vp_b = synthesis_qst_batch(cfg, Qb, Sb, Tb; real_output=true)
         @test size(Vr_b) == (cfg.nlat, cfg.nlon, nfields)
+        @inferred synthesis_qst_batch(cfg, Qb, Sb, Tb)
 
         for k in 1:nfields
             Vr, Vt, Vp = synthesis_qst(cfg, Qb[:, :, k], Sb[:, :, k], Tb[:, :, k]; real_output=true)
@@ -47,6 +48,10 @@ end
             @test isapprox(Vt_b[:, :, k], Vt; rtol=1e-11, atol=1e-13)
             @test isapprox(Vp_b[:, :, k], Vp; rtol=1e-11, atol=1e-13)
         end
+
+        synthesis_qst_batch(cfg, Qb, Sb, Tb)
+        GC.gc()
+        @test @allocated(synthesis_qst_batch(cfg, Qb, Sb, Tb)) <= 25_000
     end
 
     @testset "analysis_qst_batch matches per-field analysis_qst" begin
@@ -71,6 +76,10 @@ end
             @test isapprox(Sb[:, :, k], S; rtol=1e-11, atol=1e-13)
             @test isapprox(Tb[:, :, k], T; rtol=1e-11, atol=1e-13)
         end
+
+        analysis_qst_batch(cfg, Vr_b, Vt_b, Vp_b)
+        GC.gc()
+        @test @allocated(analysis_qst_batch(cfg, Vr_b, Vt_b, Vp_b)) <= 28_000
     end
 
     @testset "Batch QST roundtrip" begin

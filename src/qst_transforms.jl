@@ -98,16 +98,15 @@ velocity fields in spherical coordinates (Vr, Vt, Vp).
 Transform QST spectral coefficients to 3D spatial vector field components.
 Returns radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
-function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    nlat, nlon = cfg.nlat, cfg.nlon
+Base.@constprop :aggressive function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+    return _synthesis_qst(cfg, Qlm, Slm, Tlm, Val(real_output))
+end
 
-    # Validate input dimensions
+function _synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
+                        ::Val{real_output}) where {real_output}
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-
-    # Get the spatial components
-    Vr = synthesis(cfg, Qlm; real_output=real_output)
-    Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=real_output)
+    Vr = _synthesis(cfg, Qlm, Val(real_output), nothing, Val(false))
+    Vt, Vp = _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(false))
 
     return Vr, Vt, Vp
 end
@@ -137,10 +136,8 @@ end
 Complex version of QST to spatial transform, preserving complex values.
 """
 function synthesis_qst_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
-    nlat, nlon = cfg.nlat, cfg.nlon
-
-    # Transform to spatial fields keeping complex values
-    Vr = synthesis(cfg, Qlm; real_output=false)
+    validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
+    Vr = synthesis_cplx(cfg, Qlm)
     Vt, Vp = synthesis_sphtor_cplx(cfg, Slm, Tlm)
 
     return Vr, Vt, Vp
@@ -185,22 +182,20 @@ end
 
 Degree-limited version of synthesis_qst, using coefficients only up to degree ltr.
 """
-function synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
-    lmax, mmax = cfg.lmax, cfg.mmax
+Base.@constprop :aggressive function synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+    return _synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr, Val(real_output))
+end
 
-    # Create truncated coefficient arrays
-    Q2 = copy(Qlm); S2 = copy(Slm); T2 = copy(Tlm)
+function synthesis_qst_l_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int)
+    return _synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr, Val(false))
+end
 
-    # Zero high-degree modes
-    for m in 0:mmax, l in (ltr+1):lmax
-        if l >= m
-            Q2[l+1, m+1] = 0.0
-            S2[l+1, m+1] = 0.0
-            T2[l+1, m+1] = 0.0
-        end
-    end
-
-    return synthesis_qst(cfg, Q2, S2, T2; real_output=real_output)
+function _synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
+                          ltr::Int, ::Val{real_output}) where {real_output}
+    validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
+    Vr = _synthesis_l(cfg, Qlm, ltr, Val(real_output))
+    Vt, Vp = _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(real_output))
+    return Vr, Vt, Vp
 end
 
 """

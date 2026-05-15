@@ -85,6 +85,38 @@ using SHTnsKit
         @test isapprox(alm_back, alm_batch; rtol=1e-10, atol=1e-12)
     end
 
+    @testset "Scalar batch in-place scratch keeps allocations bounded" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(75)
+        nfields = 4
+
+        fields = randn(rng, nlat, nlon, nfields)
+        alm_batch = zeros(ComplexF64, lmax + 1, lmax + 1, nfields)
+        fft_batch = zeros(ComplexF64, nlat, nlon, nfields)
+        rfft_batch = zeros(ComplexF64, nlat, nlon ÷ 2 + 1, nfields)
+        fields_out = zeros(Float64, nlat, nlon, nfields)
+
+        analysis_batch!(cfg, alm_batch, fields; fft_batch=fft_batch)
+        synthesis_batch!(cfg, fields_out, alm_batch; fft_batch=fft_batch)
+        analysis_batch!(cfg, alm_batch, fields; fft_batch=rfft_batch, use_rfft=true)
+        synthesis_batch!(cfg, fields_out, alm_batch; fft_batch=rfft_batch, use_rfft=true)
+        GC.gc()
+
+        @test @allocated(analysis_batch!(cfg, alm_batch, fields; fft_batch=fft_batch)) <= 8_000
+        @test @allocated(synthesis_batch!(cfg, fields_out, alm_batch; fft_batch=fft_batch)) <= 8_000
+        @test @allocated(analysis_batch!(cfg, alm_batch, fields; fft_batch=rfft_batch, use_rfft=true)) <= 8_000
+        @test @allocated(synthesis_batch!(cfg, fields_out, alm_batch; fft_batch=rfft_batch, use_rfft=true)) <= 8_000
+        @inferred synthesis_batch(cfg, alm_batch)
+
+        fields_kw = synthesis_batch(cfg, alm_batch; real_output=false)
+        fields_cplx = @inferred synthesis_batch_cplx(cfg, alm_batch)
+        @test eltype(fields_cplx) === ComplexF64
+        @test isapprox(fields_cplx, fields_kw; rtol=0, atol=0)
+    end
+
     @testset "Batch size configuration" begin
         lmax = 6
         nlat = lmax + 2
@@ -117,6 +149,11 @@ using SHTnsKit
         nfields = 3
 
         # Test individual transforms with spectral-to-spatial-to-spectral roundtrip
+        Slm_batch = zeros(ComplexF64, lmax+1, lmax+1, nfields)
+        Tlm_batch = zeros(ComplexF64, lmax+1, lmax+1, nfields)
+        Vt_batch = randn(rng, nlat, nlon, nfields)
+        Vp_batch = randn(rng, nlat, nlon, nfields)
+
         for k in 1:nfields
             Slm = randn(rng, ComplexF64, lmax+1, lmax+1)
             Tlm = randn(rng, ComplexF64, lmax+1, lmax+1)
@@ -129,6 +166,8 @@ using SHTnsKit
                 Slm[l+1, m+1] = 0
                 Tlm[l+1, m+1] = 0
             end
+            Slm_batch[:, :, k] .= Slm
+            Tlm_batch[:, :, k] .= Tlm
 
             Vt, Vp = synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
             @test size(Vt) == (nlat, nlon)
@@ -142,6 +181,19 @@ using SHTnsKit
             @test isapprox(Slm_back, Slm; rtol=1e-9, atol=1e-11)
             @test isapprox(Tlm_back, Tlm; rtol=1e-9, atol=1e-11)
         end
+
+        @inferred synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch)
+        Vt_kw, Vp_kw = synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch; real_output=false)
+        Vt_cplx, Vp_cplx = @inferred synthesis_sphtor_batch_cplx(cfg, Slm_batch, Tlm_batch)
+        @test eltype(Vt_cplx) === ComplexF64
+        @test eltype(Vp_cplx) === ComplexF64
+        @test isapprox(Vt_cplx, Vt_kw; rtol=0, atol=0)
+        @test isapprox(Vp_cplx, Vp_kw; rtol=0, atol=0)
+        synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch)
+        analysis_sphtor_batch(cfg, Vt_batch, Vp_batch)
+        GC.gc()
+        @test @allocated(synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch)) <= 16_000
+        @test @allocated(analysis_sphtor_batch(cfg, Vt_batch, Vp_batch)) <= 18_000
     end
 
     @testset "QST batch transforms" begin
@@ -180,10 +232,33 @@ using SHTnsKit
             @test isapprox(Slm_back, Slm; rtol=1e-9, atol=1e-11)
             @test isapprox(Tlm_back, Tlm; rtol=1e-9, atol=1e-11)
         end
-    end
 
-    # NOTE: Vector/QST batch transforms (synthesis_sphtor_batch, synthesis_qst_batch)
-    # are skipped because they have a known bug with nested @threads :static
-    # that causes "cannot be used concurrently or nested" errors when running
-    # with multiple threads. This needs to be fixed in the library.
+        Qlm_batch = zeros(ComplexF64, lmax+1, lmax+1, nfields)
+        Slm_batch = zeros(ComplexF64, lmax+1, lmax+1, nfields)
+        Tlm_batch = zeros(ComplexF64, lmax+1, lmax+1, nfields)
+        for k in 1:nfields
+            Qlm_batch[:, :, k] .= randn(rng, ComplexF64, lmax+1, lmax+1)
+            Slm_batch[:, :, k] .= randn(rng, ComplexF64, lmax+1, lmax+1)
+            Tlm_batch[:, :, k] .= randn(rng, ComplexF64, lmax+1, lmax+1)
+            Qlm_batch[:, 1, k] .= real.(Qlm_batch[:, 1, k])
+            Slm_batch[:, 1, k] .= real.(Slm_batch[:, 1, k])
+            Tlm_batch[:, 1, k] .= real.(Tlm_batch[:, 1, k])
+            Slm_batch[1, :, k] .= 0
+            Tlm_batch[1, :, k] .= 0
+            for m in 0:lmax, l in 0:(m-1)
+                Qlm_batch[l+1, m+1, k] = 0
+                Slm_batch[l+1, m+1, k] = 0
+                Tlm_batch[l+1, m+1, k] = 0
+            end
+        end
+
+        Vr_kw, Vt_kw, Vp_kw = synthesis_qst_batch(cfg, Qlm_batch, Slm_batch, Tlm_batch; real_output=false)
+        Vr_cplx, Vt_cplx, Vp_cplx = @inferred synthesis_qst_batch_cplx(cfg, Qlm_batch, Slm_batch, Tlm_batch)
+        @test eltype(Vr_cplx) === ComplexF64
+        @test eltype(Vt_cplx) === ComplexF64
+        @test eltype(Vp_cplx) === ComplexF64
+        @test isapprox(Vr_cplx, Vr_kw; rtol=0, atol=0)
+        @test isapprox(Vt_cplx, Vt_kw; rtol=0, atol=0)
+        @test isapprox(Vp_cplx, Vp_kw; rtol=0, atol=0)
+    end
 end

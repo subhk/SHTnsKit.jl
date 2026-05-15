@@ -82,12 +82,51 @@ const _TWO_PI = 2π
 const _FFT_BACKEND = Threads.Atomic{Int}(0)
 const _FFT_BACKEND_FFTW = 1
 const _FFT_BACKEND_DFT = 2
+const _LOCAL_FFT_PLAN_CACHE =
+    Dict{Tuple{Symbol,DataType,NTuple{2,Int},NTuple{2,Int},Int}, Any}()
+const _LOCAL_FFT_PLAN_CACHE_LOCK = ReentrantLock()
 
 function fft_phi_backend()
     v = _FFT_BACKEND[]
     v == _FFT_BACKEND_FFTW && return :fftw
     v == _FFT_BACKEND_DFT && return :dft
     return :unknown
+end
+
+@inline function _local_fft_plan_key(kind::Symbol, A::AbstractMatrix, nlon::Int=0)
+    return (kind, eltype(A), (size(A, 1), size(A, 2)), (stride(A, 1), stride(A, 2)), nlon)
+end
+
+function _cached_local_fft_plan(kind::Symbol, A::AbstractMatrix, nlon::Int=0)
+    key = _local_fft_plan_key(kind, A, nlon)
+    lock(_LOCAL_FFT_PLAN_CACHE_LOCK)
+    try
+        plan = get(_LOCAL_FFT_PLAN_CACHE, key, nothing)
+        if plan === nothing
+            plan = if kind === :fft
+                plan_fft!(A, 2; flags=FFTW.ESTIMATE)
+            elseif kind === :ifft
+                plan_ifft!(A, 2; flags=FFTW.ESTIMATE)
+            elseif kind === :rfft
+                plan_rfft(A, 2; flags=FFTW.ESTIMATE)
+            elseif kind === :irfft
+                plan_irfft(A, nlon, 2; flags=FFTW.ESTIMATE)
+            else
+                throw(ArgumentError("unknown FFT plan kind: $kind"))
+            end
+            _LOCAL_FFT_PLAN_CACHE[key] = plan
+        end
+        return plan
+    finally
+        unlock(_LOCAL_FFT_PLAN_CACHE_LOCK)
+    end
+end
+
+@inline function _copy_complex_input!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
+    @inbounds for I in eachindex(dest, A)
+        dest[I] = A[I]
+    end
+    return dest
 end
 
 """
@@ -148,10 +187,11 @@ unavailable for the element type.
 """
 function ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     size(dest) == size(A) || throw(DimensionMismatch("dest and A must have same size"))
-    @inbounds dest .= A
+    _copy_complex_input!(dest, A)
     nlat, nlon = size(A)
     try
-        ifft!(dest, 2)
+        plan = _cached_local_fft_plan(:ifft, dest)
+        mul!(dest, plan, dest)
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW
         return dest
     catch e
@@ -220,10 +260,11 @@ Falls back to the pure-DFT path for unsupported element types.
 """
 function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     size(dest) == size(A) || throw(DimensionMismatch("dest and A must have same size"))
-    @inbounds dest .= complex.(A)
+    _copy_complex_input!(dest, A)
     nlat, nlon = size(A)
     try
-        fft!(dest, 2)
+        plan = _cached_local_fft_plan(:fft, dest)
+        mul!(dest, plan, dest)
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW
         return dest
     catch e
@@ -277,6 +318,33 @@ function rfft_phi(A::AbstractMatrix{<:Real})
 end
 
 """
+    rfft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix{<:Real})
+
+Real-to-complex FFT along longitude into a preallocated half-spectrum buffer.
+`dest` must have shape `(size(A,1), size(A,2)÷2+1)`.
+"""
+function rfft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix{<:Real})
+    nlat, nlon = size(A)
+    size(dest) == (nlat, nlon ÷ 2 + 1) || throw(DimensionMismatch("dest shape must be (size(A,1), size(A,2)÷2+1)"))
+    try
+        plan = _cached_local_fft_plan(:rfft, A)
+        mul!(dest, plan, A)
+        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+        return dest
+    catch e
+        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
+            rethrow(e)
+        end
+        Y_full = _dft_phi(A, -1)
+        @inbounds for j in 1:size(dest, 2), i in 1:nlat
+            dest[i, j] = Y_full[i, j]
+        end
+        _FFT_BACKEND[] = _FFT_BACKEND_DFT
+        return dest
+    end
+end
+
+"""
     irfft_phi!(dest::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Complex}, nlon::Int)
 
 Complex-to-real inverse FFT along longitude. `A` has `nlon÷2+1` columns (the
@@ -288,7 +356,8 @@ function irfft_phi!(dest::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Complex}, 
     size(A, 2) == nlon ÷ 2 + 1 || throw(DimensionMismatch("A must have nlon÷2+1 columns"))
     size(dest) == (size(A, 1), nlon) || throw(DimensionMismatch("dest shape must be (size(A,1), nlon)"))
     try
-        dest .= irfft(A, nlon, 2)
+        plan = _cached_local_fft_plan(:irfft, A, nlon)
+        mul!(dest, plan, A)
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW
         return dest
     catch e

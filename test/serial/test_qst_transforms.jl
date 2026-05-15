@@ -78,6 +78,16 @@ using SHTnsKit
         @test isapprox(Vr_l, Vr_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Vt_l, Vt_ref; rtol=1e-10, atol=1e-12)
         @test isapprox(Vp_l, Vp_ref; rtol=1e-10, atol=1e-12)
+
+        Vr_l_cplx, Vt_l_cplx, Vp_l_cplx = @inferred synthesis_qst_l_cplx(cfg, Qlm, Slm, Tlm, ltr)
+        Vr_ref_cplx, Vt_ref_cplx, Vp_ref_cplx = synthesis_qst(cfg, Qlm_z, Slm_z, Tlm_z; real_output=false)
+        @test isapprox(Vr_l_cplx, Vr_ref_cplx; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vt_l_cplx, Vt_ref_cplx; rtol=1e-10, atol=1e-12)
+        @test isapprox(Vp_l_cplx, Vp_ref_cplx; rtol=1e-10, atol=1e-12)
+
+        synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true)
+        GC.gc()
+        @test @allocated(synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true)) <= 11_500
     end
 
     @testset "QST complex transforms" begin

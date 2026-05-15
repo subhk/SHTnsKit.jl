@@ -123,7 +123,7 @@ using Base.Threads  # For multi-threading support
 # Runtime knob for inverse-FFT φ scaling during synthesis.
 # Defaults: Gauss grids use "dft" (nlon), regular/equiangular use "quad" (nlon/(2π)).
 # Override via cfg.phi_scale=:dft/:quad or ENV SHTNSKIT_PHI_SCALE=dft|quad.
-phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : nlon)
+phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : Float64(nlon))
 
 # Include all module source files
 include("loop.jl")                           # Unified CPU/GPU loop abstraction
@@ -140,14 +140,14 @@ function phi_inv_scale(cfg::SHTConfig)
     if mode == "quad"
         return cfg.nlon / (2π)
     elseif mode == "dft"
-        return cfg.nlon
+        return Float64(cfg.nlon)
     end
     if cfg.phi_scale === :quad
         return cfg.nlon / (2π)
     elseif cfg.phi_scale === :dft
-        return cfg.nlon
+        return Float64(cfg.nlon)
     else
-        return cfg.grid_type == :gauss ? cfg.nlon : cfg.nlon / (2π)
+        return cfg.grid_type == :gauss ? Float64(cfg.nlon) : cfg.nlon / (2π)
     end
 end
 
@@ -184,15 +184,15 @@ export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_co
 export select_compute_device, device_transfer_arrays                  # Device utilities
 
 # ===== BASIC TRANSFORMS =====
-export analysis, synthesis                              # Basic forward/backward transforms
+export analysis, synthesis, synthesis_cplx             # Basic forward/backward transforms
 export SHTPlan, analysis!, synthesis!                  # Planned (optimized) transforms
 
 # ===== BATCH TRANSFORMS =====
 export set_batch_size!, get_batch_size, reset_batch_size!  # Batch configuration
 export analysis_batch, analysis_batch!                  # Batch scalar analysis
-export synthesis_batch, synthesis_batch!                # Batch scalar synthesis
-export analysis_sphtor_batch, synthesis_sphtor_batch   # Batch vector transforms
-export analysis_qst_batch, synthesis_qst_batch         # Batch 3D vector transforms
+export synthesis_batch, synthesis_batch!, synthesis_batch_cplx  # Batch scalar synthesis
+export analysis_sphtor_batch, synthesis_sphtor_batch, synthesis_sphtor_batch_cplx  # Batch vector transforms
+export analysis_qst_batch, synthesis_qst_batch, synthesis_qst_batch_cplx           # Batch 3D vector transforms
 
 # ===== SPATIAL ↔ SPHERICAL HARMONIC TRANSFORMS =====
 export analysis_sphtor!, synthesis_sphtor!              # In-place spheroidal/toroidal transforms
@@ -208,15 +208,16 @@ export fft_phi_backend
 export scratch_fft, scratch_spatial
 
 # ===== VECTOR FIELD TRANSFORMS =====
-export analysis_sphtor, synthesis_sphtor, synthesis_sph, synthesis_tor
+export analysis_sphtor, synthesis_sphtor, synthesis_sph, synthesis_tor, synthesis_sph_cplx, synthesis_tor_cplx
 export divergence_from_spheroidal, divergence_from_spheroidal!, spheroidal_from_divergence, spheroidal_from_divergence!
 export vorticity_from_toroidal, vorticity_from_toroidal!, toroidal_from_vorticity, toroidal_from_vorticity!
 export analysis_qst, synthesis_qst, analysis_qst_cplx, synthesis_qst_cplx  # Q,S,T decomposition
 
 # ===== LATITUDE-BAND AND M-MODE SPECIFIC TRANSFORMS =====
 export synthesis_sphtor_l, analysis_sphtor_l, synthesis_sph_l, synthesis_tor_l
+export synthesis_sphtor_l_cplx, synthesis_sph_l_cplx, synthesis_tor_l_cplx
 export analysis_sphtor_ml, synthesis_sphtor_ml, synthesis_sph_ml, synthesis_tor_ml
-export analysis_qst_l, synthesis_qst_l, analysis_qst_ml, synthesis_qst_ml
+export analysis_qst_l, synthesis_qst_l, synthesis_qst_l_cplx, analysis_qst_ml, synthesis_qst_ml
 export synthesis_sphtor_cplx, analysis_sphtor_cplx
 export suggest_pencil_grid, set_fft_plan_cache!, enable_fft_plan_cache!, disable_fft_plan_cache!, fft_plan_cache_enabled
 

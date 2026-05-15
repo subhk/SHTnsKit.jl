@@ -163,6 +163,28 @@ using SHTnsKit
         @test isapprox(alm_scratch, alm_no_scratch; rtol=1e-12, atol=1e-14)
     end
 
+    @testset "Out-of-place synthesis inference" begin
+        lmax = 6
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(49)
+
+        alm = randn(rng, ComplexF64, lmax+1, lmax+1)
+        alm[:, 1] .= real.(alm[:, 1])
+        for m in 0:lmax, l in 0:(m-1)
+            alm[l+1, m+1] = 0
+        end
+
+        @inferred SHTnsKit.phi_inv_scale(cfg)
+        @inferred synthesis(cfg, alm)
+
+        f_kw = synthesis(cfg, alm; real_output=false)
+        f_cplx = @inferred synthesis_cplx(cfg, alm)
+        @test eltype(f_cplx) === ComplexF64
+        @test isapprox(f_cplx, f_kw; rtol=0, atol=0)
+    end
+
     @testset "PLM tables path" begin
         lmax = 8
         nlat = lmax + 2
@@ -224,6 +246,18 @@ using SHTnsKit
             f_out = zeros(Float64, nlat, nlon)
             synthesis!(cfg, f_out, alm_c; real_output=true, use_rfft=true)
             @test isapprox(f_out, f_r; rtol=1e-10, atol=1e-12)
+
+            rfft_scratch = zeros(ComplexF64, nlat, nlon ÷ 2 + 1)
+            analysis!(cfg, alm_out, f; fft_scratch=rfft_scratch, use_rfft=true)
+            @test isapprox(alm_out, alm_r; rtol=1e-10, atol=1e-12)
+            synthesis!(cfg, f_out, alm_c; real_output=true, fft_scratch=rfft_scratch, use_rfft=true)
+            @test isapprox(f_out, f_r; rtol=1e-10, atol=1e-12)
+
+            analysis!(cfg, alm_out, f; fft_scratch=rfft_scratch, use_rfft=true)
+            synthesis!(cfg, f_out, alm_c; real_output=true, fft_scratch=rfft_scratch, use_rfft=true)
+            GC.gc()
+            @test @allocated(analysis!(cfg, alm_out, f; fft_scratch=rfft_scratch, use_rfft=true)) <= 512
+            @test @allocated(synthesis!(cfg, f_out, alm_c; real_output=true, fft_scratch=rfft_scratch, use_rfft=true)) <= 512
 
             # Round-trip via rfft path
             alm_rt = analysis(cfg, f_r; use_rfft=true)

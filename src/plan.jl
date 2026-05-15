@@ -231,7 +231,9 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
                 @inbounds for i in 1:nlat
                     sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
                     if sθ > 0
-                        plan.real_scratch[i, :] ./= sθ
+                        for j in 1:nlon
+                            plan.real_scratch[i, j] /= sθ
+                        end
                     end
                 end
             end
@@ -245,7 +247,9 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
                 @inbounds for i in 1:nlat
                     sθ = sqrt(max(0.0, 1 - cfg.x[i]^2))
                     if sθ > 0
-                        plan.Fθk[i, :] ./= sθ
+                        for j in 1:nlon
+                            plan.Fθk[i, j] /= sθ
+                        end
                     end
                 end
             end

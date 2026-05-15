@@ -256,8 +256,12 @@ using SHTnsKit
             analysis!(cfg, alm_out, f; fft_scratch=rfft_scratch, use_rfft=true)
             synthesis!(cfg, f_out, alm_c; real_output=true, fft_scratch=rfft_scratch, use_rfft=true)
             GC.gc()
-            @test @allocated(analysis!(cfg, alm_out, f; fft_scratch=rfft_scratch, use_rfft=true)) <= 512
-            @test @allocated(synthesis!(cfg, f_out, alm_c; real_output=true, fft_scratch=rfft_scratch, use_rfft=true)) <= 512
+            # Julia/FFTW patch versions can impose a small constant allocation
+            # floor around plan execution. Keep the budget below scratch-sized
+            # allocations while allowing the observed Julia 1.10 Linux floor.
+            rfft_alloc_budget = 2_048
+            @test @allocated(analysis!(cfg, alm_out, f; fft_scratch=rfft_scratch, use_rfft=true)) <= rfft_alloc_budget
+            @test @allocated(synthesis!(cfg, f_out, alm_c; real_output=true, fft_scratch=rfft_scratch, use_rfft=true)) <= rfft_alloc_budget
 
             # Round-trip via rfft path
             alm_rt = analysis(cfg, f_r; use_rfft=true)

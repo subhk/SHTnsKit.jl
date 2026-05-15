@@ -177,6 +177,8 @@ function analysis(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,
     size(f, 1) == nlat || throw(DimensionMismatch("first dim must be nlat=$(nlat)"))
     size(f, 2) == nlon || throw(DimensionMismatch("second dim must be nlon=$(nlon)"))
     if use_rfft
+        # Real FFTs expose bins 0..nlon/2. These align with the full complex
+        # FFT columns used by the Legendre m-loop for all supported m values.
         eltype(f) <: Real || throw(ArgumentError("use_rfft=true requires a real-valued input"))
         nbins = nlon ÷ 2 + 1
         Fph = if fft_scratch === nothing
@@ -201,6 +203,8 @@ In-place forward transform. Writes coefficients into `alm_out`.
 `alm_out` must be size `(lmax+1, mmax+1)`.
 """
 Base.@constprop :aggressive function analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix; fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing, use_rfft::Bool=false)
+    # Function barrier: `Val(use_rfft)` makes the scratch shape and FFT branch
+    # compile-time constants for callers that pass a literal keyword.
     return _analysis!(cfg, alm_out, f, fft_scratch, Val(use_rfft))
 end
 
@@ -236,6 +240,8 @@ Inverse transform back to a grid `(nlat, nlon)`. If `real_output=true`,
 Hermitian symmetry is enforced before IFFT.
 """
 Base.@constprop :aggressive function synthesis(cfg::SHTConfig, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing, use_rfft::Bool=false)
+    # Function barrier: output element type and FFT buffer shape depend on
+    # keyword values, so route literals through Val-dispatched methods.
     return _synthesis(cfg, alm, Val(real_output), fft_scratch, Val(use_rfft))
 end
 
@@ -259,6 +265,8 @@ function _synthesis(cfg::SHTConfig, alm::AbstractMatrix, ::Val{real_output},
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
     if use_rfft
+        # The rfft path returns real output by construction. Hermitian
+        # symmetry is not materialized in Fph; irfft_phi! reconstructs it.
         real_output === true || throw(ArgumentError("use_rfft=true implies real_output"))
         mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2, got mmax=$mmax, nlon=$nlon"))
         nbins = nlon ÷ 2 + 1
@@ -320,6 +328,8 @@ end
 In-place inverse transform. Writes the spatial field into `f_out`.
 """
 Base.@constprop :aggressive function synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true, fft_scratch::Union{Nothing,AbstractMatrix{<:Complex}}=nothing, use_rfft::Bool=false)
+    # Same Val barrier as out-of-place synthesis, but preserving the caller's
+    # output buffer contract.
     return _synthesis!(cfg, f_out, alm, Val(real_output), fft_scratch, Val(use_rfft))
 end
 
@@ -501,6 +511,9 @@ function _analysis_scalar_mloop!(alm::AbstractMatrix, cfg::SHTConfig, Fph::Abstr
 end
 
 @inline function _analysis_scalar_mloop_tbl!(alm, cfg, Fph, m_order, scale_phi)
+    # Avoid @threads setup and closure allocation on single-thread runs. The
+    # serial and threaded bodies stay separate so performance tests can lock
+    # down the low-allocation path.
     if Threads.nthreads() == 1
         return _analysis_scalar_mloop_tbl_serial!(alm, cfg, Fph, m_order, scale_phi)
     else
@@ -539,6 +552,8 @@ end
 @inline function _analysis_scalar_mloop_otf!(alm, cfg, Fph, m_order, scale_phi)
     lmax = cfg.lmax
     thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
+    # See table path above: single-thread transforms use a direct loop and
+    # the first scratch buffer instead of paying threaded-loop overhead.
     if Threads.nthreads() == 1
         return _analysis_scalar_mloop_otf_serial!(alm, cfg, Fph, m_order, scale_phi, thread_local_P, lmax)
     else
@@ -602,6 +617,8 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
 end
 
 @inline function _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+    # Keep the single-thread path free of @threads overhead. This matters for
+    # allocation-sensitive small transforms and scalar in-place APIs.
     if Threads.nthreads() == 1
         return _synthesis_scalar_mloop_tbl_serial!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
     else
@@ -636,6 +653,8 @@ end
 
 @inline function _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
     thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, max(ltr_eff, 0))
+    # `thread_local_P[1]` is valid in serial mode because _ensure_otf_scratch!
+    # sizes scratch for maxthreadid().
     if Threads.nthreads() == 1
         return _synthesis_scalar_mloop_otf_serial!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff, thread_local_P)
     else

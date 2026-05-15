@@ -106,6 +106,9 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     inv_scaleφ = phi_inv_scale(cfg)
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    # Complex packed layout stores negative and positive m explicitly, so this
+    # loop writes each Fourier bin directly instead of relying on Hermitian
+    # symmetry as the real-field packed layout does.
     for m in -mmax:mmax
         # build G_m(θ) = sum_l Nlm P_l^{|m|} alm(l,m)
         am = abs(m)
@@ -158,6 +161,8 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     scaleφ = cfg.cphi
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    # Read both signs of m from the FFT output and store them in LM_cplx order.
+    # Negative modes live at DFT column nlon+m+1.
     for m in -mmax:mmax
         am = abs(m)
         col = m ≥ 0 ? (m + 1) : (cfg.nlon + m + 1)

@@ -113,6 +113,8 @@ function analysis_packed(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     f = reshape(Vr, cfg.nlat, cfg.nlon)
     alm_mat = analysis(cfg, f)
     Qlm = Vector{eltype(alm_mat)}(undef, cfg.nlm)
+    # Dense matrix output is converted back to SHTns-compatible packed LM
+    # order, skipping unsupported m values when mres > 1.
     @inbounds for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
         for l in m:cfg.lmax
@@ -131,6 +133,8 @@ Packed scalar synthesis from Qlm (LM order) to flattened real grid (length nlat*
 function synthesis_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
     alm_mat = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    # Packed LM order stores only valid (l,m) pairs. Expand to dense
+    # (l+1,m+1) so the core synthesis kernel can be reused.
     @inbounds for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
         for l in m:cfg.lmax
@@ -177,6 +181,8 @@ function synthesis_packed_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr:
     lcap = min(Int(ltr), cfg.lmax)
     lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
     alm_mat = zeros(eltype(Qlm), cfg.lmax+1, cfg.mmax+1)
+    # Ignore packed coefficients above lcap without mutating the caller's
+    # source vector; this is the spectral low-pass behavior of `_l` variants.
     @inbounds for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
         m > lcap && continue

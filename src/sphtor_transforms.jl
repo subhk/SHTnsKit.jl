@@ -131,6 +131,9 @@ struct _ZeroSpectralVector{T} <: AbstractVector{T}
     len::Int
 end
 
+# Lightweight read-only zero spectra used by spheroidal-only and toroidal-only
+# wrappers. They avoid allocating dense zero Slm/Tlm arrays while still
+# satisfying the AbstractArray interface used by the shared kernels.
 Base.size(A::_ZeroSpectralMatrix) = (A.nrows, A.ncols)
 Base.axes(A::_ZeroSpectralMatrix) = (Base.OneTo(A.nrows), Base.OneTo(A.ncols))
 @inline Base.getindex(::_ZeroSpectralMatrix{T}, ::Int, ::Int) where {T} = zero(T)
@@ -157,6 +160,8 @@ Transform spheroidal/toroidal coefficients to horizontal vector field components
 Returns colatitude (Vt) and azimuthal (Vp) components on the spatial grid.
 """
 Base.@constprop :aggressive function synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true, use_rfft::Bool=false)
+    # `real_output` and `use_rfft` choose different buffer shapes and return
+    # element types, so dispatch through Val for literal keyword calls.
     return _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(use_rfft))
 end
 
@@ -179,6 +184,8 @@ function _synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMat
     CT = eltype(Slm_int)
 
     if use_rfft
+        # Vector rfft synthesis mirrors scalar synthesis: write only
+        # nonnegative m columns, then let irfft_phi! reconstruct real output.
         real_output === true || throw(ArgumentError("use_rfft=true implies real_output"))
         mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
         nbins = nlon ÷ 2 + 1
@@ -338,12 +345,18 @@ function _synthesis_sphtor_mloop!(Ftheta::AbstractMatrix, Fphi::AbstractMatrix,
     m_order = cached_m_order(cfg)
 
     if has_fused_vector_tables(cfg)
+        # Fused tables store normalization with P and dP values, reducing
+        # inner-loop multiplies at the cost of table memory.
         _synthesis_sphtor_mloop_tbl!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
     else
+        # On-the-fly mode uses thread-local Legendre scratch to avoid shared
+        # mutable buffers while keeping memory bounded by nthreads*lmax.
         _synthesis_sphtor_mloop_otf!(Ftheta, Fphi, cfg, Slm, Tlm, m_order, ltr_eff, inv_scale_phi)
     end
 
     if real_output
+        # Full complex IFFT needs negative-m bins explicitly. rfft callers set
+        # real_output=false here and reconstruct Hermitian symmetry in irfft.
         nlat = cfg.nlat
         for m in 1:mmax
             col = m + 1
@@ -626,6 +639,7 @@ Base.@constprop :aggressive function synthesis_sphtor_l(cfg::SHTConfig, Slm::Abs
 end
 
 function synthesis_sphtor_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int)
+    # Dedicated complex helper avoids inference depending on a runtime keyword.
     return _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(false))
 end
 
@@ -704,6 +718,8 @@ end
 Degree-limited spheroidal-only transform.
 """
 function synthesis_sph_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+    # Use a zero-view toroidal spectrum so the shared S/T implementation does
+    # not pay for an all-zero dense allocation.
     Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr; real_output=real_output)
 end
@@ -719,6 +735,8 @@ end
 Degree-limited toroidal-only transform.
 """
 function synthesis_tor_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+    # Use a zero-view spheroidal spectrum so the shared S/T implementation
+    # stays allocation-light.
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr; real_output=real_output)
 end
@@ -734,6 +752,8 @@ end
 Mode-limited spheroidal-only synthesis wrapper.
 """
 function synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+    # Mode-limited wrappers use zero-vector views for the missing component;
+    # this avoids an O(ltr-im) allocation on repeated per-mode calls.
     Tl_zero = _zero_spectral_vector(eltype(Sl), length(Sl))
     return synthesis_sphtor_ml(cfg, im, Sl, Tl_zero, ltr)
 end
@@ -744,6 +764,8 @@ end
 Mode-limited toroidal-only synthesis wrapper.
 """
 function synthesis_tor_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
+    # Mode-limited wrappers use zero-vector views for the missing component;
+    # this avoids an O(ltr-im) allocation on repeated per-mode calls.
     Sl_zero = _zero_spectral_vector(eltype(Tl), length(Tl))
     return synthesis_sphtor_ml(cfg, im, Sl_zero, Tl, ltr)
 end

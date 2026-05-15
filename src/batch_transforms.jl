@@ -95,6 +95,9 @@ This mirrors the `shtns_set_many` functionality from the SHTns C library.
 
 @inline _batch_fft_fallback_error(e) = e isa MethodError || e isa ArgumentError || e isa InexactError
 
+# Batch FFT helpers build one plan from the first field and reuse it for every
+# sibling slice. Fallback delegates to scalar FFT wrappers so AD element types
+# keep the same behavior as the non-batch API.
 function _batch_fft_phi!(Fφ_batch::AbstractArray{<:Complex,3}, fields::AbstractArray{<:Real,3})
     nfields = size(fields, 3)
     nfields == 0 && return Fφ_batch
@@ -437,6 +440,8 @@ Batch inverse transform for multiple spectral coefficient sets.
 """
 Base.@constprop :aggressive function synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
                          real_output::Bool=true, use_rfft::Bool=false)
+    # Preserve the ergonomic keyword API while giving literal keyword callers
+    # a concrete return type through the Val-dispatched implementation.
     return _synthesis_batch(cfg, alm_batch, Val(real_output), Val(use_rfft))
 end
 
@@ -461,6 +466,8 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
     nlat, nlon = cfg.nlat, cfg.nlon
 
     if use_rfft
+        # Batch rfft synthesis stores only nonnegative m columns; irfft handles
+        # the conjugate half per field.
         real_output === true || throw(ArgumentError("use_rfft=true implies real_output"))
         mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
     end
@@ -678,9 +685,12 @@ Batch spheroidal-toroidal synthesis for multiple vector fields.
 """
 Base.@constprop :aggressive function synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
                                 Tlm_batch::AbstractArray{<:Complex,3}; real_output::Bool=true)
+    # Val dispatch keeps the tuple element types concrete for real vs complex
+    # vector batch synthesis.
     return _synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch, Val(real_output))
 end
 
+"""Complex-output batch spheroidal/toroidal synthesis with a concrete return type."""
 function synthesis_sphtor_batch_cplx(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
                                      Tlm_batch::AbstractArray{<:Complex,3})
     return _synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch, Val(false))
@@ -764,9 +774,12 @@ Batch QST synthesis for multiple 3D vector fields.
 Base.@constprop :aggressive function synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
                              Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3};
                              real_output::Bool=true)
+    # QST batch synthesis composes scalar Q with sphtor S/T; the Val barrier
+    # keeps all three returned component arrays type-stable.
     return _synthesis_qst_batch(cfg, Qlm_batch, Slm_batch, Tlm_batch, Val(real_output))
 end
 
+"""Complex-output batch QST synthesis with a concrete return type."""
 function synthesis_qst_batch_cplx(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
                                   Slm_batch::AbstractArray{<:Complex,3},
                                   Tlm_batch::AbstractArray{<:Complex,3})

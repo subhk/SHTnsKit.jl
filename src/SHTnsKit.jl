@@ -184,6 +184,9 @@ export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_co
 export select_compute_device, device_transfer_arrays                  # Device utilities
 
 # ===== BASIC TRANSFORMS =====
+# The `*_cplx` helpers are intentionally separate from `real_output=false`
+# keyword calls. A literal helper gives Julia a compile-time output mode and
+# keeps inference-sensitive callers from seeing a runtime Bool return union.
 export analysis, synthesis, synthesis_cplx             # Basic forward/backward transforms
 export SHTPlan, analysis!, synthesis!                  # Planned (optimized) transforms
 
@@ -214,6 +217,8 @@ export vorticity_from_toroidal, vorticity_from_toroidal!, toroidal_from_vorticit
 export analysis_qst, synthesis_qst, analysis_qst_cplx, synthesis_qst_cplx  # Q,S,T decomposition
 
 # ===== LATITUDE-BAND AND M-MODE SPECIFIC TRANSFORMS =====
+# `_l` variants truncate by degree; `_ml` variants operate on one Fourier mode.
+# The complex helpers mirror the full-grid API convention above.
 export synthesis_sphtor_l, analysis_sphtor_l, synthesis_sph_l, synthesis_tor_l
 export synthesis_sphtor_l_cplx, synthesis_sph_l_cplx, synthesis_tor_l_cplx
 export analysis_sphtor_ml, synthesis_sphtor_ml, synthesis_sph_ml, synthesis_tor_ml

@@ -82,6 +82,11 @@ const _TWO_PI = 2π
 const _FFT_BACKEND = Threads.Atomic{Int}(0)
 const _FFT_BACKEND_FFTW = 1
 const _FFT_BACKEND_DFT = 2
+
+# Small local plan cache for the unplanned API. It removes the repeated FFTW
+# planning allocation cost without changing the public `SHTPlan` contract.
+# Strides are part of the key because views with the same shape may need
+# different FFTW plans.
 const _LOCAL_FFT_PLAN_CACHE =
     Dict{Tuple{Symbol,DataType,NTuple{2,Int},NTuple{2,Int},Int}, Any}()
 const _LOCAL_FFT_PLAN_CACHE_LOCK = ReentrantLock()
@@ -122,6 +127,8 @@ function _cached_local_fft_plan(kind::Symbol, A::AbstractMatrix, nlon::Int=0)
     end
 end
 
+# FFTW's in-place complex plans mutate their input, so real inputs are copied
+# explicitly into the complex destination before applying the cached plan.
 @inline function _copy_complex_input!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     @inbounds for I in eachindex(dest, A)
         dest[I] = A[I]
@@ -190,6 +197,8 @@ function ifft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     _copy_complex_input!(dest, A)
     nlat, nlon = size(A)
     try
+        # Reusing the plan keeps warmed in-place transforms effectively
+        # allocation-free; `mul!` avoids the allocating `plan * array` path.
         plan = _cached_local_fft_plan(:ifft, dest)
         mul!(dest, plan, dest)
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW
@@ -263,6 +272,8 @@ function fft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix)
     _copy_complex_input!(dest, A)
     nlat, nlon = size(A)
     try
+        # Reusing the plan keeps warmed in-place transforms effectively
+        # allocation-free; `mul!` avoids the allocating `plan * array` path.
         plan = _cached_local_fft_plan(:fft, dest)
         mul!(dest, plan, dest)
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW
@@ -323,10 +334,23 @@ end
 Real-to-complex FFT along longitude into a preallocated half-spectrum buffer.
 `dest` must have shape `(size(A,1), size(A,2)÷2+1)`.
 """
+function rfft_phi!(dest::StridedMatrix{Complex{T}}, A::StridedMatrix{T}) where {T<:Union{Float32,Float64}}
+    nlat, nlon = size(A)
+    size(dest) == (nlat, nlon ÷ 2 + 1) || throw(DimensionMismatch("dest shape must be (size(A,1), size(A,2)÷2+1)"))
+    # Exact FFTW-supported eltypes do not need the generic try/fallback path;
+    # keeping this method straight-line avoids patch-version allocation noise.
+    plan = _cached_local_fft_plan(:rfft, A)
+    mul!(dest, plan, A)
+    _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+    return dest
+end
+
 function rfft_phi!(dest::AbstractMatrix{<:Complex}, A::AbstractMatrix{<:Real})
     nlat, nlon = size(A)
     size(dest) == (nlat, nlon ÷ 2 + 1) || throw(DimensionMismatch("dest shape must be (size(A,1), size(A,2)÷2+1)"))
     try
+        # The real-input plan writes only nonnegative Fourier bins. Scalar and
+        # vector synthesis code never fills negative bins on this path.
         plan = _cached_local_fft_plan(:rfft, A)
         mul!(dest, plan, A)
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW
@@ -352,10 +376,23 @@ positive-frequency half); `dest` is `(size(A,1), nlon)`. Writes real output
 in place. DFT fallback reconstructs the negative-frequency half via Hermitian
 symmetry then inverse-transforms.
 """
+function irfft_phi!(dest::StridedMatrix{T}, A::StridedMatrix{Complex{T}}, nlon::Int) where {T<:Union{Float32,Float64}}
+    size(A, 2) == nlon ÷ 2 + 1 || throw(DimensionMismatch("A must have nlon÷2+1 columns"))
+    size(dest) == (size(A, 1), nlon) || throw(DimensionMismatch("dest shape must be (size(A,1), nlon)"))
+    # Exact FFTW-supported eltypes do not need the generic try/fallback path;
+    # keeping this method straight-line avoids patch-version allocation noise.
+    plan = _cached_local_fft_plan(:irfft, A, nlon)
+    mul!(dest, plan, A)
+    _FFT_BACKEND[] = _FFT_BACKEND_FFTW
+    return dest
+end
+
 function irfft_phi!(dest::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Complex}, nlon::Int)
     size(A, 2) == nlon ÷ 2 + 1 || throw(DimensionMismatch("A must have nlon÷2+1 columns"))
     size(dest) == (size(A, 1), nlon) || throw(DimensionMismatch("dest shape must be (size(A,1), nlon)"))
     try
+        # `plan_irfft` implicitly reconstructs Hermitian negative-frequency
+        # bins, so callers pass only the half-spectrum buffer here.
         plan = _cached_local_fft_plan(:irfft, A, nlon)
         mul!(dest, plan, A)
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW

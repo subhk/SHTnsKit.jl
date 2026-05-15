@@ -99,12 +99,16 @@ Transform QST spectral coefficients to 3D spatial vector field components.
 Returns radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
 Base.@constprop :aggressive function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+    # QST synthesis is scalar Q plus horizontal S/T synthesis. Use a Val
+    # barrier so all returned component arrays have concrete element types.
     return _synthesis_qst(cfg, Qlm, Slm, Tlm, Val(real_output))
 end
 
 function _synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                         ::Val{real_output}) where {real_output}
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
+    # Reuse the scalar and sphtor implementations so normalization, rfft
+    # choices, and complex-output behavior stay consistent across APIs.
     Vr = _synthesis(cfg, Qlm, Val(real_output), nothing, Val(false))
     Vt, Vp = _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(false))
 
@@ -187,6 +191,8 @@ Base.@constprop :aggressive function synthesis_qst_l(cfg::SHTConfig, Qlm::Abstra
 end
 
 function synthesis_qst_l_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int)
+    # Dedicated helper mirrors `synthesis_qst_l(...; real_output=false)` while
+    # keeping the output tuple concrete for inference-sensitive code.
     return _synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr, Val(false))
 end
 

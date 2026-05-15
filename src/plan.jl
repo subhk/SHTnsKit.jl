@@ -174,6 +174,9 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
 
     # RFFT-specific buffers and plans
     if use_rfft
+        # Scalar planned rfft stores half-width Fourier data. The full complex
+        # buffer remains allocated because vector planned transforms still need
+        # explicit negative-m columns when not using rfft.
         real_scratch = Matrix{Float64}(undef, nlat, nlon)
         fill!(real_scratch, 0.0)
         Fθk_r = Matrix{ComplexF64}(undef, nlat, nlon ÷ 2 + 1)
@@ -222,6 +225,8 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
     # between complex and rfft paths so the kernel needs no change.
     for pass in 1:2
         V = pass == 1 ? Vt : Vp
+        # Process Vtheta and Vphi separately through the same FFT buffer. This
+        # keeps the plan compact while accumulating both S and T spectra.
         if plan.use_rfft
             eltype(V) <: Real || throw(ArgumentError("use_rfft plan requires real-valued Vt/Vp"))
             @inbounds for i in 1:nlat, j in 1:nlon
@@ -489,6 +494,8 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         real_output || throw(ArgumentError("synthesis! with use_rfft plan requires real_output=true"))
         eltype(f_out) <: Real || throw(ArgumentError("use_rfft plan requires real-valued f_out"))
         fill!(plan.Fθk_r, zero(eltype(plan.Fθk_r)))
+        # Fill only nonnegative m bins. Unlike the complex path below, no
+        # Hermitian mirror is written because irfft_plan reconstructs it.
         for m in 0:mmax
             col = m + 1
             @inbounds for i in 1:nlat

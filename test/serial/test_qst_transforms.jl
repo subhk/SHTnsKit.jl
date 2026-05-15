@@ -87,7 +87,11 @@ using SHTnsKit
 
         synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true)
         GC.gc()
-        @test @allocated(synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true)) <= 11_500
+        # Array header/alignment overhead differs across Julia patch versions
+        # and platforms (notably Windows CI). Keep this below an extra
+        # component-sized scratch allocation while allowing that fixed floor.
+        qst_l_alloc_budget = 13_000
+        @test @allocated(synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true)) <= qst_l_alloc_budget
     end
 
     @testset "QST complex transforms" begin

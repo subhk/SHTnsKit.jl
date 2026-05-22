@@ -55,15 +55,17 @@ function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft
     return DistPlan(cfg, prototype_θφ, use_rfft)
 end
 
+const _SphtorScratch = NamedTuple{(:Fθ, :Fφ, :Vtθ, :Vpθ, :P, :dPdx),
+                                   Tuple{Matrix{ComplexF64}, Matrix{ComplexF64},
+                                         Matrix{Float64}, Matrix{Float64},
+                                         Vector{Float64}, Vector{Float64}}}
+
 struct DistSphtorPlan
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
     use_rfft::Bool
     with_spatial_scratch::Bool
-    spatial_scratch::Union{Nothing,NamedTuple{(:Fθ, :Fφ, :Vtθ, :Vpθ, :P, :dPdx),
-                                              Tuple{Matrix{ComplexF64}, Matrix{ComplexF64},
-                                                    Matrix{Float64}, Matrix{Float64},
-                                                    Vector{Float64}, Vector{Float64}}}}
+    spatial_scratch::Union{Nothing, _SphtorScratch}
 end
 
 function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; with_spatial_scratch::Bool=false, use_rfft::Bool=false)

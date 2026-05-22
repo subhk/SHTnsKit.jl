@@ -1087,7 +1087,8 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::Penci
                                          Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
     if plan.with_spatial_scratch && plan.spatial_scratch !== nothing
         # Use pre-allocated scratch buffers for zero-allocation synthesis
-        _dist_synthesis_sphtor_with_scratch!(plan.cfg, Slm, Tlm, plan.spatial_scratch, Vtθφ_out, Vpθφ_out;
+        scratch = plan.spatial_scratch::_SphtorScratch
+        _dist_synthesis_sphtor_with_scratch!(plan.cfg, Slm, Tlm, scratch, Vtθφ_out, Vpθφ_out;
                                             prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
         return Vtθφ_out, Vpθφ_out
     else
@@ -2184,7 +2185,7 @@ function gather_to_dense_2d(dsa::DistributedSpectralArray2D{T}) where T
     # Use scratch buffer if available, otherwise allocate
     has_scratch = plan.with_scratch && plan.scratch !== nothing
     if has_scratch && T === ComplexF64
-        all_coefficients = plan.scratch.gather_buffer
+        all_coefficients = (plan.scratch::_DistributedSpectralPlan2DScratch).gather_buffer
     else
         all_coefficients = Vector{T}(undef, plan.m_group_nlm)
     end
@@ -2544,14 +2545,15 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
     φ_is_local = (nlon_local == nlon)
 
     if has_scratch
-        θ_globals = plan.scratch.θ_globals
-        nθ_local = plan.scratch.nθ_local
-        x_cache = plan.scratch.x_cache
-        Fθm = plan.scratch.Fθm
-        P = plan.scratch.P
-        P_complex = plan.scratch.P_complex
-        fθφ_local = plan.scratch.fθφ_local
-        fθφ_result = plan.scratch.fθφ_result  # Separate result buffer to avoid copy
+        scratch_buf = plan.scratch::_DistributedSpectralPlan2DScratch
+        θ_globals = scratch_buf.θ_globals
+        nθ_local = scratch_buf.nθ_local
+        x_cache = scratch_buf.x_cache
+        Fθm = scratch_buf.Fθm
+        P = scratch_buf.P
+        P_complex = scratch_buf.P_complex
+        fθφ_local = scratch_buf.fθφ_local
+        fθφ_result = scratch_buf.fθφ_result  # Separate result buffer to avoid copy
     else
         θ_globals = collect(globalindices(prototype_θφ, 1))
         nθ_local = length(θ_globals)
@@ -2772,14 +2774,15 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     # Get cached or compute θ indices
     if has_scratch
-        θ_globals = plan.scratch.θ_globals
-        nθ_local = plan.scratch.nθ_local
-        weights_cache = plan.scratch.weights_cache
-        x_cache = plan.scratch.x_cache
-        Fθm = plan.scratch.Fθm
-        local_contrib = plan.scratch.local_contrib
-        P = plan.scratch.P
-        n_m_valid = plan.scratch.n_m_valid
+        scratch_buf = plan.scratch::_DistributedSpectralPlan2DScratch
+        θ_globals = scratch_buf.θ_globals
+        nθ_local = scratch_buf.nθ_local
+        weights_cache = scratch_buf.weights_cache
+        x_cache = scratch_buf.x_cache
+        Fθm = scratch_buf.Fθm
+        local_contrib = scratch_buf.local_contrib
+        P = scratch_buf.P
+        n_m_valid = scratch_buf.n_m_valid
     else
         θ_globals = collect(globalindices(fθφ, 1))
         nθ_local = length(θ_globals)
@@ -2855,9 +2858,10 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         # Use packed communication to avoid sending zeros in triangular region
         # This reduces communication volume by ~50%
         if has_scratch
-            packed = plan.scratch.packed_contrib
-            pack_offsets = plan.scratch.pack_offsets
-            m_values = plan.scratch.m_values
+            scratch_buf2 = plan.scratch::_DistributedSpectralPlan2DScratch
+            packed = scratch_buf2.packed_contrib
+            pack_offsets = scratch_buf2.pack_offsets
+            m_values = scratch_buf2.m_values
 
             # Pack valid coefficients (l >= m for each m column)
             pack_idx = 1

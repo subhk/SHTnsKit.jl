@@ -298,7 +298,7 @@ const _SHTCONFIG_ALIAS_WARNED = Ref(false)
     return nothing
 end
 
-function Base.getproperty(cfg::SHTConfig, name::Symbol)
+@inline function Base.getproperty(cfg::SHTConfig, name::Symbol)
     # ----- old aliases (deprecated) -----
     if name === :wlat
         _warn_alias_once(:wlat, :w)

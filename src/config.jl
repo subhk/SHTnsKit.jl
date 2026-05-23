@@ -137,14 +137,16 @@ mutable struct SHTGrid
     cphi::Float64
 end
 
-"""Normalization + phase convention. `scale_matrix` is lazily built."""
+"""Normalization + phase convention. `scale_matrix` is lazily built; it is held
+in a `Ref` so the lazy fill mutates the Ref's contents rather than rebinding a
+struct field — this keeps the field compatible with an immutable config."""
 Base.@kwdef mutable struct SHTNorm
     Nlm::Matrix{Float64}
     norm::Symbol
     cs_phase::Bool
     real_norm::Bool
     robert_form::Bool
-    scale_matrix::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
+    scale_matrix::Base.RefValue{Matrix{Float64}} = Ref(Matrix{Float64}(undef, 0, 0))
 end
 
 """Precomputed Legendre tables (raw and Nlm-fused)."""
@@ -259,7 +261,7 @@ function SHTConfig(;
     norm_group = SHTNorm(; Nlm=convert(Matrix{Float64}, Nlm),
                           norm=norm, cs_phase=cs_phase,
                           real_norm=real_norm, robert_form=robert_form,
-                          scale_matrix=convert(Matrix{Float64}, norm_scale_matrix))
+                          scale_matrix=Ref(convert(Matrix{Float64}, norm_scale_matrix)))
     tables = SHTTables(;
         enabled=use_plm_tables,
         plm=convert(Vector{Matrix{Float64}}, collect(plm_tables)),
@@ -324,7 +326,7 @@ end
     elseif name === :robert_form
         return getfield(cfg, :_norm).robert_form
     elseif name === :norm_scale_matrix
-        return getfield(cfg, :_norm).scale_matrix
+        return getfield(cfg, :_norm).scale_matrix[]  # deref Ref so callers still see a Matrix
     # ----- tables fields -----
     elseif name === :use_plm_tables
         return getfield(cfg, :_tables).enabled
@@ -384,7 +386,8 @@ function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
     elseif name === :robert_form
         return setfield!(getfield(cfg, :_norm), :robert_form, val)
     elseif name === :norm_scale_matrix
-        return setfield!(getfield(cfg, :_norm), :scale_matrix, val)
+        getfield(cfg, :_norm).scale_matrix[] = val  # mutate Ref contents, not rebind the field
+        return val
     elseif name === :use_plm_tables
         return setfield!(getfield(cfg, :_tables), :enabled, val)
     elseif name === :plm_tables

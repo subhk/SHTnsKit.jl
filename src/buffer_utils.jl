@@ -29,10 +29,14 @@ Return the cfg's cached balanced m-ordering, building it on first use. Callers
 should not mutate the returned vector.
 """
 @inline function cached_m_order(cfg)
-    if length(cfg._m_order) != cfg.mmax + 1
-        cfg._m_order = balanced_m_order(cfg.mmax)
+    mo = cfg._m_order
+    if length(mo) != cfg.mmax + 1
+        # Fill the existing Vector in place rather than rebinding the field, so
+        # the cache works even when cfg is an immutable struct.
+        resize!(mo, cfg.mmax + 1)
+        copyto!(mo, balanced_m_order(cfg.mmax))
     end
-    return cfg._m_order
+    return mo
 end
 
 """

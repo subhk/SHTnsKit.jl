@@ -2654,7 +2654,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
     # Apply Robert form scaling if enabled
     if cfg.robert_form
         for ii in 1:nθ_local
-            x_val = x_cache !== nothing ? x_cache[ii] : cfg.x[θ_globals[ii]]
+            x_val = x_cache !== nothing ? x_cache[ii] : xv[θ_globals[ii]]
             sθ = sqrt(max(0.0, 1 - x_val*x_val))
             if sθ > 0
                 @inbounds for j in 1:nlon

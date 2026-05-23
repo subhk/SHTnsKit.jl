@@ -21,6 +21,7 @@ function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArra
     x = float(cost)
     P = Vector{Float64}(undef, lmax + 1)
     vals_local = zeros(ComplexF64, nphi)
+    Nlm = cfg.Nlm
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
     gl_l = globalindices(Alm_pencil, 1)
     gl_m = globalindices(Alm_pencil, 2)
@@ -32,7 +33,7 @@ function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArra
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             if lval <= ltr
-                g0 += cfg.Nlm[lval+1, 1] * P[lval+1] * Alm_pencil[il, mloc[j0]]
+                g0 += Nlm[lval+1, 1] * P[lval+1] * Alm_pencil[il, mloc[j0]]
             end
         end
         vals_local .+= g0
@@ -46,7 +47,7 @@ function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArra
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             if mval <= lval <= ltr
-                gm += cfg.Nlm[lval+1, mval+1] * P[lval+1] * Alm_pencil[il, jm]
+                gm += Nlm[lval+1, mval+1] * P[lval+1] * Alm_pencil[il, jm]
             end
         end
         @inbounds for j in 0:(nphi-1)
@@ -71,6 +72,7 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
     gl_l = globalindices(Alm_pencil, 1)
     gl_m = globalindices(Alm_pencil, 2)
+    Nlm = cfg.Nlm
     s_local = 0.0
     # m=0
     j0 = findfirst(==(1), gl_m)
@@ -79,7 +81,7 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
         g0 = 0.0
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
-            g0 += cfg.Nlm[lval+1, 1] * P[lval+1] * real(Alm_pencil[il, mloc[j0]])
+            g0 += Nlm[lval+1, 1] * P[lval+1] * real(Alm_pencil[il, mloc[j0]])
         end
         s_local += g0
     end
@@ -92,7 +94,7 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             if lval >= mval
-                gm += cfg.Nlm[lval+1, mval+1] * P[lval+1] * Alm_pencil[il, jm]
+                gm += Nlm[lval+1, mval+1] * P[lval+1] * Alm_pencil[il, jm]
             end
         end
         ph = cis(mval * phi)
@@ -115,6 +117,7 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
     lloc = axes(Q_p, 1); mloc = axes(Q_p, 2)
     gl_l = globalindices(Q_p, 1)
     gl_m = globalindices(Q_p, 2)
+    Nlm = cfg.Nlm
     vr_local = 0.0 + 0.0im
     vt_local = 0.0 + 0.0im
     vp_local = 0.0 + 0.0im
@@ -124,7 +127,7 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
         SHTnsKit.Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
-            N = cfg.Nlm[lval+1, 1]
+            N = Nlm[lval+1, 1]
             Y = N * P[lval+1]
             dθY = N * dPdtheta[lval+1]
             vr_local += Y   * Q_p[il, mloc[j0]]
@@ -143,7 +146,7 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             if lval >= mval
-                N = cfg.Nlm[lval+1, mval+1]
+                N = Nlm[lval+1, mval+1]
                 Y = N * P[lval+1]
                 dθY = N * dPdtheta[lval+1]
                 Y_over_sθ = N * P_over_sinth[lval+1]
@@ -183,6 +186,7 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
     Vr_local = zeros(ComplexF64, nphi)
     Vt_local = zeros(ComplexF64, nphi)
     Vp_local = zeros(ComplexF64, nphi)
+    Nlm = cfg.Nlm
     # m=0
     j0 = findfirst(==(1), gl_m)
     if j0 !== nothing
@@ -191,7 +195,7 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             if lval <= ltr
-                N = cfg.Nlm[lval+1, 1]
+                N = Nlm[lval+1, 1]
                 Y = N * P[lval+1]
                 dθY = N * dPdtheta[lval+1]
                 g0  += Y * Q_p[il, mloc[j0]]
@@ -212,7 +216,7 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
             if mval <= lval <= ltr
-                N = cfg.Nlm[lval+1, mval+1]
+                N = Nlm[lval+1, mval+1]
                 Y = N * P[lval+1]
                 dθY = N * dPdtheta[lval+1]
                 Y_over_sθ = N * P_over_sinth[lval+1]

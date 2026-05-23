@@ -1217,6 +1217,7 @@ function prepare_plm_tables!(cfg::SHTConfig)
     # element on both the P and dP/dx tables.
     NP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
     NdP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
+    Nlm = cfg.Nlm
     @inbounds for m in 0:mmax
         NP = NP_tables[m+1]
         NdP = NdP_tables[m+1]
@@ -1224,8 +1225,9 @@ function prepare_plm_tables!(cfg::SHTConfig)
         dtbl = dtables[m+1]
         for i in 1:nlat
             for l in m:lmax
-                NP[l+1, i] = cfg.Nlm[l+1, m+1] * tbl[l+1, i]
-                NdP[l+1, i] = cfg.Nlm[l+1, m+1] * dtbl[l+1, i]
+                Nlm_lm = Nlm[l+1, m+1]
+                NP[l+1, i] = Nlm_lm * tbl[l+1, i]
+                NdP[l+1, i] = Nlm_lm * dtbl[l+1, i]
             end
         end
     end

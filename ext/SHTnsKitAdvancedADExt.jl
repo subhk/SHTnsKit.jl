@@ -155,6 +155,7 @@ end
         P = Vector{Float64}(undef, lmax + 1)
         dPdtheta = Vector{Float64}(undef, lmax + 1)
         P_over_sinth = Vector{Float64}(undef, lmax + 1)
+        xv = cfg.x; Nlm = cfg.Nlm
 
         # Forward synthesis uses inv_scaleφ = nlon, but adjoint of ifft is (1/nlon)*fft
         # So these factors cancel. wm accounts for Hermitian symmetry in "fill conjugate" step.
@@ -164,7 +165,7 @@ end
             adj_scale = wm  # nlon from forward cancels with 1/nlon from ifft adjoint
 
             for i in 1:nlat
-                x = cfg.x[i]
+                x = xv[i]
 
                 SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
 
@@ -172,7 +173,7 @@ end
                 Fφ_im = F̄φ[i, col]
 
                 @inbounds for l in max(1, m):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = N * dPdtheta[l+1]
                     Y_over_sθ = N * P_over_sinth[l+1]
                     term = 1.0im * m * Y_over_sθ

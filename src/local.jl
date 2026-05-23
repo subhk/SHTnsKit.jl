@@ -20,6 +20,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     fill!(vals, 0.0)
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    Nlm = cfg.Nlm
 
     # m=0 contribution
     Plm_row!(P, x, lmax, 0)
@@ -31,7 +32,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
         if need_norm
             a *= norm_scale_from_orthonormal(l, 0, cfg.norm) * α0
         end
-        g0 += cfg.Nlm[l+1, 1] * P[l+1] * a
+        g0 += Nlm[l+1, 1] * P[l+1] * a
     end
 
     @inbounds for j in 0:(nphi-1)
@@ -51,7 +52,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
             if need_norm
                 a *= norm_scale_from_orthonormal(l, m, cfg.norm) * αm
             end
-            gm += cfg.Nlm[l+1, col] * P[l+1] * a
+            gm += Nlm[l+1, col] * P[l+1] * a
         end
         
         for j in 0:(nphi-1)
@@ -74,6 +75,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     vals = Vector{ComplexF64}(undef, nphi)
     fill!(vals, zero(ComplexF64))
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    Nlm = cfg.Nlm
     # m=0
     Plm_row!(P, x, lmax, 0)
     g0 = zero(ComplexF64)
@@ -84,7 +86,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
         if need_norm
             a *= norm_scale_from_orthonormal(l, 0, cfg.norm) * α0
         end
-        g0 += cfg.Nlm[l+1, 1] * P[l+1] * a
+        g0 += Nlm[l+1, 1] * P[l+1] * a
     end
     
     @inbounds for j in 1:nphi
@@ -99,7 +101,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
         αp = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         αn = need_norm ? cs_phase_factor(-m, true, cfg.cs_phase) : 1.0
         @inbounds for l in m:min(ltr, lmax)
-            Ylm = cfg.Nlm[l+1, col] * P[l+1]
+            Ylm = Nlm[l+1, col] * P[l+1]
             # positive m
             ap = alm_packed[LM_cplx_index(lmax, mmax, l, m) + 1]
             # negative m
@@ -143,9 +145,10 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     # m=0 (no 1/sinθ terms)
     Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    Nlm = cfg.Nlm
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
     for l in 0:lmax
-        N = cfg.Nlm[l+1, 1]
+        N = Nlm[l+1, 1]
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
         aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
         if need_norm
@@ -171,7 +174,7 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
         col = m + 1
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for l in m:lmax
-            N = cfg.Nlm[l+1, col]
+            N = Nlm[l+1, col]
             lm = LM_index(lmax, cfg.mres, l, m) + 1
             aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
             if need_norm
@@ -233,6 +236,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     fill!(Vr, 0.0); fill!(Vt, 0.0); fill!(Vp, 0.0)
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    Nlm = cfg.Nlm
 
     # m=0 (no 1/sinθ terms)
     Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
@@ -242,7 +246,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
 
     @inbounds for l in 0:ltr
-        N = cfg.Nlm[l+1, 1]
+        N = Nlm[l+1, 1]
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
         aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
         if need_norm
@@ -272,7 +276,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
 
         @inbounds for l in m:min(ltr, lmax)
-            N = cfg.Nlm[l+1, col]
+            N = Nlm[l+1, col]
             lm = LM_index(lmax, cfg.mres, l, m) + 1
             aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
             if need_norm

@@ -27,6 +27,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     fill!(alm, 0.0 + 0.0im)
 
     scaleφ = cfg.cphi
+    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
     # Adaptive threading: use nested parallelism for better load balancing
     n_threads = Threads.nthreads()
     if mmax + 1 < n_threads ÷ 2 && nlat > 32
@@ -44,7 +45,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                     tid = Threads.threadid()
                     local_acc = thread_alm[tid]
                     Fi = Fφ[i, col]
-                    wi = cfg.w[i]
+                    wi = wv[i]
                     @inbounds for l in m:lmax
                         local_acc[l + 1] += (wi * tbl[l + 1, i]) * Fi
                     end
@@ -54,9 +55,9 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                     tid = Threads.threadid()
                     local_acc = thread_alm[tid]
                     thread_P = Vector{Float64}(undef, lmax + 1)
-                    SHTnsKit.Plm_row!(thread_P, cfg.x[i], lmax, m)
+                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
                     Fi = Fφ[i, col]
-                    wi = cfg.w[i]
+                    wi = wv[i]
                     @inbounds for l in m:lmax
                         local_acc[l + 1] += (wi * thread_P[l + 1]) * Fi
                     end
@@ -68,7 +69,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                 for t in 1:n_tid
                     acc += thread_alm[t][l + 1]
                 end
-                alm[l + 1, col] = acc * cfg.Nlm[l + 1, col] * scaleφ
+                alm[l + 1, col] = acc * Nlm[l + 1, col] * scaleφ
             end
         end
     else
@@ -79,7 +80,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                 tbl = cfg.plm_tables[m + 1]
                 for i in 1:nlat
                     Fi = Fφ[i, col]
-                    wi = cfg.w[i]
+                    wi = wv[i]
                     @tturbo warn_check_args=false for l in m:lmax
                         alm[l + 1, col] += (wi * tbl[l + 1, i]) * Fi
                     end
@@ -87,16 +88,16 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
             else
                 thread_P = Vector{Float64}(undef, lmax + 1)
                 for i in 1:nlat
-                    SHTnsKit.Plm_row!(thread_P, cfg.x[i], lmax, m)
+                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
                     Fi = Fφ[i, col]
-                    wi = cfg.w[i]
+                    wi = wv[i]
                     @tturbo warn_check_args=false for l in m:lmax
                         alm[l + 1, col] += (wi * thread_P[l + 1]) * Fi
                     end
                 end
             end
             @tturbo warn_check_args=false for l in m:lmax
-                alm[l + 1, col] *= cfg.Nlm[l + 1, col] * scaleφ
+                alm[l + 1, col] *= Nlm[l + 1, col] * scaleφ
             end
         end
     end
@@ -127,6 +128,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
 
     G = Vector{CT}(undef, nlat)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+    xv = cfg.x; Nlm = cfg.Nlm
 
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         alm_int = similar(alm)
@@ -146,7 +148,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = cfg.Nlm[l + 1, col] * tbl[l + 1, i]
+                        c = Nlm[l + 1, col] * tbl[l + 1, i]
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)
@@ -156,11 +158,11 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
             else
                 @threads for i in 1:nlat
                     thread_P = Vector{Float64}(undef, lmax + 1)
-                    SHTnsKit.Plm_row!(thread_P, cfg.x[i], lmax, m)
+                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = cfg.Nlm[l + 1, col] * thread_P[l + 1]
+                        c = Nlm[l + 1, col] * thread_P[l + 1]
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)
@@ -189,7 +191,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = cfg.Nlm[l + 1, col] * tbl[l + 1, i]
+                        c = Nlm[l + 1, col] * tbl[l + 1, i]
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)
@@ -199,11 +201,11 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
             else
                 thread_P = Vector{Float64}(undef, lmax + 1)
                 for i in 1:nlat
-                    SHTnsKit.Plm_row!(thread_P, cfg.x[i], lmax, m)
+                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = cfg.Nlm[l + 1, col] * thread_P[l + 1]
+                        c = Nlm[l + 1, col] * thread_P[l + 1]
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)

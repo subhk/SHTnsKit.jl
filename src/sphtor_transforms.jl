@@ -298,6 +298,7 @@ function _adjoint_analysis_sphtor(cfg::SHTConfig, Slm̄::AbstractMatrix, Tlm̄::
     P_over_sinth = Vector{Float64}(undef, lmax + 1)
     φadj = 2π
 
+    Nlm = cfg.Nlm
     for m in 0:mmax
         col = m + 1
         for (ii, iglob) in pairs(θ_globals)
@@ -305,7 +306,7 @@ function _adjoint_analysis_sphtor(cfg::SHTConfig, Slm̄::AbstractMatrix, Tlm̄::
             wi = cfg.w[iglob]
             sθ = zero(ComplexF64); sφ = zero(ComplexF64)
             @inbounds for l in max(1, m):lmax
-                N = cfg.Nlm[l+1, col]
+                N = Nlm[l+1, col]
                 dθY = N * dPdtheta[l+1]
                 Y_over_sθ = N * P_over_sinth[l+1]
                 ll1 = l * (l + 1)
@@ -424,6 +425,9 @@ end
 @inline function _analysis_sphtor_mloop_tbl!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
     lmax = cfg.lmax
     nlat = cfg.nlat
+    w = cfg.w
+    x = cfg.x
+    robert_form = cfg.robert_form
     nthreads = Threads.maxthreadid()
     thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
@@ -436,10 +440,10 @@ end
         NP = cfg.NP_tables[col]
         NdP = cfg.NdP_tables[col]
         for i in 1:nlat
-            wi = cfg.w[i]
+            wi = w[i]
             Ftheta_i = Fthetam[i, col]; Fphi_i = Fphim[i, col]
-            if cfg.robert_form
-                s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
+            if robert_form
+                s_theta = sqrt(max(0.0, 1 - x[i]^2))
                 if s_theta > 0
                     Ftheta_i /= s_theta; Fphi_i /= s_theta
                 end
@@ -456,6 +460,9 @@ end
 @inline function _analysis_sphtor_mloop_otf!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
     lmax = cfg.lmax
     nlat = cfg.nlat
+    w = cfg.w
+    x = cfg.x
+    robert_form = cfg.robert_form
     nthreads = Threads.maxthreadid()
     thread_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
     thread_dP = _ensure_otf_scratch!(cfg._otf_scratch_dP, lmax)
@@ -470,10 +477,10 @@ end
         Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
         P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]
         for i in 1:nlat
-            wi = cfg.w[i]
+            wi = w[i]
             Ftheta_i = Fthetam[i, col]; Fphi_i = Fphim[i, col]
-            if cfg.robert_form
-                s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
+            if robert_form
+                s_theta = sqrt(max(0.0, 1 - x[i]^2))
                 if s_theta > 0
                     Ftheta_i /= s_theta; Fphi_i /= s_theta
                 end
@@ -680,8 +687,9 @@ function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractM
 
     # Robert form: scale by sin(theta) — must match synthesis_sphtor behavior
     if cfg.robert_form
+        x = cfg.x
         @inbounds for i in 1:nlat
-            s_theta = sqrt(max(0.0, 1 - cfg.x[i]^2))
+            s_theta = sqrt(max(0.0, 1 - x[i]^2))
             for j in 1:nlon
                 Vt[i, j] *= s_theta
                 Vp[i, j] *= s_theta
@@ -795,6 +803,7 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
     scaleφ = cfg.cphi
+    Nlm = cfg.Nlm
 
     # Integrate using Legendre polynomials and derivatives (pole-safe)
     for i in 1:nlat
@@ -814,7 +823,7 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
         Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im)
 
         @inbounds for l in max(1, im):ltr
-            N = cfg.Nlm[l+1, im+1]
+            N = Nlm[l+1, im+1]
             dθY = N * dPdtheta[l+1]
             Y = N * P[l+1]
             Y_over_sθ = N * P_over_sinth[l+1]
@@ -872,6 +881,7 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     P = Vector{Float64}(undef, ltr + 1)
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
+    Nlm = cfg.Nlm
     # Synthesize vector components for this mode using pole-safe functions
     for i in 1:nlat
         x = cfg.x[i]
@@ -884,7 +894,7 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
         gφ = zero(ComplexF64)
 
         @inbounds for l in max(1, im):ltr
-            N = cfg.Nlm[l+1, im+1]
+            N = Nlm[l+1, im+1]
             dθY = N * dPdtheta[l+1]
             Y = N * P[l+1]
             Y_over_sθ = N * P_over_sinth[l+1]

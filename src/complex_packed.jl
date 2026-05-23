@@ -109,6 +109,7 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     # Complex packed layout stores negative and positive m explicitly, so this
     # loop writes each Fourier bin directly instead of relying on Hermitian
     # symmetry as the real-field packed layout does.
+    xv = cfg.x; Nlm = cfg.Nlm
     for m in -mmax:mmax
         # build G_m(θ) = sum_l Nlm P_l^{|m|} alm(l,m)
         am = abs(m)
@@ -116,7 +117,7 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
         if am > lmax; continue; end
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for i in 1:nlat
-            Plm_row!(P, cfg.x[i], lmax, am)
+            Plm_row!(P, xv[i], lmax, am)
             g = zero(CT)
             @inbounds for l in am:lmax
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
@@ -124,7 +125,7 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
                 if need_norm
                     a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
                 end
-                g += (cfg.Nlm[l+1, am+1] * P[l+1]) * a
+                g += (Nlm[l+1, am+1] * P[l+1]) * a
             end
             G[i] = g
         end
@@ -161,6 +162,7 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     scaleφ = cfg.cphi
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
     # Read both signs of m from the FFT output and store them in LM_cplx order.
     # Negative modes live at DFT column nlon+m+1.
     for m in -mmax:mmax
@@ -168,12 +170,12 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
         col = m ≥ 0 ? (m + 1) : (cfg.nlon + m + 1)
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for i in 1:cfg.nlat
-            Plm_row!(P, cfg.x[i], lmax, am)
+            Plm_row!(P, xv[i], lmax, am)
             Fi = Fφ[i, col]
-            wi = cfg.w[i]
+            wi = wv[i]
             @inbounds for l in am:lmax
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
-                a = (wi * P[l+1]) * Fi * cfg.Nlm[l+1, am+1] * scaleφ
+                a = (wi * P[l+1]) * Fi * Nlm[l+1, am+1] * scaleφ
                 # Convert from internal to cfg normalization if needed when storing
                 if need_norm
                     a /= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
@@ -199,6 +201,7 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     P = Vector{Float64}(undef, lmax + 1)
     acc = zero(CT)
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+    Nlm = cfg.Nlm
     # m from -mmax..mmax
     for m in -mmax:mmax
         am = abs(m)
@@ -211,7 +214,7 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
             if need_norm
                 a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
             end
-            gm += cfg.Nlm[l+1, am+1] * P[l+1] * a
+            gm += Nlm[l+1, am+1] * P[l+1] * a
         end
         acc += gm * cis(m * phi)
     end

@@ -290,6 +290,8 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
     end
 
     scaleφ = cfg.cphi
+    w = cfg.w
+    Nlm = cfg.Nlm
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # Use precomputed tables - most efficient path
@@ -300,9 +302,9 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
                 @inbounds for l in m:lmax
                     acc = zero(ComplexF64)
                     for i in 1:nlat
-                        acc += (cfg.w[i] * tbl[l+1, i]) * Fφ_batch[i, col, k]
+                        acc += (w[i] * tbl[l+1, i]) * Fφ_batch[i, col, k]
                     end
-                    alm_batch[l+1, col, k] = acc * cfg.Nlm[l+1, col] * scaleφ
+                    alm_batch[l+1, col, k] = acc * Nlm[l+1, col] * scaleφ
                 end
             end
         end
@@ -318,7 +320,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
             for i in 1:nlat
                 x = cfg.x[i]
                 Plm_row!(P, x, lmax, m)
-                wi = cfg.w[i]
+                wi = w[i]
 
                 @inbounds for k in 1:nfields
                     Fi = Fφ_batch[i, col, k]
@@ -331,7 +333,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
             # Apply normalization and scaling
             @inbounds for k in 1:nfields
                 for l in m:lmax
-                    alm_batch[l+1, col, k] *= cfg.Nlm[l+1, col] * scaleφ
+                    alm_batch[l+1, col, k] *= Nlm[l+1, col] * scaleφ
                 end
             end
         end
@@ -378,6 +380,8 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     end
 
     scaleφ = cfg.cphi
+    w = cfg.w
+    Nlm = cfg.Nlm
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         for m in 0:mmax
@@ -387,9 +391,9 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
                 @inbounds for l in m:lmax
                     acc = zero(ComplexF64)
                     for i in 1:nlat
-                        acc += (cfg.w[i] * tbl[l+1, i]) * Fφ_batch[i, col, k]
+                        acc += (w[i] * tbl[l+1, i]) * Fφ_batch[i, col, k]
                     end
-                    alm_out[l+1, col, k] = acc * cfg.Nlm[l+1, col] * scaleφ
+                    alm_out[l+1, col, k] = acc * Nlm[l+1, col] * scaleφ
                 end
             end
         end
@@ -403,7 +407,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
             for i in 1:nlat
                 x = cfg.x[i]
                 Plm_row!(P, x, lmax, m)
-                wi = cfg.w[i]
+                wi = w[i]
 
                 @inbounds for k in 1:nfields
                     Fi = Fφ_batch[i, col, k]
@@ -415,7 +419,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
 
             @inbounds for k in 1:nfields
                 for l in m:lmax
-                    alm_out[l+1, col, k] *= cfg.Nlm[l+1, col] * scaleφ
+                    alm_out[l+1, col, k] *= Nlm[l+1, col] * scaleφ
                 end
             end
         end
@@ -477,6 +481,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
     Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
     fill!(Fφ_batch, zero(ComplexF64))
     inv_scaleφ = phi_inv_scale(cfg)
+    Nlm = cfg.Nlm
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         for m in 0:mmax
@@ -486,7 +491,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
                 for i in 1:nlat
                     acc = zero(ComplexF64)
                     for l in m:lmax
-                        acc += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm_batch[l+1, col, k]
+                        acc += (Nlm[l+1, col] * tbl[l+1, i]) * alm_batch[l+1, col, k]
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end
@@ -506,7 +511,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
                 @inbounds for k in 1:nfields
                     acc = zero(ComplexF64)
                     for l in m:lmax
-                        acc += (cfg.Nlm[l+1, col] * P[l+1]) * alm_batch[l+1, col, k]
+                        acc += (Nlm[l+1, col] * P[l+1]) * alm_batch[l+1, col, k]
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end
@@ -576,6 +581,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     end
     fill!(Fφ_batch, zero(eltype(Fφ_batch)))
     inv_scaleφ = phi_inv_scale(cfg)
+    Nlm = cfg.Nlm
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         for m in 0:mmax
@@ -585,7 +591,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                 for i in 1:nlat
                     acc = zero(ComplexF64)
                     for l in m:lmax
-                        acc += (cfg.Nlm[l+1, col] * tbl[l+1, i]) * alm_batch[l+1, col, k]
+                        acc += (Nlm[l+1, col] * tbl[l+1, i]) * alm_batch[l+1, col, k]
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end
@@ -605,7 +611,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                 @inbounds for k in 1:nfields
                     acc = zero(ComplexF64)
                     for l in m:lmax
-                        acc += (cfg.Nlm[l+1, col] * P[l+1]) * alm_batch[l+1, col, k]
+                        acc += (Nlm[l+1, col] * P[l+1]) * alm_batch[l+1, col, k]
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end

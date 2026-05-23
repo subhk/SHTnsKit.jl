@@ -262,14 +262,15 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
             Fbuf = plan.Fθk
         end
 
+        xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
         for m in 0:mmax
             col = m + 1
             for i in 1:nlat
-                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
+                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m)
                 fourier_coeff = Fbuf[i, col]
-                quad_weight = cfg.w[i]
+                quad_weight = wv[i]
                 @inbounds for l in max(1,m):lmax
-                    norm_factor = cfg.Nlm[l+1, col]
+                    norm_factor = Nlm[l+1, col]
                     legendre_deriv = norm_factor * plan.dPdtheta[l+1]
                     legendre_over_sinθ = norm_factor * plan.P_over_sinth[l+1]
                     weight_coeff = quad_weight * scaleφ / (l*(l+1))
@@ -337,13 +338,14 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             fill!(plan.Fθk, zero(eltype(plan.Fθk)))
         end
 
+        xv = cfg.x; Nlm = cfg.Nlm
         for m in 0:mmax
             col = m + 1
             for i in 1:nlat
-                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, cfg.x[i], lmax, m)
+                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m)
                 g = zero(ComplexF64)
                 @inbounds for l in max(1,m):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = N * plan.dPdtheta[l+1]
                     Y_over_sθ = N * plan.P_over_sinth[l+1]
                     Sl = Slm_int[l+1, col]; Tl = Tlm_int[l+1, col]

@@ -422,6 +422,7 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
     ālm = zeros(ComplexF64, lmax + 1, mmax + 1)
     use_tbl = has_fused_scalar_tables(cfg)
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
+    xv = cfg.x; Nlm = cfg.Nlm
     for m in 0:mmax
         col = m + 1
         wm = (m == 0 || !real_output) ? 1.0 : 2.0
@@ -435,10 +436,10 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
             end
         else
             @inbounds for (ii, iglob) in pairs(θ_globals)
-                Plm_row!(P, cfg.x[iglob], lmax, m)
+                Plm_row!(P, xv[iglob], lmax, m)
                 Fi = wm * Fph̄[ii, col]
                 for l in m:lmax
-                    ālm[l+1, col] += cfg.Nlm[l+1, col] * P[l+1] * Fi
+                    ālm[l+1, col] += Nlm[l+1, col] * P[l+1] * Fi
                 end
             end
         end

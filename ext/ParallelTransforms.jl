@@ -529,6 +529,7 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     # See _analysis_loop_no_tables! and _analysis_loop_with_tables! for details
     if use_packed_storage
         # Original inline loop for packed storage (not the hot path)
+        xv = cfg.x; Nlm = cfg.Nlm; cphi = cfg.cphi
         for mval in 0:mmax
             col = mval + 1
             m_fft = mval + 1
@@ -539,13 +540,13 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
                     tblcol = view(cfg.plm_tables[col], :, iglob)
                     @inbounds @simd for l in mval:lmax
                         lm = storage_info.lm_to_packed[l+1, col]
-                        Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * tblcol[l+1]) * Fi
+                        Alm_local[lm] += (wi * Nlm[l+1, col] * cphi * tblcol[l+1]) * Fi
                     end
                 else
-                    SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
+                    SHTnsKit.Plm_row!(P, xv[iglob], lmax, mval)
                     @inbounds @simd for l in mval:lmax
                         lm = storage_info.lm_to_packed[l+1, col]
-                        Alm_local[lm] += (wi * cfg.Nlm[l+1, col] * cfg.cphi * P[l+1]) * Fi
+                        Alm_local[lm] += (wi * Nlm[l+1, col] * cphi * P[l+1]) * Fi
                     end
                 end
             end
@@ -576,18 +577,20 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
             SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
             # Apply normalization to dense matrix with SIMD optimization
             # Each (l,m) element is independent, so ivdep is safe
+            Nlm = cfg.Nlm; cphi = cfg.cphi
             @inbounds for m in 0:mmax
                 @simd ivdep for l in m:lmax
-                    Alm_local[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
+                    Alm_local[l+1, m+1] *= Nlm[l+1, m+1] * cphi
                 end
             end
         end
     else
         # θ is not distributed - no reduction needed, just apply normalization
         if !use_packed_storage
+            Nlm = cfg.Nlm; cphi = cfg.cphi
             @inbounds for m in 0:mmax
                 @simd ivdep for l in m:lmax
-                    Alm_local[l+1, m+1] *= cfg.Nlm[l+1, m+1] * cfg.cphi
+                    Alm_local[l+1, m+1] *= Nlm[l+1, m+1] * cphi
                 end
             end
         end
@@ -687,6 +690,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 
     P = Vector{Float64}(undef, lmax + 1)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+    xv = cfg.x; Nlm = cfg.Nlm
 
     # Synthesis: for each m mode, compute Legendre series
     for mval in 0:mmax
@@ -699,13 +703,13 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
                 tbl = cfg.plm_tables[col]
                 g = 0.0 + 0.0im
                 @inbounds @simd for l in mval:lmax
-                    g += (cfg.Nlm[l+1, col] * tbl[l+1, iglob]) * Alm[l+1, col]
+                    g += (Nlm[l+1, col] * tbl[l+1, iglob]) * Alm[l+1, col]
                 end
             else
-                SHTnsKit.Plm_row!(P, cfg.x[iglob], lmax, mval)
+                SHTnsKit.Plm_row!(P, xv[iglob], lmax, mval)
                 g = 0.0 + 0.0im
                 @inbounds @simd for l in mval:lmax
-                    g += (cfg.Nlm[l+1, col] * P[l+1]) * Alm[l+1, col]
+                    g += (Nlm[l+1, col] * P[l+1]) * Alm[l+1, col]
                 end
             end
 
@@ -735,7 +739,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     # Apply Robert form scaling if enabled
     if cfg.robert_form
         @inbounds for (ii, iglob) in enumerate(θ_globals)
-            x = cfg.x[iglob]
+            x = xv[iglob]
             sθ = sqrt(max(0.0, 1 - x*x))
             if sθ > 0
                 for j in 1:nlon
@@ -855,6 +859,7 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     P = Vector{Float64}(undef, lmax + 1)     # Fallback buffers
     dPdx = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
+    Nlm = cfg.Nlm
 
     # Main vector analysis loop
     for mval in 0:mmax
@@ -883,7 +888,7 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
                 tbld = cfg.dplm_tables[col]
 
                 @inbounds for l in max(1, mval):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = -sθ * N * tbld[l+1, iglobθ]
                     Y = N * tblP[l+1, iglobθ]
                     coeff = wi * scaleφ / (l * (l + 1))
@@ -897,7 +902,7 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
                 SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
 
                 @inbounds for l in max(1, mval):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = -sθ * N * dPdx[l+1]
                     Y = N * P[l+1]
                     coeff = wi * scaleφ / (l * (l + 1))
@@ -977,13 +982,14 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     P = Vector{Float64}(undef, lmax + 1)
     dPdx = Vector{Float64}(undef, lmax + 1)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+    xv = cfg.x; Nlm = cfg.Nlm
 
     # Synthesis loop
     for mval in 0:mmax
         col = mval + 1
 
         for (ii, iglobθ) in enumerate(θ_globals)
-            x = cfg.x[iglobθ]
+            x = xv[iglobθ]
             sθ = sqrt(max(0.0, 1 - x * x))
             inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
 
@@ -995,7 +1001,7 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                 tbld = cfg.dplm_tables[col]
 
                 @inbounds for l in max(1, mval):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = -sθ * N * tbld[l+1, iglobθ]
                     Y = N * tblP[l+1, iglobθ]
                     Sl = Slm[l+1, col]
@@ -1010,7 +1016,7 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                 SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
 
                 @inbounds for l in max(1, mval):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = -sθ * N * dPdx[l+1]
                     Y = N * P[l+1]
                     Sl = Slm[l+1, col]
@@ -1049,7 +1055,7 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     # Apply Robert form scaling if enabled
     if cfg.robert_form
         @inbounds for (ii, iglobθ) in enumerate(θ_globals)
-            x = cfg.x[iglobθ]
+            x = xv[iglobθ]
             sθ = sqrt(max(0.0, 1 - x * x))
             for j in 1:nlon
                 Vtθφ_local[ii, j] *= sθ
@@ -1139,13 +1145,14 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
     fill!(Fφm, zero(ComplexF64))
 
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+    xv = cfg.x; Nlm = cfg.Nlm
 
     # Synthesis loop - accumulate Fourier coefficients
     for mval in 0:mmax
         col = mval + 1
 
         for (ii, iglobθ) in enumerate(θ_globals)
-            x = cfg.x[iglobθ]
+            x = xv[iglobθ]
             sθ = sqrt(max(0.0, 1 - x * x))
             inv_sθ = sθ == 0 ? 0.0 : 1.0 / sθ
 
@@ -1157,7 +1164,7 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
                 tbld = cfg.dplm_tables[col]
 
                 @inbounds for l in max(1, mval):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = -sθ * N * tbld[l+1, iglobθ]
                     Y = N * tblP[l+1, iglobθ]
                     Sl = Slm[l+1, col]
@@ -1172,7 +1179,7 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
                 SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
 
                 @inbounds for l in max(1, mval):lmax
-                    N = cfg.Nlm[l+1, col]
+                    N = Nlm[l+1, col]
                     dθY = -sθ * N * dPdx[l+1]
                     Y = N * P[l+1]
                     Sl = Slm[l+1, col]
@@ -1206,7 +1213,7 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
     # Apply Robert form scaling if enabled
     if cfg.robert_form
         @inbounds for (ii, iglobθ) in enumerate(θ_globals)
-            x = cfg.x[iglobθ]
+            x = xv[iglobθ]
             sθ = sqrt(max(0.0, 1 - x * x))
             for j in 1:nlon
                 Vtθφ_local[ii, j] *= sθ
@@ -1660,9 +1667,10 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     # Apply normalization
+    Nlm = cfg.Nlm
     @inbounds for m in 0:mmax
         @simd ivdep for l in m:lmax
-            local_contrib[l+1, m+1] *= cfg.Nlm[l+1, m+1] * scaleφ
+            local_contrib[l+1, m+1] *= Nlm[l+1, m+1] * scaleφ
         end
     end
 
@@ -2440,9 +2448,10 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     # Apply normalization
+    Nlm = cfg.Nlm
     @inbounds for m in 0:mmax
         @simd ivdep for l in m:lmax
-            local_contrib[l+1, m+1] *= cfg.Nlm[l+1, m+1] * scaleφ
+            local_contrib[l+1, m+1] *= Nlm[l+1, m+1] * scaleφ
         end
     end
 
@@ -2573,6 +2582,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         alm_partial = gather_to_dense_2d(alm)
 
         inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+        xv = cfg.x; Nlm = cfg.Nlm
 
         # Synthesis: for each m in m_range, compute Legendre series
         m_col = 0
@@ -2585,7 +2595,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
                 # Pre-multiply Nlm * alm to avoid redundant multiply per θ point
                 # Use complex buffer since alm_partial is ComplexF64
                 @inbounds for l in m:lmax
-                    P_complex[l+1] = cfg.Nlm[l+1, col] * alm_partial[l+1, m_col]
+                    P_complex[l+1] = Nlm[l+1, col] * alm_partial[l+1, m_col]
                 end
 
                 tbl = cfg.plm_tables[col]
@@ -2605,7 +2615,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
                     SHTnsKit.Plm_row!(P, x_cache[ii], lmax, m)
                     g = 0.0 + 0.0im
                     @inbounds @simd for l in m:lmax
-                        g += (cfg.Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
+                        g += (Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
                     end
                     Fθm[ii, m + 1] = inv_scaleφ * g
                     if real_output && m > 0
@@ -2615,10 +2625,10 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
             else
                 # Non-table path without cache - direct cfg access
                 for ii in 1:nθ_local
-                    SHTnsKit.Plm_row!(P, cfg.x[θ_globals[ii]], lmax, m)
+                    SHTnsKit.Plm_row!(P, xv[θ_globals[ii]], lmax, m)
                     g = 0.0 + 0.0im
                     @inbounds @simd for l in m:lmax
-                        g += (cfg.Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
+                        g += (Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
                     end
                     Fθm[ii, m + 1] = inv_scaleφ * g
                     if real_output && m > 0
@@ -2890,12 +2900,13 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     # Apply normalization
+    Nlm = cfg.Nlm
     m_col = 0
     for mval in m_range
         (mval % mres == 0) || continue
         m_col += 1
         @inbounds @simd ivdep for l in mval:lmax
-            local_contrib[l+1, m_col] *= cfg.Nlm[l+1, mval+1] * scaleφ
+            local_contrib[l+1, m_col] *= Nlm[l+1, mval+1] * scaleφ
         end
     end
 

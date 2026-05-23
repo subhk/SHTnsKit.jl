@@ -283,36 +283,12 @@ function SHTConfig(;
 end
 
 # ============================================================================
-# BACKWARD-COMPATIBLE PROPERTY FORWARDING
+# PROPERTY FORWARDING (flat field names -> grouped sub-structs)
 # ============================================================================
-# Three fields were removed from SHTConfig to eliminate redundant aliases:
-#   wlat     → use w      (Gauss-Legendre weights)
-#   ct       → use x      (cos(θ) nodes)
-#   sintheta → use st     (sin(θ) values)
-# Property forwarding preserves backward compatibility so cfg.wlat still works.
-
-const _SHTCONFIG_ALIAS_WARNED = Ref(false)
-@inline function _warn_alias_once(old::Symbol, new::Symbol)
-    if !_SHTCONFIG_ALIAS_WARNED[]
-        _SHTCONFIG_ALIAS_WARNED[] = true
-        Base.depwarn("cfg.$old is deprecated; use cfg.$new instead", :getproperty)
-    end
-    return nothing
-end
 
 @inline function Base.getproperty(cfg::SHTConfig, name::Symbol)
-    # ----- old aliases (deprecated) -----
-    if name === :wlat
-        _warn_alias_once(:wlat, :w)
-        return getfield(cfg, :_grid).w
-    elseif name === :ct
-        _warn_alias_once(:ct, :x)
-        return getfield(cfg, :_grid).x
-    elseif name === :sintheta
-        _warn_alias_once(:sintheta, :st)
-        return getfield(cfg, :_grid).st
     # ----- grid fields -----
-    elseif name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
+    if name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
         return getproperty(getfield(cfg, :_grid), name)
     # ----- normalization fields -----
     elseif name === :Nlm
@@ -364,16 +340,7 @@ end
 end
 
 function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
-    if name === :wlat
-        _warn_alias_once(:wlat, :w)
-        return setfield!(getfield(cfg, :_grid), :w, val)
-    elseif name === :ct
-        _warn_alias_once(:ct, :x)
-        return setfield!(getfield(cfg, :_grid), :x, val)
-    elseif name === :sintheta
-        _warn_alias_once(:sintheta, :st)
-        return setfield!(getfield(cfg, :_grid), :st, val)
-    elseif name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
+    if name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
         return setproperty!(getfield(cfg, :_grid), name, val)
     elseif name === :Nlm
         return setfield!(getfield(cfg, :_norm), :Nlm, val)

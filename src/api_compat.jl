@@ -306,7 +306,7 @@ function legendre_sphPlm_array(cfg::SHTConfig, lmax::Integer, im::Integer, x::Re
     P = Vector{Float64}(undef, cfg.lmax + 1)
     Plm_row!(P, x, cfg.lmax, m)
     n = min(length(yl), lmax - m + 1)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     @inbounds for (k, l) in enumerate(m:(m + n - 1))
         yl[k] = Nlm[l+1, m+1] * P[l+1]
@@ -331,7 +331,7 @@ function legendre_sphPlm_deriv_array(cfg::SHTConfig, lmax::Integer, im::Integer,
     dPdx = Vector{Float64}(undef, cfg.lmax + 1)
     Plm_and_dPdx_row!(P, dPdx, x, cfg.lmax, m)
     n = min(length(yl), length(dyl), lmax - m + 1)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     @inbounds for (k, l) in enumerate(m:(m + n - 1))
         N = Nlm[l+1, m+1]

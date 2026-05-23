@@ -1217,7 +1217,7 @@ function prepare_plm_tables!(cfg::SHTConfig)
     # element on both the P and dP/dx tables.
     NP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
     NdP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the m/i/l loops (cfg is mutable, so the compiler can't lift it)
     @inbounds for m in 0:mmax
         NP = NP_tables[m+1]
         NdP = NdP_tables[m+1]

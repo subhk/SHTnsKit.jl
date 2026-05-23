@@ -109,7 +109,7 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     # Complex packed layout stores negative and positive m explicitly, so this
     # loop writes each Fourier bin directly instead of relying on Hermitian
     # symmetry as the real-field packed layout does.
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
     for m in -mmax:mmax
         # build G_m(θ) = sum_l Nlm P_l^{|m|} alm(l,m)
         am = abs(m)
@@ -162,7 +162,7 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     scaleφ = cfg.cphi
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
+    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
     # Read both signs of m from the FFT output and store them in LM_cplx order.
     # Negative modes live at DFT column nlon+m+1.
     for m in -mmax:mmax
@@ -201,7 +201,7 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     P = Vector{Float64}(undef, lmax + 1)
     acc = zero(CT)
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the m/l loops (cfg is mutable, so the compiler can't lift it)
     # m from -mmax..mmax
     for m in -mmax:mmax
         am = abs(m)

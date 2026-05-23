@@ -298,7 +298,7 @@ function _adjoint_analysis_sphtor(cfg::SHTConfig, Slm̄::AbstractMatrix, Tlm̄::
     P_over_sinth = Vector{Float64}(undef, lmax + 1)
     φadj = 2π
 
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     for m in 0:mmax
         col = m + 1
         for (ii, iglob) in pairs(θ_globals)
@@ -425,6 +425,7 @@ end
 @inline function _analysis_sphtor_mloop_tbl!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
     lmax = cfg.lmax
     nlat = cfg.nlat
+    # Hoist cfg field reads to locals: cfg is mutable, so reads inside the loops below aren't auto-hoisted.
     w = cfg.w
     x = cfg.x
     robert_form = cfg.robert_form
@@ -460,6 +461,7 @@ end
 @inline function _analysis_sphtor_mloop_otf!(Slm, Tlm, cfg, Fthetam, Fphim, m_order, ltr_eff, scale_phi)
     lmax = cfg.lmax
     nlat = cfg.nlat
+    # Hoist cfg field reads to locals: cfg is mutable, so reads inside the loops below aren't auto-hoisted.
     w = cfg.w
     x = cfg.x
     robert_form = cfg.robert_form
@@ -687,7 +689,7 @@ function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractM
 
     # Robert form: scale by sin(theta) — must match synthesis_sphtor behavior
     if cfg.robert_form
-        x = cfg.x
+        x = cfg.x  # hoist field read out of the loop below (cfg is mutable, so the compiler can't lift it)
         @inbounds for i in 1:nlat
             s_theta = sqrt(max(0.0, 1 - x[i]^2))
             for j in 1:nlon
@@ -803,7 +805,7 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
     scaleφ = cfg.cphi
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     # Integrate using Legendre polynomials and derivatives (pole-safe)
     for i in 1:nlat
@@ -881,7 +883,7 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     P = Vector{Float64}(undef, ltr + 1)
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     # Synthesize vector components for this mode using pole-safe functions
     for i in 1:nlat
         x = cfg.x[i]

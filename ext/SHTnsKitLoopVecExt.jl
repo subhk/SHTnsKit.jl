@@ -27,6 +27,8 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     fill!(alm, 0.0 + 0.0im)
 
     scaleφ = cfg.cphi
+    # Bind cfg fields to locals so the @tturbo loops below operate on plain arrays.
+    # LoopVectorization can't analyze property access (cfg.Nlm) inside @tturbo, and cfg is mutable.
     xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
     # Adaptive threading: use nested parallelism for better load balancing
     n_threads = Threads.nthreads()
@@ -128,6 +130,8 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
 
     G = Vector{CT}(undef, nlat)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
+    # Bind cfg fields to locals so the @tturbo loops below operate on plain arrays.
+    # LoopVectorization can't analyze property access (cfg.Nlm) inside @tturbo, and cfg is mutable.
     xv = cfg.x; Nlm = cfg.Nlm
 
     if cfg.norm !== :orthonormal || cfg.cs_phase == false

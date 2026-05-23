@@ -422,7 +422,7 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
     ālm = zeros(ComplexF64, lmax + 1, mmax + 1)
     use_tbl = has_fused_scalar_tables(cfg)
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
     for m in 0:mmax
         col = m + 1
         wm = (m == 0 || !real_output) ? 1.0 : 2.0

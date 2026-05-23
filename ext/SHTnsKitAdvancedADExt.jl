@@ -155,7 +155,7 @@ end
         P = Vector{Float64}(undef, lmax + 1)
         dPdtheta = Vector{Float64}(undef, lmax + 1)
         P_over_sinth = Vector{Float64}(undef, lmax + 1)
-        xv = cfg.x; Nlm = cfg.Nlm
+        xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the m/i/l loops (cfg is mutable, so not auto-hoisted)
 
         # Forward synthesis uses inv_scaleφ = nlon, but adjoint of ifft is (1/nlon)*fft
         # So these factors cancel. wm accounts for Hermitian symmetry in "fill conjugate" step.

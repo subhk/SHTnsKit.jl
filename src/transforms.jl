@@ -89,7 +89,7 @@ function analysis_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     fill!(Ql, zero(ComplexF64))
 
     P = Vector{Float64}(undef, lmax + 1)
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
+    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
@@ -209,7 +209,7 @@ function synthesis_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     
     Vr = Vector{Float64}(undef, nlat)
     P = Vector{Float64}(undef, lmax + 1)
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
@@ -239,7 +239,7 @@ function analysis_axisym_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
     fill!(Ql, zero(ComplexF64))
 
     P = Vector{Float64}(undef, ltr + 1)
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
+    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
@@ -267,7 +267,7 @@ function synthesis_axisym_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr:
     
     Vr = Vector{Float64}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
@@ -304,7 +304,7 @@ function analysis_packed_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Comp
 
     P = Vector{Float64}(undef, ltr + 1)
     scaleφ = cfg.cphi  # Match full transform normalization
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
+    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
@@ -341,7 +341,7 @@ function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Compl
     Vr_m = Vector{ComplexF64}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
     inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
@@ -373,7 +373,7 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
 
     result = 0.0
     P = Vector{Float64}(undef, lmax + 1)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the l loops (cfg is mutable, so the compiler can't lift it)
 
     # m = 0 contribution (no conjugate partner)
     Plm_row!(P, cost, lmax, 0)

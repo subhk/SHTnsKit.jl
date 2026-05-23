@@ -529,7 +529,7 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     # See _analysis_loop_no_tables! and _analysis_loop_with_tables! for details
     if use_packed_storage
         # Original inline loop for packed storage (not the hot path)
-        xv = cfg.x; Nlm = cfg.Nlm; cphi = cfg.cphi
+        xv = cfg.x; Nlm = cfg.Nlm; cphi = cfg.cphi  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
         for mval in 0:mmax
             col = mval + 1
             m_fft = mval + 1
@@ -577,7 +577,7 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
             SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
             # Apply normalization to dense matrix with SIMD optimization
             # Each (l,m) element is independent, so ivdep is safe
-            Nlm = cfg.Nlm; cphi = cfg.cphi
+            Nlm = cfg.Nlm; cphi = cfg.cphi  # hoist field reads out of the normalization loop (cfg is mutable)
             @inbounds for m in 0:mmax
                 @simd ivdep for l in m:lmax
                     Alm_local[l+1, m+1] *= Nlm[l+1, m+1] * cphi
@@ -587,7 +587,7 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     else
         # θ is not distributed - no reduction needed, just apply normalization
         if !use_packed_storage
-            Nlm = cfg.Nlm; cphi = cfg.cphi
+            Nlm = cfg.Nlm; cphi = cfg.cphi  # hoist field reads out of the normalization loop (cfg is mutable)
             @inbounds for m in 0:mmax
                 @simd ivdep for l in m:lmax
                     Alm_local[l+1, m+1] *= Nlm[l+1, m+1] * cphi
@@ -690,7 +690,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 
     P = Vector{Float64}(undef, lmax + 1)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis: for each m mode, compute Legendre series
     for mval in 0:mmax
@@ -859,7 +859,7 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     P = Vector{Float64}(undef, lmax + 1)     # Fallback buffers
     dPdx = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
 
     # Main vector analysis loop
     for mval in 0:mmax
@@ -982,7 +982,7 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     P = Vector{Float64}(undef, lmax + 1)
     dPdx = Vector{Float64}(undef, lmax + 1)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis loop
     for mval in 0:mmax
@@ -1145,7 +1145,7 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
     fill!(Fφm, zero(ComplexF64))
 
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis loop - accumulate Fourier coefficients
     for mval in 0:mmax
@@ -1667,7 +1667,7 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     # Apply normalization
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for m in 0:mmax
         @simd ivdep for l in m:lmax
             local_contrib[l+1, m+1] *= Nlm[l+1, m+1] * scaleφ
@@ -2448,7 +2448,7 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     # Apply normalization
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for m in 0:mmax
         @simd ivdep for l in m:lmax
             local_contrib[l+1, m+1] *= Nlm[l+1, m+1] * scaleφ
@@ -2582,7 +2582,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         alm_partial = gather_to_dense_2d(alm)
 
         inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-        xv = cfg.x; Nlm = cfg.Nlm
+        xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
 
         # Synthesis: for each m in m_range, compute Legendre series
         m_col = 0
@@ -2900,7 +2900,7 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     # Apply normalization
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
     m_col = 0
     for mval in m_range
         (mval % mres == 0) || continue

@@ -34,7 +34,7 @@ end
     Plm_row!(P, cfg.x[i], lmax, m)
     Fi = Fph[i, col]
     wi = cfg.w[i]
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in m:lmax
         alm[l+1, col] += (wi * Nlm[l+1, col] * P[l+1] * scale_phi) * Fi
     end
@@ -57,7 +57,7 @@ end
 @inline function _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax)
     Plm_row!(P, cfg.x[i], lmax, m)
     acc = zero(eltype(alm))
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in m:lmax
         acc += (Nlm[l+1, col] * P[l+1]) * alm[l+1, col]
     end
@@ -131,7 +131,7 @@ end
     inv_s_theta = is_pole ? 0.0 : 1.0 / s_theta
     g_theta = zero(ComplexF64)
     g_phi = zero(ComplexF64)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in max(1, m):ltr
         if is_pole
             N = Nlm[l+1, col]  # pole-safe closed forms still need N explicitly
@@ -153,7 +153,7 @@ end
     Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[i], cfg.lmax, m)
     g_theta = zero(ComplexF64)
     g_phi = zero(ComplexF64)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in max(1, m):ltr
         N = Nlm[l+1, col]
         dtheta_Y = N * dPdtheta[l+1]
@@ -180,7 +180,7 @@ end
     s_theta = sqrt(max(0.0, 1 - x*x))
     is_pole = s_theta < POLE_TOLERANCE_FACTOR * eps(Float64)
     inv_s_theta = is_pole ? 0.0 : 1.0 / s_theta
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in max(1, m):ltr
         if is_pole
             N = Nlm[l+1, col]
@@ -200,7 +200,7 @@ end
 """Sphtor analysis kernel computing Legendre on the fly. Accumulates into Sacc, Tacc."""
 @inline function _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi, P, dPdtheta, P_over_sinth, i, col, m, ltr, scale_phi)
     Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[i], cfg.lmax, m)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in max(1, m):ltr
         N = Nlm[l+1, col]
         dtheta_Y = N * dPdtheta[l+1]

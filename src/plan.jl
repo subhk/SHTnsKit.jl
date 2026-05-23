@@ -262,7 +262,7 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
             Fbuf = plan.Fθk
         end
 
-        xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
+        xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
         for m in 0:mmax
             col = m + 1
             for i in 1:nlat
@@ -338,7 +338,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             fill!(plan.Fθk, zero(eltype(plan.Fθk)))
         end
 
-        xv = cfg.x; Nlm = cfg.Nlm
+        xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
         for m in 0:mmax
             col = m + 1
             for i in 1:nlat

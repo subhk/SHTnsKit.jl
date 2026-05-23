@@ -20,7 +20,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     fill!(vals, 0.0)
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     # m=0 contribution
     Plm_row!(P, x, lmax, 0)
@@ -75,7 +75,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     vals = Vector{ComplexF64}(undef, nphi)
     fill!(vals, zero(ComplexF64))
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     # m=0
     Plm_row!(P, x, lmax, 0)
     g0 = zero(ComplexF64)
@@ -145,7 +145,7 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     # m=0 (no 1/sinθ terms)
     Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
     for l in 0:lmax
         N = Nlm[l+1, 1]
@@ -236,7 +236,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     fill!(Vr, 0.0); fill!(Vt, 0.0); fill!(Vp, 0.0)
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     # m=0 (no 1/sinθ terms)
     Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)

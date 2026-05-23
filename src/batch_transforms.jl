@@ -290,8 +290,9 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
     end
 
     scaleφ = cfg.cphi
+    # Hoist cfg field reads to locals: cfg is mutable, so reads inside the m/l loops below aren't auto-hoisted.
     w = cfg.w
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the m/l loops below (cfg is mutable, so the compiler can't lift it)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # Use precomputed tables - most efficient path
@@ -380,8 +381,9 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     end
 
     scaleφ = cfg.cphi
+    # Hoist cfg field reads to locals: cfg is mutable, so reads inside the m/l loops below aren't auto-hoisted.
     w = cfg.w
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the m/l loops below (cfg is mutable, so the compiler can't lift it)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         for m in 0:mmax
@@ -481,7 +483,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
     Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
     fill!(Fφ_batch, zero(ComplexF64))
     inv_scaleφ = phi_inv_scale(cfg)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the m/l loops below (cfg is mutable, so the compiler can't lift it)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         for m in 0:mmax
@@ -581,7 +583,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     end
     fill!(Fφ_batch, zero(eltype(Fφ_batch)))
     inv_scaleφ = phi_inv_scale(cfg)
-    Nlm = cfg.Nlm
+    Nlm = cfg.Nlm  # hoist field read out of the m/l loops below (cfg is mutable, so the compiler can't lift it)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         for m in 0:mmax

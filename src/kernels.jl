@@ -31,12 +31,11 @@ end
 
 """Scalar analysis kernel computing Legendre polynomials on the fly."""
 @inline function _scalar_analysis_kernel_otf!(alm, cfg, Fph, P, i, col, m, lmax, scale_phi)
-    Plm_row!(P, cfg.x[i], lmax, m)
+    Plm_norm_row!(P, cfg.x[i], lmax, m)
     Fi = Fph[i, col]
     wi = cfg.w[i]
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in m:lmax
-        alm[l+1, col] += (wi * Nlm[l+1, col] * P[l+1] * scale_phi) * Fi
+        alm[l+1, col] += (wi * P[l+1] * scale_phi) * Fi
     end
 end
 
@@ -55,11 +54,10 @@ end
 
 """Scalar synthesis kernel computing Legendre polynomials on the fly. Returns accumulated value."""
 @inline function _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax)
-    Plm_row!(P, cfg.x[i], lmax, m)
+    Plm_norm_row!(P, cfg.x[i], lmax, m)   # P now holds orthonormal P̄ (= Nlm·rawP)
     acc = zero(eltype(alm))
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in m:lmax
-        acc += (Nlm[l+1, col] * P[l+1]) * alm[l+1, col]
+        acc += P[l+1] * alm[l+1, col]
     end
     return acc
 end

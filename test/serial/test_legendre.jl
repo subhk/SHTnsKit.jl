@@ -382,4 +382,25 @@ using SHTnsKit
             @test isapprox(integral, expected; atol=1e-12)
         end
     end
+
+    @testset "Plm_norm_row! bounded + matches Nlm*P (lmax<=128)" begin
+        for lmax in (16, 64, 128), x in (-0.9, 0.13, 0.77)
+            cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1); N = cfg.Nlm
+            P = zeros(lmax+1); g = zeros(lmax+1)
+            for m in 0:lmax
+                SHTnsKit.Plm_row!(P, x, lmax, m)
+                SHTnsKit.Plm_norm_row!(g, x, lmax, m)
+                @test all(isfinite, @view g[m+1:end])
+                for l in m:lmax
+                    ref = N[l+1,m+1]*P[l+1]
+                    abs(ref) > 1e-9 && @test isapprox(g[l+1], ref; rtol=1e-9)
+                end
+            end
+        end
+        cfg = create_gauss_config(512, 514; nlon=1025); g = zeros(513)
+        for m in 0:512
+            SHTnsKit.Plm_norm_row!(g, 0.31, 512, m)
+            @test all(isfinite, @view g[m+1:end]) && maximum(abs, @view g[m+1:end]) < 2.0
+        end
+    end
 end

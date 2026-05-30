@@ -185,6 +185,36 @@ function Plm_row!(P::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
     return P
 end
 
+const _INV_SQRT_4PI = 0.28209479177387814  # sqrt(1/(4π)) = orthonormal P̄_0^0
+
+"""
+    Plm_norm_row!(P, x, lmax, m)
+
+Fill `P[l+1] = P̄_l^m(x)` for l = m..lmax with the ORTHONORMAL + Condon–Shortley
+associated Legendre functions (i.e. exactly `cfg.Nlm[l,m] * (raw P_l^m)`), via an
+analytical fully-normalized recurrence that stays bounded (|P̄| ≲ 1) at all l, m —
+no overflow at high lmax. Entries l < m are zeroed.
+"""
+function Plm_norm_row!(P::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
+    @inbounds fill!(P, zero(T))
+    m < 0 && throw(ArgumentError("m must be ≥ 0"))
+    lmax >= m || return P
+    s = sqrt(max(zero(T), one(T) - x*x))
+    pmm = T(_INV_SQRT_4PI)
+    @inbounds for k in 1:m
+        pmm = -sqrt(T(2k + 1) / T(2k)) * s * pmm
+    end
+    P[m+1] = pmm
+    lmax == m && return P
+    P[m+2] = sqrt(T(2m + 3)) * x * pmm
+    @inbounds for l in (m+2):lmax
+        a = sqrt((T(2l - 1) * T(2l + 1)) / (T(l - m) * T(l + m)))
+        b = sqrt((T(2l + 1) * T(l - 1 - m) * T(l - 1 + m)) / (T(2l - 3) * T(l - m) * T(l + m)))
+        P[l+1] = a * x * P[l] - b * P[l-1]
+    end
+    return P
+end
+
 """
     Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
 

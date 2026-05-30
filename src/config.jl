@@ -1188,15 +1188,29 @@ function prepare_plm_tables!(cfg::SHTConfig)
     NP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
     NdP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
     Nlm = cfg.Nlm  # hoist field read out of the m/i/l loops (cfg is mutable, so the compiler can't lift it)
-    @inbounds for m in 0:mmax
+
+    # NP: build from the bounded normalized recurrence P̄ = Nlm·rawP so that
+    # no intermediate unnormalized values are formed — avoids overflow at lmax ≥ 151.
+    g = Vector{Float64}(undef, lmax + 1)
+    for m in 0:mmax
         NP = NP_tables[m+1]
+        for i in 1:nlat
+            Plm_norm_row!(g, cfg.x[i], lmax, m)
+            @inbounds for l in m:lmax
+                NP[l+1, i] = g[l+1]   # P̄ already equals Nlm·rawP; do NOT multiply by Nlm again
+            end
+        end
+    end
+
+    # NdP: build from the raw-P derivative table fused with Nlm (unchanged; used
+    # only by vector transforms fixed in Tasks 4–5; overflows at high lmax but only
+    # produces non-finite values silently for now).
+    @inbounds for m in 0:mmax
         NdP = NdP_tables[m+1]
-        tbl = tables[m+1]
         dtbl = dtables[m+1]
         for i in 1:nlat
             for l in m:lmax
                 Nlm_lm = Nlm[l+1, m+1]
-                NP[l+1, i] = Nlm_lm * tbl[l+1, i]
                 NdP[l+1, i] = Nlm_lm * dtbl[l+1, i]
             end
         end

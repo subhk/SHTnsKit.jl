@@ -579,12 +579,23 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     θ_is_distributed = (nθ_local < nlat)
 
     if θ_is_distributed
-        if use_packed_storage
-            # Reduce packed coefficients directly (already normalized during accumulation)
-            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
-        else
-            # Use efficient reduction for large spectral arrays
-            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
+        # Reduce only across ranks that share this rank's φ-segment (they differ
+        # in θ), so a 2D (θ×φ) pencil sums each θ-slab exactly once. φ-partners
+        # that hold the same θ-slab carry identical post-gather contributions, so
+        # reducing over the full comm would overcount by the φ-partition factor.
+        # For a 1D θ-only split φ is complete on every rank, so first(φ_globals)
+        # is identical everywhere → this column subcomm equals the full comm and
+        # the previous behaviour is preserved exactly.
+        φ_globals_red = collect(globalindices(fθφ, 2))
+        reduce_comm = MPI.Comm_split(comm, Int(first(φ_globals_red)), MPI.Comm_rank(comm))
+        try
+            # Reduce packed coefficients (already normalized during accumulation)
+            # or dense partial sums; both reduce over the θ-column subcomm.
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, reduce_comm)
+        finally
+            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
+        end
+        if !use_packed_storage
             # Apply normalization to dense matrix with SIMD optimization
             # Each (l,m) element is independent, so ivdep is safe
             Nlm = cfg.Nlm; cphi = cfg.cphi  # hoist field reads out of the normalization loop (cfg is mutable)
@@ -930,9 +941,18 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     θ_is_distributed = (nθ_local < nlat)
 
     if θ_is_distributed
-        # Use efficient reduction for better scaling on large process counts
-        SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, comm)
-        SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, comm)
+        # Reduce over the θ-column subcomm (ranks sharing this φ-segment) so a 2D
+        # (θ×φ) pencil sums each θ-slab once instead of once per φ-partner. For a
+        # 1D θ-only split this column subcomm equals the full comm (see the scalar
+        # dist_analysis_standard reduction for the detailed rationale).
+        φ_globals_red = collect(globalindices(Vtθφ, 2))
+        reduce_comm = MPI.Comm_split(comm, Int(first(φ_globals_red)), MPI.Comm_rank(comm))
+        try
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, reduce_comm)
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, reduce_comm)
+        finally
+            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
+        end
     end
 
     # Convert to cfg's requested normalization if needed
@@ -1688,7 +1708,16 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # each rank's local_contrib is already the complete answer)
     θ_is_distributed = (nθ_local < cfg.nlat)
     if θ_is_distributed
-        MPI.Allreduce!(local_contrib, +, comm)
+        # Reduce over the θ-column subcomm (ranks sharing this φ-segment) so a 2D
+        # (θ×φ) spatial pencil sums each θ-slab once, not once per φ-partner. For
+        # φ-complete inputs every rank has the same color → subcomm == full comm.
+        φ_globals_red = collect(globalindices(fθφ, 2))
+        reduce_comm = MPI.Comm_split(comm, Int(first(φ_globals_red)), MPI.Comm_rank(comm))
+        try
+            MPI.Allreduce!(local_contrib, +, reduce_comm)
+        finally
+            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
+        end
     end
 
     # Create output distributed array and extract local portion
@@ -2453,8 +2482,17 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     θ_is_distributed = (nθ_local < nlat)
 
     if θ_is_distributed
-        # Reduce contributions across all ranks
-        MPI.Allreduce!(local_contrib, +, comm)
+        # Reduce over the θ-column subcomm (ranks sharing this φ-segment) so a
+        # 2D (θ×φ) spatial pencil sums each θ-slab once rather than once per
+        # φ-partner. For φ-complete inputs the color is identical on every rank,
+        # so this subcomm equals plan.comm and behaviour is unchanged.
+        φ_globals_red = collect(globalindices(fθφ, 2))
+        reduce_comm = MPI.Comm_split(comm, Int(first(φ_globals_red)), MPI.Comm_rank(comm))
+        try
+            MPI.Allreduce!(local_contrib, +, reduce_comm)
+        finally
+            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
+        end
     end
 
     # Apply normalization

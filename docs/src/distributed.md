@@ -28,9 +28,9 @@ nlat = lmax + 2
 nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
-# Create distributed array
+# Create distributed array — decompose LATITUDE (θ), the scalable axis.
 comm = MPI.COMM_WORLD
-pen = Pencil((nlat, nlon), comm)
+pen = SHTnsKit.create_spatial_pencil(cfg; comm)   # = Pencil((nlat, nlon), (1,), comm)
 fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
 # Fill with test data (Y_2^0 pattern)
@@ -57,6 +57,20 @@ end
 destroy_config(cfg)
 MPI.Finalize()
 ```
+
+!!! warning "Decompose latitude (θ), not longitude (φ)"
+    PencilArrays splits the **last** dimension by default, so the bare
+    `Pencil((nlat, nlon), comm)` decomposes **longitude (φ)** — the
+    non-scaling axis. The φ-distributed analysis path `Allgatherv!`s the full
+    longitude onto every rank and then replicates the Legendre transform, so it
+    does **not** strong-scale (it usually gets *slower* as you add ranks).
+
+    Decompose **latitude (θ)** instead. Use `SHTnsKit.create_spatial_pencil(cfg; comm)`
+    (or `create_spatial_array(cfg; comm)`), which builds `Pencil((nlat, nlon), (1,), comm)`.
+    Each rank then integrates Legendre over its local θ band and only a small
+    `(lmax+1, mmax+1)` spectral `Allreduce!` remains — this scales near-linearly.
+    Measured (lmax=511): analysis 1.93×@2 ranks, 3.31×@4; synthesis 1.94×/3.45×.
+    Passing a φ-distributed array to `dist_analysis` emits a one-time warning.
 
 ---
 
@@ -133,7 +147,7 @@ comm = MPI.COMM_WORLD
 rank = MPI.Comm_rank(comm)
 
 # Create pencil decomposition
-pen = Pencil((nlat, nlon), comm)
+pen = Pencil((nlat, nlon), (1,), comm)
 
 # Each rank owns a portion of the data
 local_size = PencilArrays.size_local(pen)
@@ -173,7 +187,7 @@ nlat, nlon = lmax + 2, 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create distributed vector field components
-pen = Pencil((nlat, nlon), comm)
+pen = Pencil((nlat, nlon), (1,), comm)
 Vθ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 Vφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 

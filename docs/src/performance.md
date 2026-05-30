@@ -86,7 +86,7 @@ nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create distributed array
-pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+pen = Pencil((nlat, nlon), (1,), MPI.COMM_WORLD)
 fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
 # Fill with test data

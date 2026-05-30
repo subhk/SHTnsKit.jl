@@ -313,6 +313,7 @@ export dist_spatial_divergence, dist_spatial_vorticity                  # Distri
 export dist_scalar_laplacian, dist_scalar_laplacian!                    # Distributed scalar Laplacian
 export dist_SH_Zrotate_packed, dist_SH_Yrotate_packed, dist_SH_Yrotate90_packed, dist_SH_Xrotate90_packed
 export create_spectral_pencil, create_spectral_array                        # Distributed spectral array creation
+export create_spatial_pencil, create_spatial_array                          # Distributed spatial (θ-decomposed) array creation
 export matrix_to_spectral_pencil, spectral_pencil_to_matrix                 # Distributed spectral conversion
 
 # ===== EXTENSION FALLBACK FUNCTIONS =====
@@ -464,6 +465,8 @@ dist_SH_mul_mx!(::SHTConfig, ::Any, ::Any, ::Any) = error("Parallel extension no
 # Extensions with typed (cfg::SHTConfig) signature will take precedence in dispatch.
 create_spectral_pencil(cfg; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
 create_spectral_array(cfg; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+create_spatial_pencil(cfg; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+create_spatial_array(cfg; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
 matrix_to_spectral_pencil(cfg, Alm; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
 spectral_pencil_to_matrix(cfg, Alm_p; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
 

@@ -188,7 +188,17 @@ function analysis(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,
             rfft_phi!(fft_scratch, f)
         end
     else
-        Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
+        # Use the in-place, cached-plan FFT for both paths. The no-scratch path
+        # allocates a single complex buffer instead of the two temporaries the
+        # old `fft_phi(_as_complex(f))` produced (a `complex.(f)` copy plus an
+        # out-of-place `fft` that re-planned each call). eltype is preserved so
+        # AD element types still take fft_phi!'s DFT fallback.
+        if fft_scratch === nothing
+            CT = complex(float(eltype(f)))
+            Fph = fft_phi!(Matrix{CT}(undef, nlat, nlon), f)
+        else
+            Fph = fft_phi!(fft_scratch, f)
+        end
     end
     CT = eltype(Fph)
     alm = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
@@ -227,7 +237,17 @@ function _analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix,
             rfft_phi!(fft_scratch, f)
         end
     else
-        Fph = fft_scratch === nothing ? fft_phi(_as_complex(f)) : fft_phi!(fft_scratch, f)
+        # Use the in-place, cached-plan FFT for both paths. The no-scratch path
+        # allocates a single complex buffer instead of the two temporaries the
+        # old `fft_phi(_as_complex(f))` produced (a `complex.(f)` copy plus an
+        # out-of-place `fft` that re-planned each call). eltype is preserved so
+        # AD element types still take fft_phi!'s DFT fallback.
+        if fft_scratch === nothing
+            CT = complex(float(eltype(f)))
+            Fph = fft_phi!(Matrix{CT}(undef, nlat, nlon), f)
+        else
+            Fph = fft_phi!(fft_scratch, f)
+        end
     end
     _analysis_scalar_mloop!(alm_out, cfg, Fph)
     return alm_out

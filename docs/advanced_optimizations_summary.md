@@ -58,7 +58,7 @@ nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create distributed array using PencilArrays
-pen = Pencil((nlat, nlon), comm)
+pen = Pencil((nlat, nlon), (1,), comm)
 fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
 # Fill with test data

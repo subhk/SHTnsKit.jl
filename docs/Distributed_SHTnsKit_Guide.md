@@ -76,7 +76,7 @@ nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Spatial grid on a Pencil communicator
-pen = Pencil((nlat, nlon), MPI.COMM_WORLD)
+pen = Pencil((nlat, nlon), (1,), MPI.COMM_WORLD)
 fθφ_local = zeros(Float64, PencilArrays.size_local(pen)...)
 fθφ = PencilArray(pen, fθφ_local)
 

@@ -26,6 +26,39 @@ function SHTnsKit.create_spectral_array(cfg::SHTnsKit.SHTConfig; comm=MPI.COMM_W
 end
 
 """
+    create_spatial_pencil(cfg; comm=MPI.COMM_WORLD)
+
+Create a Pencil for distributed spatial data `(nlat, nlon)` decomposed along
+**latitude (θ, dimension 1)** — the scaling-friendly axis for SHTnsKit.
+
+Prefer this over the bare `Pencil((nlat, nlon), comm)`: PencilArrays splits the
+*last* dimension by default, which decomposes longitude (φ). The φ-distributed
+analysis path `Allgatherv!`s the full longitude onto every rank and then
+replicates the Legendre transform, so it does NOT scale (it usually gets slower
+with more ranks). Latitude decomposition instead divides the Legendre work per
+rank and only reduces the small `(lmax+1, mmax+1)` spectral matrix, which
+strong-scales.
+"""
+function SHTnsKit.create_spatial_pencil(cfg::SHTnsKit.SHTConfig; comm=MPI.COMM_WORLD)
+    # Decompose dimension 1 (θ / latitude). The (1,) tuple selects which global
+    # dimension to split; omitting it would default to the last dim (φ).
+    return Pencil((cfg.nlat, cfg.nlon), (1,), comm)
+end
+
+"""
+    create_spatial_array(cfg; comm=MPI.COMM_WORLD)
+
+Create a zero-initialized distributed `PencilArray{Float64}` for spatial data,
+decomposed along latitude (θ). See [`create_spatial_pencil`](@ref).
+"""
+function SHTnsKit.create_spatial_array(cfg::SHTnsKit.SHTConfig; comm=MPI.COMM_WORLD)
+    pen = SHTnsKit.create_spatial_pencil(cfg; comm)
+    arr = PencilArray{Float64}(undef, pen)
+    fill!(parent(arr), 0.0)
+    return arr
+end
+
+"""
     matrix_to_spectral_pencil(cfg, Alm::AbstractMatrix; comm=MPI.COMM_WORLD)
 
 Convert a dense spectral coefficient matrix to a distributed PencilArray.

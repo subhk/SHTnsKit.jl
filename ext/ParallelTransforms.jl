@@ -428,6 +428,16 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     local_data = parent(fθφ)
     nlat_local, nlon_local = size(local_data)
 
+    # Anti-scaling guard: a φ(longitude)-distributed input forces an Allgatherv
+    # of the full longitude onto every rank and then replicates the Legendre
+    # transform (θ is not split), so adding ranks adds communication without
+    # dividing work. Latitude decomposition is the scalable layout.
+    if nlon_local != nlon && MPI.Comm_rank(comm) == 0
+        @warn """dist_analysis received a φ(longitude)-distributed PencilArray; this path \
+does NOT scale (it Allgathers full longitude on every rank and replicates the transform). \
+Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Pencil((nlat,nlon),(1,),comm)`.""" maxlog=1
+    end
+
     # Get global index ranges for this process's local data
     # globalindices(fθφ, dim) returns the global indices this rank owns for dimension dim
     # Example: rank 0 might own θ indices 1:48, rank 1 owns 49:96

@@ -143,7 +143,7 @@ MPI.Init()
 cfg = create_gauss_config(32, 48; nlon=96)
 
 # Create Pencil and PencilArray
-pen = Pencil((cfg.nlat, cfg.nlon), MPI.COMM_WORLD)
+pen = Pencil((cfg.nlat, cfg.nlon), (1,), MPI.COMM_WORLD)
 fθφ_local = zeros(Float64, PencilArrays.size_local(pen)...)
 fθφ = PencilArray(pen, fθφ_local)
 

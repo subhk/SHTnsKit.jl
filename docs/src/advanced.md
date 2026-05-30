@@ -231,7 +231,7 @@ nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create distributed array using PencilArrays
-pen = Pencil((nlat, nlon), comm)
+pen = Pencil((nlat, nlon), (1,), comm)
 fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
 # Fill local portion with test pattern
@@ -316,7 +316,7 @@ nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create distributed array
-pen = Pencil((nlat, nlon), comm)
+pen = Pencil((nlat, nlon), (1,), comm)
 fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 
 # Fill with Y_2^0 pattern
@@ -389,7 +389,7 @@ nlon = 2*lmax + 1
 cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
 # Create distributed velocity field components
-pen = Pencil((nlat, nlon), comm)
+pen = Pencil((nlat, nlon), (1,), comm)
 Vtθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 Vpθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
 

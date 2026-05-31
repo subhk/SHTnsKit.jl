@@ -296,19 +296,18 @@ function _adjoint_analysis_sphtor(cfg::SHTConfig, Slm̄::AbstractMatrix, Tlm̄::
     P = Vector{Float64}(undef, lmax + 1)
     dPdtheta = Vector{Float64}(undef, lmax + 1)
     P_over_sinth = Vector{Float64}(undef, lmax + 1)
+    Pbuf = Vector{Float64}(undef, lmax + 2)   # scratch for extended P̄ row (avoids per-call alloc)
     φadj = 2π
 
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     for m in 0:mmax
         col = m + 1
         for (ii, iglob) in pairs(θ_globals)
-            Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[iglob], lmax, m)
+            Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[iglob], lmax, m, Pbuf)
             wi = cfg.w[iglob]
             sθ = zero(ComplexF64); sφ = zero(ComplexF64)
             @inbounds for l in max(1, m):lmax
-                N = Nlm[l+1, col]
-                dθY = N * dPdtheta[l+1]
-                Y_over_sθ = N * P_over_sinth[l+1]
+                dθY = dPdtheta[l+1]          # already orthonormal-normalized
+                Y_over_sθ = P_over_sinth[l+1]
                 ll1 = l * (l + 1)
                 term = 1.0im * m * Y_over_sθ
                 S_bar = Slm̄[l+1, col]; T_bar = Tlm̄[l+1, col]
@@ -392,13 +391,14 @@ end
     thread_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
     thread_dP = _ensure_otf_scratch!(cfg._otf_scratch_dP, lmax)
     thread_Ps = _ensure_otf_scratch!(cfg._otf_scratch_Ps, lmax)
+    thread_Pb = _ensure_otf_scratch!(cfg._otf_scratch_Pb, lmax + 1)  # lmax+2 for extended P̄ row
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
         tid = Threads.threadid()
-        P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]
+        P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]; Pb = thread_Pb[tid]
         @inbounds for i in 1:nlat
-            g_theta, g_phi = _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm, P, dP, Ps, i, col, m, ltr_eff)
+            g_theta, g_phi = _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm, P, dP, Ps, Pb, i, col, m, ltr_eff)
             Ftheta[i, col] = inv_scale_phi * g_theta
             Fphi[i, col] = inv_scale_phi * g_phi
         end
@@ -469,6 +469,7 @@ end
     thread_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
     thread_dP = _ensure_otf_scratch!(cfg._otf_scratch_dP, lmax)
     thread_Ps = _ensure_otf_scratch!(cfg._otf_scratch_Ps, lmax)
+    thread_Pb = _ensure_otf_scratch!(cfg._otf_scratch_Pb, lmax + 1)  # lmax+2 for extended P̄ row
     thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
     @threads :static for idx in 1:length(m_order)
@@ -477,7 +478,7 @@ end
         tid = Threads.threadid()
         Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
         Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
-        P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]
+        P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]; Pb = thread_Pb[tid]
         for i in 1:nlat
             wi = w[i]
             Ftheta_i = Fthetam[i, col]; Fphi_i = Fphim[i, col]
@@ -488,7 +489,7 @@ end
                 end
             end
             _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
-                P, dP, Ps, i, col, m, ltr_eff, scale_phi)
+                P, dP, Ps, Pb, i, col, m, ltr_eff, scale_phi)
         end
         for l in max(1, m):ltr_eff
             Slm[l+1, col] = Sacc[l+1]; Tlm[l+1, col] = Tacc[l+1]
@@ -804,8 +805,8 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
     P = Vector{Float64}(undef, ltr + 1)
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
+    Pbuf = Vector{Float64}(undef, ltr + 2)   # scratch for extended P̄ row (avoids per-call alloc)
     scaleφ = cfg.cphi
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     # Integrate using Legendre polynomials and derivatives (pole-safe)
     for i in 1:nlat
@@ -821,14 +822,12 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
             Fφ = Fφ / sθ
         end
 
-        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
-        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im)
+        # Single call computes P̄, dP̄/dθ, and P̄/sinθ (bounded normalized; no overflow)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im, Pbuf)
 
         @inbounds for l in max(1, im):ltr
-            N = Nlm[l+1, im+1]
-            dθY = N * dPdtheta[l+1]
-            Y = N * P[l+1]
-            Y_over_sθ = N * P_over_sinth[l+1]
+            dθY = dPdtheta[l+1]          # already orthonormal-normalized
+            Y_over_sθ = P_over_sinth[l+1]
             ll1 = l * (l + 1)
             coeff = wi * scaleφ / ll1
             term = 1.0im * im * Y_over_sθ
@@ -883,23 +882,21 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     P = Vector{Float64}(undef, ltr + 1)
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
-    # Synthesize vector components for this mode using pole-safe functions
+    Pbuf = Vector{Float64}(undef, ltr + 2)   # scratch for extended P̄ row (avoids per-call alloc)
+    # Synthesize vector components for this mode using bounded normalized functions
     for i in 1:nlat
         x = cfg.x[i]
         sθ = sqrt(max(0.0, 1 - x*x))
 
-        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
-        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im)
+        # Single call computes P̄, dP̄/dθ, and P̄/sinθ (bounded normalized; no overflow)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im, Pbuf)
 
         gθ = zero(ComplexF64)
         gφ = zero(ComplexF64)
 
         @inbounds for l in max(1, im):ltr
-            N = Nlm[l+1, im+1]
-            dθY = N * dPdtheta[l+1]
-            Y = N * P[l+1]
-            Y_over_sθ = N * P_over_sinth[l+1]
+            dθY = dPdtheta[l+1]          # already orthonormal-normalized
+            Y_over_sθ = P_over_sinth[l+1]
             S_coef = Sl_int[l-im+1]
             T_coef = Tl_int[l-im+1]
 

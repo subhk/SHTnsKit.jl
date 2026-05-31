@@ -294,7 +294,7 @@ function Plm_norm_and_dPdtheta_row!(P::AbstractVector{T}, dPdtheta::AbstractVect
 end
 
 """
-    Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
+    Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m[, Pbuf])
 
 Combined computation of P̄_l^m(x), dP̄_l^m/dθ, and P̄_l^m/sin(θ) in a single call,
 using the bounded orthonormal normalized convention (no overflow at high lmax).
@@ -302,6 +302,9 @@ using the bounded orthonormal normalized convention (no overflow at high lmax).
 - `P`           ← P̄_l^m   (same as `Plm_norm_row!`)
 - `dPdtheta`    ← dP̄_l^m/dθ  (same as `Plm_norm_and_dPdtheta_row!`)
 - `P_over_sinth`← P̄_l^m / sin(θ)
+- `Pbuf`        — optional caller-supplied scratch of length ≥ lmax+2 (avoids heap
+                  allocation in hot loops; the allocating 6-arg form falls back when
+                  omitted).
 
 All three quantities are finite for all l, m at interior points. Pole limits mirror
 those in `Plm_dPdtheta_over_sinth_row!` but scaled to the normalized convention.
@@ -309,6 +312,16 @@ those in `Plm_dPdtheta_over_sinth_row!` but scaled to the normalized convention.
 function Plm_norm_dPdtheta_over_sinth_row!(P::AbstractVector{T}, dPdtheta::AbstractVector{T},
                                             P_over_sinth::AbstractVector{T},
                                             x::T, lmax::Int, m::Int) where {T<:Real}
+    # Allocating fallback: provide a local Pbuf and delegate.
+    Pbuf = zeros(T, lmax + 2)
+    return Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)
+end
+
+function Plm_norm_dPdtheta_over_sinth_row!(P::AbstractVector{T}, dPdtheta::AbstractVector{T},
+                                            P_over_sinth::AbstractVector{T},
+                                            x::T, lmax::Int, m::Int,
+                                            Pbuf::AbstractVector{T}) where {T<:Real}
+    length(Pbuf) >= lmax + 2 || throw(ArgumentError("Pbuf must have length ≥ lmax+2"))
     Plm_norm_row!(P, x, lmax, m)
 
     @inbounds begin
@@ -338,7 +351,6 @@ function Plm_norm_dPdtheta_over_sinth_row!(P::AbstractVector{T}, dPdtheta::Abstr
         end
 
         # Standard case: compute P̄ to lmax+1 for dθ recurrence
-        Pbuf = zeros(T, lmax + 2)
         Plm_norm_row!(Pbuf, x, lmax + 1, m)
 
         inv_sinth = one(T) / sinth

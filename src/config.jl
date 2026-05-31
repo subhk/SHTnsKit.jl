@@ -163,6 +163,7 @@ Base.@kwdef mutable struct SHTScratch
     otf_P::Vector{Vector{Float64}} = Vector{Float64}[]
     otf_dP::Vector{Vector{Float64}} = Vector{Float64}[]
     otf_Ps::Vector{Vector{Float64}} = Vector{Float64}[]
+    otf_Pb::Vector{Vector{Float64}} = Vector{Float64}[]   # extended P̄ buffer (length lmax+2) for norm dθ kernels
     m_order::Vector{Int} = Int[]
 end
 
@@ -216,7 +217,7 @@ end
               compute_device=:cpu, device_preference=[:cpu],
               use_plm_tables=false, plm_tables=[], dplm_tables=[],
               NP_tables=[], NdP_tables=[], norm_scale_matrix=Matrix{Float64}(undef,0,0),
-              _otf_scratch_P=[], _otf_scratch_dP=[], _otf_scratch_Ps=[], _m_order=[],
+              _otf_scratch_P=[], _otf_scratch_dP=[], _otf_scratch_Ps=[], _otf_scratch_Pb=[], _m_order=[],
               howmany=1, spec_dist=0, south_pole_first=false,
               allow_padding=false, nlat_padded=0, spat_dist=0) -> SHTConfig
 
@@ -245,6 +246,7 @@ function SHTConfig(;
     _otf_scratch_P::AbstractVector = Vector{Float64}[],
     _otf_scratch_dP::AbstractVector = Vector{Float64}[],
     _otf_scratch_Ps::AbstractVector = Vector{Float64}[],
+    _otf_scratch_Pb::AbstractVector = Vector{Float64}[],
     _m_order::AbstractVector{<:Integer} = Int[],
     howmany::Integer = 1,
     spec_dist::Integer = 0,
@@ -272,6 +274,7 @@ function SHTConfig(;
         otf_P=convert(Vector{Vector{Float64}}, collect(_otf_scratch_P)),
         otf_dP=convert(Vector{Vector{Float64}}, collect(_otf_scratch_dP)),
         otf_Ps=convert(Vector{Vector{Float64}}, collect(_otf_scratch_Ps)),
+        otf_Pb=convert(Vector{Vector{Float64}}, collect(_otf_scratch_Pb)),
         m_order=collect(Int, _m_order))
     return SHTConfig(Int(lmax), Int(mmax), Int(mres), Int(nlat), Int(nlon), grid_type,
                      Int(nlm), collect(Int, li), collect(Int, mi), Int(nspat),
@@ -321,6 +324,8 @@ end
         return getfield(cfg, :_scratch).otf_dP
     elseif name === :_otf_scratch_Ps
         return getfield(cfg, :_scratch).otf_Ps
+    elseif name === :_otf_scratch_Pb
+        return getfield(cfg, :_scratch).otf_Pb
     elseif name === :_m_order
         return getfield(cfg, :_scratch).m_order
     # ----- sub-struct direct access (new API) -----
@@ -371,6 +376,8 @@ function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
         return setfield!(getfield(cfg, :_scratch), :otf_dP, val)
     elseif name === :_otf_scratch_Ps
         return setfield!(getfield(cfg, :_scratch), :otf_Ps, val)
+    elseif name === :_otf_scratch_Pb
+        return setfield!(getfield(cfg, :_scratch), :otf_Pb, val)
     elseif name === :_m_order
         return setfield!(getfield(cfg, :_scratch), :m_order, val)
     else
@@ -383,7 +390,7 @@ function Base.propertynames(::SHTConfig, private::Bool=false)
             :θ, :φ, :x, :w, :st, :cphi,
             :Nlm, :norm, :cs_phase, :real_norm, :robert_form, :norm_scale_matrix,
             :use_plm_tables, :plm_tables, :dplm_tables, :NP_tables, :NdP_tables,
-            :_otf_scratch_P, :_otf_scratch_dP, :_otf_scratch_Ps, :_m_order,
+            :_otf_scratch_P, :_otf_scratch_dP, :_otf_scratch_Ps, :_otf_scratch_Pb, :_m_order,
             :grid, :normalization, :tables, :scratch,
             :wlat, :ct, :sintheta)
 end
@@ -440,6 +447,7 @@ norm-scale matrix, balanced m ordering.
 """
 @inline scratch_view(cfg::SHTConfig) = (
     otf_P = cfg._otf_scratch_P, otf_dP = cfg._otf_scratch_dP, otf_Ps = cfg._otf_scratch_Ps,
+    otf_Pb = cfg._otf_scratch_Pb,
     norm_scale = cfg.norm_scale_matrix, m_order = cfg._m_order,
 )
 
@@ -1202,16 +1210,18 @@ function prepare_plm_tables!(cfg::SHTConfig)
         end
     end
 
-    # NdP: build from the raw-P derivative table fused with Nlm (unchanged; used
-    # only by vector transforms fixed in Tasks 4–5; overflows at high lmax but only
-    # produces non-finite values silently for now).
-    @inbounds for m in 0:mmax
+    # NdP: build from the bounded normalized θ-derivative so no overflow at high lmax.
+    # NdP[l+1, i] = -(dP̄_l^m/dθ) / sinθ_i, matching the table kernel's usage:
+    #   dtheta_Y = -s_theta * NdP[l+1, i]  →  -sinθ * (-(dP̄/dθ)/sinθ) = dP̄/dθ  ✓
+    # Gauss nodes never hit poles, so s_i > 0 for all i.
+    dg = Vector{Float64}(undef, lmax + 1)   # θ-derivative scratch (reuse P-norm scratch g from above)
+    for m in 0:mmax
         NdP = NdP_tables[m+1]
-        dtbl = dtables[m+1]
         for i in 1:nlat
-            for l in m:lmax
-                Nlm_lm = Nlm[l+1, m+1]
-                NdP[l+1, i] = Nlm_lm * dtbl[l+1, i]
+            s_i = sqrt(max(0.0, 1.0 - cfg.x[i]^2))
+            Plm_norm_and_dPdtheta_row!(g, dg, cfg.x[i], lmax, m)
+            @inbounds for l in m:lmax
+                NdP[l+1, i] = -dg[l+1] / s_i
             end
         end
     end

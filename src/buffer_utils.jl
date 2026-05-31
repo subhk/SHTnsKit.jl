@@ -86,6 +86,7 @@ function warmup!(cfg::SHTConfig)
     _ensure_otf_scratch!(cfg._otf_scratch_P, cfg.lmax)
     _ensure_otf_scratch!(cfg._otf_scratch_dP, cfg.lmax)
     _ensure_otf_scratch!(cfg._otf_scratch_Ps, cfg.lmax)
+    _ensure_otf_scratch!(cfg._otf_scratch_Pb, cfg.lmax + 1)  # lmax+2 entries for extended P̄ row
     _ensure_norm_scale_matrix!(cfg)
     cached_m_order(cfg)
     return cfg

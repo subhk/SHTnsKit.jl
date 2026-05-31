@@ -146,16 +146,15 @@ end
     return g_theta, g_phi
 end
 
-"""Sphtor synthesis kernel computing Legendre on the fly. Returns (g_theta, g_phi)."""
-@inline function _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm, P, dPdtheta, P_over_sinth, i, col, m, ltr)
-    Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[i], cfg.lmax, m)
+"""Sphtor synthesis kernel computing Legendre on the fly. Returns (g_theta, g_phi).
+`Pb` is a caller-supplied scratch of length ≥ lmax+2 used by the normalized dθ recurrence."""
+@inline function _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm, P, dPdtheta, P_over_sinth, Pb, i, col, m, ltr)
+    Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[i], cfg.lmax, m, Pb)
     g_theta = zero(ComplexF64)
     g_phi = zero(ComplexF64)
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in max(1, m):ltr
-        N = Nlm[l+1, col]
-        dtheta_Y = N * dPdtheta[l+1]
-        Y_over_s = N * P_over_sinth[l+1]
+        dtheta_Y = dPdtheta[l+1]      # already orthonormal-normalized
+        Y_over_s = P_over_sinth[l+1]
         Sl = Slm[l+1, col]; Tl = Tlm[l+1, col]
         g_theta += dtheta_Y * Sl - 1.0im * m * Y_over_s * Tl
         g_phi += 1.0im * m * Y_over_s * Sl + dtheta_Y * Tl
@@ -195,14 +194,13 @@ end
     end
 end
 
-"""Sphtor analysis kernel computing Legendre on the fly. Accumulates into Sacc, Tacc."""
-@inline function _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi, P, dPdtheta, P_over_sinth, i, col, m, ltr, scale_phi)
-    Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[i], cfg.lmax, m)
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
+"""Sphtor analysis kernel computing Legendre on the fly. Accumulates into Sacc, Tacc.
+`Pb` is a caller-supplied scratch of length ≥ lmax+2 used by the normalized dθ recurrence."""
+@inline function _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi, P, dPdtheta, P_over_sinth, Pb, i, col, m, ltr, scale_phi)
+    Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[i], cfg.lmax, m, Pb)
     @inbounds for l in max(1, m):ltr
-        N = Nlm[l+1, col]
-        dtheta_Y = N * dPdtheta[l+1]
-        Y_over_s = N * P_over_sinth[l+1]
+        dtheta_Y = dPdtheta[l+1]      # already orthonormal-normalized
+        Y_over_s = P_over_sinth[l+1]
         coeff = wi * scale_phi / (l * (l + 1))
         term = 1.0im * m * Y_over_s
         Sacc[l+1] += coeff * (Ftheta_i * dtheta_Y + conj(term) * Fphi_i)

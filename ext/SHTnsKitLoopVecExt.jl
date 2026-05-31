@@ -29,7 +29,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     scaleφ = cfg.cphi
     # Bind cfg fields to locals so the @tturbo loops below operate on plain arrays.
     # LoopVectorization can't analyze property access (cfg.Nlm) inside @tturbo, and cfg is mutable.
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm
+    xv = cfg.x; wv = cfg.w
     # Adaptive threading: use nested parallelism for better load balancing
     n_threads = Threads.nthreads()
     if mmax + 1 < n_threads ÷ 2 && nlat > 32
@@ -41,8 +41,9 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
             for t in 1:n_tid
                 fill!(thread_alm[t], zero(ComplexF64))
             end
-            if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-                tbl = cfg.plm_tables[m + 1]
+            if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+                # NP_tables[col][l+1, i] = P̄_l^m already; no extra Nlm multiply
+                tbl = cfg.NP_tables[m + 1]
                 @threads for i in 1:nlat
                     tid = Threads.threadid()
                     local_acc = thread_alm[tid]
@@ -57,7 +58,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                     tid = Threads.threadid()
                     local_acc = thread_alm[tid]
                     thread_P = Vector{Float64}(undef, lmax + 1)
-                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
+                    SHTnsKit.Plm_norm_row!(thread_P, xv[i], lmax, m)
                     Fi = Fφ[i, col]
                     wi = wv[i]
                     @inbounds for l in m:lmax
@@ -65,21 +66,22 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                     end
                 end
             end
-            # Merge thread-local accumulators and apply normalization
+            # Merge thread-local accumulators and apply φ scaling (Nlm already in P̄)
             @inbounds for l in m:lmax
                 acc = zero(ComplexF64)
                 for t in 1:n_tid
                     acc += thread_alm[t][l + 1]
                 end
-                alm[l + 1, col] = acc * Nlm[l + 1, col] * scaleφ
+                alm[l + 1, col] = acc * scaleφ
             end
         end
     else
         # Standard m-parallel approach with dynamic scheduling
         @threads :dynamic for m in 0:mmax
             col = m + 1
-            if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-                tbl = cfg.plm_tables[m + 1]
+            if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+                # NP_tables[col][l+1, i] = P̄_l^m already; no extra Nlm multiply
+                tbl = cfg.NP_tables[m + 1]
                 for i in 1:nlat
                     Fi = Fφ[i, col]
                     wi = wv[i]
@@ -90,7 +92,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
             else
                 thread_P = Vector{Float64}(undef, lmax + 1)
                 for i in 1:nlat
-                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
+                    SHTnsKit.Plm_norm_row!(thread_P, xv[i], lmax, m)
                     Fi = Fφ[i, col]
                     wi = wv[i]
                     @tturbo warn_check_args=false for l in m:lmax
@@ -98,8 +100,9 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                     end
                 end
             end
+            # Apply φ scaling only (Nlm already baked into P̄ from Plm_norm_row!)
             @tturbo warn_check_args=false for l in m:lmax
-                alm[l + 1, col] *= Nlm[l + 1, col] * scaleφ
+                alm[l + 1, col] *= scaleφ
             end
         end
     end
@@ -132,7 +135,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
     # Bind cfg fields to locals so the @tturbo loops below operate on plain arrays.
     # LoopVectorization can't analyze property access (cfg.Nlm) inside @tturbo, and cfg is mutable.
-    xv = cfg.x; Nlm = cfg.Nlm
+    xv = cfg.x
 
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         alm_int = similar(alm)
@@ -146,13 +149,14 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
         # Few m modes: parallelize over latitude points instead
         for m in 0:mmax
             col = m + 1
-            if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-                tbl = cfg.plm_tables[m + 1]
+            if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+                # NP_tables[col][l+1, i] = P̄_l^m already; no extra Nlm multiply
+                tbl = cfg.NP_tables[m + 1]
                 @threads for i in 1:nlat
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = Nlm[l + 1, col] * tbl[l + 1, i]
+                        c = tbl[l + 1, i]  # P̄ already normalized; no extra Nlm
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)
@@ -162,11 +166,11 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
             else
                 @threads for i in 1:nlat
                     thread_P = Vector{Float64}(undef, lmax + 1)
-                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
+                    SHTnsKit.Plm_norm_row!(thread_P, xv[i], lmax, m)
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = Nlm[l + 1, col] * thread_P[l + 1]
+                        c = thread_P[l + 1]  # P̄ already normalized; no extra Nlm
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)
@@ -189,13 +193,14 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
         @threads :dynamic for m in 0:mmax
             col = m + 1
             thread_G = Vector{CT}(undef, nlat)
-            if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
-                tbl = cfg.plm_tables[m + 1]
+            if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
+                # NP_tables[col][l+1, i] = P̄_l^m already; no extra Nlm multiply
+                tbl = cfg.NP_tables[m + 1]
                 for i in 1:nlat
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = Nlm[l + 1, col] * tbl[l + 1, i]
+                        c = tbl[l + 1, i]  # P̄ already normalized; no extra Nlm
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)
@@ -205,11 +210,11 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
             else
                 thread_P = Vector{Float64}(undef, lmax + 1)
                 for i in 1:nlat
-                    SHTnsKit.Plm_row!(thread_P, xv[i], lmax, m)
+                    SHTnsKit.Plm_norm_row!(thread_P, xv[i], lmax, m)
                     g_re = 0.0
                     g_im = 0.0
                     @tturbo warn_check_args=false for l in m:lmax
-                        c = Nlm[l + 1, col] * thread_P[l + 1]
+                        c = thread_P[l + 1]  # P̄ already normalized; no extra Nlm
                         a = alm[l + 1, col]
                         g_re += c * real(a)
                         g_im += c * imag(a)

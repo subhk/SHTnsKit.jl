@@ -294,14 +294,15 @@ end
     _analysis_loop_no_tables!(temp_dense, P, Fθm, weights_cache, x_cache, θ_globals, lmax, mmax)
 
 Inner loop for spherical harmonic analysis when plm_tables are NOT available.
-Computes Legendre polynomials on-demand using Plm_row!.
+Computes normalized Legendre polynomials on-demand using Plm_norm_row!.
+P already contains the orthonormal value P̄_l^m = Nlm·P_l^m (no separate Nlm multiply needed).
 
 This is a "function barrier" - a separate function with explicit type signatures
 that allows Julia to generate specialized, allocation-free code.
 
 # Arguments
 - `temp_dense::Matrix{ComplexF64}`: Output accumulator for coefficients (modified in-place)
-- `P::Vector{Float64}`: Pre-allocated buffer for Legendre polynomials
+- `P::Vector{Float64}`: Pre-allocated buffer for normalized Legendre polynomials P̄
 - `Fθm::Matrix{ComplexF64}`: FFT results, shape (nθ_local, nlon)
 - `weights_cache::Vector{Float64}`: Gauss-Legendre quadrature weights for local θ
 - `x_cache::Vector{Float64}`: cos(θ) values for local θ points (pre-cached from cfg.x)
@@ -324,7 +325,7 @@ function _analysis_loop_no_tables!(temp_dense::Matrix{ComplexF64}, P::Vector{Flo
         for ii in 1:nθ_local
             Fi = Fθm[ii, m_fft]
             wi = weights_cache[ii]
-            SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+            SHTnsKit.Plm_norm_row!(P, x_cache[ii], lmax, mval)
             @simd for l in mval:lmax
                 temp_dense[l+1, col] += wi * P[l+1] * Fi
             end
@@ -538,8 +539,9 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     # Uses function barriers for type stability (eliminates ~33MB allocations!)
     # See _analysis_loop_no_tables! and _analysis_loop_with_tables! for details
     if use_packed_storage
-        # Original inline loop for packed storage (not the hot path)
-        xv = cfg.x; Nlm = cfg.Nlm; cphi = cfg.cphi  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
+        # Original inline loop for packed storage (not the hot path).
+        # Uses normalized rows (Plm_norm_row! / NP_tables): Nlm is already baked in.
+        xv = cfg.x; cphi = cfg.cphi  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
         for mval in 0:mmax
             col = mval + 1
             m_fft = mval + 1
@@ -547,16 +549,17 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
                 Fi = Fθm[ii, m_fft]
                 wi = weights_cache[ii]
                 if use_tbl
-                    tblcol = view(cfg.plm_tables[col], :, iglob)
+                    # NP_tables[col][l+1, iglob] = P̄_l^m already; no extra Nlm multiply
+                    tblcol = view(cfg.NP_tables[col], :, iglob)
                     @inbounds @simd for l in mval:lmax
                         lm = storage_info.lm_to_packed[l+1, col]
-                        Alm_local[lm] += (wi * Nlm[l+1, col] * cphi * tblcol[l+1]) * Fi
+                        Alm_local[lm] += (wi * cphi * tblcol[l+1]) * Fi
                     end
                 else
-                    SHTnsKit.Plm_row!(P, xv[iglob], lmax, mval)
+                    SHTnsKit.Plm_norm_row!(P, xv[iglob], lmax, mval)
                     @inbounds @simd for l in mval:lmax
                         lm = storage_info.lm_to_packed[l+1, col]
-                        Alm_local[lm] += (wi * Nlm[l+1, col] * cphi * P[l+1]) * Fi
+                        Alm_local[lm] += (wi * cphi * P[l+1]) * Fi
                     end
                 end
             end
@@ -596,22 +599,22 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
             SHTnsKitParallelExt._safe_comm_free(reduce_comm)
         end
         if !use_packed_storage
-            # Apply normalization to dense matrix with SIMD optimization
-            # Each (l,m) element is independent, so ivdep is safe
-            Nlm = cfg.Nlm; cphi = cfg.cphi  # hoist field reads out of the normalization loop (cfg is mutable)
+            # Apply φ scaling (cphi = 2π/nlon). Nlm is NOT applied here: the
+            # normalized recurrence Plm_norm_row! already bakes Nlm into P̄.
+            cphi = cfg.cphi  # hoist field read out of the normalization loop (cfg is mutable)
             @inbounds for m in 0:mmax
                 @simd ivdep for l in m:lmax
-                    Alm_local[l+1, m+1] *= Nlm[l+1, m+1] * cphi
+                    Alm_local[l+1, m+1] *= cphi
                 end
             end
         end
     else
-        # θ is not distributed - no reduction needed, just apply normalization
+        # θ is not distributed - no reduction needed, just apply φ scaling
         if !use_packed_storage
-            Nlm = cfg.Nlm; cphi = cfg.cphi  # hoist field reads out of the normalization loop (cfg is mutable)
+            cphi = cfg.cphi  # hoist field read out of the normalization loop (cfg is mutable)
             @inbounds for m in 0:mmax
                 @simd ivdep for l in m:lmax
-                    Alm_local[l+1, m+1] *= Nlm[l+1, m+1] * cphi
+                    Alm_local[l+1, m+1] *= cphi
                 end
             end
         end
@@ -711,7 +714,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 
     P = Vector{Float64}(undef, lmax + 1)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x  # hoist field read out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis: for each m mode, compute Legendre series
     for mval in 0:mmax
@@ -719,18 +722,19 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 
         # Compute synthesized values for each local θ
         for (ii, iglob) in enumerate(θ_globals)
-            # Get Legendre polynomials at this latitude
-            if cfg.use_plm_tables && !isempty(cfg.plm_tables)
-                tbl = cfg.plm_tables[col]
+            # Get normalized Legendre polynomials (P̄ = Nlm·P) at this latitude
+            if cfg.use_plm_tables && !isempty(cfg.NP_tables)
+                # NP_tables[col][l+1, iglob] = P̄_l^m already; no extra Nlm multiply
+                tbl = cfg.NP_tables[col]
                 g = 0.0 + 0.0im
                 @inbounds @simd for l in mval:lmax
-                    g += (Nlm[l+1, col] * tbl[l+1, iglob]) * Alm[l+1, col]
+                    g += tbl[l+1, iglob] * Alm[l+1, col]
                 end
             else
-                SHTnsKit.Plm_row!(P, xv[iglob], lmax, mval)
+                SHTnsKit.Plm_norm_row!(P, xv[iglob], lmax, mval)
                 g = 0.0 + 0.0im
                 @inbounds @simd for l in mval:lmax
-                    g += (Nlm[l+1, col] * P[l+1]) * Alm[l+1, col]
+                    g += P[l+1] * Alm[l+1, col]
                 end
             end
 
@@ -866,21 +870,23 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
         weights_cache[ii] = cfg.w[iglobθ]
     end
 
-    # Enhanced plm_tables integration for vector spherical harmonic transforms
-    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables) && !isempty(cfg.dplm_tables)
+    # Use fused normalized tables (NP/NdP) if available; fall back to OTF normalized rows.
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.NP_tables) && !isempty(cfg.NdP_tables)
 
-    # Validate both plm_tables and dplm_tables structure
+    # Validate fused table structure
     if use_tbl
-        if length(cfg.plm_tables) != mmax + 1 || length(cfg.dplm_tables) != mmax + 1
+        if length(cfg.NP_tables) != mmax + 1 || length(cfg.NdP_tables) != mmax + 1
             @warn "Vector transform table length mismatch. Falling back to on-demand computation."
             use_tbl = false
         end
     end
 
-    P = Vector{Float64}(undef, lmax + 1)     # Fallback buffers
-    dPdx = Vector{Float64}(undef, lmax + 1)
+    # OTF buffers: P̄, dP̄/dθ, P̄/sinθ (all normalized — no separate Nlm multiply needed)
+    P          = Vector{Float64}(undef, lmax + 1)
+    dPdtheta   = Vector{Float64}(undef, lmax + 1)
+    P_over_sth = Vector{Float64}(undef, lmax + 1)
+    Pbuf       = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
     scaleφ = cfg.cphi
-    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
 
     # Main vector analysis loop
     for mval in 0:mmax
@@ -905,29 +911,30 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
             end
 
             if use_tbl
-                tblP = cfg.plm_tables[col]
-                tbld = cfg.dplm_tables[col]
+                # NP_tables: P̄_l^m already; NdP_tables: -dP̄/dθ/sinθ already.
+                # dθY = -sθ * NdP[l+1, iglobθ]  (matches kernel convention)
+                # Y_over_sθ = NP[l+1, iglobθ] * inv_sθ
+                tblNP  = cfg.NP_tables[col]
+                tblNdP = cfg.NdP_tables[col]
 
                 @inbounds for l in max(1, mval):lmax
-                    N = Nlm[l+1, col]
-                    dθY = -sθ * N * tbld[l+1, iglobθ]
-                    Y = N * tblP[l+1, iglobθ]
+                    dθY      = -sθ * tblNdP[l+1, iglobθ]
+                    Y_over_sθ = tblNP[l+1, iglobθ] * inv_sθ
                     coeff = wi * scaleφ / (l * (l + 1))
-                    term = (0 + 1im) * mval * inv_sθ * Y
+                    term = (0 + 1im) * mval * Y_over_sθ
                     # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
                     Slm_local[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
                     Tlm_local[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
                 end
             else
-                # Fallback: compute Legendre polynomials and derivatives on-demand
-                SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
+                # OTF: normalized rows — P̄, dP̄/dθ, P̄/sinθ; no extra Nlm multiply.
+                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sth, x, lmax, mval, Pbuf)
 
                 @inbounds for l in max(1, mval):lmax
-                    N = Nlm[l+1, col]
-                    dθY = -sθ * N * dPdx[l+1]
-                    Y = N * P[l+1]
+                    dθY      = dPdtheta[l+1]    # dP̄/dθ already orthonormal-normalized
+                    Y_over_sθ = P_over_sth[l+1] # P̄/sinθ
                     coeff = wi * scaleφ / (l * (l + 1))
-                    term = (0 + 1im) * mval * inv_sθ * Y
+                    term = (0 + 1im) * mval * Y_over_sθ
                     # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
                     Slm_local[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
                     Tlm_local[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
@@ -1009,10 +1016,13 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     Fθm = zeros(ComplexF64, nθ_local, nbins)
     Fφm = zeros(ComplexF64, nθ_local, nbins)
 
-    P = Vector{Float64}(undef, lmax + 1)
-    dPdx = Vector{Float64}(undef, lmax + 1)
+    # OTF buffers: P̄, dP̄/dθ, P̄/sinθ (all normalized — no separate Nlm multiply needed)
+    P          = Vector{Float64}(undef, lmax + 1)
+    dPdtheta   = Vector{Float64}(undef, lmax + 1)
+    P_over_sth = Vector{Float64}(undef, lmax + 1)
+    Pbuf       = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x  # hoist field read out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis loop
     for mval in 0:mmax
@@ -1026,14 +1036,14 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
             gθ = 0.0 + 0.0im
             gφ = 0.0 + 0.0im
 
-            if cfg.use_plm_tables && !isempty(cfg.plm_tables) && !isempty(cfg.dplm_tables)
-                tblP = cfg.plm_tables[col]
-                tbld = cfg.dplm_tables[col]
+            if cfg.use_plm_tables && !isempty(cfg.NP_tables) && !isempty(cfg.NdP_tables)
+                # NP_tables: P̄ already; NdP_tables: -dP̄/dθ/sinθ already.
+                tblNP  = cfg.NP_tables[col]
+                tblNdP = cfg.NdP_tables[col]
 
                 @inbounds for l in max(1, mval):lmax
-                    N = Nlm[l+1, col]
-                    dθY = -sθ * N * tbld[l+1, iglobθ]
-                    Y = N * tblP[l+1, iglobθ]
+                    dθY = -sθ * tblNdP[l+1, iglobθ]
+                    Y   = tblNP[l+1, iglobθ]
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
@@ -1042,13 +1052,12 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                     gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
                 end
             else
-                # Fallback: compute Legendre polynomials and derivatives on-demand
-                SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
+                # OTF: normalized rows — P̄, dP̄/dθ, P̄/sinθ; no extra Nlm multiply.
+                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sth, x, lmax, mval, Pbuf)
 
                 @inbounds for l in max(1, mval):lmax
-                    N = Nlm[l+1, col]
-                    dθY = -sθ * N * dPdx[l+1]
-                    Y = N * P[l+1]
+                    dθY = dPdtheta[l+1]    # dP̄/dθ already orthonormal-normalized
+                    Y   = P[l+1]           # P̄
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
@@ -1170,12 +1179,16 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
     Fθm = scratch.Fθ
     Fφm = scratch.Fφ
     P = scratch.P
-    dPdx = scratch.dPdx
     fill!(Fθm, zero(ComplexF64))
     fill!(Fφm, zero(ComplexF64))
 
+    # OTF normalized derivative buffers (small — no separate scratch needed)
+    dPdtheta   = Vector{Float64}(undef, lmax + 1)
+    P_over_sth = Vector{Float64}(undef, lmax + 1)
+    Pbuf       = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
+
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x  # hoist field read out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis loop - accumulate Fourier coefficients
     for mval in 0:mmax
@@ -1189,14 +1202,14 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
             gθ = 0.0 + 0.0im
             gφ = 0.0 + 0.0im
 
-            if cfg.use_plm_tables && !isempty(cfg.plm_tables) && !isempty(cfg.dplm_tables)
-                tblP = cfg.plm_tables[col]
-                tbld = cfg.dplm_tables[col]
+            if cfg.use_plm_tables && !isempty(cfg.NP_tables) && !isempty(cfg.NdP_tables)
+                # NP_tables: P̄ already; NdP_tables: -dP̄/dθ/sinθ already.
+                tblNP  = cfg.NP_tables[col]
+                tblNdP = cfg.NdP_tables[col]
 
                 @inbounds for l in max(1, mval):lmax
-                    N = Nlm[l+1, col]
-                    dθY = -sθ * N * tbld[l+1, iglobθ]
-                    Y = N * tblP[l+1, iglobθ]
+                    dθY = -sθ * tblNdP[l+1, iglobθ]
+                    Y   = tblNP[l+1, iglobθ]
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
@@ -1205,13 +1218,12 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
                     gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
                 end
             else
-                # Fallback: compute Legendre polynomials and derivatives on-demand
-                SHTnsKit.Plm_and_dPdx_row!(P, dPdx, x, lmax, mval)
+                # OTF: normalized rows — P̄, dP̄/dθ, P̄/sinθ; no extra Nlm multiply.
+                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sth, x, lmax, mval, Pbuf)
 
                 @inbounds for l in max(1, mval):lmax
-                    N = Nlm[l+1, col]
-                    dθY = -sθ * N * dPdx[l+1]
-                    Y = N * P[l+1]
+                    dθY = dPdtheta[l+1]    # dP̄/dθ already orthonormal-normalized
+                    Y   = P[l+1]           # P̄
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
@@ -1671,7 +1683,8 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         x_cache[ii] = cfg.x[iglob]
     end
 
-    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
+    # Use NP_tables (already normalized P̄) if available; fall back to OTF normalized rows.
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.NP_tables)
     P = Vector{Float64}(undef, lmax + 1)
 
     # Legendre integration
@@ -1683,12 +1696,13 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
             wi = weights_cache[ii]
 
             if use_tbl
-                tbl = cfg.plm_tables[col]
+                # NP_tables[col][l+1, iglob] = P̄_l^m already; no extra Nlm multiply
+                tbl = cfg.NP_tables[col]
                 @inbounds @simd for l in mval:lmax
                     local_contrib[l+1, col] += wi * tbl[l+1, iglob] * Fi
                 end
             else
-                SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+                SHTnsKit.Plm_norm_row!(P, x_cache[ii], lmax, mval)
                 @inbounds @simd for l in mval:lmax
                     local_contrib[l+1, col] += wi * P[l+1] * Fi
                 end
@@ -1696,11 +1710,11 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         end
     end
 
-    # Apply normalization
-    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
+    # Apply φ scaling only. Nlm is NOT applied here: the normalized recurrence /
+    # NP_tables already bake Nlm into P̄.
     @inbounds for m in 0:mmax
         @simd ivdep for l in m:lmax
-            local_contrib[l+1, m+1] *= Nlm[l+1, m+1] * scaleφ
+            local_contrib[l+1, m+1] *= scaleφ
         end
     end
 
@@ -2447,7 +2461,8 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     scaleφ = cfg.cphi
-    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
+    # Use NP_tables (already normalized P̄) if available; fall back to OTF normalized rows.
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.NP_tables)
     P = Vector{Float64}(undef, lmax + 1)
 
     # Compute local contributions to ALL (l,m) coefficients
@@ -2465,12 +2480,13 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
             wi = weights_cache[ii]
 
             if use_tbl
-                tbl = cfg.plm_tables[col]
+                # NP_tables[col][l+1, iglob] = P̄_l^m already; no extra Nlm multiply
+                tbl = cfg.NP_tables[col]
                 @inbounds @simd for l in mval:lmax
                     local_contrib[l+1, col] += wi * tbl[l+1, iglob] * Fi
                 end
             else
-                SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+                SHTnsKit.Plm_norm_row!(P, x_cache[ii], lmax, mval)
                 @inbounds @simd for l in mval:lmax
                     local_contrib[l+1, col] += wi * P[l+1] * Fi
                 end
@@ -2495,11 +2511,11 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         end
     end
 
-    # Apply normalization
-    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
+    # Apply φ scaling only. Nlm is NOT applied here: the normalized recurrence /
+    # NP_tables already bake Nlm into P̄.
     @inbounds for m in 0:mmax
         @simd ivdep for l in m:lmax
-            local_contrib[l+1, m+1] *= Nlm[l+1, m+1] * scaleφ
+            local_contrib[l+1, m+1] *= scaleφ
         end
     end
 
@@ -2630,7 +2646,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         alm_partial = gather_to_dense_2d(alm)
 
         inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-        xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
+        xv = cfg.x  # hoist field read out of the loops below (cfg is mutable, so not auto-hoisted)
 
         # Synthesis: for each m in m_range, compute Legendre series
         m_col = 0
@@ -2639,14 +2655,13 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
             m_col += 1
             col = m + 1
 
-            if cfg.use_plm_tables && !isempty(cfg.plm_tables)
-                # Pre-multiply Nlm * alm to avoid redundant multiply per θ point
-                # Use complex buffer since alm_partial is ComplexF64
+            if cfg.use_plm_tables && !isempty(cfg.NP_tables)
+                # NP_tables[col][l+1, iglob] = P̄_l^m already; pre-multiply alm only.
                 @inbounds for l in m:lmax
-                    P_complex[l+1] = Nlm[l+1, col] * alm_partial[l+1, m_col]
+                    P_complex[l+1] = alm_partial[l+1, m_col]
                 end
 
-                tbl = cfg.plm_tables[col]
+                tbl = cfg.NP_tables[col]
                 for (ii, iglob) in enumerate(θ_globals)
                     g = 0.0 + 0.0im
                     @inbounds @simd for l in m:lmax
@@ -2658,12 +2673,12 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
                     end
                 end
             elseif x_cache !== nothing
-                # Non-table path with cached x values
+                # OTF normalized path with cached x values
                 for ii in 1:nθ_local
-                    SHTnsKit.Plm_row!(P, x_cache[ii], lmax, m)
+                    SHTnsKit.Plm_norm_row!(P, x_cache[ii], lmax, m)
                     g = 0.0 + 0.0im
                     @inbounds @simd for l in m:lmax
-                        g += (Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
+                        g += P[l+1] * alm_partial[l+1, m_col]
                     end
                     Fθm[ii, m + 1] = inv_scaleφ * g
                     if real_output && m > 0
@@ -2671,12 +2686,12 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
                     end
                 end
             else
-                # Non-table path without cache - direct cfg access
+                # OTF normalized path without cache - direct cfg access
                 for ii in 1:nθ_local
-                    SHTnsKit.Plm_row!(P, xv[θ_globals[ii]], lmax, m)
+                    SHTnsKit.Plm_norm_row!(P, xv[θ_globals[ii]], lmax, m)
                     g = 0.0 + 0.0im
                     @inbounds @simd for l in m:lmax
-                        g += (Nlm[l+1, col] * P[l+1]) * alm_partial[l+1, m_col]
+                        g += P[l+1] * alm_partial[l+1, m_col]
                     end
                     Fθm[ii, m + 1] = inv_scaleφ * g
                     if real_output && m > 0
@@ -2868,7 +2883,8 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     scaleφ = cfg.cphi
-    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables)
+    # Use NP_tables (already normalized P̄) if available; fall back to OTF normalized rows.
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.NP_tables)
 
     # Early exit for empty m_range
     if n_m_valid == 0 || isempty(m_range)
@@ -2888,7 +2904,8 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         m_fft = mval + 1  # FFT index (1-based, matches m value + 1)
 
         if use_tbl
-            tbl = cfg.plm_tables[mval + 1]  # Table is indexed by m+1
+            # NP_tables[col][l+1, iglob] = P̄_l^m already; no extra Nlm multiply
+            tbl = cfg.NP_tables[mval + 1]  # Table is indexed by m+1
             for ii in 1:nθ_local
                 iglob = θ_globals[ii]
                 wiFi = weights_cache[ii] * Fθm[ii, m_fft]  # Hoisted out of l-loop
@@ -2899,7 +2916,7 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         else
             for ii in 1:nθ_local
                 wiFi = weights_cache[ii] * Fθm[ii, m_fft]  # Hoisted out of l-loop
-                SHTnsKit.Plm_row!(P, x_cache[ii], lmax, mval)
+                SHTnsKit.Plm_norm_row!(P, x_cache[ii], lmax, mval)
                 @inbounds @simd for l in mval:lmax
                     local_contrib[l+1, m_col] += wiFi * P[l+1]
                 end
@@ -2947,14 +2964,14 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         end
     end
 
-    # Apply normalization
-    Nlm = cfg.Nlm  # hoist field read out of the normalization loop (cfg is mutable, so the compiler can't lift it)
+    # Apply φ scaling only. Nlm is NOT applied here: the normalized recurrence /
+    # NP_tables already bake Nlm into P̄.
     m_col = 0
     for mval in m_range
         (mval % mres == 0) || continue
         m_col += 1
         @inbounds @simd ivdep for l in mval:lmax
-            local_contrib[l+1, m_col] *= Nlm[l+1, mval+1] * scaleφ
+            local_contrib[l+1, m_col] *= scaleφ
         end
     end
 

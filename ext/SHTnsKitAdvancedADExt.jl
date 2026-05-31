@@ -155,7 +155,8 @@ end
         P = Vector{Float64}(undef, lmax + 1)
         dPdtheta = Vector{Float64}(undef, lmax + 1)
         P_over_sinth = Vector{Float64}(undef, lmax + 1)
-        xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the m/i/l loops (cfg is mutable, so not auto-hoisted)
+        Pbuf = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
+        xv = cfg.x  # hoist field read out of the m/i/l loops (cfg is mutable, so not auto-hoisted)
 
         # Forward synthesis uses inv_scaleφ = nlon, but adjoint of ifft is (1/nlon)*fft
         # So these factors cancel. wm accounts for Hermitian symmetry in "fill conjugate" step.
@@ -167,15 +168,15 @@ end
             for i in 1:nlat
                 x = xv[i]
 
-                SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
+                # Normalized row: P̄, dP̄/dθ, P̄/sinθ — no extra Nlm multiply needed.
+                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)
 
                 Fθ_im = F̄θ[i, col]
                 Fφ_im = F̄φ[i, col]
 
                 @inbounds for l in max(1, m):lmax
-                    N = Nlm[l+1, col]
-                    dθY = N * dPdtheta[l+1]
-                    Y_over_sθ = N * P_over_sinth[l+1]
+                    dθY = dPdtheta[l+1]         # dP̄/dθ already orthonormal-normalized
+                    Y_over_sθ = P_over_sinth[l+1]  # P̄/sinθ
                     term = 1.0im * m * Y_over_sθ
 
                     # Adjoint of synthesis matrix [dθY, -term; term, dθY]:

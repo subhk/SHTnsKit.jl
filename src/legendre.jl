@@ -97,6 +97,15 @@ Condon-Shortley phase factor (-1)^m included, which is standard in physics.
 
 The input x = cos(θ) where θ is the colatitude angle.
 Results are stored as P[l+1] = P_l^m(x) for l = 0..lmax (1-based indexing).
+
+!!! warning "Overflows for lmax ≳ 150"
+    These are the UN-normalized P_l^m; their magnitude grows factorially with m
+    (~1e305 at m≈150) and overflows `Float64` for lmax ≳ 155. The transform
+    kernels no longer use this directly — they use [`Plm_norm_row!`], which
+    computes the bounded orthonormal `P̄_l^m = Nlm·P_l^m` and works at any lmax.
+    Prefer `Plm_norm_row!` (and `Plm_norm_and_dPdtheta_row!` /
+    `Plm_norm_dPdtheta_over_sinth_row!`) for new code. This function is retained
+    for low-lmax use and as a reference.
 """
 function Plm_row!(P::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:Real}
     # Initialize output array to zero

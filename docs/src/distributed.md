@@ -212,6 +212,102 @@ MPI.Finalize()
 
 ---
 
+## Transpose-based distributed transforms (scalable)
+
+The gather path (`dist_analysis` / `dist_synthesis`) Allgathers the full spectrum
+onto every rank, so spectral memory is replicated (`O(lmax²)` per rank regardless of
+`p`). For large `lmax` or high rank counts this becomes a bottleneck.
+
+`DistTransposePlan` is a fully distributed alternative: the spectral array is
+**distributed over m** (each rank owns a disjoint set of m-columns), giving
+`O(lmax² / p)` spectral memory per rank. Internally, PencilFFTs performs the
+longitude FFT and a global transpose (one Alltoall per slab/batch), and the Legendre
+transform is purely local per rank. The result is measured **5–7× faster than the
+gather path at 4 ranks** for `lmax = 256`.
+
+!!! tip "When to use `DistTransposePlan`"
+    - High rank counts (≥ 4) where the Allreduce of the gather path becomes a bottleneck.
+    - Applications that want distributed spectral memory (`O(lmax² / p)` per rank).
+    - Batched transforms over `nlev` radial levels — all levels are processed in a
+      single call, amortising the Alltoall cost.
+
+### Data layout
+
+- **Spatial** (`allocate_spatial`): real `PencilArray`, logical shape `(nlon, nlat_local, nlev)`.
+  φ is the *fast* (innermost) index; the FFT is taken along φ. θ is distributed across
+  ranks; `nlev` is a local batch dimension (radial levels, e.g. depth slabs).
+- **Spectral** (`allocate_spectral`): complex `PencilArray`, logical shape
+  `(lmax+1, nm_local, nlev)`. m is distributed; for each owned m, all l ≥ m are stored
+  (l is the slow index).
+
+### Runnable example
+
+```julia
+using MPI, SHTnsKit, PencilArrays, PencilFFTs
+MPI.Init()
+comm = MPI.COMM_WORLD
+
+cfg = create_gauss_config(256, 258; nlon=513)
+
+# Build a transpose plan: 8 radial levels batched per Alltoall
+plan = DistTransposePlan(cfg; comm=comm, nlev=8, use_rfft=true)
+
+f   = allocate_spatial(plan)    # real PencilArray: (nlon, nlat_local, 8)
+Alm = allocate_spectral(plan)   # complex PencilArray: (lmax+1, nm_local, 8)
+
+# Fill parent(f) with your data: parent(f)[φ_local, θ_local, lev]
+r = PencilArrays.range_local(pencil(f))   # r[1]=φ range, r[2]=θ range
+# for (il, ig) in enumerate(r[2]), (jl, jg) in enumerate(r[1])
+#     parent(f)[jl, il, lev] = my_field[ig, jg, lev]
+
+dist_analysis!(plan, Alm, f)    # spatial → distributed spectral (m-pencil)
+dist_synthesis!(plan, f, Alm)   # distributed spectral → spatial
+
+# Vector (toroidal/poloidal) transforms
+Slm = allocate_spectral(plan); Tlm = allocate_spectral(plan)
+Vt  = allocate_spatial(plan);  Vp  = allocate_spatial(plan)
+plan_v = DistTransposePlan(cfg; comm=comm, nlev=8, use_rfft=true, with_vector=true)
+dist_analysis_sphtor!(plan_v, Slm, Tlm, Vt, Vp)
+dist_synthesis_sphtor!(plan_v, Vt, Vp, Slm, Tlm)
+
+# QST (radial + toroidal/poloidal) transforms
+Qlm = allocate_spectral(plan_v)
+Vr  = allocate_spatial(plan_v)
+dist_analysis_qst!(plan_v, Qlm, Slm, Tlm, Vr, Vt, Vp)
+dist_synthesis_qst!(plan_v, Vr, Vt, Vp, Qlm, Slm, Tlm)
+
+MPI.Finalize()
+```
+
+### API summary
+
+| Function | Description |
+|----------|-------------|
+| `DistTransposePlan(cfg; comm, nlev, use_rfft, with_vector)` | Build plan (Legendre tables + PencilFFTs plan) |
+| `allocate_spatial(plan)` | Real `PencilArray` `(nlon, nlat_local, nlev)` |
+| `allocate_spectral(plan)` | Complex `PencilArray` `(lmax+1, nm_local, nlev)` |
+| `dist_analysis!(plan, Alm, f)` | Scalar spatial → spectral |
+| `dist_synthesis!(plan, f, Alm)` | Scalar spectral → spatial |
+| `dist_analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)` | Vector (sphtor) analysis |
+| `dist_synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)` | Vector (sphtor) synthesis |
+| `dist_analysis_qst!(plan, Qlm, Slm, Tlm, Vr, Vt, Vp)` | QST analysis |
+| `dist_synthesis_qst!(plan, Vr, Vt, Vp, Qlm, Slm, Tlm)` | QST synthesis |
+
+!!! note "Relationship to the gather path"
+    `DistTransposePlan` **complements** (does not replace) the dense `dist_analysis` /
+    `dist_synthesis` gather path. The gather path produces a fully replicated dense
+    `(lmax+1, mmax+1)` spectrum on every rank, which is convenient for post-processing
+    and operator applications that need global spectral access. The transpose path keeps
+    the spectrum distributed (each rank sees only its m-columns) and is the right choice
+    when spectral memory or Allreduce cost is a bottleneck.
+
+    **Known follow-up:** at ≥ 4 ranks the Legendre step has a ~1.7× load imbalance
+    because low-m columns (owned by rank 0) have more non-zero (l, m) pairs than high-m
+    columns. Interleaved-m ownership (round-robin assignment of m to ranks) will
+    equalise this and is planned for a future release.
+
+---
+
 ## Best Practices
 
 !!! note "Performance Tips"

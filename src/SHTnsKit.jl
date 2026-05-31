@@ -470,6 +470,12 @@ create_spatial_array(cfg; kwargs...) = error("Parallel extension not loaded. Add
 matrix_to_spectral_pencil(cfg, Alm; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
 spectral_pencil_to_matrix(cfg, Alm_p; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
 
+# ===== TRANSPOSE-BASED DISTRIBUTED SHT (Task 2+) =====
+export DistTransposePlan, allocate_spatial, allocate_spectral
+DistTransposePlan(cfg; kwargs...) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+allocate_spatial(plan) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+allocate_spectral(plan) = error("Parallel extension not loaded. Add MPI, PencilArrays, PencilFFTs.")
+
 # ===== PARALLEL ROTATION FUNCTIONS =====
 # Parallel rotations fallbacks (PencilArray-based)
 # Non-bang (out-of-place) and in-place rotation variants

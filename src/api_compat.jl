@@ -304,12 +304,11 @@ function legendre_sphPlm_array(cfg::SHTConfig, lmax::Integer, im::Integer, x::Re
     (0 ≤ m ≤ cfg.mmax) || return 0
     (m ≤ lmax ≤ cfg.lmax) || return 0
     P = Vector{Float64}(undef, cfg.lmax + 1)
-    Plm_row!(P, x, cfg.lmax, m)
+    Plm_norm_row!(P, x, cfg.lmax, m)
     n = min(length(yl), lmax - m + 1)
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     @inbounds for (k, l) in enumerate(m:(m + n - 1))
-        yl[k] = Nlm[l+1, m+1] * P[l+1]
+        yl[k] = P[l+1]
     end
     return n
 end
@@ -328,15 +327,14 @@ function legendre_sphPlm_deriv_array(cfg::SHTConfig, lmax::Integer, im::Integer,
     (0 ≤ m ≤ cfg.mmax) || return 0
     (m ≤ lmax ≤ cfg.lmax) || return 0
     P = Vector{Float64}(undef, cfg.lmax + 1)
-    dPdx = Vector{Float64}(undef, cfg.lmax + 1)
-    Plm_and_dPdx_row!(P, dPdx, x, cfg.lmax, m)
+    dPdtheta = Vector{Float64}(undef, cfg.lmax + 1)
+    # Plm_norm_and_dPdtheta_row! fills P ← P̄_l^m and dPdtheta ← dP̄/dθ = -sinθ·dP̄/dx
+    Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, cfg.lmax, m)
     n = min(length(yl), length(dyl), lmax - m + 1)
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     @inbounds for (k, l) in enumerate(m:(m + n - 1))
-        N = Nlm[l+1, m+1]
-        yl[k]  = N * P[l+1]
-        dyl[k] = -sint * N * dPdx[l+1]
+        yl[k]  = P[l+1]
+        dyl[k] = dPdtheta[l+1]
     end
     return n
 end

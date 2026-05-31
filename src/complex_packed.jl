@@ -109,15 +109,15 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     # Complex packed layout stores negative and positive m explicitly, so this
     # loop writes each Fourier bin directly instead of relying on Hermitian
     # symmetry as the real-field packed layout does.
-    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x  # hoist field read out of the m/l loops (cfg is mutable, so not auto-hoisted)
     for m in -mmax:mmax
-        # build G_m(θ) = sum_l Nlm P_l^{|m|} alm(l,m)
+        # build G_m(θ) = sum_l P̄_l^{|m|} alm(l,m)
         am = abs(m)
         # skip if no degrees for given am
         if am > lmax; continue; end
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for i in 1:nlat
-            Plm_row!(P, xv[i], lmax, am)
+            Plm_norm_row!(P, xv[i], lmax, am)
             g = zero(CT)
             @inbounds for l in am:lmax
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
@@ -125,7 +125,7 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
                 if need_norm
                     a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
                 end
-                g += (Nlm[l+1, am+1] * P[l+1]) * a
+                g += P[l+1] * a
             end
             G[i] = g
         end
@@ -162,7 +162,7 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     scaleφ = cfg.cphi
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x; wv = cfg.w  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
     # Read both signs of m from the FFT output and store them in LM_cplx order.
     # Negative modes live at DFT column nlon+m+1.
     for m in -mmax:mmax
@@ -170,12 +170,12 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
         col = m ≥ 0 ? (m + 1) : (cfg.nlon + m + 1)
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for i in 1:cfg.nlat
-            Plm_row!(P, xv[i], lmax, am)
+            Plm_norm_row!(P, xv[i], lmax, am)
             Fi = Fφ[i, col]
             wi = wv[i]
             @inbounds for l in am:lmax
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
-                a = (wi * P[l+1]) * Fi * Nlm[l+1, am+1] * scaleφ
+                a = (wi * P[l+1]) * Fi * scaleφ
                 # Convert from internal to cfg normalization if needed when storing
                 if need_norm
                     a /= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
@@ -201,11 +201,10 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     P = Vector{Float64}(undef, lmax + 1)
     acc = zero(CT)
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm  # hoist field read out of the m/l loops (cfg is mutable, so the compiler can't lift it)
     # m from -mmax..mmax
     for m in -mmax:mmax
         am = abs(m)
-        Plm_row!(P, x, lmax, am)
+        Plm_norm_row!(P, x, lmax, am)
         gm = zero(CT)
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         @inbounds for l in am:lmax
@@ -214,7 +213,7 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
             if need_norm
                 a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
             end
-            gm += Nlm[l+1, am+1] * P[l+1] * a
+            gm += P[l+1] * a
         end
         acc += gm * cis(m * phi)
     end

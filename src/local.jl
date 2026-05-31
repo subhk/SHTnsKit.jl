@@ -20,10 +20,9 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     fill!(vals, 0.0)
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     # m=0 contribution
-    Plm_row!(P, x, lmax, 0)
+    Plm_norm_row!(P, x, lmax, 0)
     g0 = zero(ComplexF64)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
     @inbounds for l in 0:ltr
@@ -32,7 +31,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
         if need_norm
             a *= norm_scale_from_orthonormal(l, 0, cfg.norm) * α0
         end
-        g0 += Nlm[l+1, 1] * P[l+1] * a
+        g0 += P[l+1] * a
     end
 
     @inbounds for j in 0:(nphi-1)
@@ -42,9 +41,8 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     # m>0
     for m in 1:mtr
         (m % cfg.mres == 0) || continue
-        Plm_row!(P, x, lmax, m)
+        Plm_norm_row!(P, x, lmax, m)
         gm = zero(ComplexF64)
-        col = m + 1
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         @inbounds for l in m:min(ltr, lmax)
             lm = LM_index(lmax, cfg.mres, l, m) + 1
@@ -52,7 +50,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
             if need_norm
                 a *= norm_scale_from_orthonormal(l, m, cfg.norm) * αm
             end
-            gm += Nlm[l+1, col] * P[l+1] * a
+            gm += P[l+1] * a
         end
         
         for j in 0:(nphi-1)
@@ -75,9 +73,8 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     vals = Vector{ComplexF64}(undef, nphi)
     fill!(vals, zero(ComplexF64))
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     # m=0
-    Plm_row!(P, x, lmax, 0)
+    Plm_norm_row!(P, x, lmax, 0)
     g0 = zero(ComplexF64)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
     @inbounds for l in 0:min(ltr, lmax)
@@ -86,22 +83,21 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
         if need_norm
             a *= norm_scale_from_orthonormal(l, 0, cfg.norm) * α0
         end
-        g0 += Nlm[l+1, 1] * P[l+1] * a
+        g0 += P[l+1] * a
     end
-    
+
     @inbounds for j in 1:nphi
         vals[j] += g0
     end
-    
+
     # m ≠ 0
     for m in 1:mmax
-        Plm_row!(P, x, lmax, m)
-        col = m + 1
+        Plm_norm_row!(P, x, lmax, m)
         gm = zero(ComplexF64); gn = zero(ComplexF64)
         αp = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         αn = need_norm ? cs_phase_factor(-m, true, cfg.cs_phase) : 1.0
         @inbounds for l in m:min(ltr, lmax)
-            Ylm = Nlm[l+1, col] * P[l+1]
+            Ylm = P[l+1]
             # positive m
             ap = alm_packed[LM_cplx_index(lmax, mmax, l, m) + 1]
             # negative m
@@ -143,20 +139,18 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     vp = zero(CT)
 
     # m=0 (no 1/sinθ terms)
-    Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
+    Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
     for l in 0:lmax
-        N = Nlm[l+1, 1]
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
         aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
         if need_norm
             s = norm_scale_from_orthonormal(l, 0, cfg.norm) * α0
             aQ *= s; aS *= s; aT *= s
         end
-        Y = N * P[l+1]
-        dθY = N * dPdtheta[l+1]
+        Y = P[l+1]
+        dθY = dPdtheta[l+1]
         vr += Y   * aQ
         vt += dθY * aS
         # Vφ = (im/sinθ)*Y*S + dθY*T, for m=0 the first term is zero
@@ -166,24 +160,22 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     # m>0 (need pole-safe 1/sinθ handling)
     for m in 1:mmax
         (m % cfg.mres == 0) || continue
-        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
-        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
+        # Single call computes P̄, dP̄/dθ, and P̄/sinθ (avoids redundant Plm_norm_row!)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
         gvr = zero(CT)
         gvt = zero(CT)
         gvp = zero(CT)
-        col = m + 1
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         for l in m:lmax
-            N = Nlm[l+1, col]
             lm = LM_index(lmax, cfg.mres, l, m) + 1
             aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
             if need_norm
                 s = norm_scale_from_orthonormal(l, m, cfg.norm) * αm
                 aQ *= s; aS *= s; aT *= s
             end
-            Y = N * P[l+1]
-            dθY = N * dPdtheta[l+1]
-            Y_over_sθ = N * P_over_sinth[l+1]
+            Y = P[l+1]
+            dθY = dPdtheta[l+1]
+            Y_over_sθ = P_over_sinth[l+1]
             gvr += Y   * aQ
             # Vθ = dθY*S - (im/sinθ)*Y*T
             gvt += dθY * aS - 1.0im * m * Y_over_sθ * aT
@@ -236,25 +228,23 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     fill!(Vr, 0.0); fill!(Vt, 0.0); fill!(Vp, 0.0)
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
 
     # m=0 (no 1/sinθ terms)
-    Plm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
+    Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
     g0 = zero(ComplexF64)
     gθ0 = zero(ComplexF64)
     gφ0 = zero(ComplexF64)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
 
     @inbounds for l in 0:ltr
-        N = Nlm[l+1, 1]
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
         aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
         if need_norm
             s = norm_scale_from_orthonormal(l, 0, cfg.norm) * α0
             aQ *= s; aS *= s; aT *= s
         end
-        Y = N * P[l+1]
-        dθY = N * dPdtheta[l+1]
+        Y = P[l+1]
+        dθY = dPdtheta[l+1]
         g0  += Y * aQ
         gθ0 += dθY * aS
         # Vφ = (im/sinθ)*Y*S + dθY*T, for m=0 the first term is zero
@@ -267,25 +257,23 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     # m>0 (need pole-safe 1/sinθ handling)
     for m in 1:mtr
         (m % cfg.mres == 0) || continue
-        # Single call computes P, dP/dθ, and P/sinθ (avoids redundant Plm_row!)
-        Plm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
+        # Single call computes P̄, dP̄/dθ, and P̄/sinθ (avoids redundant Plm_norm_row!)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
         g  = zero(ComplexF64)
         gθ = zero(ComplexF64)
         gφ = zero(ComplexF64)
-        col = m + 1
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
 
         @inbounds for l in m:min(ltr, lmax)
-            N = Nlm[l+1, col]
             lm = LM_index(lmax, cfg.mres, l, m) + 1
             aQ = Qlm[lm]; aS = Slm[lm]; aT = Tlm[lm]
             if need_norm
                 s = norm_scale_from_orthonormal(l, m, cfg.norm) * αm
                 aQ *= s; aS *= s; aT *= s
             end
-            Y = N * P[l+1]
-            dθY = N * dPdtheta[l+1]
-            Y_over_sθ = N * P_over_sinth[l+1]
+            Y = P[l+1]
+            dθY = dPdtheta[l+1]
+            Y_over_sθ = P_over_sinth[l+1]
             g  += Y   * aQ
             # Vθ = dθY*S - (im/sinθ)*Y*T
             gθ += dθY * aS - 1.0im * m * Y_over_sθ * aT

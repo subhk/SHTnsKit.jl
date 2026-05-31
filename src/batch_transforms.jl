@@ -320,7 +320,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
             # For each latitude, compute P_l^m once and apply to all fields
             for i in 1:nlat
                 x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
+                Plm_norm_row!(P, x, lmax, m)
                 wi = w[i]
 
                 @inbounds for k in 1:nfields
@@ -331,10 +331,10 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
                 end
             end
 
-            # Apply normalization and scaling
+            # Apply φ scaling (Nlm already baked into P̄)
             @inbounds for k in 1:nfields
                 for l in m:lmax
-                    alm_batch[l+1, col, k] *= Nlm[l+1, col] * scaleφ
+                    alm_batch[l+1, col, k] *= scaleφ
                 end
             end
         end
@@ -408,7 +408,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
 
             for i in 1:nlat
                 x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
+                Plm_norm_row!(P, x, lmax, m)
                 wi = w[i]
 
                 @inbounds for k in 1:nfields
@@ -421,7 +421,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
 
             @inbounds for k in 1:nfields
                 for l in m:lmax
-                    alm_out[l+1, col, k] *= Nlm[l+1, col] * scaleφ
+                    alm_out[l+1, col, k] *= scaleφ
                 end
             end
         end
@@ -508,12 +508,12 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
 
             for i in 1:nlat
                 x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
+                Plm_norm_row!(P, x, lmax, m)
 
                 @inbounds for k in 1:nfields
                     acc = zero(ComplexF64)
                     for l in m:lmax
-                        acc += (Nlm[l+1, col] * P[l+1]) * alm_batch[l+1, col, k]
+                        acc += P[l+1] * alm_batch[l+1, col, k]
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end
@@ -608,12 +608,12 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
 
             for i in 1:nlat
                 x = cfg.x[i]
-                Plm_row!(P, x, lmax, m)
+                Plm_norm_row!(P, x, lmax, m)
 
                 @inbounds for k in 1:nfields
                     acc = zero(ComplexF64)
                     for l in m:lmax
-                        acc += (Nlm[l+1, col] * P[l+1]) * alm_batch[l+1, col, k]
+                        acc += P[l+1] * alm_batch[l+1, col, k]
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end

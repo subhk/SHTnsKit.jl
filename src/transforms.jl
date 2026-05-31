@@ -89,15 +89,15 @@ function analysis_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     fill!(Ql, zero(ComplexF64))
 
     P = Vector{Float64}(undef, lmax + 1)
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x; wv = cfg.w  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
-        Plm_row!(P, x, lmax, 0)  # m=0 case (axisymmetric)
+        Plm_norm_row!(P, x, lmax, 0)  # m=0 case (axisymmetric); P̄ already orthonormal-normalized
 
         weighted_Vr = Vr[i] * wv[i]
         @inbounds for l in 0:lmax
-            Ql[l+1] += weighted_Vr * Nlm[l+1, 1] * P[l+1]
+            Ql[l+1] += weighted_Vr * P[l+1]
         end
     end
 
@@ -209,15 +209,15 @@ function synthesis_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     
     Vr = Vector{Float64}(undef, nlat)
     P = Vector{Float64}(undef, lmax + 1)
-    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
-        Plm_row!(P, x, lmax, 0)  # m=0 case
+        Plm_norm_row!(P, x, lmax, 0)  # m=0 case; P̄ already orthonormal-normalized
 
         val = 0.0
         @inbounds for l in 0:lmax
-            val += real(Qlm[l+1] * Nlm[l+1, 1] * P[l+1])  # Take real part for spatial field
+            val += real(Qlm[l+1] * P[l+1])  # Take real part for spatial field
         end
         Vr[i] = val
     end
@@ -239,15 +239,15 @@ function analysis_axisym_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
     fill!(Ql, zero(ComplexF64))
 
     P = Vector{Float64}(undef, ltr + 1)
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x; wv = cfg.w  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
-        Plm_row!(P, x, ltr, 0)
+        Plm_norm_row!(P, x, ltr, 0)  # P̄ already orthonormal-normalized
 
         weighted_Vr = Vr[i] * wv[i]
         @inbounds for l in 0:ltr
-            Ql[l+1] += weighted_Vr * Nlm[l+1, 1] * P[l+1]
+            Ql[l+1] += weighted_Vr * P[l+1]
         end
     end
 
@@ -267,15 +267,15 @@ function synthesis_axisym_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr:
     
     Vr = Vector{Float64}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
-    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
-        Plm_row!(P, x, ltr, 0)
+        Plm_norm_row!(P, x, ltr, 0)  # P̄ already orthonormal-normalized
 
         val = 0.0
         @inbounds for l in 0:ltr
-            val += real(Qlm[l+1] * Nlm[l+1, 1] * P[l+1])
+            val += real(Qlm[l+1] * P[l+1])
         end
         Vr[i] = val
     end
@@ -304,15 +304,15 @@ function analysis_packed_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Comp
 
     P = Vector{Float64}(undef, ltr + 1)
     scaleφ = cfg.cphi  # Match full transform normalization
-    xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x; wv = cfg.w  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
-        Plm_row!(P, x, ltr, im)
+        Plm_norm_row!(P, x, ltr, im)  # P̄ already orthonormal-normalized
 
         weighted_Vr = Vr_m[i] * wv[i]
         @inbounds for l in im:ltr
-            Ql[l-im+1] += weighted_Vr * Nlm[l+1, im+1] * P[l+1]
+            Ql[l-im+1] += weighted_Vr * P[l+1]
         end
     end
 
@@ -341,15 +341,15 @@ function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Compl
     Vr_m = Vector{ComplexF64}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
     inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization
-    xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+    xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
     for i in 1:nlat
         x = xv[i]
-        Plm_row!(P, x, ltr, im)
+        Plm_norm_row!(P, x, ltr, im)  # P̄ already orthonormal-normalized
 
         val = zero(ComplexF64)
         @inbounds for l in im:ltr
-            val += Ql[l-im+1] * Nlm[l+1, im+1] * P[l+1]
+            val += Ql[l-im+1] * P[l+1]
         end
         Vr_m[i] = val * inv_scaleφ
     end
@@ -373,21 +373,20 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
 
     result = 0.0
     P = Vector{Float64}(undef, lmax + 1)
-    Nlm = cfg.Nlm  # hoist field read out of the l loops (cfg is mutable, so the compiler can't lift it)
 
     # m = 0 contribution (no conjugate partner)
-    Plm_row!(P, cost, lmax, 0)
+    Plm_norm_row!(P, cost, lmax, 0)  # P̄ already orthonormal-normalized
     @inbounds for l in 0:lmax
-        result += real(Qlm[l+1, 1]) * Nlm[l+1, 1] * P[l+1]
+        result += real(Qlm[l+1, 1]) * P[l+1]
     end
 
     # m > 0 contributions: add both +m and -m via 2*real(...)
     for m in 1:mmax
-        Plm_row!(P, cost, lmax, m)
+        Plm_norm_row!(P, cost, lmax, m)  # P̄ already orthonormal-normalized
         phase = cis(m * phi)  # e^(imφ)
         gm = zero(ComplexF64)
         @inbounds for l in m:lmax
-            gm += Qlm[l+1, m+1] * Nlm[l+1, m+1] * P[l+1]
+            gm += Qlm[l+1, m+1] * P[l+1]
         end
         result += 2 * real(gm * phase)
     end

@@ -110,3 +110,66 @@ end
     @test all(isfinite, ab)
     @test isapprox(ab, alm_3d; rtol=1e-8, atol=1e-10)
 end
+
+@testset "planned sphtor + point/packed/truncated finite at lmax 256" begin
+    lmax = 256
+    cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
+
+    # --- planned sphtor round-trip (was NaN before this task) ---
+    S0 = zeros(ComplexF64, lmax+1, lmax+1); T0 = copy(S0)
+    for m in 0:lmax, l in max(1,m):lmax
+        sc = 1/(1+l)^2
+        S0[l+1,m+1] = complex(sc, m==0 ? 0.0 : 0.5sc)
+        T0[l+1,m+1] = complex(0.7sc, m==0 ? 0.0 : -0.3sc)
+    end
+
+    # synthesis_sphtor (non-planned) produces reference spatial fields
+    Vt, Vp = SHTnsKit.synthesis_sphtor(cfg, S0, T0; real_output=true)
+    @test all(isfinite, Vt) && all(isfinite, Vp)
+
+    # planned analysis_sphtor! (was the confirmed-broken path)
+    plan = SHTPlan(cfg)
+    Slm = zeros(ComplexF64, lmax+1, lmax+1); Tlm = copy(Slm)
+    SHTnsKit.analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)
+    @test all(isfinite, Slm) && all(isfinite, Tlm)
+    @test isapprox(Slm, S0; rtol=1e-7, atol=1e-9) && isapprox(Tlm, T0; rtol=1e-7, atol=1e-9)
+
+    # planned synthesis_sphtor!
+    Vt2 = similar(Vt); Vp2 = similar(Vp)
+    SHTnsKit.synthesis_sphtor!(plan, Vt2, Vp2, S0, T0)
+    @test all(isfinite, Vt2) && all(isfinite, Vp2)
+    @test isapprox(Vt2, Vt; rtol=1e-7, atol=1e-9) && isapprox(Vp2, Vp; rtol=1e-7, atol=1e-9)
+
+    # --- scalar point evaluation (synthesis_point; transforms.jl) ---
+    a0 = zeros(ComplexF64, lmax+1, lmax+1)
+    for m in 0:lmax, l in m:lmax
+        sc = 1/(1+l)^2
+        a0[l+1,m+1] = m==0 ? complex(sc) : complex(sc, 0.5sc)
+    end
+    pt_val = SHTnsKit.synthesis_point(cfg, a0, 0.3, 0.7)
+    @test isfinite(pt_val)
+
+    # --- axisymmetric analysis/synthesis (transforms.jl): check finite ---
+    # The axisym pair integrates over θ only (no φ factor), so analysis∘synthesis
+    # returns alm / (2π); just verify finiteness here.
+    f_ax = SHTnsKit.synthesis_axisym(cfg, a0[:, 1])
+    @test all(isfinite, f_ax)
+    ql_ax = SHTnsKit.analysis_axisym(cfg, real.(f_ax))
+    @test all(isfinite, ql_ax)
+
+    # --- analysis_axisym_l / synthesis_axisym_l (truncated, transforms.jl) ---
+    ltr = lmax ÷ 2
+    f_axl = SHTnsKit.synthesis_axisym_l(cfg, a0[:, 1], ltr)
+    @test all(isfinite, f_axl)
+    ql_axl = SHTnsKit.analysis_axisym_l(cfg, real.(f_axl), ltr)
+    @test all(isfinite, ql_axl)
+
+    # --- analysis_packed_ml / synthesis_packed_ml (per-m, transforms.jl) ---
+    im_test = 3; ltr2 = lmax ÷ 2
+    Ql_ml = a0[im_test+1:ltr2+1, im_test+1]  # coefficients for m=im_test, l=im_test:ltr2
+    Vr_ml = SHTnsKit.synthesis_packed_ml(cfg, im_test, Ql_ml, ltr2)
+    @test all(isfinite, Vr_ml)
+    Ql_ml2 = SHTnsKit.analysis_packed_ml(cfg, im_test, Vr_ml, ltr2)
+    @test all(isfinite, Ql_ml2)
+    @test isapprox(Ql_ml2, Ql_ml; rtol=1e-7, atol=1e-9)
+end

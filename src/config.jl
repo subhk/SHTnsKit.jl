@@ -1172,22 +1172,27 @@ function prepare_plm_tables!(cfg::SHTConfig)
     dtables = [zeros(Float64, lmax + 1, nlat) for _ in 0:mmax]  # dP_l^m/dx derivatives
     
     # Working arrays for computing one row at a time
-    P = Vector{Float64}(undef, lmax + 1)      # P_l^m(x) for fixed (x,m), varying l
-    dPdx = Vector{Float64}(undef, lmax + 1)   # dP_l^m/dx for fixed (x,m), varying l
-    
-    # Compute tables for each azimuthal order m
+    P = Vector{Float64}(undef, lmax + 1)      # P̄_l^m(x) normalized values
+    dPdtheta = Vector{Float64}(undef, lmax + 1)  # dP̄_l^m/dθ normalized θ-derivatives
+
+    # Compute tables for each azimuthal order m using bounded normalized recurrence
+    # plm_tables[m+1][l+1, i]  = P̄_l^m(x_i)   (orthonormal; no overflow at high lmax)
+    # dplm_tables[m+1][l+1, i] = -(dP̄_l^m/dθ)/sinθ_i  (matches NdP convention used by batch kernels)
+    # Gauss nodes never hit poles, so sinθ > 0 for all i.
     for m in 0:mmax
         tbl = tables[m+1]    # Access using 1-based indexing
         dtbl = dtables[m+1]
-        
-        # Compute Legendre polynomials at each latitude point
+
+        # Compute normalized Legendre polynomials at each latitude point
         for i in 1:nlat
-            # Compute all degrees l for this (x_i, m) pair
-            Plm_and_dPdx_row!(P, dPdx, cfg.x[i], lmax, m)
-            
-            # Store results in precomputed tables
-            @inbounds @views tbl[:, i] .= P      # P_l^m(x_i) for l=0:lmax
-            @inbounds @views dtbl[:, i] .= dPdx  # dP_l^m/dx(x_i) for l=0:lmax
+            s_i = sqrt(max(0.0, 1.0 - cfg.x[i]^2))
+            Plm_norm_and_dPdtheta_row!(P, dPdtheta, cfg.x[i], lmax, m)
+
+            # Store normalized values — no Nlm multiply needed (P̄ already = Nlm * rawP)
+            @inbounds @views tbl[:, i] .= P         # P̄_l^m(x_i) for l=0:lmax
+            @inbounds for l in 0:lmax
+                dtbl[l+1, i] = -dPdtheta[l+1] / s_i  # -(dP̄/dθ)/sinθ (matches NdP convention)
+            end
         end
     end
     

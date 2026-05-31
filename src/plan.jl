@@ -124,6 +124,7 @@ struct SHTPlan{FP, IP, RP, IRP}
     dPdx::Vector{Float64}         # Working array for derivatives dP_l^m/dx (legacy, kept for compatibility)
     dPdtheta::Vector{Float64}     # Working array for pole-safe derivatives dP_l^m/dθ
     P_over_sinth::Vector{Float64} # Working array for pole-safe P_l^m/sin(θ)
+    Pb::Vector{Float64}           # Scratch buffer of length lmax+2 for normalized dθ recurrence
     G::Vector{ComplexF64}         # Temporary array for latitudinal profiles
     Fθk::Matrix{ComplexF64}       # Fourier coefficient matrix [latitude × longitude] (complex path)
     Fθk_r::Matrix{ComplexF64}     # (nlat, nlon÷2+1) buffer for rfft path; 0×0 when use_rfft=false
@@ -163,6 +164,7 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
     dPdx = Vector{Float64}(undef, cfg.lmax + 1)         # dP_l^m/d(cos θ) derivatives (legacy)
     dPdtheta = Vector{Float64}(undef, cfg.lmax + 1)     # dP_l^m/dθ pole-safe derivatives
     P_over_sinth = Vector{Float64}(undef, cfg.lmax + 1) # P_l^m/sin(θ) pole-safe
+    Pb = Vector{Float64}(undef, cfg.lmax + 2)           # Scratch for normalized dθ recurrence (needs lmax+2)
     G = Vector{ComplexF64}(undef, nlat)                 # Temporary latitudinal profiles
 
     # Full complex FFT path — always present for vector (sphtor) transforms
@@ -194,7 +196,7 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
     norm_tmp1 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
     norm_tmp2 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
 
-    return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, G, Fθk, Fθk_r, real_scratch,
+    return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, Pb, G, Fθk, Fθk_r, real_scratch,
                    fft_plan, ifft_plan, rfft_plan, irfft_plan, use_rfft,
                    norm_tmp1, norm_tmp2)
 end
@@ -262,17 +264,16 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
             Fbuf = plan.Fθk
         end
 
-        xv = cfg.x; wv = cfg.w; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+        xv = cfg.x; wv = cfg.w  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
         for m in 0:mmax
             col = m + 1
             for i in 1:nlat
-                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m)
+                Plm_norm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m, plan.Pb)
                 fourier_coeff = Fbuf[i, col]
                 quad_weight = wv[i]
                 @inbounds for l in max(1,m):lmax
-                    norm_factor = Nlm[l+1, col]
-                    legendre_deriv = norm_factor * plan.dPdtheta[l+1]
-                    legendre_over_sinθ = norm_factor * plan.P_over_sinth[l+1]
+                    legendre_deriv = plan.dPdtheta[l+1]       # already orthonormal-normalized
+                    legendre_over_sinθ = plan.P_over_sinth[l+1]
                     weight_coeff = quad_weight * scaleφ / (l*(l+1))
                     if pass == 1
                         # From Vθ: S gets +dθY*Vθ, T gets +(im*m/sinθ)*Vθ
@@ -338,16 +339,15 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
             fill!(plan.Fθk, zero(eltype(plan.Fθk)))
         end
 
-        xv = cfg.x; Nlm = cfg.Nlm  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
+        xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
         for m in 0:mmax
             col = m + 1
             for i in 1:nlat
-                Plm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m)
+                Plm_norm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m, plan.Pb)
                 g = zero(ComplexF64)
                 @inbounds for l in max(1,m):lmax
-                    N = Nlm[l+1, col]
-                    dθY = N * plan.dPdtheta[l+1]
-                    Y_over_sθ = N * plan.P_over_sinth[l+1]
+                    dθY = plan.dPdtheta[l+1]       # already orthonormal-normalized
+                    Y_over_sθ = plan.P_over_sinth[l+1]
                     Sl = Slm_int[l+1, col]; Tl = Tlm_int[l+1, col]
                     if pass == 1
                         # Vθ = ∂S/∂θ - (im/sinθ) * T

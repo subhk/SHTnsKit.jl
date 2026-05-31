@@ -38,4 +38,46 @@ const rank = MPI.Comm_rank(comm)
     rank == 0 && println("DistTransposePlan construction OK on $(MPI.Comm_size(comm)) rank(s)")
 end
 
+@testset "transpose dist_analysis! vs serial (scalar)" begin
+    for lmax in (32, 64)
+        nlat = lmax + 2; nlon = 2 * lmax + 1
+        cfg  = create_gauss_config(lmax, nlat; nlon = nlon)
+
+        # Build reference: random spectral coefficients → serial synthesis → serial analysis
+        a0 = zeros(ComplexF64, lmax + 1, lmax + 1)
+        for m in 0:lmax, l in m:lmax
+            sc = 1.0 / (1 + l)^2
+            a0[l+1, m+1] = m == 0 ? complex(sc) : complex(sc, 0.5sc)
+        end
+        f_full = SHTnsKit.synthesis(cfg, a0; real_output = true)  # (nlat, nlon)
+        a_ref  = SHTnsKit.analysis(cfg, f_full)                   # (lmax+1, mmax+1) reference
+
+        # Build transpose plan and fill spatial PencilArray from f_full
+        plan = DistTransposePlan(cfg; comm = comm, nlev = 1, use_rfft = true)
+        f    = allocate_spatial(plan)   # real PencilArray, global (nlon, nlat), θ-distributed
+
+        # range_local gives global index ranges for each logical dim:
+        #   r[1] = φ range (1-based global column indices, typically 1:nlon on every rank)
+        #   r[2] = θ range (1-based global row indices for this rank's slice)
+        r = PencilArrays.range_local(pencil(f))
+        # parent(f) layout: (n_phi_local, n_theta_local, nlev)
+        for (il, ig) in enumerate(r[2]), (jl, jg) in enumerate(r[1])
+            # f_full[ig, jg] = f_full[θ_global, φ_global]
+            parent(f)[jl, il, 1] = f_full[ig, jg]
+        end
+
+        Alm = allocate_spectral(plan)
+        dist_analysis!(plan, Alm, f)
+
+        # Compare each rank's owned m-columns against the dense serial reference
+        err = 0.0
+        for (mi, m) in enumerate(plan.m_local), l in m:lmax
+            err = max(err, abs(parent(Alm)[l+1, mi, 1] - a_ref[l+1, m+1]))
+        end
+        gerr = MPI.Allreduce(err, MPI.MAX, comm)
+        rank == 0 && println("lmax=$lmax scalar analysis gerr=$gerr")
+        @test gerr < 1e-8
+    end
+end
+
 MPI.Finalize()

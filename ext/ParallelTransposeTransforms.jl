@@ -31,6 +31,8 @@ Key invariants
 ================================================================================
 =#
 
+import LinearAlgebra: mul!
+
 # ---------------------------------------------------------------------------
 # Struct
 # ---------------------------------------------------------------------------
@@ -146,6 +148,63 @@ function SHTnsKit.DistTransposePlan(
         fft_plan, F_buf, spectral_pencil,
         m_local, NP,
     )
+end
+
+# ---------------------------------------------------------------------------
+# Analysis: spatial → spectral
+# ---------------------------------------------------------------------------
+
+"""
+    dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::PencilArray) -> Alm
+
+Distributed scalar spherical harmonic analysis using the transpose approach.
+
+Takes a spatial field `f` (global `(nlon, nlat)`, θ-distributed, produced by
+`allocate_spatial(plan)`) and writes spherical harmonic coefficients into `Alm`
+(global `(lmax+1, mmax+1)`, m-distributed, produced by `allocate_spectral(plan)`).
+
+The forward pass is:
+1. `mul!(F_buf, fft_plan, f)` — rFFT(φ) + internal pencil transpose → `F_buf[mi, θ, lev]`
+   where θ is now fully local on every rank and m is distributed across ranks.
+2. Legendre contraction per local m:
+   `Alm[l+1, mi, lev] = Σ_i w[i] · NP[mi][l+1, i] · cphi · F[mi, i, lev]`
+"""
+function SHTnsKit.dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::PencilArray)
+    # Step 1: rFFT(φ) + internal pencil transpose.
+    # After mul!, F_buf has logical dims (m, θ) with permutation (2,1), so the
+    # physical parent storage order is (θ, m, lev):
+    #   parent(F_buf)[i, mi, lev]   where i=theta index, mi=m-slot index
+    # This is because PencilFFTs outputs F with Permutation(2,1) (physical dim1
+    # = logical dim2 = θ, physical dim2 = logical dim1 = m).
+    mul!(plan.F_buf, plan.fft_plan, f)
+
+    F = parent(plan.F_buf)   # (nlat, n_m_local, nlev)  — physical storage (θ, m, lev)
+    A = parent(Alm)          # (lmax+1, n_m_local, nlev)
+
+    fill!(A, zero(eltype(A)))
+
+    w       = plan.cfg.w
+    scaleφ  = plan.cfg.cphi   # 2π/nlon — converts unnormalized rFFT sum to integral
+    lmax    = plan.lmax
+    nlat    = plan.nlat
+    nlev    = plan.nlev
+
+    # Step 2: Legendre contraction.
+    # Access pattern: NP[mi] is (lmax+1, nlat) column-major; iterating i in the
+    # inner loop walks NP columns sequentially. F[i, mi, lev] is also column-major
+    # friendly with i as the fast index (dim1 of parent).
+    @inbounds for lev in 1:nlev
+        for (mi, m) in enumerate(plan.m_local)
+            NP_mi = plan.NP[mi]          # (lmax+1, nlat) matrix for this m
+            for i in 1:nlat
+                wi_cphi_Fi = w[i] * scaleφ * F[i, mi, lev]
+                for l in m:lmax
+                    A[l+1, mi, lev] += NP_mi[l+1, i] * wi_cphi_Fi
+                end
+            end
+        end
+    end
+    return Alm
 end
 
 # ---------------------------------------------------------------------------

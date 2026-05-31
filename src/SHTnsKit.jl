@@ -440,6 +440,7 @@ dist_analysis!(::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not l
 dist_synthesis!(::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_analysis_sphtor!(::Any, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_synthesis_sphtor!(::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
+dist_synthesis_sphtor!(::Any, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_analysis_qst!(::Any, ::Any, ::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_synthesis_qst!(::Any, ::Any, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")
 dist_SH_to_lat(::SHTConfig, ::Any, ::Any; kwargs...) = error("Parallel extension not loaded")

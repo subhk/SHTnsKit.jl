@@ -42,7 +42,7 @@ import LinearAlgebra: mul!, ldiv!
 
 Plan for a transpose-based distributed spherical harmonic transform.
 
-Constructed via `DistTransposePlan(cfg; comm, nlev, use_rfft)`.
+Constructed via `DistTransposePlan(cfg; comm, nlev, use_rfft, with_vector)`.
 
 # Fields
 - `cfg`             : SHTConfig (replicated across ranks)
@@ -50,9 +50,12 @@ Constructed via `DistTransposePlan(cfg; comm, nlev, use_rfft)`.
 - `comm`            : MPI communicator
 - `fft_plan`        : `PencilFFTPlan((nlon, nlat), …)` — rFFT(φ) + internal transpose
 - `F_buf`           : pre-allocated output of `fft_plan` (m-distributed, θ-local)
+- `F_buf2`          : second pre-allocated output buffer for the second vector component
 - `spectral_pencil` : `Pencil` for Alm arrays, global `(lmax+1, mmax+1)`, m-decomposed
 - `m_local`         : 0-based global m indices owned by this rank (in F-dim-1 order)
 - `NP`              : `NP[mi]` = `(lmax+1, nlat)` matrix of P̄_l^{m_local[mi]}(cos θ_i)
+- `dP`              : `dP[mi]` = `(lmax+1, nlat)` matrix of dP̄_l^m/dθ at each latitude
+- `Pos`             : `Pos[mi]` = `(lmax+1, nlat)` matrix of P̄_l^m/sinθ at each latitude
 """
 struct DistTransposePlan{TP, TFB, TSP}
     cfg           :: SHTnsKit.SHTConfig
@@ -64,9 +67,12 @@ struct DistTransposePlan{TP, TFB, TSP}
     comm          :: MPI.Comm
     fft_plan      :: TP                      # PencilFFTPlan
     F_buf         :: TFB                     # allocate_output(fft_plan): m-dist/θ-local + extra (nlev,)
+    F_buf2        :: TFB                     # second buffer for vector component
     spectral_pencil :: TSP                   # Pencil for Alm: global (lmax+1,mmax+1), m-dist on dim2
     m_local       :: Vector{Int}             # 0-based global m indices this rank owns
     NP            :: Vector{Matrix{Float64}} # NP[mi] = (lmax+1, nlat) normalized Legendre table
+    dP            :: Vector{Matrix{Float64}} # dP[mi] = (lmax+1, nlat) dP̄_l^m/dθ table
+    Pos           :: Vector{Matrix{Float64}} # Pos[mi] = (lmax+1, nlat) P̄_l^m/sinθ table
 end
 
 # ---------------------------------------------------------------------------
@@ -75,9 +81,10 @@ end
 
 function SHTnsKit.DistTransposePlan(
         cfg::SHTnsKit.SHTConfig;
-        comm   :: MPI.Comm = MPI.COMM_WORLD,
-        nlev   :: Int      = 1,
-        use_rfft :: Bool   = true)
+        comm        :: MPI.Comm = MPI.COMM_WORLD,
+        nlev        :: Int      = 1,
+        use_rfft    :: Bool     = true,
+        with_vector :: Bool     = true)
 
     nlat = cfg.nlat
     nlon = cfg.nlon
@@ -100,7 +107,8 @@ function SHTnsKit.DistTransposePlan(
 
     # 2. Allocate the spectral output buffer: shape (m_local, θ_ALL, nlev),
     #    decomposed on dim1 (m).
-    F_buf = allocate_output(fft_plan)
+    F_buf  = allocate_output(fft_plan)
+    F_buf2 = allocate_output(fft_plan)   # second buffer for vector (sphtor) component
 
     # 3. Determine which m values this rank owns (from F_buf's pencil).
     #    dim1 of F_buf's pencil is the m dimension (after the internal FFT+transpose).
@@ -130,23 +138,42 @@ function SHTnsKit.DistTransposePlan(
 
     # 6. Pre-compute normalized Legendre tables for each local m.
     #    NP[mi][l+1, i] = P̄_l^{m_local[mi]}(cos θ_i)  for i=1..nlat, l=0..lmax
-    P_buf = Vector{Float64}(undef, lmax + 1)
-    NP    = Vector{Matrix{Float64}}(undef, length(m_local))
+    #    When with_vector=true also compute dP (dP̄/dθ) and Pos (P̄/sinθ) tables.
+    P_buf   = Vector{Float64}(undef, lmax + 1)
+    dP_buf  = Vector{Float64}(undef, lmax + 1)
+    Pos_buf = Vector{Float64}(undef, lmax + 1)
+    NP  = Vector{Matrix{Float64}}(undef, length(m_local))
+    dP  = Vector{Matrix{Float64}}(undef, length(m_local))
+    Pos = Vector{Matrix{Float64}}(undef, length(m_local))
     for (mi, m) in enumerate(m_local)
-        tbl = Matrix{Float64}(undef, lmax + 1, nlat)
+        tbl_NP  = Matrix{Float64}(undef, lmax + 1, nlat)
+        tbl_dP  = Matrix{Float64}(undef, lmax + 1, nlat)
+        tbl_Pos = Matrix{Float64}(undef, lmax + 1, nlat)
         for i in 1:nlat
-            SHTnsKit.Plm_norm_row!(P_buf, cfg.x[i], lmax, m)
-            @inbounds for l in 0:lmax
-                tbl[l + 1, i] = P_buf[l + 1]
+            if with_vector
+                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
+                    P_buf, dP_buf, Pos_buf, cfg.x[i], lmax, m)
+                @inbounds for l in 0:lmax
+                    tbl_NP[l+1, i]  = P_buf[l+1]
+                    tbl_dP[l+1, i]  = dP_buf[l+1]
+                    tbl_Pos[l+1, i] = Pos_buf[l+1]
+                end
+            else
+                SHTnsKit.Plm_norm_row!(P_buf, cfg.x[i], lmax, m)
+                @inbounds for l in 0:lmax
+                    tbl_NP[l+1, i] = P_buf[l+1]
+                end
             end
         end
-        NP[mi] = tbl
+        NP[mi]  = tbl_NP
+        dP[mi]  = tbl_dP
+        Pos[mi] = tbl_Pos
     end
 
     return DistTransposePlan(
         cfg, nlat, nlon, lmax, mmax, nlev, comm,
-        fft_plan, F_buf, spectral_pencil,
-        m_local, NP,
+        fft_plan, F_buf, F_buf2, spectral_pencil,
+        m_local, NP, dP, Pos,
     )
 end
 
@@ -258,6 +285,133 @@ function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::
     # Single inverse Alltoall + irFFT for the ENTIRE nlev batch (one collective).
     ldiv!(f, plan.fft_plan, plan.F_buf)
     return f
+end
+
+# ---------------------------------------------------------------------------
+# Vector (sphtor) transforms
+# ---------------------------------------------------------------------------
+
+"""
+    dist_analysis_sphtor!(plan::DistTransposePlan, Slm, Tlm, Vt, Vp) -> (Slm, Tlm)
+
+Distributed spheroidal/toroidal analysis using the transpose approach.
+
+Takes spatial vector field components `Vt` (colatitude) and `Vp` (azimuthal),
+both global `(nlon, nlat)` PencilArrays, and writes spheroidal/toroidal spectral
+coefficients into `Slm` and `Tlm` (both global `(lmax+1, mmax+1)` PencilArrays).
+
+Two FFT+transpose collectives are performed (one per component), then a local
+Legendre contraction over (lev, m, θ, l) using the pre-built dP and Pos tables.
+"""
+function SHTnsKit.dist_analysis_sphtor!(plan::DistTransposePlan,
+                                         Slm::PencilArray, Tlm::PencilArray,
+                                         Vt::PencilArray,  Vp::PencilArray)
+    # Step 1: rFFT(φ) + internal transpose for both components.
+    mul!(plan.F_buf,  plan.fft_plan, Vt)
+    mul!(plan.F_buf2, plan.fft_plan, Vp)
+
+    Ft = parent(plan.F_buf)    # (nlat, n_m_local, nlev) — θ fast, complex Fourier m-modes
+    Fp = parent(plan.F_buf2)
+
+    S = parent(Slm)            # (lmax+1, n_m_local, nlev)
+    T = parent(Tlm)
+
+    fill!(S, zero(eltype(S)))
+    fill!(T, zero(eltype(T)))
+
+    w       = plan.cfg.w
+    scaleφ  = plan.cfg.cphi    # 2π/nlon — converts unnormalized rFFT sum to integral
+    lmax    = plan.lmax
+    nlat    = plan.nlat
+    nlev    = plan.nlev
+
+    # Step 2: sphtor Legendre contraction per local m.
+    # Kernel (from kernels.jl _sphtor_analysis_kernel_otf!):
+    #   coeff = w[i] * scaleφ / (l*(l+1))
+    #   term  = im*m * Y_over_s
+    #   Sacc[l] += coeff * (Ft_i * dtheta_Y + conj(term) * Fp_i)
+    #   Tacc[l] += coeff * (-conj(term) * Ft_i + dtheta_Y * Fp_i)
+    @inbounds for lev in 1:nlev
+        for (mi, m) in enumerate(plan.m_local)
+            dP_mi  = plan.dP[mi]   # (lmax+1, nlat)
+            Pos_mi = plan.Pos[mi]  # (lmax+1, nlat)
+            for i in 1:nlat
+                wi_scale = w[i] * scaleφ
+                Ft_i = Ft[i, mi, lev]
+                Fp_i = Fp[i, mi, lev]
+                for l in max(1, m):lmax
+                    dtheta_Y = dP_mi[l+1, i]
+                    Y_over_s = Pos_mi[l+1, i]
+                    coeff    = wi_scale / (l * (l + 1))
+                    term     = (1.0im * m) * Y_over_s   # im*m * P̄/sinθ
+                    S[l+1, mi, lev] += coeff * (Ft_i * dtheta_Y + conj(term) * Fp_i)
+                    T[l+1, mi, lev] += coeff * (-conj(term) * Ft_i + dtheta_Y * Fp_i)
+                end
+            end
+        end
+    end
+    return Slm, Tlm
+end
+
+"""
+    dist_synthesis_sphtor!(plan::DistTransposePlan, Vt, Vp, Slm, Tlm) -> (Vt, Vp)
+
+Distributed spheroidal/toroidal synthesis using the transpose approach.
+
+Takes spectral coefficients `Slm` and `Tlm` (both global `(lmax+1, mmax+1)`
+PencilArrays) and writes reconstructed vector field components into `Vt` and `Vp`
+(both global `(nlon, nlat)` PencilArrays).
+
+Local Legendre expansion Slm,Tlm → Ft,Fp, then two inverse FFT+transpose collectives
+(one per component) recover the real spatial fields.
+"""
+function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
+                                          Vt::PencilArray,  Vp::PencilArray,
+                                          Slm::PencilArray, Tlm::PencilArray)
+    S = parent(Slm)            # (lmax+1, n_m_local, nlev)
+    T = parent(Tlm)
+
+    Ft = parent(plan.F_buf)    # (nlat, n_m_local, nlev)
+    Fp = parent(plan.F_buf2)
+
+    fill!(Ft, zero(eltype(Ft)))
+    fill!(Fp, zero(eltype(Fp)))
+
+    inv_scaleφ = SHTnsKit.phi_inv_scale(plan.cfg)
+    lmax = plan.lmax
+    nlat = plan.nlat
+    nlev = plan.nlev
+
+    # Legendre expansion: for each local m, sum over l → Ft[i,mi,lev], Fp[i,mi,lev]
+    # Kernel (from kernels.jl _sphtor_synthesis_kernel_otf):
+    #   g_theta += dtheta_Y * Sl - im*m * Y_over_s * Tl
+    #   g_phi   += im*m * Y_over_s * Sl + dtheta_Y * Tl
+    # Then scale by inv_scaleφ (same as scalar synthesis) to undo the rFFT normalization.
+    @inbounds for lev in 1:nlev
+        for (mi, m) in enumerate(plan.m_local)
+            dP_mi  = plan.dP[mi]
+            Pos_mi = plan.Pos[mi]
+            for i in 1:nlat
+                g_theta = zero(ComplexF64)
+                g_phi   = zero(ComplexF64)
+                for l in max(1, m):lmax
+                    dtheta_Y = dP_mi[l+1, i]
+                    Y_over_s = Pos_mi[l+1, i]
+                    Sl = S[l+1, mi, lev]
+                    Tl = T[l+1, mi, lev]
+                    g_theta += dtheta_Y * Sl - (1.0im * m) * Y_over_s * Tl
+                    g_phi   += (1.0im * m) * Y_over_s * Sl + dtheta_Y * Tl
+                end
+                Ft[i, mi, lev] = inv_scaleφ * g_theta
+                Fp[i, mi, lev] = inv_scaleφ * g_phi
+            end
+        end
+    end
+
+    # Two inverse Alltoall + irFFT collectives (one per component).
+    ldiv!(Vt, plan.fft_plan, plan.F_buf)
+    ldiv!(Vp, plan.fft_plan, plan.F_buf2)
+    return Vt, Vp
 end
 
 # ---------------------------------------------------------------------------

@@ -150,4 +150,33 @@ end
     @test rt < 1e-8
 end
 
+@testset "transpose dist sphtor round-trip" begin
+    for lmax in (32, 64)
+        nlat=lmax+2; nlon=2*lmax+1; cfg=create_gauss_config(lmax,nlat;nlon=nlon)
+        S0=zeros(ComplexF64,lmax+1,lmax+1); T0=copy(S0)
+        for m in 0:lmax, l in max(1,m):lmax; sc=1/(1+l)^2; S0[l+1,m+1]=complex(sc, m==0 ? 0.0 : 0.5sc); T0[l+1,m+1]=complex(0.7sc, m==0 ? 0.0 : -0.3sc); end
+        Vt_full, Vp_full = SHTnsKit.synthesis_sphtor(cfg, S0, T0; real_output=true)
+        S_ref, T_ref = SHTnsKit.analysis_sphtor(cfg, Vt_full, Vp_full)   # serial reference
+        plan=DistTransposePlan(cfg; comm=comm, nlev=1, use_rfft=true, with_vector=true)
+        Vt=allocate_spatial(plan); Vp=allocate_spatial(plan)
+        r=PencilArrays.range_local(pencil(Vt))   # (φ,θ,lev)
+        for (il,ig) in enumerate(r[2]), (jl,jg) in enumerate(r[1])
+            parent(Vt)[jl,il,1]=Vt_full[ig,jg]; parent(Vp)[jl,il,1]=Vp_full[ig,jg]
+        end
+        Slm=allocate_spectral(plan); Tlm=allocate_spectral(plan)
+        dist_analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)
+        err=0.0
+        for (mi,m) in enumerate(plan.m_local), l in max(1,m):lmax
+            err=max(err, abs(parent(Slm)[l+1,mi,1]-S_ref[l+1,m+1]), abs(parent(Tlm)[l+1,mi,1]-T_ref[l+1,m+1]))
+        end
+        gerr=MPI.Allreduce(err, MPI.MAX, comm); MPI.Comm_rank(comm)==0 && println("lmax=$lmax sphtor analysis gerr=$gerr")
+        @test gerr < 1e-7
+        Vt2=allocate_spatial(plan); Vp2=allocate_spatial(plan)
+        dist_synthesis_sphtor!(plan, Vt2, Vp2, Slm, Tlm)
+        rt=MPI.Allreduce(max(maximum(abs.(parent(Vt2).-parent(Vt))), maximum(abs.(parent(Vp2).-parent(Vp)))), MPI.MAX, comm)
+        MPI.Comm_rank(comm)==0 && println("lmax=$lmax sphtor round-trip gerr=$rt")
+        @test rt < 1e-7
+    end
+end
+
 MPI.Finalize()

@@ -387,37 +387,54 @@ end
 
 @kernel function legendre_associated_kernel!(Plm, x, lmax, mmax)
     """
-    GPU kernel for computing associated Legendre polynomials P_l^m(x).
+    GPU kernel for computing ORTHONORMAL normalized associated Legendre functions P̄_l^m(x).
     Parallelized over (latitude, m) pairs for maximum GPU utilization.
-    Uses stable three-term recurrence relations.
-    Computes UNNORMALIZED Plm - normalization is applied during integration.
+
+    Computes P̄_l^m = Nlm·P_l^m directly via a bounded recurrence (|P̄| ≲ 1 at all l,m),
+    fixing overflow for lmax ≥ ~151 that afflicted the old unnormalized approach.
+    The downstream analysis/synthesis kernels must NOT multiply by Nlm (it is folded in).
+
+    Recurrence (Condon–Shortley phase included, orthonormal convention):
+      P̄_0^0 = 1/sqrt(4π)   (INV_SQRT_4PI)
+      P̄_m^m = −sqrt((2m+1)/(2m)) · sinθ · P̄_{m−1}^{m−1}   (sectoral step)
+      P̄_{m+1}^m = sqrt(2m+3) · x · P̄_m^m
+      P̄_l^m = a·x·P̄_{l−1}^m − b·P̄_{l−2}^m   (l ≥ m+2)
+        a = sqrt(((2l−1)(2l+1)) / ((l−m)(l+m)))
+        b = sqrt(((2l+1)(l−1−m)(l−1+m)) / ((2l−3)(l−m)(l+m)))
     """
     i, m_idx = @index(Global, NTuple)
     nlat = length(x)
     if i <= nlat && m_idx <= mmax + 1
         m = m_idx - 1
         xi = x[i]
-        sint = sqrt(max(0.0, 1 - xi*xi))  # sin(θ) = sqrt(1 - cos²(θ))
+        sint = sqrt(max(0.0, 1.0 - xi*xi))  # sin(θ)
 
-        # Compute P_m^m (diagonal term) using recurrence from P_0^0
-        # P_0^0 = 1, P_m^m = -(2m-1) * sin(θ) * P_{m-1}^{m-1}
-        pmm = 1.0
+        # ── Sectoral term P̄_m^m ────────────────────────────────────────────────
+        # Start from P̄_0^0 = 1/sqrt(4π) and apply the sectoral recurrence m times.
+        # Each step: P̄_k^k = −sqrt((2k+1)/(2k)) · sinθ · P̄_{k−1}^{k−1}
+        const_inv_sqrt4pi = 0.28209479177387814  # 1/sqrt(4π)
+        pmm = const_inv_sqrt4pi
         @inbounds for k = 1:m
-            pmm *= -(2*k - 1) * sint
+            pmm = -sqrt((2.0*k + 1.0) / (2.0*k)) * sint * pmm
         end
         Plm[i, m+1, m_idx] = pmm
 
-        # Compute P_{m+1}^m if m < lmax
+        # ── P̄_{m+1}^m ──────────────────────────────────────────────────────────
         if m < lmax
-            pm1m = (2*m + 1) * xi * pmm
+            pm1m = sqrt(2.0*m + 3.0) * xi * pmm
             Plm[i, m+2, m_idx] = pm1m
 
-            # Compute remaining P_l^m for l > m+1 using recurrence:
-            # P_l^m = ((2l-1) * x * P_{l-1}^m - (l+m-1) * P_{l-2}^m) / (l-m)
-            plm_prev2 = pmm      # P_{l-2}^m
-            plm_prev1 = pm1m     # P_{l-1}^m
+            # ── Three-term recurrence for l ≥ m+2 ──────────────────────────────
+            plm_prev2 = pmm    # P̄_{l−2}^m
+            plm_prev1 = pm1m   # P̄_{l−1}^m
             @inbounds for l = m+2:lmax
-                plm = ((2*l - 1) * xi * plm_prev1 - (l + m - 1) * plm_prev2) / (l - m)
+                fl  = Float64(l)
+                fm  = Float64(m)
+                a = sqrt(((2.0*fl - 1.0) * (2.0*fl + 1.0)) /
+                         ((fl - fm) * (fl + fm)))
+                b = sqrt(((2.0*fl + 1.0) * (fl - 1.0 - fm) * (fl - 1.0 + fm)) /
+                         ((2.0*fl - 3.0) * (fl - fm) * (fl + fm)))
+                plm = a * xi * plm_prev1 - b * plm_prev2
                 Plm[i, l+1, m_idx] = plm
                 plm_prev2 = plm_prev1
                 plm_prev1 = plm
@@ -428,51 +445,71 @@ end
 
 @kernel function legendre_and_derivative_kernel!(Plm, dPlm, x, lmax, mmax)
     """
-    GPU kernel for computing associated Legendre polynomials P_l^m(x) AND their
-    derivatives dP_l^m/dx. Required for vector spherical harmonic transforms.
+    GPU kernel for computing ORTHONORMAL normalized P̄_l^m(x) AND their
+    derivatives dP̄_l^m/dx. Required for vector spherical harmonic transforms.
 
-    The derivative satisfies: dP_l^m/dx = [l*x*P_l^m - (l+m)*P_{l-1}^m] / (x²-1)
+    Computes P̄_l^m via the same bounded normalized sectoral recurrence as
+    legendre_associated_kernel! (no overflow at high lmax).
+
+    For dP̄_l^m/dx the standard formula adapted to the normalized functions is:
+      (x²−1) · dP̄_l^m/dx = l·x·P̄_l^m − sqrt((l²−m²)(2l+1)/(2l−1)) · P̄_{l−1}^m
+    At poles (x²−1 ≈ 0) the derivative is set to zero (pole handling is done by
+    the pole closed-form in the downstream synthesis kernel via Nlm separately).
+
+    The downstream kernels must NOT multiply by Nlm (it is folded into P̄ and dP̄).
     """
     i, m_idx = @index(Global, NTuple)
     nlat = length(x)
     if i <= nlat && m_idx <= mmax + 1
         m = m_idx - 1
         xi = x[i]
-        sint = sqrt(max(0.0, 1 - xi*xi))
+        sint = sqrt(max(0.0, 1.0 - xi*xi))
         x2m1 = xi*xi - 1.0
         # Guard against x = ±1 (poles)
         inv_x2m1 = abs(x2m1) < 1e-14 ? 0.0 : 1.0 / x2m1
 
-        # Compute P_m^m (diagonal term)
-        pmm = 1.0
+        # ── Sectoral P̄_m^m (same as legendre_associated_kernel!) ────────────
+        const_inv_sqrt4pi = 0.28209479177387814
+        pmm = const_inv_sqrt4pi
         @inbounds for k = 1:m
-            pmm *= -(2*k - 1) * sint
+            pmm = -sqrt((2.0*k + 1.0) / (2.0*k)) * sint * pmm
         end
         Plm[i, m+1, m_idx] = pmm
 
-        # dP_m^m/dx: use recurrence dP_m^m/dx = m*x*P_m^m / (x²-1) for m > 0
-        # For m=0: dP_0^0/dx = 0
+        # dP̄_m^m/dx = m·x·P̄_m^m / (x²−1)   [0 for m=0]
         if m == 0
             dPlm[i, 1, 1] = 0.0
         else
-            dPlm[i, m+1, m_idx] = m * xi * pmm * inv_x2m1
+            dPlm[i, m+1, m_idx] = Float64(m) * xi * pmm * inv_x2m1
         end
 
-        # Compute P_{m+1}^m and its derivative if m < lmax
         if m < lmax
-            pm1m = (2*m + 1) * xi * pmm
+            # ── P̄_{m+1}^m ───────────────────────────────────────────────────
+            pm1m = sqrt(2.0*m + 3.0) * xi * pmm
             Plm[i, m+2, m_idx] = pm1m
-            # dP_{m+1}^m/dx = [(m+1)*x*P_{m+1}^m - (m+1+m)*P_m^m] / (x²-1)
-            dPlm[i, m+2, m_idx] = ((m+1) * xi * pm1m - (2*m+1) * pmm) * inv_x2m1
 
-            # Compute remaining P_l^m and dP_l^m/dx for l > m+1
-            plm_prev2 = pmm
-            plm_prev1 = pm1m
+            # dP̄_{m+1}^m/dx: l=m+1 case.
+            # Numerator: (m+1)·x·P̄_{m+1}^m − sqrt(((m+1)²−m²)(2(m+1)+1)/(2(m+1)−1)) · P̄_m^m
+            # = (m+1)·x·P̄_{m+1}^m − sqrt((2m+1)(2m+3)/(2m+1)) · P̄_m^m
+            # = (m+1)·x·P̄_{m+1}^m − sqrt(2m+3) · P̄_m^m
+            dPlm[i, m+2, m_idx] = (Float64(m+1) * xi * pm1m -
+                                    sqrt(2.0*m + 3.0) * pmm) * inv_x2m1
+
+            # ── Three-term recurrence for l ≥ m+2 ──────────────────────────
+            plm_prev2 = pmm    # P̄_{l−2}^m = P̄_m^m
+            plm_prev1 = pm1m   # P̄_{l−1}^m = P̄_{m+1}^m
             @inbounds for l = m+2:lmax
-                plm = ((2*l - 1) * xi * plm_prev1 - (l + m - 1) * plm_prev2) / (l - m)
+                fl = Float64(l)
+                fm = Float64(m)
+                a = sqrt(((2.0*fl - 1.0) * (2.0*fl + 1.0)) /
+                         ((fl - fm) * (fl + fm)))
+                b = sqrt(((2.0*fl + 1.0) * (fl - 1.0 - fm) * (fl - 1.0 + fm)) /
+                         ((2.0*fl - 3.0) * (fl - fm) * (fl + fm)))
+                plm = a * xi * plm_prev1 - b * plm_prev2
                 Plm[i, l+1, m_idx] = plm
-                # dP_l^m/dx = [l*x*P_l^m - (l+m)*P_{l-1}^m] / (x²-1)
-                dPlm[i, l+1, m_idx] = (l * xi * plm - (l + m) * plm_prev1) * inv_x2m1
+                # dP̄_l^m/dx = [l·x·P̄_l^m − sqrt((l²−m²)(2l+1)/(2l−1))·P̄_{l−1}^m] / (x²−1)
+                scale_lm = sqrt((fl*fl - fm*fm) * (2.0*fl + 1.0) / (2.0*fl - 1.0))
+                dPlm[i, l+1, m_idx] = (fl * xi * plm - scale_lm * plm_prev1) * inv_x2m1
                 plm_prev2 = plm_prev1
                 plm_prev1 = plm
             end
@@ -510,12 +547,12 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_ou
     # Allocate GPU arrays
     coeffs = CUDA.zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
     Plm = CUDA.zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1)
-    normalization = CuArray(cfg.Nlm)
     weights = CuArray(cfg.w)
     x_values = CuArray(cfg.x)  # cos(θ) values at Gauss points
 
-    # Step 1: Precompute UNNORMALIZED Legendre polynomials on GPU
-    # Parallelized over (latitude, m) pairs: nlat * (mmax+1) threads
+    # Step 1: Precompute ORTHONORMAL normalized Legendre functions P̄_l^m on GPU.
+    # P̄ = Nlm·P_l^m is bounded (|P̄| ≲ 1) at all lmax — no overflow.
+    # Normalization Nlm is folded into P̄; downstream kernels must NOT multiply by Nlm.
     backend = CUDABackend()
     legendre_kernel! = legendre_associated_kernel!(backend)
     legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax; ndrange=(cfg.nlat, cfg.mmax+1))
@@ -528,9 +565,10 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_ou
     # Scaling factor for φ integration (matches CPU: cfg.cphi = 2π/nlon)
     scaleφ = cfg.cphi
 
-    # Step 3: Fully parallel Legendre integration - ALL (l,m) pairs in one kernel
-    # Each thread computes one a_lm coefficient
-    @kernel function analysis_kernel!(coeffs, Fφ, Plm, weights, norm, nlat, nlon, lmax, mmax, scale)
+    # Step 3: Fully parallel Legendre integration - ALL (l,m) pairs in one kernel.
+    # Each thread computes one a_lm coefficient.
+    # Plm already holds P̄_l^m (orthonormal-normalized); no separate Nlm factor needed.
+    @kernel function analysis_kernel!(coeffs, Fφ, Plm, weights, nlat, nlon, lmax, mmax, scale)
         l_idx, m_idx = @index(Global, NTuple)
         if l_idx <= lmax + 1 && m_idx <= mmax + 1
             l = l_idx - 1
@@ -539,18 +577,17 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_ou
             if l >= m && m <= nlon ÷ 2
                 result = ComplexF64(0, 0)
                 @inbounds for i_lat = 1:nlat
-                    # Gauss-Legendre quadrature: weight * Plm * Fourier_mode
-                    # Fourier mode m is in column m+1
+                    # Gauss-Legendre quadrature: weight * P̄_l^m * Fourier_mode
+                    # Fourier mode m is in column m+1; P̄ already includes Nlm.
                     result += weights[i_lat] * Plm[i_lat, l_idx, m_idx] * Fφ[i_lat, m_idx]
                 end
-                # Apply normalization and φ scaling
-                coeffs[l_idx, m_idx] = result * norm[l_idx, m_idx] * scale
+                coeffs[l_idx, m_idx] = result * scale
             end
         end
     end
 
     analysis_k! = analysis_kernel!(backend)
-    analysis_k!(coeffs, gpu_data, Plm, weights, normalization,
+    analysis_k!(coeffs, gpu_data, Plm, weights,
                 cfg.nlat, cfg.nlon, cfg.lmax, cfg.mmax, scaleφ;
                 ndrange=(cfg.lmax+1, cfg.mmax+1))
     CUDA.synchronize()
@@ -585,30 +622,31 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
 
     # Allocate GPU arrays
     Plm = CUDA.zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1)
-    normalization = CuArray(cfg.Nlm)
     x_values = CuArray(cfg.x)  # cos(θ) values at Gauss points
 
     backend = CUDABackend()
 
-    # Step 1: Precompute UNNORMALIZED Legendre polynomials on GPU
-    # Parallelized over (latitude, m) pairs: nlat * (mmax+1) threads
+    # Step 1: Precompute ORTHONORMAL normalized Legendre functions P̄_l^m on GPU.
+    # P̄ = Nlm·P_l^m is bounded (|P̄| ≲ 1) at all lmax — no overflow.
+    # Normalization Nlm is folded into P̄; downstream kernel must NOT multiply by Nlm.
     legendre_kernel! = legendre_associated_kernel!(backend)
     legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax; ndrange=(cfg.nlat, cfg.mmax+1))
     CUDA.synchronize()
 
-    # Step 2: Fully parallel Legendre summation - ALL (θ, m) pairs in one kernel
-    # Each thread computes F_m(θ_i) for one latitude and one m-mode
+    # Step 2: Fully parallel Legendre summation - ALL (θ, m) pairs in one kernel.
+    # Each thread computes F_m(θ_i) = Σ_l a_lm * P̄_l^m(cos θ_i) for one (lat, m).
+    # Plm already holds P̄_l^m; no separate Nlm factor needed.
     fourier_modes = CUDA.zeros(ComplexF64, cfg.nlat, cfg.nlon)
 
-    @kernel function synthesis_kernel!(Fφ, coeffs, Plm, norm, nlat, nlon, lmax, mmax, do_hermitian)
+    @kernel function synthesis_kernel!(Fφ, coeffs, Plm, nlat, nlon, lmax, mmax, do_hermitian)
         i_lat, m_idx = @index(Global, NTuple)
         if i_lat <= nlat && m_idx <= mmax + 1
             m = m_idx - 1
-            # Compute F_m(θ_i) = Σ_l a_lm * P_l^m(cos θ_i) * N_lm
+            # Compute F_m(θ_i) = Σ_l a_lm * P̄_l^m(cos θ_i)
             result = ComplexF64(0, 0)
             @inbounds for l = m:lmax
                 l_idx = l + 1
-                result += coeffs[l_idx, m_idx] * Plm[i_lat, l_idx, m_idx] * norm[l_idx, m_idx]
+                result += coeffs[l_idx, m_idx] * Plm[i_lat, l_idx, m_idx]
             end
 
             # Place in Fourier mode slots for IFFT
@@ -629,7 +667,7 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
     end
 
     synthesis_k! = synthesis_kernel!(backend)
-    synthesis_k!(fourier_modes, gpu_coeffs, Plm, normalization,
+    synthesis_k!(fourier_modes, gpu_coeffs, Plm,
                  cfg.nlat, cfg.nlon, cfg.lmax, cfg.mmax, real_output;
                  ndrange=(cfg.nlat, cfg.mmax+1))
     CUDA.synchronize()
@@ -686,11 +724,11 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     # Transfer config data to GPU
     x_values = CuArray(cfg.x)
     weights = CuArray(cfg.w)
-    normalization = CuArray(cfg.Nlm)
     scaleφ = cfg.cphi
     robert_form = cfg.robert_form
 
-    # Compute Legendre polynomials AND their derivatives on GPU
+    # Compute ORTHONORMAL normalized P̄_l^m AND their dP̄/dx on GPU.
+    # Both arrays already include Nlm — downstream kernels must NOT multiply by Nlm.
     Plm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
     dPlm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
     legendre_deriv_kernel! = legendre_and_derivative_kernel!(backend)
@@ -704,7 +742,7 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     T_contrib = CUDA.zeros(ComplexF64, nlat, lmax+1, mmax+1)
 
     @kernel function vector_analysis_contrib_kernel!(S_out, T_out, Fθ, Fφ, Plm, dPlm,
-                                                      x_vals, w_vals, norm, scale,
+                                                      x_vals, w_vals, scale,
                                                       nlat, lmax, mmax, do_robert)
         i_lat, l_idx, m_idx = @index(Global, NTuple)
 
@@ -729,14 +767,13 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
                     Fφ_val /= sθ
                 end
 
-                # Get Legendre values
-                N = norm[l_idx, m_idx]
-                P = Plm[i_lat, l_idx, m_idx]
-                dP = dPlm[i_lat, l_idx, m_idx]
+                # Get ORTHONORMAL normalized Legendre values (Nlm already folded in)
+                P = Plm[i_lat, l_idx, m_idx]   # P̄_l^m
+                dP = dPlm[i_lat, l_idx, m_idx]  # dP̄_l^m/dx
 
-                # ∂Y_l^m/∂θ = -sinθ * N * dP/dx
-                dθY = -sθ * N * dP
-                Y = N * P
+                # ∂Ȳ_l^m/∂θ = -sinθ * dP̄_l^m/dx
+                dθY = -sθ * dP
+                Y = P
 
                 # Compute coefficient and term
                 coeff = wi * scale / (l * (l + 1))
@@ -780,7 +817,7 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 
     contrib_kernel! = vector_analysis_contrib_kernel!(backend)
     contrib_kernel!(S_contrib, T_contrib, gpu_vθ, gpu_vφ, Plm, dPlm,
-                    x_values, weights, normalization, scaleφ,
+                    x_values, weights, scaleφ,
                     nlat, lmax, mmax, robert_form;
                     ndrange=(nlat, lmax+1, mmax+1))
     CUDA.synchronize()
@@ -835,13 +872,13 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
         SHTnsKit.convert_alm_norm!(Tlm_int, tor_coeffs, cfg; to_internal=true)
     end
 
-    # Transfer coefficients and normalization to GPU
+    # Transfer coefficients to GPU (no Nlm upload needed — folded into P̄)
     gpu_Slm = CuArray(ComplexF64.(Slm_int))
     gpu_Tlm = CuArray(ComplexF64.(Tlm_int))
-    gpu_Nlm = CuArray(cfg.Nlm)
     x_values = CuArray(cfg.x)
 
-    # Compute Legendre polynomials AND their derivatives on GPU
+    # Compute ORTHONORMAL normalized P̄_l^m AND dP̄/dx on GPU.
+    # Both arrays include Nlm — downstream kernel must NOT multiply by Nlm.
     Plm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
     dPlm = CUDA.zeros(Float64, nlat, lmax+1, mmax+1)
     legendre_deriv_kernel! = legendre_and_derivative_kernel!(backend)
@@ -858,8 +895,9 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
     # Scale factor for inverse FFT - use phi_inv_scale to match CPU (not 1/cphi!)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
 
-    # Kernel for spectral vector synthesis - compute Fourier modes for each (latitude, m)
-    @kernel function vector_spectral_synthesis_kernel!(Ftheta, Fphi, Slm, Tlm, Plm, dPlm, Nlm, sintheta, nlat, nlon, lmax, mmax, inv_scale)
+    # Kernel for spectral vector synthesis - compute Fourier modes for each (latitude, m).
+    # Plm holds P̄_l^m and dPlm holds dP̄_l^m/dx (both orthonormal-normalized, no Nlm factor).
+    @kernel function vector_spectral_synthesis_kernel!(Ftheta, Fphi, Slm, Tlm, Plm, dPlm, sintheta, nlat, nlon, lmax, mmax, inv_scale)
         i, m_idx = @index(Global, NTuple)
         if i <= nlat && m_idx <= mmax + 1
             m = m_idx - 1
@@ -871,14 +909,12 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
 
             @inbounds for l = m:lmax
                 l_idx = l + 1
-                N = Nlm[l_idx, m_idx]
-                P = Plm[i, l_idx, m_idx]
-                dP = dPlm[i, l_idx, m_idx]
+                # P̄_l^m and dP̄_l^m/dx already include Nlm — no separate N factor.
+                Y    = Plm[i, l_idx, m_idx]   # P̄_l^m
+                dP   = dPlm[i, l_idx, m_idx]  # dP̄_l^m/dx
 
-                # Y_l^m contribution (without exp(imφ) which comes from FFT)
-                Y = N * P
-                # ∂Y_l^m/∂θ = -sinθ * N * dP/dx
-                dYdθ = -sθ * N * dP
+                # ∂Ȳ_l^m/∂θ = -sinθ * dP̄_l^m/dx
+                dYdθ = -sθ * dP
 
                 Sl = Slm[l_idx, m_idx]
                 Tl = Tlm[l_idx, m_idx]
@@ -896,7 +932,7 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
     end
 
     synth_kernel! = vector_spectral_synthesis_kernel!(backend)
-    synth_kernel!(Fθ, Fφ, gpu_Slm, gpu_Tlm, Plm, dPlm, gpu_Nlm, sintheta, nlat, nlon, lmax, mmax, inv_scaleφ; ndrange=(nlat, mmax+1))
+    synth_kernel!(Fθ, Fφ, gpu_Slm, gpu_Tlm, Plm, dPlm, sintheta, nlat, nlon, lmax, mmax, inv_scaleφ; ndrange=(nlat, mmax+1))
     CUDA.synchronize()
 
     # Apply Hermitian symmetry for real output

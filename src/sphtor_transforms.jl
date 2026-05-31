@@ -245,13 +245,20 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix;
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
 
+    # Use the in-place, cached-plan FFTs (one buffer each) instead of the old
+    # out-of-place `fft_phi(_as_complex(V))` / `rfft_phi(V)` which copied the
+    # input and re-planned FFTW on every call. Mirrors the scalar `analysis`
+    # fix; eltype is preserved so AD types still take the DFT fallback.
     if use_rfft
         eltype(Vt) <: Real && eltype(Vp) <: Real || throw(ArgumentError("use_rfft=true requires real-valued Vt, Vp"))
-        Fthetam = rfft_phi(Vt)
-        Fphim = rfft_phi(Vp)
+        nbins = nlon ÷ 2 + 1
+        RT = float(real(eltype(Vt)))
+        Fthetam = rfft_phi!(Matrix{Complex{RT}}(undef, nlat, nbins), Vt)
+        Fphim   = rfft_phi!(Matrix{Complex{RT}}(undef, nlat, nbins), Vp)
     else
-        Fthetam = fft_phi(_as_complex(Vt))
-        Fphim = fft_phi(_as_complex(Vp))
+        CT = complex(float(eltype(Vt)))
+        Fthetam = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vt)
+        Fphim   = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vp)
     end
 
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -706,8 +713,11 @@ function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatri
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
-    Fthetam = fft_phi(_as_complex(Vt))
-    Fphim = fft_phi(_as_complex(Vp))
+    # In-place cached-plan FFT (one buffer each); avoids the copy + re-plan of
+    # the old `fft_phi(_as_complex(V))`. See `analysis_sphtor` for rationale.
+    CT = complex(float(eltype(Vt)))
+    Fthetam = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vt)
+    Fphim   = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vp)
     lmax, mmax = cfg.lmax, cfg.mmax
     Slm = zeros(ComplexF64, lmax + 1, mmax + 1)
     Tlm = zeros(ComplexF64, lmax + 1, mmax + 1)

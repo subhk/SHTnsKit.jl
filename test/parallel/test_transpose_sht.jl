@@ -80,4 +80,41 @@ end
     end
 end
 
+@testset "transpose dist_synthesis! round-trip (scalar)" begin
+    for lmax in (32, 64)
+        nlat = lmax + 2; nlon = 2 * lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon = nlon)
+
+        # Build band-limited field from known spectral coefficients
+        a0 = zeros(ComplexF64, lmax + 1, lmax + 1)
+        for m in 0:lmax, l in m:lmax
+            sc = 1.0 / (1 + l)^2
+            a0[l+1, m+1] = m == 0 ? complex(sc) : complex(sc, 0.5sc)
+        end
+        f_full = SHTnsKit.synthesis(cfg, a0; real_output = true)  # (nlat, nlon) reference
+
+        plan = DistTransposePlan(cfg; comm = comm, nlev = 1, use_rfft = true)
+
+        # Fill distributed spatial field from serial reference
+        f = allocate_spatial(plan)
+        r = PencilArrays.range_local(pencil(f))   # r[1]=φ range, r[2]=θ range
+        for (il, ig) in enumerate(r[2]), (jl, jg) in enumerate(r[1])
+            parent(f)[jl, il, 1] = f_full[ig, jg]
+        end
+
+        # Forward: analysis
+        Alm = allocate_spectral(plan)
+        dist_analysis!(plan, Alm, f)
+
+        # Reverse: synthesis — should recover f up to machine precision
+        f2 = allocate_spatial(plan)
+        dist_synthesis!(plan, f2, Alm)
+
+        lerr = maximum(abs.(parent(f2) .- parent(f)))
+        gerr = MPI.Allreduce(lerr, MPI.MAX, comm)
+        rank == 0 && println("lmax=$lmax synthesis round-trip gerr=$gerr")
+        @test gerr < 1e-8
+    end
+end
+
 MPI.Finalize()

@@ -31,7 +31,7 @@ Key invariants
 ================================================================================
 =#
 
-import LinearAlgebra: mul!
+import LinearAlgebra: mul!, ldiv!
 
 # ---------------------------------------------------------------------------
 # Struct
@@ -205,6 +205,56 @@ function SHTnsKit.dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::P
         end
     end
     return Alm
+end
+
+# ---------------------------------------------------------------------------
+# Synthesis: spectral → spatial
+# ---------------------------------------------------------------------------
+
+"""
+    dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::PencilArray) -> f
+
+Distributed scalar spherical harmonic synthesis using the transpose approach.
+
+Takes spectral coefficients `Alm` (global `(lmax+1, mmax+1)`, m-distributed,
+produced by `allocate_spectral(plan)`) and writes the reconstructed spatial
+field into `f` (global `(nlon, nlat)`, θ-distributed, produced by
+`allocate_spatial(plan)`).
+
+The reverse pass is:
+1. Legendre expansion per local m:
+   `F[i, mi, lev] = inv_scaleφ · Σ_{l=m}^{lmax} NP[mi][l+1, i] · Alm[l+1, mi, lev]`
+2. `ldiv!(f, fft_plan, F_buf)` — inverse transpose + irFFT(φ) → real spatial field.
+"""
+function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::PencilArray)
+    A = parent(Alm)           # (lmax+1, n_m_local, nlev)
+    F = parent(plan.F_buf)    # (nlat, n_m_local, nlev)  — physical storage (θ fast)
+
+    fill!(F, zero(eltype(F)))
+
+    inv_scaleφ = SHTnsKit.phi_inv_scale(plan.cfg)
+    lmax = plan.lmax
+    nlat = plan.nlat
+    nlev = plan.nlev
+
+    # Legendre expansion: for each local m, sum over l → F[i, mi, lev]
+    # NP[mi] is (lmax+1, nlat) column-major; iterating i (fast dim of F) is cache-friendly.
+    @inbounds for lev in 1:nlev
+        for (mi, m) in enumerate(plan.m_local)
+            NP_mi = plan.NP[mi]          # (lmax+1, nlat) matrix for this m
+            for i in 1:nlat
+                acc = zero(ComplexF64)
+                for l in m:lmax
+                    acc += NP_mi[l+1, i] * A[l+1, mi, lev]
+                end
+                F[i, mi, lev] = inv_scaleφ * acc
+            end
+        end
+    end
+
+    # Inverse transpose + irFFT: writes real spatial data into f.
+    ldiv!(f, plan.fft_plan, plan.F_buf)
+    return f
 end
 
 # ---------------------------------------------------------------------------

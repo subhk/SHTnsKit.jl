@@ -176,6 +176,9 @@ function SHTnsKit.dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::P
     #   parent(F_buf)[i, mi, lev]   where i=theta index, mi=m-slot index
     # This is because PencilFFTs outputs F with Permutation(2,1) (physical dim1
     # = logical dim2 = θ, physical dim2 = logical dim1 = m).
+    # Single FFT + Alltoall collective for the ENTIRE nlev batch.
+    # This is the key amortization: one MPI collective serves all radial levels,
+    # so cost is O(1) in nlev rather than O(nlev).
     mul!(plan.F_buf, plan.fft_plan, f)
 
     F = parent(plan.F_buf)   # (nlat, n_m_local, nlev)  — physical storage (θ, m, lev)
@@ -252,7 +255,7 @@ function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::
         end
     end
 
-    # Inverse transpose + irFFT: writes real spatial data into f.
+    # Single inverse Alltoall + irFFT for the ENTIRE nlev batch (one collective).
     ldiv!(f, plan.fft_plan, plan.F_buf)
     return f
 end

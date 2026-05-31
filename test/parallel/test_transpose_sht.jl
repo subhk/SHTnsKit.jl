@@ -117,4 +117,37 @@ end
     end
 end
 
+@testset "transpose SHT batched over levels (nlev>1)" begin
+    lmax=48; nlat=lmax+2; nlon=2*lmax+1; nlev=4
+    cfg=create_gauss_config(lmax,nlat;nlon=nlon)
+    # distinct band-limited field per level
+    a0 = [zeros(ComplexF64,lmax+1,lmax+1) for _ in 1:nlev]
+    ffull = Vector{Matrix{Float64}}(undef, nlev)
+    for lev in 1:nlev
+        for m in 0:lmax,l in m:lmax; sc=(lev+0.3)/(1+l)^2; a0[lev][l+1,m+1]= m==0 ? complex(sc) : complex(sc,0.5sc); end
+        ffull[lev]=SHTnsKit.synthesis(cfg,a0[lev];real_output=true)
+    end
+    plan=DistTransposePlan(cfg; comm=comm, nlev=nlev, use_rfft=true)
+    f=allocate_spatial(plan); r=PencilArrays.range_local(pencil(f))  # (φ, θ, lev)
+    for lev in 1:nlev, (il,ig) in enumerate(r[2]), (jl,jg) in enumerate(r[1])
+        parent(f)[jl, il, lev] = ffull[lev][ig, jg]
+    end
+    Alm=allocate_spectral(plan); dist_analysis!(plan, Alm, f)
+    # per-level analysis correctness vs serial
+    err=0.0
+    for lev in 1:nlev
+        a_ref=SHTnsKit.analysis(cfg, ffull[lev])
+        for (mi,m) in enumerate(plan.m_local), l in m:lmax
+            err=max(err, abs(parent(Alm)[l+1, mi, lev] - a_ref[l+1, m+1]))
+        end
+    end
+    gerr=MPI.Allreduce(err, MPI.MAX, comm); MPI.Comm_rank(comm)==0 && println("batched analysis gerr=$gerr")
+    @test gerr < 1e-8
+    # round-trip
+    f2=allocate_spatial(plan); dist_synthesis!(plan, f2, Alm)
+    rt=MPI.Allreduce(maximum(abs.(parent(f2).-parent(f))), MPI.MAX, comm)
+    MPI.Comm_rank(comm)==0 && println("batched round-trip gerr=$rt")
+    @test rt < 1e-8
+end
+
 MPI.Finalize()

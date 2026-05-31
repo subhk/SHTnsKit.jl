@@ -216,6 +216,148 @@ function Plm_norm_row!(P::AbstractVector{T}, x::T, lmax::Int, m::Int) where {T<:
 end
 
 """
+    Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, lmax, m)
+
+Compute orthonormal normalized P̄_l^m(x) and dP̄_l^m/dθ for l = m..lmax.
+
+`P` is filled with `P̄_l^m` (identical to `Plm_norm_row!`).
+`dPdtheta` is filled with `dP̄_l^m/dθ` using the bounded recurrence:
+
+    d(l,m) = l==0 ? 0 : sqrt((l^2 - m^2) / (4l^2 - 1))
+    sinθ · dP̄_l^m/dθ = l·d(l+1,m)·P̄_{l+1}^m − (l+1)·d(l,m)·P̄_{l-1}^m
+
+This recurrence is numerically stable (no overflow) at all lmax because it only
+involves the bounded P̄ values (|P̄| ≲ 1).
+
+At poles (sinθ → 0):
+- m = 0: dP̄_l^0/dθ = 0 (symmetry)
+- m = 1: analytic limit = N_{l,1} · (−l(l+1)/2) at north pole
+- m > 1: dP̄_l^m/dθ = 0 (P̄_l^m ~ sin^m, derivative ~ sin^{m−1} → 0)
+"""
+function Plm_norm_and_dPdtheta_row!(P::AbstractVector{T}, dPdtheta::AbstractVector{T},
+                                     x::T, lmax::Int, m::Int) where {T<:Real}
+    # Fill P with orthonormal P̄_l^m
+    Plm_norm_row!(P, x, lmax, m)
+
+    @inbounds begin
+        fill!(dPdtheta, zero(T))
+        lmax < m && return P, dPdtheta
+
+        sinth = sqrt(max(zero(T), one(T) - x*x))
+
+        # Handle poles (sinθ ≈ 0)
+        if sinth < POLE_TOLERANCE_FACTOR * eps(T)
+            if m == 1
+                # Analytic limit: dP̄_l^1/dθ|_{θ=0} = N_{l,1} * (−l(l+1)/2)
+                # N_{l,1} = sqrt[(2l+1)/(4π) / (l*(l+1))], so
+                # dP̄_l^1/dθ|_{θ=0} = −(1/2)*sqrt[(2l+1)*l*(l+1)/(4π)]
+                for l in 1:lmax
+                    mag = T(0.5) * sqrt(T(2l + 1) * T(l) * T(l + 1) * T(_INV_SQRT_4PI^2 * 4π))
+                    # = 0.5 * sqrt((2l+1)*l*(l+1) / (4π))
+                    # Simplify: _INV_SQRT_4PI = 1/sqrt(4π), so 1/(4π) = _INV_SQRT_4PI^2
+                    # mag = 0.5 * sqrt((2l+1)*l*(l+1)) * _INV_SQRT_4PI
+                    # Recompute cleanly:
+                    mag = T(0.5) * T(_INV_SQRT_4PI) * sqrt(T(2l + 1) * T(l) * T(l + 1))
+                    if x > 0  # North pole
+                        dPdtheta[l+1] = -mag
+                    else  # South pole
+                        dPdtheta[l+1] = (isodd(l+1) ? one(T) : -one(T)) * mag
+                    end
+                end
+            end
+            # m == 0 or m > 1: stays zero
+            return P, dPdtheta
+        end
+
+        # Standard case: use the normalized dθ recurrence.
+        # We need P̄_{l+1}^m for the l-term, so compute P̄ to lmax+1.
+        # Use a local buffer for the extended row.
+        Pbuf = zeros(T, lmax + 2)   # indices 1..lmax+2 → degrees 0..lmax+1
+        Plm_norm_row!(Pbuf, x, lmax + 1, m)
+
+        # d(l,m) = sqrt((l^2 - m^2) / (4l^2 - 1))  [0 for l=0]
+        inv_sinth = one(T) / sinth
+
+        for l in m:lmax
+            dl1m = (l + 1 == 0) ? zero(T) :
+                   sqrt(max(zero(T), T((l+1)^2 - m^2) / T(4*(l+1)^2 - 1)))
+            dlm  = (l   == 0) ? zero(T) :
+                   sqrt(max(zero(T), T(l^2      - m^2) / T(4*l^2      - 1)))
+            # sinθ · dP̄_l/dθ = l*d(l+1,m)*P̄_{l+1} - (l+1)*d(l,m)*P̄_{l-1}
+            Pm1 = l > 0 ? Pbuf[l] : zero(T)   # P̄_{l-1}^m (index l, 1-based)
+            Pp1 = Pbuf[l + 2]                  # P̄_{l+1}^m (index l+2, 1-based)
+            dPdtheta[l+1] = (T(l) * dl1m * Pp1 - T(l + 1) * dlm * Pm1) * inv_sinth
+        end
+    end
+
+    return P, dPdtheta
+end
+
+"""
+    Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
+
+Combined computation of P̄_l^m(x), dP̄_l^m/dθ, and P̄_l^m/sin(θ) in a single call,
+using the bounded orthonormal normalized convention (no overflow at high lmax).
+
+- `P`           ← P̄_l^m   (same as `Plm_norm_row!`)
+- `dPdtheta`    ← dP̄_l^m/dθ  (same as `Plm_norm_and_dPdtheta_row!`)
+- `P_over_sinth`← P̄_l^m / sin(θ)
+
+All three quantities are finite for all l, m at interior points. Pole limits mirror
+those in `Plm_dPdtheta_over_sinth_row!` but scaled to the normalized convention.
+"""
+function Plm_norm_dPdtheta_over_sinth_row!(P::AbstractVector{T}, dPdtheta::AbstractVector{T},
+                                            P_over_sinth::AbstractVector{T},
+                                            x::T, lmax::Int, m::Int) where {T<:Real}
+    Plm_norm_row!(P, x, lmax, m)
+
+    @inbounds begin
+        fill!(dPdtheta, zero(T))
+        fill!(P_over_sinth, zero(T))
+        lmax < m && return P, dPdtheta, P_over_sinth
+
+        sinth = sqrt(max(zero(T), one(T) - x*x))
+
+        if sinth < POLE_TOLERANCE_FACTOR * eps(T)
+            if m == 1
+                for l in 1:lmax
+                    mag = T(0.5) * T(_INV_SQRT_4PI) * sqrt(T(2l + 1) * T(l) * T(l + 1))
+                    if x > 0  # North pole
+                        dPdtheta[l+1]    = -mag
+                        P_over_sinth[l+1] = -mag
+                    else  # South pole
+                        sign_dP  = isodd(l+1) ? one(T) : -one(T)   # (-1)^(l+1)
+                        sign_Pos = isodd(l)   ? one(T) : -one(T)   # (-1)^l
+                        dPdtheta[l+1]    = sign_dP  * mag
+                        P_over_sinth[l+1] = sign_Pos * mag
+                    end
+                end
+            end
+            # m == 0 or m > 1: both stay zero
+            return P, dPdtheta, P_over_sinth
+        end
+
+        # Standard case: compute P̄ to lmax+1 for dθ recurrence
+        Pbuf = zeros(T, lmax + 2)
+        Plm_norm_row!(Pbuf, x, lmax + 1, m)
+
+        inv_sinth = one(T) / sinth
+
+        for l in m:lmax
+            dl1m = sqrt(max(zero(T), T((l+1)^2 - m^2) / T(4*(l+1)^2 - 1)))
+            dlm  = (l == 0) ? zero(T) :
+                   sqrt(max(zero(T), T(l^2 - m^2) / T(4*l^2 - 1)))
+            Pm1 = l > 0 ? Pbuf[l] : zero(T)
+            Pp1 = Pbuf[l + 2]
+            dPdtheta[l+1]    = (T(l) * dl1m * Pp1 - T(l + 1) * dlm * Pm1) * inv_sinth
+            P_over_sinth[l+1] = Pbuf[l + 1] * inv_sinth
+        end
+    end
+
+    return P, dPdtheta, P_over_sinth
+end
+
+"""
     Plm_and_dPdx_row!(P, dPdx, x, lmax, m)
 
 Simultaneously compute associated Legendre polynomials P_l^m(x) and their derivatives.

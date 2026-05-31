@@ -403,4 +403,54 @@ using SHTnsKit
             @test all(isfinite, @view g[m+1:end]) && maximum(abs, @view g[m+1:end]) < 2.0
         end
     end
+
+    @testset "Plm_norm_and_dPdtheta_row! matches N*dP (lmax 64, 128)" begin
+        x = 0.4273
+        for lmax in (64, 128)
+            cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1); N = cfg.Nlm
+            P = zeros(lmax+1); dP = zeros(lmax+1)
+            g = zeros(lmax+1); dg = zeros(lmax+1)
+            for m in 0:lmax
+                SHTnsKit.Plm_and_dPdtheta_row!(P, dP, x, lmax, m)
+                SHTnsKit.Plm_norm_and_dPdtheta_row!(g, dg, x, lmax, m)
+                @test all(isfinite, @view dg[m+1:end])
+                for l in max(1,m):lmax
+                    ref = N[l+1,m+1] * dP[l+1]
+                    isfinite(ref) && abs(ref) > 1e-9 &&
+                        @test isapprox(dg[l+1], ref; rtol=1e-7)
+                end
+            end
+        end
+    end
+
+    @testset "Plm_norm_dPdtheta_over_sinth_row! matches N*dP + N*P/sinθ (lmax 64, 128)" begin
+        x = 0.4273
+        for lmax in (64, 128)
+            cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1); N = cfg.Nlm
+            P = zeros(lmax+1); dP = zeros(lmax+1); Pos = zeros(lmax+1)
+            g = zeros(lmax+1); dg = zeros(lmax+1); gos = zeros(lmax+1)
+            for m in 0:lmax
+                SHTnsKit.Plm_dPdtheta_over_sinth_row!(P, dP, Pos, x, lmax, m)
+                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(g, dg, gos, x, lmax, m)
+                @test all(isfinite, @view dg[m+1:end])
+                @test all(isfinite, @view gos[m+1:end])
+                for l in max(1,m):lmax
+                    rd  = N[l+1,m+1] * dP[l+1]
+                    ros = N[l+1,m+1] * Pos[l+1]
+                    isfinite(rd)  && abs(rd)  > 1e-9 && @test isapprox(dg[l+1],  rd;  rtol=1e-7)
+                    isfinite(ros) && abs(ros) > 1e-9 && @test isapprox(gos[l+1], ros; rtol=1e-7)
+                end
+            end
+        end
+    end
+
+    @testset "Plm_norm_dPdtheta_over_sinth_row! finite at lmax=512" begin
+        lmax = 512
+        g = zeros(lmax+1); dg = zeros(lmax+1); gos = zeros(lmax+1)
+        for m in 0:lmax
+            SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(g, dg, gos, 0.31, lmax, m)
+            @test all(isfinite, @view dg[m+1:end])
+            @test all(isfinite, @view gos[m+1:end])
+        end
+    end
 end

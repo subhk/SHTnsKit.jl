@@ -415,6 +415,38 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
 end
 
 # ---------------------------------------------------------------------------
+# QST transforms (by delegation)
+# ---------------------------------------------------------------------------
+
+"""
+    dist_analysis_qst!(plan::DistTransposePlan, Qlm, Slm, Tlm, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
+
+Distributed QST analysis: scalar radial component (Q) via `dist_analysis!` and
+spheroidal/toroidal components (S,T) via `dist_analysis_sphtor!`.
+"""
+function SHTnsKit.dist_analysis_qst!(plan::DistTransposePlan,
+                                      Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray,
+                                      Vr::PencilArray,  Vt::PencilArray,  Vp::PencilArray)
+    SHTnsKit.dist_analysis!(plan, Qlm, Vr)
+    SHTnsKit.dist_analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)
+    return Qlm, Slm, Tlm
+end
+
+"""
+    dist_synthesis_qst!(plan::DistTransposePlan, Vr, Vt, Vp, Qlm, Slm, Tlm) -> (Vr, Vt, Vp)
+
+Distributed QST synthesis: scalar radial component (Q) via `dist_synthesis!` and
+spheroidal/toroidal components (S,T) via `dist_synthesis_sphtor!`.
+"""
+function SHTnsKit.dist_synthesis_qst!(plan::DistTransposePlan,
+                                       Vr::PencilArray,  Vt::PencilArray,  Vp::PencilArray,
+                                       Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray)
+    SHTnsKit.dist_synthesis!(plan, Vr, Qlm)
+    SHTnsKit.dist_synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)
+    return Vr, Vt, Vp
+end
+
+# ---------------------------------------------------------------------------
 # Allocation helpers
 # ---------------------------------------------------------------------------
 

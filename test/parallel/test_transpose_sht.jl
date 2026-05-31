@@ -179,4 +179,26 @@ end
     end
 end
 
+@testset "transpose dist qst round-trip" begin
+    lmax=48; nlat=lmax+2; nlon=2*lmax+1; cfg=create_gauss_config(lmax,nlat;nlon=nlon)
+    Q0=zeros(ComplexF64,lmax+1,lmax+1); S0=copy(Q0); T0=copy(Q0)
+    for m in 0:lmax, l in m:lmax; sc=1/(1+l)^2; Q0[l+1,m+1]= m==0 ? complex(sc) : complex(sc,0.4sc); end
+    for m in 0:lmax, l in max(1,m):lmax; sc=1/(1+l)^2; S0[l+1,m+1]=complex(sc, m==0 ? 0.0 : 0.5sc); T0[l+1,m+1]=complex(0.7sc, m==0 ? 0.0 : -0.3sc); end
+    Vr_full = SHTnsKit.synthesis(cfg, Q0; real_output=true)
+    Vt_full, Vp_full = SHTnsKit.synthesis_sphtor(cfg, S0, T0; real_output=true)
+    plan=DistTransposePlan(cfg; comm=comm, nlev=1, use_rfft=true, with_vector=true)
+    Vr=allocate_spatial(plan); Vt=allocate_spatial(plan); Vp=allocate_spatial(plan)
+    r=PencilArrays.range_local(pencil(Vr))
+    for (il,ig) in enumerate(r[2]), (jl,jg) in enumerate(r[1])
+        parent(Vr)[jl,il,1]=Vr_full[ig,jg]; parent(Vt)[jl,il,1]=Vt_full[ig,jg]; parent(Vp)[jl,il,1]=Vp_full[ig,jg]
+    end
+    Qlm=allocate_spectral(plan); Slm=allocate_spectral(plan); Tlm=allocate_spectral(plan)
+    dist_analysis_qst!(plan, Qlm, Slm, Tlm, Vr, Vt, Vp)
+    Vr2=allocate_spatial(plan); Vt2=allocate_spatial(plan); Vp2=allocate_spatial(plan)
+    dist_synthesis_qst!(plan, Vr2, Vt2, Vp2, Qlm, Slm, Tlm)
+    e = max(maximum(abs.(parent(Vr2).-parent(Vr))), maximum(abs.(parent(Vt2).-parent(Vt))), maximum(abs.(parent(Vp2).-parent(Vp))))
+    gerr=MPI.Allreduce(e, MPI.MAX, comm); MPI.Comm_rank(comm)==0 && println("qst round-trip gerr=$gerr")
+    @test gerr < 1e-7
+end
+
 MPI.Finalize()

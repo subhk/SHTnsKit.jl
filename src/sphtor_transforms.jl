@@ -262,8 +262,11 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix;
     end
 
     lmax, mmax = cfg.lmax, cfg.mmax
-    Slm_int = zeros(ComplexF64, lmax + 1, mmax + 1)
-    Tlm_int = zeros(ComplexF64, lmax + 1, mmax + 1)
+    # Output eltype follows the input so AD types (e.g. ForwardDiff.Dual) flow
+    # through; defaults to ComplexF64 for ordinary real inputs.
+    OT = complex(float(promote_type(eltype(Vt), eltype(Vp))))
+    Slm_int = zeros(OT, lmax + 1, mmax + 1)
+    Tlm_int = zeros(OT, lmax + 1, mmax + 1)
 
     _analysis_sphtor_mloop!(Slm_int, Tlm_int, cfg, Fthetam, Fphim; ltr=lmax)
 
@@ -437,14 +440,16 @@ end
     x = cfg.x
     robert_form = cfg.robert_form
     nthreads = Threads.maxthreadid()
-    thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
+    # Accumulator eltype follows the output (Slm) so AD types propagate.
+    AT = eltype(Slm)
+    thread_Sacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Tacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
         tid = Threads.threadid()
-        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
-        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
+        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(AT))
+        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(AT))
         NP = cfg.NP_tables[col]
         NdP = cfg.NdP_tables[col]
         for i in 1:nlat
@@ -477,14 +482,16 @@ end
     thread_dP = _ensure_otf_scratch!(cfg._otf_scratch_dP, lmax)
     thread_Ps = _ensure_otf_scratch!(cfg._otf_scratch_Ps, lmax)
     thread_Pb = _ensure_otf_scratch!(cfg._otf_scratch_Pb, lmax + 1)  # lmax+2 for extended P̄ row
-    thread_Sacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Tacc = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:nthreads]
+    # Accumulator eltype follows the output (Slm) so AD types propagate.
+    AT = eltype(Slm)
+    thread_Sacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
+    thread_Tacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
         tid = Threads.threadid()
-        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(ComplexF64))
-        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(ComplexF64))
+        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(AT))
+        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(AT))
         P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]; Pb = thread_Pb[tid]
         for i in 1:nlat
             wi = w[i]

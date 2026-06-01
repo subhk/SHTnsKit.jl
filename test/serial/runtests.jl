@@ -27,7 +27,10 @@ using Test
     include("test_rotations_extended.jl")
     include("test_energy_diagnostics.jl")
     include("test_vorticity.jl")
+    include("test_vorticity_inverse.jl")
     include("test_gradients.jl")
+    include("test_ad_convenience.jl")
+    include("test_turbo.jl")
     include("test_complex_packed.jl")
     include("test_local.jl")
     include("test_api_compat.jl")
@@ -41,4 +44,6 @@ using Test
     include("test_ml_modes.jl")
     include("test_batch_qst.jl")
     include("test_config_copy.jl")
+    include("test_plm_tables.jl")
+    include("test_flags.jl")
 end

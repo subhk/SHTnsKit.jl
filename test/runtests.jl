@@ -1228,13 +1228,11 @@ end
 # Serial transform tests (exercises single-processor transform functions)
 include("serial/runtests.jl")
 
-# Parallel grid resolution tests (tests across multiple lat/lon configurations)
-# Only run on Linux where MPI is available
-if Sys.islinux()
-    include("parallel/runtests.jl")
-else
-    @info "Skipping parallel grid resolution tests (Linux only)"
-end
+# Parallel grid resolution tests (tests across multiple lat/lon configurations).
+# Despite the folder name these are non-MPI: parametric grid sweeps + native
+# threading that depend only on SHTnsKit + stdlib, so they run on all platforms.
+# (True MPI tests live in test/parallel/test_mpi_*.jl and run via mpiexec.)
+include("parallel/runtests.jl")
 
 # JET.jl type stability tests (optional)
 if get(ENV, "SHTNSKIT_RUN_JET_TESTS", "0") == "1"

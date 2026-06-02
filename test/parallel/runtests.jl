@@ -9,10 +9,14 @@
 # - test_threading.jl          : Native-thread correctness (run with `julia -t N`)
 # - test_mpi_comprehensive.jl  : MPI distributed tests (run separately with mpiexec)
 # - test_mpi_extended.jl       : Extended MPI tests (run separately with mpiexec)
+# - test_transpose_sht.jl      : DistTransposePlan transforms, canonical grid (mpiexec)
+# - test_disttranspose_dealiased.jl : DistTransposePlan on dealiased nlon>2*mmax+1 (mpiexec)
 #
 # To run MPI tests:
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_comprehensive.jl
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_extended.jl
+#   mpiexec -n 2 julia --project test/parallel/test_transpose_sht.jl
+#   mpiexec -n 2 julia --project test/parallel/test_disttranspose_dealiased.jl
 
 using Test
 

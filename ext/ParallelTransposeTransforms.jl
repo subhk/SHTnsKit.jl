@@ -26,8 +26,13 @@ Key invariants
 * `plan.NP[mi]` is the (lmax+1, nlat) matrix P̄_l^{m_local[mi]}(cos θ_i).
 * The m-distribution of `F_buf` (PencilFFTs output, decomposed on dim 1) is
   guaranteed to match the m-distribution of `spectral_pencil` (Alm, decomposed
-  on dim 2) because PencilArrays uses the same block-distribution formula for
-  both.  This is asserted in the constructor.
+  on dim 2) because the spectral pencil is sized to the SAME number of rFFT bins
+  (`nbin = nlon÷2+1`) and uses the same block-distribution formula.  This holds
+  for both canonical (`nlon = 2*mmax+1`, `nbin = mmax+1`) and dealiased
+  (`nlon > 2*mmax+1`, `nbin > mmax+1`) grids; in the dealiased case the owned
+  coefficients are the `m ≤ mmax` columns (the leading `length(m_local)` per
+  rank) and the high bins (`m > mmax`) are unused/zero.  Asserted in the
+  constructor.
 ================================================================================
 =#
 
@@ -51,7 +56,10 @@ Constructed via `DistTransposePlan(cfg; comm, nlev, use_rfft, with_vector)`.
 - `fft_plan`        : `PencilFFTPlan((nlon, nlat), …)` — rFFT(φ) + internal transpose
 - `F_buf`           : pre-allocated output of `fft_plan` (m-distributed, θ-local)
 - `F_buf2`          : second pre-allocated output buffer for the second vector component
-- `spectral_pencil` : `Pencil` for Alm arrays, global `(lmax+1, mmax+1)`, m-decomposed
+- `spectral_pencil` : `Pencil` for Alm arrays, global `(lmax+1, nbin)` where
+                       `nbin = nlon÷2+1` (rFFT bins), dim-2 (m/bin) decomposed to
+                       match the FFT output bin-for-bin. Owned coefficients are the
+                       `m ≤ mmax` columns (the leading `length(m_local)` per rank).
 - `m_local`         : 0-based global m indices owned by this rank (in F-dim-1 order)
 - `NP`              : `NP[mi]` = `(lmax+1, nlat)` matrix of P̄_l^{m_local[mi]}(cos θ_i)
 - `dP`              : `dP[mi]` = `(lmax+1, nlat)` matrix of dP̄_l^m/dθ at each latitude
@@ -112,28 +120,39 @@ function SHTnsKit.DistTransposePlan(
 
     # 3. Determine which m values this rank owns (from F_buf's pencil).
     #    dim1 of F_buf's pencil is the m dimension (after the internal FFT+transpose).
-    mr     = range_local(pencil(F_buf))     # tuple of ranges; mr[1] = local m-range (1-based)
-    # Global m index (0-based) = 1-based pencil index − 1
+    #    The rFFT output has nbin = nlon÷2+1 Fourier bins (0..nlon÷2), distributed
+    #    across ranks.  Each rank owns a CONTIGUOUS ASCENDING block of bins.
+    nbin   = nlon ÷ 2 + 1
+    mr     = range_local(pencil(F_buf))     # tuple of ranges; mr[1] = local bin-range (1-based)
+    # Global bin index (0-based) = 1-based pencil index − 1
     all_m_0based = collect(mr[1]) .- 1
-    # Keep only m within [0, mmax]; the rFFT output has nlon÷2+1 bins (0..nlon÷2).
-    # For the canonical setting nlon ≥ 2*mmax+1 the rFFT bins 0..mmax are all valid.
+    # Keep only m within [0, mmax].  Because the bins ascend, the kept indices are
+    # always the LEADING PREFIX of this rank's local bins.  This holds for both the
+    # canonical grid (nlon = 2*mmax+1, nbin = mmax+1) and dealiased grids
+    # (nlon > 2*mmax+1, nbin > mmax+1) where the high bins (m > mmax) carry no signal.
     keep   = findall(m -> 0 <= m <= mmax, all_m_0based)
     m_local = all_m_0based[keep]
 
-    # 4. Build the spectral Pencil for Alm: global (lmax+1, mmax+1),
-    #    decomposed on dim2 (the m axis).
-    #    PencilArrays uses the same block-distribution as PencilFFTs,
-    #    so dim2 of this pencil matches dim1 of F_buf's pencil for 0..mmax.
-    spectral_pencil = Pencil((lmax + 1, mmax + 1), (2,), comm)
+    # 4. Build the spectral Pencil for Alm sized to the rFFT BINS: global
+    #    (lmax+1, nbin), decomposed on dim2 (the m/bin axis).  Sizing dim2 to nbin
+    #    (instead of an independent mmax+1 block-split) GUARANTEES that dim2 of this
+    #    pencil uses the SAME block distribution as dim1 of F_buf's pencil — so on
+    #    every rank, the local columns of Alm correspond bin-for-bin to F_buf's local
+    #    bins, and the first length(m_local) of them correspond exactly to m_local.
+    #    For the canonical grid nbin == mmax+1 so this is bitwise-identical to the old
+    #    (lmax+1, mmax+1) pencil; for dealiased grids the extra (m > mmax) columns are
+    #    unused/zero and the irFFT zero-pads them on synthesis.
+    spectral_pencil = Pencil((lmax + 1, nbin), (2,), comm)
 
-    # 5. Assert alignment: the m-range from spectral_pencil (dim2, 1-based) must
-    #    equal m_local (after converting to 0-based).  This catches any future
-    #    divergence in distribution strategies.
+    # 5. Assert alignment: the leading m-columns of spectral_pencil (dim2, 0-based,
+    #    restricted to ≤ mmax) must equal m_local.  This catches any future
+    #    divergence in distribution strategies between the FFT and spectral pencils.
     sp_mr    = range_local(spectral_pencil)       # (l-range, m-range) 1-based
     sp_m_0   = collect(sp_mr[2]) .- 1             # 0-based m from spectral_pencil
-    if sp_m_0 != m_local
+    sp_m_kept = filter(m -> 0 <= m <= mmax, sp_m_0)
+    if sp_m_kept != m_local
         error("m-distribution mismatch on rank $(MPI.Comm_rank(comm)): " *
-              "F_buf m_local=$m_local  ≠  spectral_pencil m=$sp_m_0")
+              "F_buf m_local=$m_local  ≠  spectral_pencil m(≤mmax)=$sp_m_kept")
     end
 
     # 6. Pre-compute normalized Legendre tables for each local m.
@@ -465,8 +484,28 @@ SHTnsKit.allocate_spatial(plan::DistTransposePlan) = allocate_input(plan.fft_pla
     allocate_spectral(plan::DistTransposePlan) -> PencilArray
 
 Return a freshly allocated complex PencilArray in the spectral layout:
-global `(lmax+1, mmax+1)` with m distributed, l fully local, plus
-`nlev` as a trailing local dimension.
+global `(lmax+1, nbin)` with the m/bin axis (dim 2) distributed, l fully local,
+plus `nlev` as a trailing local dimension, where `nbin = nlon÷2+1` is the number
+of rFFT Fourier bins.
+
+# Shape contract (IMPORTANT)
+
+The dim-2 global size is `nbin = nlon÷2+1`, NOT `mmax+1`.
+
+- For the **canonical** grid (`nlon == 2*mmax+1`) `nbin == mmax+1`, so the layout
+  is identical to the historical `(lmax+1, mmax+1)`.
+- For **dealiased** grids (`nlon > 2*mmax+1`, e.g. the 3/2 rule) `nbin > mmax+1`.
+  The dim-2 distribution is aligned bin-for-bin with the rFFT output, so on every
+  rank the local columns map to that rank's Fourier bins. The MEANINGFUL spherical
+  harmonic coefficients are the columns with `m ≤ mmax`, which are exactly the
+  leading `length(plan.m_local)` local columns (`parent(Alm)[l+1, mi, lev]` for
+  `mi = 1:length(plan.m_local)` ↔ degree `plan.m_local[mi]`). Columns for bins
+  `m > mmax` are unused: zeroed by analysis and ignored by synthesis (the irFFT
+  zero-pads them).
+
+So callers should index owned coefficients via `plan.m_local` (as the `dist_*`
+kernels do), and treat the local column count as possibly exceeding
+`length(plan.m_local)` on dealiased grids.
 """
 function SHTnsKit.allocate_spectral(plan::DistTransposePlan)
     return PencilArray{ComplexF64}(undef, plan.spectral_pencil, plan.nlev)

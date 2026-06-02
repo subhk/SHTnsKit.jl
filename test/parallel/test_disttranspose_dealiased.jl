@@ -26,11 +26,15 @@ const rank = MPI.Comm_rank(comm)
     @test plan.nlon == nlon
     @test plan.mmax == lmax
 
-    # m ownership must still partition 0:mmax exactly once across all ranks
-    @test !isempty(plan.m_local)
+    # m ownership must still partition 0:mmax exactly once across all ranks.
+    # NOTE: on a dealiased grid, a rank may legitimately own ONLY high rFFT bins
+    # (m > mmax) and therefore have an EMPTY m_local — so we assert the GLOBAL
+    # partition is exact rather than requiring every rank to be non-empty.
     @test all(0 .<= plan.m_local .<= cfg.mmax)
     owned = MPI.Allreduce(length(plan.m_local), +, comm)
     @test owned == cfg.mmax + 1
+    nonempty = MPI.Allreduce(isempty(plan.m_local) ? 0 : 1, +, comm)
+    @test nonempty >= 1   # at least one rank owns meaningful coefficients
 
     fsp = allocate_spatial(plan)
     @test fsp isa PencilArray

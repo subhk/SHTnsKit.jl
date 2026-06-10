@@ -124,7 +124,11 @@ end
     Vt, Vp = y
     _, _, S̄1, T̄1 = pb((Vt, Vp))
     a2 = @allocated pb((Vt, Vp))
-    @test a2 < 2 * matbytes + 3 * matbytes ÷ 2  # 2 buffers + S̄/T̄ outputs + slack (was ~5 buffers)
+    # 2 FFT buffers + S̄/T̄ outputs ≈ 3 matbytes; the old copy+re-plan path was
+    # ~5 matbytes. 4.5× leaves headroom for Julia-version/platform allocation
+    # noise (1.12.6/x64 measures ~0.8 matbytes above 1.11.1/arm) while still
+    # failing if the per-field copy comes back.
+    @test a2 < 9 * matbytes ÷ 2
     # adjoint result must be unchanged by the buffer strategy
     _, _, S̄2, T̄2 = pb((Vt, Vp))
     @test S̄1 ≈ S̄2 && T̄1 ≈ T̄2

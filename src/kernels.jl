@@ -127,8 +127,10 @@ end
     s_theta = sqrt(max(0.0, 1 - x*x))
     is_pole = s_theta < POLE_TOLERANCE_FACTOR * eps(Float64)
     inv_s_theta = is_pole ? 0.0 : 1.0 / s_theta
-    g_theta = zero(ComplexF64)
-    g_phi = zero(ComplexF64)
+    # Accumulator eltype follows the inputs so AD types propagate.
+    CT = promote_type(eltype(Slm), eltype(Tlm), ComplexF64)
+    g_theta = zero(CT)
+    g_phi = zero(CT)
     Nlm = cfg.Nlm  # hoist field read out of the hot loop (cfg is mutable, so the compiler can't lift it)
     @inbounds for l in max(1, m):ltr
         if is_pole
@@ -150,8 +152,10 @@ end
 `Pb` is a caller-supplied scratch of length ≥ lmax+2 used by the normalized dθ recurrence."""
 @inline function _sphtor_synthesis_kernel_otf(cfg, Slm, Tlm, P, dPdtheta, P_over_sinth, Pb, i, col, m, ltr)
     Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, cfg.x[i], cfg.lmax, m, Pb)
-    g_theta = zero(ComplexF64)
-    g_phi = zero(ComplexF64)
+    # Accumulator eltype follows the inputs so AD types propagate.
+    CT = promote_type(eltype(Slm), eltype(Tlm), ComplexF64)
+    g_theta = zero(CT)
+    g_phi = zero(CT)
     @inbounds for l in max(1, m):ltr
         dtheta_Y = dPdtheta[l+1]      # already orthonormal-normalized
         Y_over_s = P_over_sinth[l+1]

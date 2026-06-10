@@ -656,8 +656,63 @@ end
 
 
 function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    Alm = dist_analysis_standard(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft)
-    copyto!(Alm_out, Alm)
+    cfg = plan.cfg
+    if plan.fallback_standard
+        # φ-distributed layout: needs the longitude Allgather; reuse the
+        # allocating standard path (it warns about anti-scaling already).
+        Alm = dist_analysis_standard(cfg, fθφ; use_tables, use_rfft=plan.use_rfft)
+        copyto!(Alm_out, Alm)
+        return Alm_out
+    end
+    lmax, mmax = cfg.lmax, cfg.mmax
+    local_data = parent(fθφ)
+    size(local_data, 1) == length(plan.θ_globals) ||
+        throw(DimensionMismatch("fθφ local θ extent $(size(local_data, 1)) does not match plan ($(length(plan.θ_globals))); build the plan from a prototype with the same Pencil"))
+    size(local_data, 2) == cfg.nlon ||
+        throw(DimensionMismatch("fθφ local φ extent $(size(local_data, 2)) does not match cfg.nlon=$(cfg.nlon)"))
+    size(Alm_out) == (lmax + 1, mmax + 1) ||
+        throw(DimensionMismatch("Alm_out must be ($(lmax+1), $(mmax+1))"))
+
+    # FFT along φ into the plan-owned buffer via the cached-plan helpers
+    # (avoids both the per-call buffer and FFTW re-planning).
+    if plan.use_rfft
+        eltype(local_data) <: Real ||
+            throw(ArgumentError("plan was built with use_rfft=true; fθφ must hold real data"))
+        SHTnsKit.rfft_phi!(plan.Fθm, local_data)
+    else
+        SHTnsKit.fft_phi!(plan.Fθm, local_data)
+    end
+
+    # Legendre integration into the plan-owned work matrix
+    fill!(plan.Alm_work, zero(ComplexF64))
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables) &&
+              length(cfg.plm_tables) == mmax + 1 && size(cfg.plm_tables[1], 2) == cfg.nlat
+    if use_tbl
+        _analysis_loop_with_tables!(plan.Alm_work, cfg.plm_tables, plan.Fθm,
+                                    plan.weights_cache, plan.θ_globals, lmax, mmax)
+    else
+        _analysis_loop_no_tables!(plan.Alm_work, plan.P, plan.Fθm, plan.weights_cache,
+                                  plan.x_cache, plan.θ_globals, lmax, mmax)
+    end
+
+    # Sum partial θ contributions over the cached θ-column subcomm
+    if plan.θ_is_distributed
+        MPI.Allreduce!(plan.Alm_work, +, plan.reduce_comm)
+    end
+
+    # φ scaling (Nlm already baked into the normalized Legendre rows)
+    cphi = cfg.cphi
+    @inbounds for m in 0:mmax
+        @simd ivdep for l in m:lmax
+            plan.Alm_work[l+1, m+1] *= cphi
+        end
+    end
+
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        SHTnsKit.convert_alm_norm!(Alm_out, plan.Alm_work, cfg; to_internal=false)
+    else
+        copyto!(Alm_out, plan.Alm_work)
+    end
     return Alm_out
 end
 

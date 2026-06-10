@@ -30,6 +30,7 @@ using Test
     include("test_vorticity_inverse.jl")
     include("test_gradients.jl")
     include("test_ad_convenience.jl")
+    include("test_eltype_flexibility.jl")
     include("test_turbo.jl")
     include("test_complex_packed.jl")
     include("test_local.jl")

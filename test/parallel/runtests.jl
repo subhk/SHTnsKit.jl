@@ -11,12 +11,14 @@
 # - test_mpi_extended.jl       : Extended MPI tests (run separately with mpiexec)
 # - test_transpose_sht.jl      : DistTransposePlan transforms, canonical grid (mpiexec)
 # - test_disttranspose_dealiased.jl : DistTransposePlan on dealiased nlon>2*mmax+1 (mpiexec)
+# - test_dist_plan_alloc.jl    : DistAnalysisPlan correctness + per-call allocation budget (mpiexec)
 #
 # To run MPI tests:
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_comprehensive.jl
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_extended.jl
 #   mpiexec -n 2 julia --project test/parallel/test_transpose_sht.jl
 #   mpiexec -n 2 julia --project test/parallel/test_disttranspose_dealiased.jl
+#   mpiexec -n 2 julia --project test/parallel/test_dist_plan_alloc.jl
 
 using Test
 

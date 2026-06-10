@@ -338,7 +338,9 @@ function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Compl
     expected_len = ltr - im + 1
     length(Ql) == expected_len || throw(DimensionMismatch("Ql length must be $(expected_len)"))
 
-    Vr_m = Vector{ComplexF64}(undef, nlat)
+    # Output eltype follows the input so AD types propagate.
+    CT = promote_type(eltype(Ql), ComplexF64)
+    Vr_m = Vector{CT}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
     inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization
     xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
@@ -347,7 +349,7 @@ function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Compl
         x = xv[i]
         Plm_norm_row!(P, x, ltr, im)  # P̄ already orthonormal-normalized
 
-        val = zero(ComplexF64)
+        val = zero(CT)
         @inbounds for l in im:ltr
             val += Ql[l-im+1] * P[l+1]
         end
@@ -371,7 +373,9 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
     size(Qlm, 1) == lmax + 1 || throw(DimensionMismatch("Qlm first dim must be lmax+1"))
     size(Qlm, 2) == mmax + 1 || throw(DimensionMismatch("Qlm second dim must be mmax+1"))
 
-    result = 0.0
+    # Accumulator eltype follows the input so AD types propagate.
+    CT = promote_type(eltype(Qlm), ComplexF64)
+    result = zero(real(CT))
     P = Vector{Float64}(undef, lmax + 1)
 
     # m = 0 contribution (no conjugate partner)
@@ -384,7 +388,7 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
     for m in 1:mmax
         Plm_norm_row!(P, cost, lmax, m)  # P̄ already orthonormal-normalized
         phase = cis(m * phi)  # e^(imφ)
-        gm = zero(ComplexF64)
+        gm = zero(CT)
         @inbounds for l in m:lmax
             gm += Qlm[l+1, m+1] * P[l+1]
         end

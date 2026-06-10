@@ -108,45 +108,60 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
                                                Alm_pencil::PencilArray,
                                                beta::Real,
                                                R_pencil::PencilArray)
-    lmax, mmax = cfg.lmax, cfg.mmax
+    # Materialize concrete-typed inputs here and run the row loop behind a
+    # function barrier: the globalindices compat wrapper is type-unstable, and
+    # letting it poison the loop costs ~1 MB/call in boxing.
     comm = communicator(Alm_pencil)
-    lloc = axes(Alm_pencil, 1)
-    mloc = axes(Alm_pencil, 2)
-    gl_l = globalindices(Alm_pencil, 1)
-    gl_m = globalindices(Alm_pencil, 2)
+    gl_l = collect(Int, globalindices(Alm_pencil, 1))
+    gl_m = collect(Int, globalindices(Alm_pencil, 2))
+    counts_m = collect(Int, Allgather(length(gl_m), comm))
+    _yrotate_truncgather_rows!(cfg, parent(Alm_pencil), parent(R_pencil),
+                               gl_l, gl_m, counts_m,
+                               MPI.Comm_size(comm), MPI.Comm_rank(comm),
+                               float(beta), comm)
+    return R_pencil
+end
 
+function _yrotate_truncgather_rows!(cfg::SHTnsKit.SHTConfig,
+                                    A_local::AbstractMatrix{ComplexF64},
+                                    R_local::AbstractMatrix{ComplexF64},
+                                    gl_l::Vector{Int}, gl_m::Vector{Int},
+                                    counts_m::Vector{Int}, nranks::Int, myrank::Int,
+                                    beta::Float64, comm)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    # Single exchange of m-ownership counts (done by the caller). The global m
+    # order is the ascending rank-block concatenation (the same invariant
+    # dist_SH_Zrotate's Allgatherv relies on), so each l-row's truncated
+    # per-rank counts are computable locally — one Allgatherv per row instead
+    # of three collectives.
+    nm_local = length(gl_m)
+    counts_l = Vector{Int}(undef, nranks)
+
+    # Hoisted scratch reused across l-rows.
     max_n2 = 2*lmax + 1
+    a_local = Vector{ComplexF64}(undef, nm_local)
+    a_full = Vector{ComplexF64}(undef, mmax + 1)
     b_buf = Vector{ComplexF64}(undef, max_n2)
     c_buf = Vector{ComplexF64}(undef, max_n2)
+    D_buf = Matrix{Float64}(undef, max_n2, max_n2)
 
-    for (ii, il) in enumerate(lloc)
+    for ii in 1:size(A_local, 1)
+        il = ii
         lval = gl_l[ii] - 1
         mm = min(lval, mmax)
-        # Build local subset for m ≤ lval
-        msel_val = Int[]
-        a_loc = ComplexF64[]
-        for (jj, jm) in enumerate(mloc)
-            mval = gl_m[jj] - 1
-            (0 <= mval <= mm) || continue
-            push!(msel_val, mval)
-            push!(a_loc, Alm_pencil[il, jm])
+        # Clip each rank's contiguous m block at mm+1 gathered elements total.
+        off = 0
+        @inbounds for r in 1:nranks
+            counts_l[r] = max(0, min(off + counts_m[r], mm + 1) - off)
+            off += counts_m[r]
         end
-        # Gather sizes
-        count_local = length(msel_val)
-        counts = Allgather(count_local, comm)
-        displs = cumsum([0; counts[1:end-1]])
-        total = sum(counts)
-        m_all = Vector{Int}(undef, total)
-        a_all = Vector{ComplexF64}(undef, total)
-        Allgatherv!(msel_val, VBuffer(m_all, counts), comm)
-        Allgatherv!(a_loc, VBuffer(a_all, counts), comm)
-        # Reconstruct a_full[0:mm]
-        a_full = zeros(ComplexF64, mm + 1)
-        for k in 1:total
-            mval = m_all[k]
-            (0 <= mval <= mm) || continue
-            a_full[mval + 1] = a_all[k]
+        count_local = counts_l[myrank + 1]
+        # Owned m values ascend, so the first count_local columns are m ≤ mm.
+        @inbounds for k in 1:count_local
+            a_local[k] = A_local[il, k]
         end
+        # Gathered blocks land in m order: a_full[m+1] = A[l, m] for m = 0:mm.
+        Allgatherv!(view(a_local, 1:count_local), VBuffer(a_full, counts_l), comm)
         # Build symmetric b of size 2l+1 from positive m part
         n2 = 2*lval + 1
         b = view(b_buf, 1:n2); fill!(b, 0.0 + 0.0im)
@@ -162,8 +177,9 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
             b[m + lval + 1] = a_int
             b[-m + lval + 1] = (-1.0)^m * conj(a_int)
         end
-        # d-matrix multiply
-        dl = SHTnsKit.wigner_d_matrix(lval, float(beta))
+        # d-matrix multiply (Wigner-d built into the hoisted buffer)
+        dl = view(D_buf, 1:n2, 1:n2)
+        SHTnsKit.wigner_d_matrix!(dl, lval, beta)
         c = view(c_buf, 1:n2)
         @inbounds for mi in -lval:lval
             acc = 0.0 + 0.0im
@@ -173,19 +189,19 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
             c[mi + lval + 1] = acc
         end
         # Write back local columns
-        for (jj, jm) in enumerate(mloc)
+        @inbounds for jj in 1:nm_local
             mval = gl_m[jj] - 1
             if mval <= lval
                 cm = c[mval + lval + 1]
                 km = SHTnsKit.norm_scale_from_orthonormal(lval, mval, cfg.norm)
                 αm = SHTnsKit.cs_phase_factor(mval, true, cfg.cs_phase)
-                R_pencil[il, jm] = cm / (km * αm)
+                R_local[il, jj] = cm / (km * αm)
             else
-                R_pencil[il, jm] = 0.0 + 0.0im
+                R_local[il, jj] = 0.0 + 0.0im
             end
         end
     end
-    return R_pencil
+    return nothing
 end
 function SHTnsKit.dist_SH_Yrotate(cfg::SHTnsKit.SHTConfig,
                                   Alm_pencil::PencilArray,

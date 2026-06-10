@@ -106,6 +106,23 @@ struct DistSphtorPlan
     use_rfft::Bool
     with_spatial_scratch::Bool
     spatial_scratch::Union{Nothing, _SphtorScratch}
+    # --- analysis scratch (always allocated; see DistAnalysisPlan) ---
+    fallback_standard::Bool
+    θ_globals::Vector{Int}
+    x_cache::Vector{Float64}
+    sθ_cache::Vector{Float64}
+    inv_sθ_cache::Vector{Float64}
+    weights_cache::Vector{Float64}
+    P::Vector{Float64}
+    dPdtheta::Vector{Float64}
+    P_over_sth::Vector{Float64}
+    Pbuf::Vector{Float64}
+    Ftθm::Matrix{ComplexF64}
+    Fpθm::Matrix{ComplexF64}
+    Slm_work::Matrix{ComplexF64}
+    Tlm_work::Matrix{ComplexF64}
+    θ_is_distributed::Bool
+    reduce_comm::MPI.Comm
 end
 
 function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; with_spatial_scratch::Bool=false, use_rfft::Bool=false)
@@ -113,13 +130,14 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
-    _validate_cfg_replicated(cfg, communicator(prototype_θφ))
+    comm = communicator(prototype_θφ)
+    _validate_cfg_replicated(cfg, comm)
+    θ_globals = collect(Int, globalindices(prototype_θφ, 1))
+    nθ_local = length(θ_globals)
+    nlon = cfg.nlon
+    lmax = cfg.lmax
     scratch = if with_spatial_scratch
         # Pre-allocate all scratch buffers needed for synthesis
-        θ_globals = collect(globalindices(prototype_θφ, 1))
-        nθ_local = length(θ_globals)
-        nlon = cfg.nlon
-        lmax = cfg.lmax
         (
             Fθ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vθ
             Fφ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vφ
@@ -131,18 +149,52 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     else
         nothing
     end
-    return DistSphtorPlan(cfg, prototype_θφ, use_rfft, with_spatial_scratch, scratch)
+    nlon_local = size(parent(prototype_θφ), 2)
+    fallback_standard = nlon_local != nlon
+    x_cache = Vector{Float64}(undef, nθ_local)
+    sθ_cache = Vector{Float64}(undef, nθ_local)
+    inv_sθ_cache = Vector{Float64}(undef, nθ_local)
+    weights_cache = Vector{Float64}(undef, nθ_local)
+    for (ii, iglob) in enumerate(θ_globals)
+        x = cfg.x[iglob]
+        sθ = sqrt(max(0.0, 1 - x * x))
+        x_cache[ii] = x
+        sθ_cache[ii] = sθ
+        inv_sθ_cache[ii] = sθ == 0 ? 0.0 : 1.0 / sθ
+        weights_cache[ii] = cfg.w[iglob]
+    end
+    nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
+    Ftθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
+    Fpθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
+    Slm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
+    Tlm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
+    θ_is_distributed = nθ_local < cfg.nlat
+    reduce_comm = if θ_is_distributed && !fallback_standard
+        φ_globals = globalindices(prototype_θφ, 2)
+        MPI.Comm_split(comm, Int(first(φ_globals)), MPI.Comm_rank(comm))
+    else
+        comm
+    end
+    return DistSphtorPlan(cfg, prototype_θφ, use_rfft, with_spatial_scratch, scratch,
+                          fallback_standard, θ_globals, x_cache, sθ_cache, inv_sθ_cache,
+                          weights_cache,
+                          Vector{Float64}(undef, lmax + 1), Vector{Float64}(undef, lmax + 1),
+                          Vector{Float64}(undef, lmax + 1), Vector{Float64}(undef, lmax + 2),
+                          Ftθm, Fpθm, Slm_work, Tlm_work, θ_is_distributed, reduce_comm)
 end
 
 struct DistQstPlan
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
     use_rfft::Bool
+    # QST analysis = scalar (radial) + sphtor (tangential); delegate to the
+    # planned sub-transforms so all scratch lives in the sub-plans.
+    scalar_plan::DistAnalysisPlan
+    sphtor_plan::DistSphtorPlan
 end
 
 function DistQstPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; with_spatial_scratch::Bool=false, use_rfft::Bool=false)
-    # Keep the keyword for API compatibility; QST plans currently do not own
-    # separate scratch storage beyond the scalar/vector sub-transforms.
-    _ = with_spatial_scratch
-    return DistQstPlan(cfg, prototype_θφ, use_rfft)
+    scalar_plan = DistAnalysisPlan(cfg, prototype_θφ; use_rfft)
+    sphtor_plan = DistSphtorPlan(cfg, prototype_θφ; with_spatial_scratch, use_rfft)
+    return DistQstPlan(cfg, prototype_θφ, use_rfft, scalar_plan, sphtor_plan)
 end

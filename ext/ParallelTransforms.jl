@@ -943,59 +943,17 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     Pbuf       = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
     scaleφ = cfg.cphi
 
-    # Main vector analysis loop
-    for mval in 0:mmax
-        col = mval + 1
-        m_fft = mval + 1  # FFT index for this m mode
-
-        for (ii, iglobθ) in enumerate(θ_globals)
-            # Use pre-cached values
-            x = x_cache[ii]
-            sθ = sθ_cache[ii]
-            inv_sθ = inv_sθ_cache[ii]
-            wi = weights_cache[ii]
-
-            # Get vector components from FFT results
-            Fθ_i = Ftθm[ii, m_fft]
-            Fφ_i = Fpθm[ii, m_fft]
-
-            # Apply Robert form scaling if enabled
-            if cfg.robert_form && sθ > 0
-                Fθ_i /= sθ
-                Fφ_i /= sθ
-            end
-
-            if use_tbl
-                # NP_tables: P̄_l^m already; NdP_tables: -dP̄/dθ/sinθ already.
-                # dθY = -sθ * NdP[l+1, iglobθ]  (matches kernel convention)
-                # Y_over_sθ = NP[l+1, iglobθ] * inv_sθ
-                tblNP  = cfg.NP_tables[col]
-                tblNdP = cfg.NdP_tables[col]
-
-                @inbounds for l in max(1, mval):lmax
-                    dθY      = -sθ * tblNdP[l+1, iglobθ]
-                    Y_over_sθ = tblNP[l+1, iglobθ] * inv_sθ
-                    coeff = wi * scaleφ / (l * (l + 1))
-                    term = (0 + 1im) * mval * Y_over_sθ
-                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
-                    Slm_local[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
-                    Tlm_local[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
-                end
-            else
-                # OTF: normalized rows — P̄, dP̄/dθ, P̄/sinθ; no extra Nlm multiply.
-                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sth, x, lmax, mval, Pbuf)
-
-                @inbounds for l in max(1, mval):lmax
-                    dθY      = dPdtheta[l+1]    # dP̄/dθ already orthonormal-normalized
-                    Y_over_sθ = P_over_sth[l+1] # P̄/sinθ
-                    coeff = wi * scaleφ / (l * (l + 1))
-                    term = (0 + 1im) * mval * Y_over_sθ
-                    # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
-                    Slm_local[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
-                    Tlm_local[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
-                end
-            end
-        end
+    # Main vector analysis loop — via the same function barriers the planned
+    # path uses (concrete argument types; the previous inline loop boxed its
+    # way to ~2.9 MB/call).
+    if use_tbl
+        _sphtor_analysis_loop_tbl!(Slm_local, Tlm_local, cfg.NP_tables, cfg.NdP_tables,
+                                   Ftθm, Fpθm, θ_globals, sθ_cache, inv_sθ_cache,
+                                   weights_cache, cfg.robert_form, scaleφ, lmax, mmax)
+    else
+        _sphtor_analysis_loop_otf!(Slm_local, Tlm_local, P, dPdtheta, P_over_sth, Pbuf,
+                                   Ftθm, Fpθm, x_cache, sθ_cache, inv_sθ_cache,
+                                   weights_cache, cfg.robert_form, scaleφ, lmax, mmax)
     end
 
     # Only reduce if θ is actually distributed across processes
@@ -1028,10 +986,139 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     end
 end
 
+# Function barriers for the sphtor analysis accumulation (see the scalar
+# _analysis_loop_* barriers for the rationale: concrete argument types keep the
+# m/θ/l loops allocation-free).
+function _sphtor_analysis_loop_tbl!(Slm::Matrix{ComplexF64}, Tlm::Matrix{ComplexF64},
+                                    NP_tables::Vector{Matrix{Float64}}, NdP_tables::Vector{Matrix{Float64}},
+                                    Ftθm::Matrix{ComplexF64}, Fpθm::Matrix{ComplexF64},
+                                    θ_globals::Vector{Int}, sθ_cache::Vector{Float64},
+                                    inv_sθ_cache::Vector{Float64}, weights_cache::Vector{Float64},
+                                    robert_form::Bool, scaleφ::Float64, lmax::Int, mmax::Int)
+    nθ_local = length(θ_globals)
+    for mval in 0:mmax
+        col = mval + 1
+        tblNP  = NP_tables[col]
+        tblNdP = NdP_tables[col]
+        for ii in 1:nθ_local
+            iglobθ = θ_globals[ii]
+            sθ = sθ_cache[ii]
+            inv_sθ = inv_sθ_cache[ii]
+            wi = weights_cache[ii]
+            Fθ_i = Ftθm[ii, col]
+            Fφ_i = Fpθm[ii, col]
+            if robert_form && sθ > 0
+                Fθ_i /= sθ
+                Fφ_i /= sθ
+            end
+            @inbounds for l in max(1, mval):lmax
+                dθY       = -sθ * tblNdP[l+1, iglobθ]
+                Y_over_sθ = tblNP[l+1, iglobθ] * inv_sθ
+                coeff = wi * scaleφ / (l * (l + 1))
+                term = (0 + 1im) * mval * Y_over_sθ
+                # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
+                Slm[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
+                Tlm[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
+            end
+        end
+    end
+    return nothing
+end
+
+function _sphtor_analysis_loop_otf!(Slm::Matrix{ComplexF64}, Tlm::Matrix{ComplexF64},
+                                    P::Vector{Float64}, dPdtheta::Vector{Float64},
+                                    P_over_sth::Vector{Float64}, Pbuf::Vector{Float64},
+                                    Ftθm::Matrix{ComplexF64}, Fpθm::Matrix{ComplexF64},
+                                    x_cache::Vector{Float64}, sθ_cache::Vector{Float64},
+                                    inv_sθ_cache::Vector{Float64}, weights_cache::Vector{Float64},
+                                    robert_form::Bool, scaleφ::Float64, lmax::Int, mmax::Int)
+    nθ_local = length(x_cache)
+    for mval in 0:mmax
+        col = mval + 1
+        for ii in 1:nθ_local
+            sθ = sθ_cache[ii]
+            wi = weights_cache[ii]
+            Fθ_i = Ftθm[ii, col]
+            Fφ_i = Fpθm[ii, col]
+            if robert_form && sθ > 0
+                Fθ_i /= sθ
+                Fφ_i /= sθ
+            end
+            # OTF: normalized rows — P̄, dP̄/dθ, P̄/sinθ; no extra Nlm multiply.
+            SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sth, x_cache[ii], lmax, mval, Pbuf)
+            @inbounds for l in max(1, mval):lmax
+                dθY       = dPdtheta[l+1]
+                Y_over_sθ = P_over_sth[l+1]
+                coeff = wi * scaleφ / (l * (l + 1))
+                term = (0 + 1im) * mval * Y_over_sθ
+                # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
+                Slm[l+1, col] += coeff * (Fθ_i * dθY + conj(term) * Fφ_i)
+                Tlm[l+1, col] += coeff * (-conj(term) * Fθ_i + dθY * Fφ_i)
+            end
+        end
+    end
+    return nothing
+end
+
 function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
                                          Vtθφ::PencilArray, Vpθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(plan.cfg, Vtθφ, Vpθφ; use_tables, use_rfft=plan.use_rfft)
-    copyto!(Slm_out, Slm); copyto!(Tlm_out, Tlm)
+    cfg = plan.cfg
+    if plan.fallback_standard
+        # φ-distributed layout: needs the longitude gather; reuse the allocating
+        # cfg-form path.
+        Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; use_tables, use_rfft=plan.use_rfft)
+        copyto!(Slm_out, Slm); copyto!(Tlm_out, Tlm)
+        return Slm_out, Tlm_out
+    end
+    lmax, mmax = cfg.lmax, cfg.mmax
+    local_Vt = parent(Vtθφ)
+    local_Vp = parent(Vpθφ)
+    nθ_local = length(plan.θ_globals)
+    (size(local_Vt, 1) == nθ_local && size(local_Vp, 1) == nθ_local) ||
+        throw(DimensionMismatch("Vt/Vp local θ extent does not match plan ($(nθ_local)); build the plan from a prototype with the same Pencil"))
+    (size(local_Vt, 2) == cfg.nlon && size(local_Vp, 2) == cfg.nlon) ||
+        throw(DimensionMismatch("Vt/Vp local φ extent does not match cfg.nlon=$(cfg.nlon)"))
+    (size(Slm_out) == (lmax + 1, mmax + 1) && size(Tlm_out) == (lmax + 1, mmax + 1)) ||
+        throw(DimensionMismatch("Slm_out/Tlm_out must be ($(lmax+1), $(mmax+1))"))
+
+    if plan.use_rfft
+        (eltype(local_Vt) <: Real && eltype(local_Vp) <: Real) ||
+            throw(ArgumentError("plan was built with use_rfft=true; Vt/Vp must hold real data"))
+        SHTnsKit.rfft_phi!(plan.Ftθm, local_Vt)
+        SHTnsKit.rfft_phi!(plan.Fpθm, local_Vp)
+    else
+        SHTnsKit.fft_phi!(plan.Ftθm, local_Vt)
+        SHTnsKit.fft_phi!(plan.Fpθm, local_Vp)
+    end
+
+    fill!(plan.Slm_work, zero(ComplexF64))
+    fill!(plan.Tlm_work, zero(ComplexF64))
+    use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.NP_tables) && !isempty(cfg.NdP_tables) &&
+              length(cfg.NP_tables) == mmax + 1 && length(cfg.NdP_tables) == mmax + 1
+    if use_tbl
+        _sphtor_analysis_loop_tbl!(plan.Slm_work, plan.Tlm_work, cfg.NP_tables, cfg.NdP_tables,
+                                   plan.Ftθm, plan.Fpθm, plan.θ_globals, plan.sθ_cache,
+                                   plan.inv_sθ_cache, plan.weights_cache,
+                                   cfg.robert_form, cfg.cphi, lmax, mmax)
+    else
+        _sphtor_analysis_loop_otf!(plan.Slm_work, plan.Tlm_work, plan.P, plan.dPdtheta,
+                                   plan.P_over_sth, plan.Pbuf, plan.Ftθm, plan.Fpθm,
+                                   plan.x_cache, plan.sθ_cache, plan.inv_sθ_cache,
+                                   plan.weights_cache, cfg.robert_form, cfg.cphi, lmax, mmax)
+    end
+
+    if plan.θ_is_distributed
+        MPI.Allreduce!(plan.Slm_work, +, plan.reduce_comm)
+        MPI.Allreduce!(plan.Tlm_work, +, plan.reduce_comm)
+    end
+
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        SHTnsKit.convert_alm_norm!(Slm_out, plan.Slm_work, cfg; to_internal=false)
+        SHTnsKit.convert_alm_norm!(Tlm_out, plan.Tlm_work, cfg; to_internal=false)
+    else
+        copyto!(Slm_out, plan.Slm_work)
+        copyto!(Tlm_out, plan.Tlm_work)
+    end
     return Slm_out, Tlm_out
 end
 
@@ -1342,8 +1429,9 @@ end
 
 function SHTnsKit.dist_analysis_qst!(plan::DistQstPlan, Qlm_out::AbstractMatrix, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
                                       Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray)
-    Q, S, T = SHTnsKit.dist_analysis_qst(plan.cfg, Vrθφ, Vtθφ, Vpθφ)
-    copyto!(Qlm_out, Q); copyto!(Slm_out, S); copyto!(Tlm_out, T)
+    # Delegate to the planned scalar + sphtor paths (all scratch in sub-plans).
+    SHTnsKit.dist_analysis!(plan.scalar_plan, Qlm_out, Vrθφ)
+    SHTnsKit.dist_analysis_sphtor!(plan.sphtor_plan, Slm_out, Tlm_out, Vtθφ, Vpθφ)
     return Qlm_out, Slm_out, Tlm_out
 end
 

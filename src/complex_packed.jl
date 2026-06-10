@@ -156,8 +156,9 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     alm = Vector{CT}(undef, nlm_cplx_calc(lmax, mmax, 1))
     fill!(alm, zero(CT))
 
-    # FFT along φ
-    Fφ = fft_phi(_as_complex(z))
+    # FFT along φ — one buffer + cached FFTW plan (the bare out-of-place
+    # fft_phi re-plans each call). eltype preserved for the AD/DFT fallback.
+    Fφ = fft_phi!(Matrix{complex(float(eltype(z)))}(undef, size(z)...), z)
     P = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
 

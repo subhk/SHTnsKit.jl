@@ -102,6 +102,41 @@ _partial(x::Dual) = partials(x, 1)
     end
 end
 
+@testset "Adjoint FFT allocations (copy+re-plan pattern)" begin
+    using ChainRulesCore: rrule
+    lmax = 64
+    nlat = lmax + 2
+    nlon = 2 * lmax + 2
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    matbytes = nlat * nlon * 16
+
+    # _adjoint_synthesis must allocate ONE complex FFT buffer (cached plan),
+    # not a complex copy + an out-of-place re-planned fft result.
+    fbar = randn(nlat, nlon)
+    ref = SHTnsKit._adjoint_synthesis(cfg, fbar)
+    a = @allocated SHTnsKit._adjoint_synthesis(cfg, fbar)
+    @test a < 2 * matbytes  # one buffer + ālm output + slack (was ~2.5 buffers)
+
+    # sphtor synthesis pullback: one buffer per field, not two
+    S = zeros(ComplexF64, lmax + 1, cfg.mmax + 1); S[2, 1] = 1.0
+    T = zeros(ComplexF64, lmax + 1, cfg.mmax + 1); T[3, 2] = 0.5 + 0.25im
+    (y, pb) = rrule(SHTnsKit.synthesis_sphtor, cfg, S, T)
+    Vt, Vp = y
+    _, _, S̄1, T̄1 = pb((Vt, Vp))
+    a2 = @allocated pb((Vt, Vp))
+    @test a2 < 2 * matbytes + 3 * matbytes ÷ 2  # 2 buffers + S̄/T̄ outputs + slack (was ~5 buffers)
+    # adjoint result must be unchanged by the buffer strategy
+    _, _, S̄2, T̄2 = pb((Vt, Vp))
+    @test S̄1 ≈ S̄2 && T̄1 ≈ T̄2
+
+    # analysis_packed_cplx: complex input avoids the copy already; guard that
+    # the cached-plan path returns identical results
+    z = randn(ComplexF64, nlat, nlon)
+    alm1 = analysis_packed_cplx(cfg, z)
+    alm2 = analysis_packed_cplx(cfg, z)
+    @test alm1 ≈ alm2
+end
+
 @testset "Point evaluator allocations" begin
     lmax = 32
     cfg = create_gauss_config(lmax, lmax + 4; nlon=2 * lmax + 2)

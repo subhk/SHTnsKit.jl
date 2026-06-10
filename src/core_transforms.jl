@@ -437,8 +437,10 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
                             real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     # FFT along φ. For real f̄ the FFTW rfft would be enough, but we accept
-    # complex f̄ too so use the general routine.
-    Fph̄ = fft_phi(_as_complex(f̄))
+    # complex f̄ too so use the general routine. One buffer + cached FFTW plan;
+    # the old `fft_phi(_as_complex(f̄))` made a complex copy AND re-planned an
+    # out-of-place fft each call. eltype preserved for the AD/DFT fallback.
+    Fph̄ = fft_phi!(Matrix{complex(float(eltype(f̄)))}(undef, size(f̄)...), f̄)
     ālm = zeros(ComplexF64, lmax + 1, mmax + 1)
     use_tbl = has_fused_scalar_tables(cfg)
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)

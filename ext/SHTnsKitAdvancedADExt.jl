@@ -145,9 +145,11 @@ end
         nlat, nlon = cfg.nlat, cfg.nlon
         lmax, mmax = cfg.lmax, cfg.mmax
 
-        # Adjoint of ifft_phi: fft_phi
-        F̄θ = SHTnsKit.fft_phi(complex.(V̄t))
-        F̄φ = SHTnsKit.fft_phi(complex.(V̄p))
+        # Adjoint of ifft_phi: fft_phi. One buffer per field + cached FFTW plan
+        # (the old `fft_phi(complex.(V̄))` made a complex copy AND re-planned an
+        # out-of-place fft on every gradient step).
+        F̄θ = SHTnsKit.fft_phi!(Matrix{complex(float(eltype(V̄t)))}(undef, size(V̄t)...), V̄t)
+        F̄φ = SHTnsKit.fft_phi!(Matrix{complex(float(eltype(V̄p)))}(undef, size(V̄p)...), V̄p)
 
         S̄ = zeros(ComplexF64, lmax + 1, mmax + 1)
         T̄ = zeros(ComplexF64, lmax + 1, mmax + 1)

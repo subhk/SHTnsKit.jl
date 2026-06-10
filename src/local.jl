@@ -15,15 +15,19 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     (0 ≤ mtr ≤ cfg.mmax) || throw(ArgumentError("mtr must be within [0, mmax]"))
     x = float(cost)
     lmax = cfg.lmax
+    # Accumulator/output eltype follows the input so AD types (e.g.
+    # ForwardDiff.Dual) propagate; defaults to Float64 for ComplexF64 input.
+    CT = promote_type(eltype(Qlm), ComplexF64)
+    RT = real(CT)
     P = Vector{Float64}(undef, lmax + 1)
-    vals = Vector{Float64}(undef, nphi)
-    fill!(vals, 0.0)
+    vals = Vector{RT}(undef, nphi)
+    fill!(vals, zero(RT))
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
 
     # m=0 contribution
     Plm_norm_row!(P, x, lmax, 0)
-    g0 = zero(ComplexF64)
+    g0 = zero(CT)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
     @inbounds for l in 0:ltr
         lm = LM_index(lmax, cfg.mres, l, 0) + 1
@@ -42,7 +46,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     for m in 1:mtr
         (m % cfg.mres == 0) || continue
         Plm_norm_row!(P, x, lmax, m)
-        gm = zero(ComplexF64)
+        gm = zero(CT)
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         @inbounds for l in m:min(ltr, lmax)
             lm = LM_index(lmax, cfg.mres, l, m) + 1
@@ -69,13 +73,14 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     lmax, mmax = cfg.lmax, cfg.mmax
     length(alm_packed) == nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("alm_packed length"))
     x = float(cost)
+    CT = promote_type(eltype(alm_packed), ComplexF64)
     P = Vector{Float64}(undef, lmax + 1)
-    vals = Vector{ComplexF64}(undef, nphi)
-    fill!(vals, zero(ComplexF64))
+    vals = Vector{CT}(undef, nphi)
+    fill!(vals, zero(CT))
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
     # m=0
     Plm_norm_row!(P, x, lmax, 0)
-    g0 = zero(ComplexF64)
+    g0 = zero(CT)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
     @inbounds for l in 0:min(ltr, lmax)
         idx = LM_cplx_index(lmax, mmax, l, 0) + 1
@@ -93,7 +98,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     # m ≠ 0
     for m in 1:mmax
         Plm_norm_row!(P, x, lmax, m)
-        gm = zero(ComplexF64); gn = zero(ComplexF64)
+        gm = zero(CT); gn = zero(CT)
         αp = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
         αn = need_norm ? cs_phase_factor(-m, true, cfg.cs_phase) : 1.0
         @inbounds for l in m:min(ltr, lmax)
@@ -132,6 +137,7 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     P = Vector{Float64}(undef, lmax + 1)
     dPdtheta = Vector{Float64}(undef, lmax + 1)
     P_over_sinth = Vector{Float64}(undef, lmax + 1)
+    Pbuf = Vector{Float64}(undef, lmax + 2)  # scratch for the dθ recurrence
     sθ = sqrt(max(0.0, 1 - x*x))
     CT = promote_type(eltype(Qlm), eltype(Slm), eltype(Tlm))
     vr = zero(CT)
@@ -161,7 +167,7 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     for m in 1:mmax
         (m % cfg.mres == 0) || continue
         # Single call computes P̄, dP̄/dθ, and P̄/sinθ (avoids redundant Plm_norm_row!)
-        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)
         gvr = zero(CT)
         gvt = zero(CT)
         gvp = zero(CT)
@@ -198,9 +204,53 @@ Evaluate gradient of a scalar field at a point. Vr is returned as 0.0.
 `DrSlm` is ignored for this pure-Julia core.
 """
 function SH_to_grad_point(cfg::SHTConfig, ::AbstractVector{<:Complex}, Slm::AbstractVector{<:Complex}, cost::Real, phi::Real)
-    zeroQ = zeros(ComplexF64, cfg.nlm)
-    zeroT = zeros(ComplexF64, cfg.nlm)
-    return SHqst_to_point(cfg, zeroQ, Slm, zeroT, cost, phi)
+    length(Slm) == cfg.nlm || throw(DimensionMismatch("Slm length"))
+    x = float(cost)
+    lmax = cfg.lmax; mmax = cfg.mmax
+    P = Vector{Float64}(undef, lmax + 1)
+    dPdtheta = Vector{Float64}(undef, lmax + 1)
+    P_over_sinth = Vector{Float64}(undef, lmax + 1)
+    Pbuf = Vector{Float64}(undef, lmax + 2)  # scratch for the dθ recurrence
+    CT = promote_type(eltype(Slm), ComplexF64)
+    vt = zero(CT)
+    vp = zero(CT)
+
+    need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+
+    # m=0: Vθ = dθY*S; the (im/sinθ)*Y*S term in Vφ vanishes
+    Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
+    α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
+    for l in 0:lmax
+        lm = LM_index(lmax, cfg.mres, l, 0) + 1
+        aS = Slm[lm]
+        if need_norm
+            aS *= norm_scale_from_orthonormal(l, 0, cfg.norm) * α0
+        end
+        vt += dPdtheta[l+1] * aS
+    end
+
+    # m>0 (pole-safe 1/sinθ handling)
+    for m in 1:mmax
+        (m % cfg.mres == 0) || continue
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)
+        gvt = zero(CT)
+        gvp = zero(CT)
+        αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
+        for l in m:lmax
+            lm = LM_index(lmax, cfg.mres, l, m) + 1
+            aS = Slm[lm]
+            if need_norm
+                aS *= norm_scale_from_orthonormal(l, m, cfg.norm) * αm
+            end
+            # Vθ = dθY*S, Vφ = (im/sinθ)*Y*S (T ≡ 0 for a scalar gradient)
+            gvt += dPdtheta[l+1] * aS
+            gvp += 1.0im * m * P_over_sinth[l+1] * aS
+        end
+        ph = cis(m * phi)
+        vt += 2 * real(gvt * ph)
+        vp += 2 * real(gvp * ph)
+    end
+    return zero(real(CT)), real(vt), real(vp)
 end
 
 """
@@ -219,21 +269,25 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     (0 ≤ mtr ≤ cfg.mmax) || throw(ArgumentError("mtr must be within [0, mmax]"))
     x = float(cost)
     lmax = cfg.lmax
+    # Accumulator/output eltype follows the inputs so AD types propagate.
+    CT = promote_type(eltype(Qlm), eltype(Slm), eltype(Tlm), ComplexF64)
+    RT = real(CT)
     P = Vector{Float64}(undef, lmax + 1)
     dPdtheta = Vector{Float64}(undef, lmax + 1)
     P_over_sinth = Vector{Float64}(undef, lmax + 1)
-    Vr = Vector{Float64}(undef, nphi)
-    Vt = Vector{Float64}(undef, nphi)
-    Vp = Vector{Float64}(undef, nphi)
-    fill!(Vr, 0.0); fill!(Vt, 0.0); fill!(Vp, 0.0)
+    Pbuf = Vector{Float64}(undef, lmax + 2)  # scratch for the dθ recurrence
+    Vr = Vector{RT}(undef, nphi)
+    Vt = Vector{RT}(undef, nphi)
+    Vp = Vector{RT}(undef, nphi)
+    fill!(Vr, zero(RT)); fill!(Vt, zero(RT)); fill!(Vp, zero(RT))
 
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
 
     # m=0 (no 1/sinθ terms)
     Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
-    g0 = zero(ComplexF64)
-    gθ0 = zero(ComplexF64)
-    gφ0 = zero(ComplexF64)
+    g0 = zero(CT)
+    gθ0 = zero(CT)
+    gφ0 = zero(CT)
     α0 = need_norm ? cs_phase_factor(0, true, cfg.cs_phase) : 1.0
 
     @inbounds for l in 0:ltr
@@ -258,10 +312,10 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     for m in 1:mtr
         (m % cfg.mres == 0) || continue
         # Single call computes P̄, dP̄/dθ, and P̄/sinθ (avoids redundant Plm_norm_row!)
-        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m)
-        g  = zero(ComplexF64)
-        gθ = zero(ComplexF64)
-        gφ = zero(ComplexF64)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)
+        g  = zero(CT)
+        gθ = zero(CT)
+        gφ = zero(CT)
         αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
 
         @inbounds for l in m:min(ltr, lmax)

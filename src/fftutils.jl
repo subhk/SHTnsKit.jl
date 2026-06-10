@@ -312,20 +312,13 @@ for `k = 0..nlon÷2`). Falls back to a DFT-then-truncate path when FFTW cannot
 handle the input element type (AD).
 """
 function rfft_phi(A::AbstractMatrix{<:Real})
-    try
-        Y = rfft(A, 2)
-        _FFT_BACKEND[] = _FFT_BACKEND_FFTW
-        return Y
-    catch e
-        if !(e isa MethodError || e isa ArgumentError || e isa InexactError)
-            rethrow(e)
-        end
-        Y_full = _dft_phi(A, -1)
-        nlon = size(A, 2)
-        Y = Y_full[:, 1:(nlon ÷ 2 + 1)]
-        _FFT_BACKEND[] = _FFT_BACKEND_DFT
-        return Y
-    end
+    # Delegate to the in-place variant so the FFTW plan comes from the local
+    # plan cache instead of being rebuilt on every call (bare `rfft(A, 2)`
+    # re-plans each time). The fallback DFT path for AD eltypes is preserved
+    # inside rfft_phi!.
+    nlat, nlon = size(A)
+    dest = Matrix{complex(float(eltype(A)))}(undef, nlat, nlon ÷ 2 + 1)
+    return rfft_phi!(dest, A)
 end
 
 """

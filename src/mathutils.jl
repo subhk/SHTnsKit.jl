@@ -39,11 +39,16 @@ function _ensure_logfac!(n::Int)
         cache = _logfac_cache[]
         kmax = length(cache) - 1  # Current maximum cached factorial
         if n > kmax
-            # Extend cache incrementally using stable recurrence relation
-            # log(k!) = log((k-1)!) + log(k) avoids overflow issues
+            # Copy-on-extend: build a NEW vector and publish it via the Ref. A
+            # lock-free reader in `logfactorial` holds the previously-published
+            # vector, which is now immutable, so it can never race a `push!`
+            # reallocation of the array it is indexing.
+            newcache = copy(cache)
             for k in (kmax + 1):n
-                push!(cache, cache[end] + log(k))
+                # log(k!) = log((k-1)!) + log(k) — stable recurrence, avoids overflow
+                push!(newcache, newcache[end] + log(k))
             end
+            _logfac_cache[] = newcache
         end
     end
 

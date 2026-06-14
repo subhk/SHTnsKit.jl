@@ -36,6 +36,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
         # Few m modes: parallelize over latitude points with thread-local accumulators
         n_tid = Threads.maxthreadid()
         thread_alm = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:n_tid]
+        thread_P_bufs = [Vector{Float64}(undef, lmax + 1) for _ in 1:n_tid]  # per-thread Legendre scratch (hoisted out of the latitude loop)
         for m in 0:mmax
             col = m + 1
             for t in 1:n_tid
@@ -44,7 +45,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
             if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
                 # NP_tables[col][l+1, i] = P̄_l^m already; no extra Nlm multiply
                 tbl = cfg.NP_tables[m + 1]
-                @threads for i in 1:nlat
+                @threads :static for i in 1:nlat   # :static pins iterations → threadid() stable (no buffer race under task migration)
                     tid = Threads.threadid()
                     local_acc = thread_alm[tid]
                     Fi = Fφ[i, col]
@@ -54,10 +55,10 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
                     end
                 end
             else
-                @threads for i in 1:nlat
+                @threads :static for i in 1:nlat   # :static pins iterations → threadid() stable (no buffer race under task migration)
                     tid = Threads.threadid()
                     local_acc = thread_alm[tid]
-                    thread_P = Vector{Float64}(undef, lmax + 1)
+                    thread_P = thread_P_bufs[tid]
                     SHTnsKit.Plm_norm_row!(thread_P, xv[i], lmax, m)
                     Fi = Fφ[i, col]
                     wi = wv[i]
@@ -147,6 +148,8 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
     n_threads = Threads.nthreads()
     if mmax + 1 < n_threads ÷ 2 && nlat > 32
         # Few m modes: parallelize over latitude points instead
+        n_tid = Threads.maxthreadid()
+        thread_P_bufs = [Vector{Float64}(undef, lmax + 1) for _ in 1:n_tid]  # per-thread Legendre scratch (hoisted out of the latitude loop)
         for m in 0:mmax
             col = m + 1
             if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
@@ -164,8 +167,8 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
                     G[i] = complex(g_re, g_im)
                 end
             else
-                @threads for i in 1:nlat
-                    thread_P = Vector{Float64}(undef, lmax + 1)
+                @threads :static for i in 1:nlat   # :static pins iterations → threadid() stable
+                    thread_P = thread_P_bufs[Threads.threadid()]
                     SHTnsKit.Plm_norm_row!(thread_P, xv[i], lmax, m)
                     g_re = 0.0
                     g_im = 0.0

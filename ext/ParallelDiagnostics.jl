@@ -4,8 +4,8 @@
 
 function SHTnsKit.energy_scalar(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; real_field::Bool=true)
     lloc = axes(Alm, 1); mloc = axes(Alm, 2)
-    gl_l = globalindices(Alm, 1)
-    gl_m = globalindices(Alm, 2)
+    gl_l = collect(Int, globalindices(Alm, 1))
+    gl_m = collect(Int, globalindices(Alm, 2))
     e_local = 0.0
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
@@ -25,8 +25,8 @@ function SHTnsKit.energy_scalar_l_spectrum(cfg::SHTnsKit.SHTConfig, Alm::PencilA
     lmax = cfg.lmax
     E = zeros(Float64, lmax + 1)
     lloc = axes(Alm, 1); mloc = axes(Alm, 2)
-    gl_l = globalindices(Alm, 1)
-    gl_m = globalindices(Alm, 2)
+    gl_l = collect(Int, globalindices(Alm, 1))
+    gl_m = collect(Int, globalindices(Alm, 2))
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         wm = (real_field && mval > 0) ? 1.0 : 0.5
@@ -45,9 +45,9 @@ function SHTnsKit.energy_scalar_m_spectrum(cfg::SHTnsKit.SHTConfig, Alm::PencilA
     mmax = cfg.mmax
     E = zeros(Float64, mmax + 1)
     mloc = axes(Alm, 2)
-    gl_m = globalindices(Alm, 2)
+    gl_m = collect(Int, globalindices(Alm, 2))
     lloc = axes(Alm, 1)
-    gl_l = globalindices(Alm, 1)
+    gl_l = collect(Int, globalindices(Alm, 1))
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         s = 0.0
@@ -68,8 +68,8 @@ function SHTnsKit.energy_vector_l_spectrum(cfg::SHTnsKit.SHTConfig, Slm::PencilA
     lmax = cfg.lmax
     E = zeros(Float64, lmax + 1)
     lloc = axes(Slm, 1); mloc = axes(Slm, 2)
-    gl_l = globalindices(Slm, 1)
-    gl_m = globalindices(Slm, 2)
+    gl_l = collect(Int, globalindices(Slm, 1))
+    gl_m = collect(Int, globalindices(Slm, 2))
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         wm2 = (real_field && mval > 0) ? 1.0 : 0.5
@@ -89,8 +89,8 @@ function SHTnsKit.energy_vector_m_spectrum(cfg::SHTnsKit.SHTConfig, Slm::PencilA
     mmax = cfg.mmax
     E = zeros(Float64, mmax + 1)
     lloc = axes(Slm, 1); mloc = axes(Slm, 2)
-    gl_l = globalindices(Slm, 1)
-    gl_m = globalindices(Slm, 2)
+    gl_l = collect(Int, globalindices(Slm, 1))
+    gl_m = collect(Int, globalindices(Slm, 2))
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         s = 0.0
@@ -112,8 +112,8 @@ function SHTnsKit.enstrophy_l_spectrum(cfg::SHTnsKit.SHTConfig, Tlm::PencilArray
     lmax = cfg.lmax
     Z = zeros(Float64, lmax + 1)
     lloc = axes(Tlm, 1); mloc = axes(Tlm, 2)
-    gl_l = globalindices(Tlm, 1)
-    gl_m = globalindices(Tlm, 2)
+    gl_l = collect(Int, globalindices(Tlm, 1))
+    gl_m = collect(Int, globalindices(Tlm, 2))
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         wm2 = (real_field && mval > 0) ? 1.0 : 0.5
@@ -133,8 +133,8 @@ function SHTnsKit.enstrophy_m_spectrum(cfg::SHTnsKit.SHTConfig, Tlm::PencilArray
     mmax = cfg.mmax
     Z = zeros(Float64, mmax + 1)
     lloc = axes(Tlm, 1); mloc = axes(Tlm, 2)
-    gl_l = globalindices(Tlm, 1)
-    gl_m = globalindices(Tlm, 2)
+    gl_l = collect(Int, globalindices(Tlm, 1))
+    gl_m = collect(Int, globalindices(Tlm, 2))
     @inbounds for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         s = 0.0
@@ -154,7 +154,7 @@ end
 
 function SHTnsKit.grid_energy_scalar(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray)
     θloc = axes(fθφ, 1)
-    gl_θ = globalindices(fθφ, 1)
+    gl_θ = collect(Int, globalindices(fθφ, 1))
     φscale = 2π / cfg.nlon
     e_local = 0.0
     @inbounds for (ii, iθ) in enumerate(θloc)
@@ -170,7 +170,7 @@ end
 
 function SHTnsKit.grid_energy_vector(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray)
     θloc = axes(Vtθφ, 1)
-    gl_θ = globalindices(Vtθφ, 1)
+    gl_θ = collect(Int, globalindices(Vtθφ, 1))
     φscale = 2π / cfg.nlon
     e_local = 0.0
     @inbounds for (ii, iθ) in enumerate(θloc)
@@ -186,7 +186,7 @@ end
 
 function SHTnsKit.grid_enstrophy(cfg::SHTnsKit.SHTConfig, ζθφ::PencilArray)
     θloc = axes(ζθφ, 1)
-    gl_θ = globalindices(ζθφ, 1)
+    gl_θ = collect(Int, globalindices(ζθφ, 1))
     φscale = 2π / cfg.nlon
     z_local = 0.0
     @inbounds for (ii, iθ) in enumerate(θloc)

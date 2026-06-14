@@ -275,12 +275,13 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
-    alm_batch = Array{ComplexF64,3}(undef, lmax + 1, mmax + 1, nfields)
-    fill!(alm_batch, zero(ComplexF64))  # Initialize to zero for += accumulation in on-the-fly path
+    CT = complex(float(eltype(fields)))  # preserve Float32/Float64 instead of forcing ComplexF64
+    alm_batch = Array{CT,3}(undef, lmax + 1, mmax + 1, nfields)
+    fill!(alm_batch, zero(CT))  # Initialize to zero for += accumulation in on-the-fly path
 
     # Allocate FFT scratch buffer — half width when using rfft.
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
-    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
+    Fφ_batch = Array{CT,3}(undef, nlat, nbins, nfields)
 
     # Perform FFT on all fields
     if use_rfft
@@ -367,7 +368,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     # Reuse caller-provided scratch if given, else allocate.
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
     if fft_batch === nothing
-        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
+        Fφ_batch = Array{complex(float(eltype(fields))),3}(undef, nlat, nbins, nfields)
     else
         size(fft_batch) == (nlat, nbins, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, $(nbins), nfields)"))
         Fφ_batch = fft_batch

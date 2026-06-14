@@ -293,6 +293,13 @@ end
     # ----- grid fields -----
     if name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
         return getproperty(getfield(cfg, :_grid), name)
+    # ----- legacy grid aliases (advertised by propertynames): wlat→w, ct→x, sintheta→st -----
+    elseif name === :wlat
+        return getproperty(getfield(cfg, :_grid), :w)
+    elseif name === :ct
+        return getproperty(getfield(cfg, :_grid), :x)
+    elseif name === :sintheta
+        return getproperty(getfield(cfg, :_grid), :st)
     # ----- normalization fields -----
     elseif name === :Nlm
         return getfield(cfg, :_norm).Nlm
@@ -347,6 +354,12 @@ end
 function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
     if name === :θ || name === :φ || name === :x || name === :w || name === :st || name === :cphi
         return setproperty!(getfield(cfg, :_grid), name, val)
+    elseif name === :wlat
+        return setproperty!(getfield(cfg, :_grid), :w, val)
+    elseif name === :ct
+        return setproperty!(getfield(cfg, :_grid), :x, val)
+    elseif name === :sintheta
+        return setproperty!(getfield(cfg, :_grid), :st, val)
     elseif name === :Nlm
         return setfield!(getfield(cfg, :_norm), :Nlm, val)
     elseif name === :norm
@@ -1198,8 +1211,10 @@ function prepare_plm_tables!(cfg::SHTConfig)
     
     # Pre-fuse Nlm so scalar and sphtor kernels can read a single product per
     # element on both the P and dP/dx tables.
-    NP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
-    NdP_tables = [Matrix{Float64}(undef, lmax + 1, nlat) for _ in 0:mmax]
+    # zeros (not undef): the l<m lower triangle is never written below but is
+    # kept deterministic so any full-column read can't pick up garbage.
+    NP_tables = [zeros(Float64, lmax + 1, nlat) for _ in 0:mmax]
+    NdP_tables = [zeros(Float64, lmax + 1, nlat) for _ in 0:mmax]
     Nlm = cfg.Nlm  # hoist field read out of the m/i/l loops (cfg is mutable, so the compiler can't lift it)
 
     # NP: build from the bounded normalized recurrence P̄ = Nlm·rawP so that
@@ -1293,6 +1308,8 @@ function Base.copy(cfg::SHTConfig)
         device_preference = copy(cfg.device_preference),
         plm_tables = [copy(t) for t in cfg.plm_tables],
         dplm_tables = [copy(t) for t in cfg.dplm_tables],
+        NP_tables = [copy(t) for t in cfg.NP_tables],
+        NdP_tables = [copy(t) for t in cfg.NdP_tables],
         howmany = cfg.howmany, spec_dist = cfg.spec_dist,
         south_pole_first = cfg.south_pole_first,
         allow_padding = cfg.allow_padding,

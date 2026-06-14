@@ -154,7 +154,7 @@ Y[k] = Σⱼ A[j] * exp(dir * 2πi * k * j / N)
 """
 function _dft_phi(A::AbstractMatrix, dir::Int)
     nlat, nlon = size(A)
-    Y = similar(complex.(A))  # Ensure output is complex-valued
+    Y = similar(A, complex(eltype(A)))  # complex output; avoids materializing complex.(A) just for its type/shape
     
     # Compute DFT for each latitude band independently with SIMD optimization
     @inbounds for i in 1:nlat

@@ -22,8 +22,8 @@ function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArra
     P = Vector{Float64}(undef, lmax + 1)
     vals_local = zeros(ComplexF64, nphi)
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
-    gl_l = globalindices(Alm_pencil, 1)
-    gl_m = globalindices(Alm_pencil, 2)
+    gl_l = collect(Int, globalindices(Alm_pencil, 1))
+    gl_m = collect(Int, globalindices(Alm_pencil, 2))
     # m = 0 if present locally
     j0 = findfirst(==(1), gl_m)
     if j0 !== nothing
@@ -69,8 +69,8 @@ function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilAr
     x = float(cost)
     P = Vector{Float64}(undef, lmax + 1)
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
-    gl_l = globalindices(Alm_pencil, 1)
-    gl_m = globalindices(Alm_pencil, 2)
+    gl_l = collect(Int, globalindices(Alm_pencil, 1))
+    gl_m = collect(Int, globalindices(Alm_pencil, 2))
     s_local = 0.0
     # m=0
     j0 = findfirst(==(1), gl_m)
@@ -113,8 +113,8 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
     dPdtheta = Vector{Float64}(undef, lmax + 1)
     P_over_sinth = Vector{Float64}(undef, lmax + 1)
     lloc = axes(Q_p, 1); mloc = axes(Q_p, 2)
-    gl_l = globalindices(Q_p, 1)
-    gl_m = globalindices(Q_p, 2)
+    gl_l = collect(Int, globalindices(Q_p, 1))
+    gl_m = collect(Int, globalindices(Q_p, 2))
     vr_local = 0.0 + 0.0im
     vt_local = 0.0 + 0.0im
     vp_local = 0.0 + 0.0im
@@ -176,8 +176,8 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
     dPdtheta = Vector{Float64}(undef, lmax + 1)
     P_over_sinth = Vector{Float64}(undef, lmax + 1)
     lloc = axes(Q_p, 1); mloc = axes(Q_p, 2)
-    gl_l = globalindices(Q_p, 1)
-    gl_m = globalindices(Q_p, 2)
+    gl_l = collect(Int, globalindices(Q_p, 1))
+    gl_m = collect(Int, globalindices(Q_p, 2))
     Vr_local = zeros(ComplexF64, nphi)
     Vt_local = zeros(ComplexF64, nphi)
     Vp_local = zeros(ComplexF64, nphi)

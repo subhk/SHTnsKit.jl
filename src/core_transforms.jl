@@ -470,6 +470,62 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
 end
 
 """
+    _adjoint_synthesis_sphtor(cfg, V̄t, V̄p; θ_globals=1:cfg.nlat, real_output=true)
+
+Adjoint operator of `synthesis_sphtor` (spheroidal/toroidal vector synthesis).
+Maps spatial cotangents (V̄t, V̄p) → (S̄lm, T̄lm). Like `_adjoint_synthesis` this
+carries NO Gauss quadrature weights or `cphi` (those belong to *analysis*, not
+the synthesis adjoint), and applies the `wm` Hermitian doubling for real output.
+
+The synthesis matrix M = [[dθY, -term]; [term, dθY]] (term = i·m·Y/sinθ) is
+Hermitian, so its adjoint reuses the same matrix with conjugated off-diagonal.
+
+Parametric over `θ_globals` so the distributed adjoint (rank-local θ slab) reuses
+this exact helper; pass a full-`nlon`-width (zero-padded) cotangent and Allreduce
+the partial (S̄, T̄) across ranks. Accumulator eltypes derive from the inputs so
+ForwardDiff `Dual` / `Float32` cotangents flow through.
+"""
+function _adjoint_synthesis_sphtor(cfg::SHTConfig, V̄t::AbstractMatrix, V̄p::AbstractMatrix;
+                                   θ_globals::AbstractVector{<:Integer}=1:cfg.nlat,
+                                   real_output::Bool=true)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    CT = complex(float(promote_type(eltype(V̄t), eltype(V̄p))))
+    # Adjoint of ifft_phi is fft_phi; one buffer per field + cached FFTW plan.
+    F̄θ = fft_phi!(Matrix{CT}(undef, size(V̄t)...), V̄t)
+    F̄φ = fft_phi!(Matrix{CT}(undef, size(V̄p)...), V̄p)
+
+    S̄ = zeros(CT, lmax + 1, mmax + 1)
+    T̄ = zeros(CT, lmax + 1, mmax + 1)
+
+    P = Vector{Float64}(undef, lmax + 1)
+    dPdtheta = Vector{Float64}(undef, lmax + 1)
+    P_over_sinth = Vector{Float64}(undef, lmax + 1)
+    Pbuf = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
+    xv = cfg.x  # hoist field read out of the m/i/l loops (cfg is mutable)
+
+    # Forward uses inv_scaleφ = nlon, adjoint of ifft is (1/nlon)·fft → factors
+    # cancel. wm accounts for the Hermitian "fill conjugate" step (real output).
+    for m in 0:mmax
+        col = m + 1
+        wm = (m == 0 || !real_output) ? 1.0 : 2.0
+        @inbounds for (ii, iglob) in pairs(θ_globals)
+            x = xv[iglob]
+            Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)
+            Fθ_im = F̄θ[ii, col]
+            Fφ_im = F̄φ[ii, col]
+            for l in max(1, m):lmax
+                dθY = dPdtheta[l+1]
+                term = 1.0im * m * P_over_sinth[l+1]
+                # Hermitian adjoint of [dθY, -term; term, dθY]:
+                S̄[l+1, col] += wm * (dθY * Fθ_im + conj(term) * Fφ_im)
+                T̄[l+1, col] += wm * (-conj(term) * Fθ_im + dθY * Fφ_im)
+            end
+        end
+    end
+    return S̄, T̄
+end
+
+"""
     _adjoint_analysis(cfg, Alm̄; θ_globals=1:cfg.nlat, φ_window=nothing)
 
 Adjoint operator of `analysis`. Shares the scalar synthesis kernels; only the

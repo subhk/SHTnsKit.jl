@@ -38,8 +38,8 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
     lloc = axes(Alm_pencil, 1)
     mloc = axes(Alm_pencil, 2)
     
-    gl_l = globalindices(Alm_pencil, 1)
-    gl_m = globalindices(Alm_pencil, 2)
+    gl_l = collect(Int, globalindices(Alm_pencil, 1))  # concrete Vector{Int} barrier (avoids ::Any boxing in loop)
+    gl_m = collect(Int, globalindices(Alm_pencil, 2))
 
     nm_local = length(mloc)
     counts_m = Allgather(nm_local, comm)
@@ -51,6 +51,8 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
     max_n2 = 2*lmax + 1
     b_buf = Vector{ComplexF64}(undef, max_n2)
     c_buf = Vector{ComplexF64}(undef, max_n2)
+    D_buf = Matrix{Float64}(undef, max_n2, max_n2)             # reused Wigner-d buffer (was alloc'd per l-row)
+    lg_buf = [SHTnsKit._loggamma(i + 1) for i in 0:(2*lmax)]   # hoisted log-factorial table
 
     for (ii, il) in enumerate(lloc)
         lval = gl_l[ii] - 1
@@ -73,7 +75,8 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
             b[-m + lval + 1] = (-1.0)^m * conj(a_int)
         end
 
-        dl = SHTnsKit.wigner_d_matrix(lval, float(beta))
+        dl = view(D_buf, 1:n2, 1:n2)
+        SHTnsKit.wigner_d_matrix!(dl, lval, float(beta), lg_buf)
         c = view(c_buf, 1:n2)
         @inbounds for mi in -lval:lval
             acc = 0.0 + 0.0im

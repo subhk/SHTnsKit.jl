@@ -100,6 +100,9 @@ function SHTnsKit.DistTransposePlan(
     mmax = cfg.mmax
 
     use_rfft || error("DistTransposePlan currently requires use_rfft=true")
+    # The transpose Legendre stages do not apply the Robert-form sinθ scaling that
+    # the cfg-form paths do; guard rather than silently return wrong results.
+    cfg.robert_form && error("DistTransposePlan does not support robert_form grids; use the cfg-form dist_analysis/dist_synthesis instead")
 
     # 1. Build the PencilFFTs plan: global (φ, θ) = (nlon, nlat),
     #    rFFT on dim1 (φ), NoTransform on dim2 (θ).
@@ -161,15 +164,18 @@ function SHTnsKit.DistTransposePlan(
     P_buf   = Vector{Float64}(undef, lmax + 1)
     dP_buf  = Vector{Float64}(undef, lmax + 1)
     Pos_buf = Vector{Float64}(undef, lmax + 1)
+    # Only allocate the vector (dP/Pos) tables when requested; otherwise leave them
+    # empty so a vector transform on a scalar-only plan errors cleanly instead of
+    # reading the previously-`undef` (garbage) matrices.
     NP  = Vector{Matrix{Float64}}(undef, length(m_local))
-    dP  = Vector{Matrix{Float64}}(undef, length(m_local))
-    Pos = Vector{Matrix{Float64}}(undef, length(m_local))
+    dP  = with_vector ? Vector{Matrix{Float64}}(undef, length(m_local)) : Matrix{Float64}[]
+    Pos = with_vector ? Vector{Matrix{Float64}}(undef, length(m_local)) : Matrix{Float64}[]
     for (mi, m) in enumerate(m_local)
-        tbl_NP  = Matrix{Float64}(undef, lmax + 1, nlat)
-        tbl_dP  = Matrix{Float64}(undef, lmax + 1, nlat)
-        tbl_Pos = Matrix{Float64}(undef, lmax + 1, nlat)
-        for i in 1:nlat
-            if with_vector
+        tbl_NP = Matrix{Float64}(undef, lmax + 1, nlat)
+        if with_vector
+            tbl_dP  = Matrix{Float64}(undef, lmax + 1, nlat)
+            tbl_Pos = Matrix{Float64}(undef, lmax + 1, nlat)
+            for i in 1:nlat
                 SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
                     P_buf, dP_buf, Pos_buf, cfg.x[i], lmax, m)
                 @inbounds for l in 0:lmax
@@ -177,16 +183,18 @@ function SHTnsKit.DistTransposePlan(
                     tbl_dP[l+1, i]  = dP_buf[l+1]
                     tbl_Pos[l+1, i] = Pos_buf[l+1]
                 end
-            else
+            end
+            dP[mi]  = tbl_dP
+            Pos[mi] = tbl_Pos
+        else
+            for i in 1:nlat
                 SHTnsKit.Plm_norm_row!(P_buf, cfg.x[i], lmax, m)
                 @inbounds for l in 0:lmax
                     tbl_NP[l+1, i] = P_buf[l+1]
                 end
             end
         end
-        NP[mi]  = tbl_NP
-        dP[mi]  = tbl_dP
-        Pos[mi] = tbl_Pos
+        NP[mi] = tbl_NP
     end
 
     return DistTransposePlan(
@@ -325,6 +333,7 @@ Legendre contraction over (lev, m, θ, l) using the pre-built dP and Pos tables.
 function SHTnsKit.dist_analysis_sphtor!(plan::DistTransposePlan,
                                          Slm::PencilArray, Tlm::PencilArray,
                                          Vt::PencilArray,  Vp::PencilArray)
+    isempty(plan.dP) && error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
     # Step 1: rFFT(φ) + internal transpose for both components.
     mul!(plan.F_buf,  plan.fft_plan, Vt)
     mul!(plan.F_buf2, plan.fft_plan, Vp)
@@ -387,6 +396,7 @@ Local Legendre expansion Slm,Tlm → Ft,Fp, then two inverse FFT+transpose colle
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
                                           Vt::PencilArray,  Vp::PencilArray,
                                           Slm::PencilArray, Tlm::PencilArray)
+    isempty(plan.dP) && error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
     S = parent(Slm)            # (lmax+1, n_m_local, nlev)
     T = parent(Tlm)
 

@@ -81,17 +81,35 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis),
                               use_rfft::Bool=false)
     y = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output, use_rfft)
     comm = communicator(prototype_θφ)
+    θ_globals = collect(globalindices(prototype_θφ, 1))
+    φ_globals = collect(globalindices(prototype_θφ, 2))
+    nlon_local = length(φ_globals)
+    φ_start = first(φ_globals)
+    φ_is_local = (nlon_local == cfg.nlon)
+    φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
 
     function dist_synthesis_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
-        # ȳ: spatial cotangent (PencilArray or Array). Adjoint of synthesis is
-        # analysis of the cotangent summed across ranks to reconstruct the
-        # replicated Ālm.
-        ȳ_parent = ȳ isa PencilArray ? parent(ȳ) : Matrix{eltype(Alm)}(ȳ)
-        # Per-rank partial analysis restricted to local θ rows & full φ
-        # (dist_analysis handles both single-rank and distributed inputs).
-        ȳ_pa = ȳ isa PencilArray ? ȳ : PencilArray(prototype_θφ.pencil, ȳ_parent)
-        Ālm = SHTnsKit.dist_analysis(cfg, ȳ_pa; use_rfft=use_rfft)
+        # Adjoint of synthesis is `_adjoint_synthesis` (NO quadrature weights /
+        # cphi — those belong to analysis), applied on this rank's θ slab over a
+        # FULL-nlon-width cotangent, then Allreduce-summed across ranks to build
+        # the replicated Ālm. Using `dist_analysis` here would wrongly inject the
+        # Gauss weights `w[θ]·cphi`. The forward ifft is over the full φ width and
+        # only then sliced, so we zero-pad the local φ window back to full nlon;
+        # FFT linearity makes Σ_ranks fft(padded window) = fft(full field).
+        ȳ_loc = ȳ isa PencilArray ? parent(ȳ) : ȳ
+        nθ_local = length(θ_globals)
+        ET = float(eltype(ȳ_loc))  # real for real_output, complex otherwise
+        f̄_full = zeros(ET, nθ_local, cfg.nlon)
+        if φ_is_local
+            f̄_full .= ȳ_loc
+        else
+            @views f̄_full[:, φ_window] .= ȳ_loc
+        end
+        Ālm_partial = SHTnsKit._adjoint_synthesis(cfg, f̄_full;
+                                                  θ_globals=θ_globals,
+                                                  real_output=real_output)
+        Ālm = MPI.Allreduce(Ālm_partial, +, comm)
         return NoTangent(), NoTangent(), Ālm
     end
     return y, dist_synthesis_pullback
@@ -141,15 +159,42 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
                                         prototype_θφ=prototype_θφ,
                                         real_output=real_output,
                                         use_rfft=use_rfft)
+    comm = communicator(prototype_θφ)
+    θ_globals = collect(globalindices(prototype_θφ, 1))
+    φ_globals = collect(globalindices(prototype_θφ, 2))
+    nlon_local = length(φ_globals)
+    φ_start = first(φ_globals)
+    φ_is_local = (nlon_local == cfg.nlon)
+    φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
 
     function dist_synthesis_sphtor_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
-        V̄t, V̄p = ȳ isa Tuple ? ȳ : (ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2]))
-        V̄t_pa = V̄t isa PencilArray ? V̄t :
-                PencilArray(prototype_θφ.pencil, Matrix{Float64}(V̄t))
-        V̄p_pa = V̄p isa PencilArray ? V̄p :
-                PencilArray(prototype_θφ.pencil, Matrix{Float64}(V̄p))
-        S̄, T̄ = SHTnsKit.dist_analysis_sphtor(cfg, V̄t_pa, V̄p_pa; use_rfft=use_rfft)
+        # unthunk EACH component (a Tangent tuple of thunks would otherwise slip through)
+        V̄t = ChainRulesCore.unthunk(ȳ[1])
+        V̄p = ChainRulesCore.unthunk(ȳ[2])
+        # Adjoint of vector synthesis is `_adjoint_synthesis_sphtor` (no quadrature
+        # weights), applied per-rank on the local θ slab over a full-nlon-width
+        # (zero-padded) cotangent, then Allreduce-summed. Previously this called
+        # `dist_analysis_sphtor`, which injects Gauss weights `w[θ]·scaleφ/(l(l+1))`
+        # that the synthesis adjoint must NOT carry.
+        V̄t_loc = V̄t isa PencilArray ? parent(V̄t) : V̄t
+        V̄p_loc = V̄p isa PencilArray ? parent(V̄p) : V̄p
+        nθ_local = length(θ_globals)
+        ETt = float(eltype(V̄t_loc)); ETp = float(eltype(V̄p_loc))
+        V̄t_full = zeros(ETt, nθ_local, cfg.nlon)
+        V̄p_full = zeros(ETp, nθ_local, cfg.nlon)
+        if φ_is_local
+            V̄t_full .= V̄t_loc
+            V̄p_full .= V̄p_loc
+        else
+            @views V̄t_full[:, φ_window] .= V̄t_loc
+            @views V̄p_full[:, φ_window] .= V̄p_loc
+        end
+        S̄p, T̄p = SHTnsKit._adjoint_synthesis_sphtor(cfg, V̄t_full, V̄p_full;
+                                                    θ_globals=θ_globals,
+                                                    real_output=real_output)
+        S̄ = MPI.Allreduce(S̄p, +, comm)
+        T̄ = MPI.Allreduce(T̄p, +, comm)
         return NoTangent(), NoTangent(), S̄, T̄
     end
     return y, dist_synthesis_sphtor_pullback

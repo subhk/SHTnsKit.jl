@@ -215,13 +215,24 @@ top-left (2l+1)×(2l+1) block of `d`. Caller must ensure `size(d,1) ≥ 2l+1`.
 """
 function wigner_d_matrix!(d::AbstractMatrix{Float64}, l::Int, beta::Float64)
     l ≥ 0 || throw(ArgumentError("l must be ≥ 0"))
-    n = 2l + 1
+    # Precompute log-factorials: lg[i+1] = loggamma(i+1) for i in 0:2l.
+    lg = [_loggamma(i + 1) for i in 0:(2l)]
+    return wigner_d_matrix!(d, l, beta, lg)
+end
+
+"""
+    wigner_d_matrix!(d, l, beta, lg)
+
+Scratch overload: `lg` is a caller-supplied buffer with `lg[i+1] = loggamma(i+1)`
+and `length(lg) ≥ 2l+1`. Lets a per-`l` rotation loop hoist the O(l) log-factorial
+table once (sized to `2*lmax+1`) instead of reallocating it every degree.
+"""
+function wigner_d_matrix!(d::AbstractMatrix{Float64}, l::Int, beta::Float64,
+                          lg::AbstractVector{Float64})
+    l ≥ 0 || throw(ArgumentError("l must be ≥ 0"))
+    length(lg) ≥ 2l + 1 || throw(ArgumentError("lg must have length ≥ 2l+1"))
     cb = cos(beta/2)
     sb = sin(beta/2)
-    # Precompute log-factorials: lg[i+1] = loggamma(i+1) for i in 0:2l.
-    # Each (m, mp) pair previously invoked 4 _loggamma calls per iteration plus
-    # 4 more per k-term; vectorizing drops them to O(l) total.
-    lg = [_loggamma(i + 1) for i in 0:(2l)]
     for m in -l:l
         for mp in -l:l
             kmin = max(0, m - mp)
@@ -381,6 +392,7 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
     b = Vector{ComplexF64}(undef, nmax)
     c = Vector{ComplexF64}(undef, nmax)
     dl = Matrix{Float64}(undef, nmax, nmax)  # Reusable Wigner d-matrix buffer
+    lg = [_loggamma(i + 1) for i in 0:(2 * r.lmax)]  # hoisted log-factorial table (reused every l)
 
     # Apply R = diag(e^{-i m α}) * d^l(β) * diag(e^{-i m γ}) for each l
     for l in 0:r.lmax
@@ -393,7 +405,7 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
             b[mp + l + 1] = Zlm[idx] * cis(-mp * γ)
         end
         # Multiply with d^l(β) — computed in-place into pre-allocated buffer
-        wigner_d_matrix!(dl, l, β)
+        wigner_d_matrix!(dl, l, β, lg)
         fill!(view(c, 1:n), zero(ComplexF64))
         # c_m = sum_{m'} d_{m m'} b_{m'}
         for mi in -l:l

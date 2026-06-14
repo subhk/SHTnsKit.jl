@@ -128,76 +128,20 @@ end
         return (Slm, Tlm), pullback
     end
 
-    # synthesis_sphtor adjoint: maps (V̄t, V̄p) → (S̄lm, T̄lm)
-    # Forward synthesis does (for real_output=true):
-    #   Fθ[i,m] = inv_scaleφ * sum_l { dθY * S - term * T } for m=0:mmax
-    #   Fill conjugate: Fθ[i, nlon-m+1] = conj(Fθ[i, m+1]) for m > 0
-    #   Vt = real(ifft_phi(Fθ))
-    # where term = i*m*Y/sinθ, inv_scaleφ = nlon
-    #
-    # Adjoint (for real V̄t input):
-    #   F̄θ = fft_phi(V̄t)  -- Hermitian symmetric since V̄t is real
-    #   The "fill conjugate" step doubles contribution for m > 0:
-    #     F̄θ_base[m] = F̄θ[m] + conj(F̄θ[nlon-m+1]) = 2*F̄θ[m] for m>0 (by Hermitian)
-    #   S̄_lm = inv_scaleφ * wm * sum_i { dθY * F̄θ + conj(term) * F̄φ }
-    #   where wm = 1 for m=0, 2 for m>0
-    function _adjoint_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, V̄t, V̄p)
-        nlat, nlon = cfg.nlat, cfg.nlon
-        lmax, mmax = cfg.lmax, cfg.mmax
-
-        # Adjoint of ifft_phi: fft_phi. One buffer per field + cached FFTW plan
-        # (the old `fft_phi(complex.(V̄))` made a complex copy AND re-planned an
-        # out-of-place fft on every gradient step).
-        F̄θ = SHTnsKit.fft_phi!(Matrix{complex(float(eltype(V̄t)))}(undef, size(V̄t)...), V̄t)
-        F̄φ = SHTnsKit.fft_phi!(Matrix{complex(float(eltype(V̄p)))}(undef, size(V̄p)...), V̄p)
-
-        S̄ = zeros(ComplexF64, lmax + 1, mmax + 1)
-        T̄ = zeros(ComplexF64, lmax + 1, mmax + 1)
-
-        P = Vector{Float64}(undef, lmax + 1)
-        dPdtheta = Vector{Float64}(undef, lmax + 1)
-        P_over_sinth = Vector{Float64}(undef, lmax + 1)
-        Pbuf = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
-        xv = cfg.x  # hoist field read out of the m/i/l loops (cfg is mutable, so not auto-hoisted)
-
-        # Forward synthesis uses inv_scaleφ = nlon, but adjoint of ifft is (1/nlon)*fft
-        # So these factors cancel. wm accounts for Hermitian symmetry in "fill conjugate" step.
-        for m in 0:mmax
-            col = m + 1
-            wm = (m == 0) ? 1.0 : 2.0
-            adj_scale = wm  # nlon from forward cancels with 1/nlon from ifft adjoint
-
-            for i in 1:nlat
-                x = xv[i]
-
-                # Normalized row: P̄, dP̄/dθ, P̄/sinθ — no extra Nlm multiply needed.
-                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)
-
-                Fθ_im = F̄θ[i, col]
-                Fφ_im = F̄φ[i, col]
-
-                @inbounds for l in max(1, m):lmax
-                    dθY = dPdtheta[l+1]         # dP̄/dθ already orthonormal-normalized
-                    Y_over_sθ = P_over_sinth[l+1]  # P̄/sinθ
-                    term = 1.0im * m * Y_over_sθ
-
-                    # Adjoint of synthesis matrix [dθY, -term; term, dθY]:
-                    # This is Hermitian (M^H = M), so adjoint uses same matrix
-                    S̄[l+1, col] += adj_scale * (dθY * Fθ_im + conj(term) * Fφ_im)
-                    T̄[l+1, col] += adj_scale * (-conj(term) * Fθ_im + dθY * Fφ_im)
-                end
-            end
-        end
-
-        return S̄, T̄
-    end
+    # synthesis_sphtor adjoint now lives in SHTnsKit proper (src/core_transforms.jl,
+    # parametrized over θ_globals so the distributed AD ext reuses the same kernel).
+    # Local alias kept for backward compat with any users touching this symbol.
+    const _adjoint_synthesis_sphtor = SHTnsKit._adjoint_synthesis_sphtor
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_sphtor), cfg::SHTnsKit.SHTConfig,
                                 Slm, Tlm; real_output::Bool=true)
         Vt, Vp = SHTnsKit.synthesis_sphtor(cfg, Slm, Tlm; real_output)
         function pullback(Ṽ)
-            V̄t, V̄p = Ṽ
-            S̄, T̄ = _adjoint_synthesis_sphtor(cfg, V̄t, V̄p)
+            # Materialize (possibly Inplaceable)Thunk components before indexing —
+            # a sum(abs2,·) loss delivers thunked cotangents in a Tangent tuple.
+            V̄t = ChainRulesCore.unthunk(Ṽ[1])
+            V̄p = ChainRulesCore.unthunk(Ṽ[2])
+            S̄, T̄ = SHTnsKit._adjoint_synthesis_sphtor(cfg, V̄t, V̄p; real_output=real_output)
             return NoTangent(), NoTangent(), S̄, T̄, (; real_output=NoTangent())
         end
         return (Vt, Vp), pullback

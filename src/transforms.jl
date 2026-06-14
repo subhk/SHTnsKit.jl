@@ -85,8 +85,9 @@ function analysis_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     
-    Ql = Vector{ComplexF64}(undef, lmax + 1)
-    fill!(Ql, zero(ComplexF64))
+    CT = complex(float(eltype(Vr)))  # AD/Float32-safe output eltype
+    Ql = Vector{CT}(undef, lmax + 1)
+    fill!(Ql, zero(CT))
 
     P = Vector{Float64}(undef, lmax + 1)
     xv = cfg.x; wv = cfg.w  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
@@ -133,7 +134,7 @@ Packed scalar synthesis from Qlm (LM order) to flattened real grid (length nlat*
 """
 function synthesis_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
-    alm_mat = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    alm_mat = zeros(eltype(Qlm), cfg.lmax+1, cfg.mmax+1)
     # Packed LM order stores only valid (l,m) pairs. Expand to dense
     # (l+1,m+1) so the core synthesis kernel can be reused.
     @inbounds for m in 0:cfg.mmax
@@ -207,7 +208,8 @@ function synthesis_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     nlat, lmax = cfg.nlat, cfg.lmax
     length(Qlm) == lmax + 1 || throw(DimensionMismatch("Qlm length must be lmax+1=$(lmax+1)"))
     
-    Vr = Vector{Float64}(undef, nlat)
+    RT = real(float(eltype(Qlm)))  # AD/Float32-safe output eltype
+    Vr = Vector{RT}(undef, nlat)
     P = Vector{Float64}(undef, lmax + 1)
     xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
@@ -215,7 +217,7 @@ function synthesis_axisym(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
         x = xv[i]
         Plm_norm_row!(P, x, lmax, 0)  # m=0 case; P̄ already orthonormal-normalized
 
-        val = 0.0
+        val = zero(RT)
         @inbounds for l in 0:lmax
             val += real(Qlm[l+1] * P[l+1])  # Take real part for spatial field
         end
@@ -235,8 +237,9 @@ function analysis_axisym_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
     
-    Ql = Vector{ComplexF64}(undef, ltr + 1)
-    fill!(Ql, zero(ComplexF64))
+    CT = complex(float(eltype(Vr)))  # AD/Float32-safe output eltype
+    Ql = Vector{CT}(undef, ltr + 1)
+    fill!(Ql, zero(CT))
 
     P = Vector{Float64}(undef, ltr + 1)
     xv = cfg.x; wv = cfg.w  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
@@ -265,7 +268,8 @@ function synthesis_axisym_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr:
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
     ltr <= ltr_qlm || throw(ArgumentError("ltr must be <= length(Qlm)-1=$(ltr_qlm)"))
     
-    Vr = Vector{Float64}(undef, nlat)
+    RT = real(float(eltype(Qlm)))  # AD/Float32-safe output eltype
+    Vr = Vector{RT}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
     xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
 
@@ -273,7 +277,7 @@ function synthesis_axisym_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr:
         x = xv[i]
         Plm_norm_row!(P, x, ltr, 0)  # P̄ already orthonormal-normalized
 
-        val = 0.0
+        val = zero(RT)
         @inbounds for l in 0:ltr
             val += real(Qlm[l+1] * P[l+1])
         end
@@ -299,8 +303,9 @@ function analysis_packed_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Comp
     ltr >= im || throw(ArgumentError("ltr must be >= im=$(im)"))
 
     num_l = ltr - im + 1
-    Ql = Vector{ComplexF64}(undef, num_l)
-    fill!(Ql, zero(ComplexF64))
+    CT = complex(float(real(eltype(Vr_m))))  # AD/Float32-safe output eltype
+    Ql = Vector{CT}(undef, num_l)
+    fill!(Ql, zero(CT))
 
     P = Vector{Float64}(undef, ltr + 1)
     scaleφ = cfg.cphi  # Match full transform normalization

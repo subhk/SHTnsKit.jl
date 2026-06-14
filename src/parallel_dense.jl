@@ -45,7 +45,7 @@ function dist_SH_Yrotate(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix, beta::Rea
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Alm,1)==lmax+1 && size(Alm,2)==mmax+1 || throw(DimensionMismatch("Alm dims"))
     size(Rlm,1)==lmax+1 && size(Rlm,2)==mmax+1 || throw(DimensionMismatch("Rlm dims"))
-    Q = Vector{ComplexF64}(undef, cfg.nlm)
+    Q = Vector{complex(float(eltype(Alm)))}(undef, cfg.nlm)
     @inbounds for m in 0:mmax, l in m:lmax
         idx = SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1
         Q[idx] = Alm[l+1, m+1]
@@ -76,7 +76,7 @@ function dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Al
     # - Y_{l-1}^m contributes to Y_l^m via b_{l-1}^m (the upward coefficient from l-1)
     # - Y_{l+1}^m contributes to Y_l^m via a_{l+1}^m (the downward coefficient from l+1)
     @inbounds for m in 0:mmax, l in m:lmax
-        acc = zero(ComplexF64)
+        acc = zero(promote_type(eltype(Alm), eltype(Rlm), complex(eltype(mx))))  # eltype-preserving accumulator (AD-safe)
         # Contribution from lower degree neighbor Y_{l-1}^m
         if l > m && l > 0
             idx_prev = SHTnsKit.LM_index(lmax, cfg.mres, l-1, m)

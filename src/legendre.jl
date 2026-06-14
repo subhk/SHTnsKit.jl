@@ -269,8 +269,8 @@ function Plm_norm_and_dPdtheta_row!(P::AbstractVector{T}, dPdtheta::AbstractVect
                     mag = T(0.5) * T(_INV_SQRT_4PI) * sqrt(T(2l + 1) * T(l) * T(l + 1))
                     if x > 0  # North pole
                         dPdtheta[l+1] = -mag
-                    else  # South pole
-                        dPdtheta[l+1] = (isodd(l+1) ? one(T) : -one(T)) * mag
+                    else  # South pole: dP̄/dθ(π) = (-1)^(l+1)·mag (parity of P̄_l^1)
+                        dPdtheta[l+1] = (isodd(l+1) ? -one(T) : one(T)) * mag
                     end
                 end
             end
@@ -347,9 +347,9 @@ function Plm_norm_dPdtheta_over_sinth_row!(P::AbstractVector{T}, dPdtheta::Abstr
                     if x > 0  # North pole
                         dPdtheta[l+1]    = -mag
                         P_over_sinth[l+1] = -mag
-                    else  # South pole
-                        sign_dP  = isodd(l+1) ? one(T) : -one(T)   # (-1)^(l+1)
-                        sign_Pos = isodd(l)   ? one(T) : -one(T)   # (-1)^l
+                    else  # South pole (parity of P̄_l^1 about θ=π/2)
+                        sign_dP  = isodd(l+1) ? -one(T) : one(T)   # (-1)^(l+1)
+                        sign_Pos = isodd(l)   ? -one(T) : one(T)   # (-1)^l
                         dPdtheta[l+1]    = sign_dP  * mag
                         P_over_sinth[l+1] = sign_Pos * mag
                     end

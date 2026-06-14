@@ -252,11 +252,11 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix;
     if use_rfft
         eltype(Vt) <: Real && eltype(Vp) <: Real || throw(ArgumentError("use_rfft=true requires real-valued Vt, Vp"))
         nbins = nlon ÷ 2 + 1
-        RT = float(real(eltype(Vt)))
+        RT = float(real(promote_type(eltype(Vt), eltype(Vp))))
         Fthetam = rfft_phi!(Matrix{Complex{RT}}(undef, nlat, nbins), Vt)
         Fphim   = rfft_phi!(Matrix{Complex{RT}}(undef, nlat, nbins), Vp)
     else
-        CT = complex(float(eltype(Vt)))
+        CT = complex(float(promote_type(eltype(Vt), eltype(Vp))))
         Fthetam = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vt)
         Fphim   = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vp)
     end
@@ -722,12 +722,12 @@ function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatri
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
     # In-place cached-plan FFT (one buffer each); avoids the copy + re-plan of
     # the old `fft_phi(_as_complex(V))`. See `analysis_sphtor` for rationale.
-    CT = complex(float(eltype(Vt)))
+    CT = complex(float(promote_type(eltype(Vt), eltype(Vp))))  # AD/Float32-safe; promote both inputs
     Fthetam = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vt)
     Fphim   = fft_phi!(Matrix{CT}(undef, nlat, nlon), Vp)
     lmax, mmax = cfg.lmax, cfg.mmax
-    Slm = zeros(ComplexF64, lmax + 1, mmax + 1)
-    Tlm = zeros(ComplexF64, lmax + 1, mmax + 1)
+    Slm = zeros(CT, lmax + 1, mmax + 1)
+    Tlm = zeros(CT, lmax + 1, mmax + 1)
     _analysis_sphtor_mloop!(Slm, Tlm, cfg, Fthetam, Fphim; ltr=ltr)
 
     # Normalization conversion — must match analysis_sphtor behavior
@@ -814,10 +814,11 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
     length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat"))
 
     num_l = ltr - im + 1
-    Sl = Vector{ComplexF64}(undef, num_l)
-    Tl = Vector{ComplexF64}(undef, num_l)
-    fill!(Sl, zero(ComplexF64))
-    fill!(Tl, zero(ComplexF64))
+    CT = complex(float(promote_type(eltype(Vt_m), eltype(Vp_m))))  # AD/Float32-safe output eltype
+    Sl = Vector{CT}(undef, num_l)
+    Tl = Vector{CT}(undef, num_l)
+    fill!(Sl, zero(CT))
+    fill!(Tl, zero(CT))
 
     P = Vector{Float64}(undef, ltr + 1)
     dPdtheta = Vector{Float64}(undef, ltr + 1)
@@ -894,8 +895,9 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
         end
     end
 
-    Vt_m = Vector{ComplexF64}(undef, nlat)
-    Vp_m = Vector{ComplexF64}(undef, nlat)
+    CT = complex(float(promote_type(eltype(Sl), eltype(Tl))))  # AD/Float32-safe output eltype
+    Vt_m = Vector{CT}(undef, nlat)
+    Vp_m = Vector{CT}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
     dPdtheta = Vector{Float64}(undef, ltr + 1)
     P_over_sinth = Vector{Float64}(undef, ltr + 1)
@@ -908,8 +910,8 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
         # Single call computes P̄, dP̄/dθ, and P̄/sinθ (bounded normalized; no overflow)
         Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im, Pbuf)
 
-        gθ = zero(ComplexF64)
-        gφ = zero(ComplexF64)
+        gθ = zero(CT)
+        gφ = zero(CT)
 
         @inbounds for l in max(1, im):ltr
             dθY = dPdtheta[l+1]          # already orthonormal-normalized

@@ -124,7 +124,7 @@ Returns Z(l) = Σₘ l²(l+1)²|T_lm|² for each l = 1..lmax.
 function enstrophy_l_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
 
-    Zl = zeros(lmax + 1)
+    Zl = zeros(real(float(eltype(Tlm))), lmax + 1)
     for l in 1:lmax, m in 0:min(l, mmax)
         ll1_sq = (l * (l + 1))^2
         Zl[l+1] += _wm(m, real_field) * ll1_sq * abs2(Tlm[l+1, m+1])
@@ -141,7 +141,7 @@ Returns Z(m) = Σₗ l²(l+1)²|T_lm|² for each m = 0..mmax.
 function enstrophy_m_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
 
-    Zm = zeros(mmax + 1)
+    Zm = zeros(real(float(eltype(Tlm))), mmax + 1)
     for m in 0:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
         Zm[m+1] += _wm(m, real_field) * ll1_sq * abs2(Tlm[l+1, m+1])
@@ -158,8 +158,9 @@ Returns matrix of size (lmax+1, mmax+1) with enstrophy contributions.
 function enstrophy_lm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
 
-    Zlm = Matrix{Float64}(undef, lmax+1, mmax+1)
-    fill!(Zlm, 0.0)
+    RT = real(float(eltype(Tlm)))
+    Zlm = Matrix{RT}(undef, lmax+1, mmax+1)
+    fill!(Zlm, zero(RT))
 
     for m in 0:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2

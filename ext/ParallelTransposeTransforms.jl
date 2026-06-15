@@ -81,6 +81,7 @@ struct DistTransposePlan{TP, TFB, TSP}
     NP            :: Vector{Matrix{Float64}} # NP[mi] = (lmax+1, nlat) normalized Legendre table
     dP            :: Vector{Matrix{Float64}} # dP[mi] = (lmax+1, nlat) dP̄_l^m/dθ table
     Pos           :: Vector{Matrix{Float64}} # Pos[mi] = (lmax+1, nlat) P̄_l^m/sinθ table
+    with_vector   :: Bool                    # whether dP/Pos were built (sphtor/qst capable)
 end
 
 # ---------------------------------------------------------------------------
@@ -200,7 +201,7 @@ function SHTnsKit.DistTransposePlan(
     return DistTransposePlan(
         cfg, nlat, nlon, lmax, mmax, nlev, comm,
         fft_plan, F_buf, F_buf2, spectral_pencil,
-        m_local, NP, dP, Pos,
+        m_local, NP, dP, Pos, with_vector,
     )
 end
 
@@ -333,7 +334,7 @@ Legendre contraction over (lev, m, θ, l) using the pre-built dP and Pos tables.
 function SHTnsKit.dist_analysis_sphtor!(plan::DistTransposePlan,
                                          Slm::PencilArray, Tlm::PencilArray,
                                          Vt::PencilArray,  Vp::PencilArray)
-    isempty(plan.dP) && error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
+    plan.with_vector || error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
     # Step 1: rFFT(φ) + internal transpose for both components.
     mul!(plan.F_buf,  plan.fft_plan, Vt)
     mul!(plan.F_buf2, plan.fft_plan, Vp)
@@ -396,7 +397,7 @@ Local Legendre expansion Slm,Tlm → Ft,Fp, then two inverse FFT+transpose colle
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
                                           Vt::PencilArray,  Vp::PencilArray,
                                           Slm::PencilArray, Tlm::PencilArray)
-    isempty(plan.dP) && error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
+    plan.with_vector || error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
     S = parent(Slm)            # (lmax+1, n_m_local, nlev)
     T = parent(Tlm)
 

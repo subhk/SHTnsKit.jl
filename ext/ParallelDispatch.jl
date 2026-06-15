@@ -74,8 +74,8 @@ function SHTnsKit.matrix_to_spectral_pencil(cfg::SHTnsKit.SHTConfig, Alm::Abstra
     # Copy only the local portion
     lloc = axes(Alm_p, 1)
     mloc = axes(Alm_p, 2)
-    gl_l = globalindices(Alm_p, 1)
-    gl_m = globalindices(Alm_p, 2)
+    gl_l = collect(Int, globalindices(Alm_p, 1))
+    gl_m = collect(Int, globalindices(Alm_p, 2))
 
     for (jj, jm) in enumerate(mloc)
         mglob = gl_m[jj]
@@ -103,8 +103,8 @@ function SHTnsKit.spectral_pencil_to_matrix(cfg::SHTnsKit.SHTConfig, Alm_p::Penc
     # Copy local portion
     lloc = axes(Alm_p, 1)
     mloc = axes(Alm_p, 2)
-    gl_l = globalindices(Alm_p, 1)
-    gl_m = globalindices(Alm_p, 2)
+    gl_l = collect(Int, globalindices(Alm_p, 1))
+    gl_m = collect(Int, globalindices(Alm_p, 2))
 
     for (jj, jm) in enumerate(mloc)
         mglob = gl_m[jj]

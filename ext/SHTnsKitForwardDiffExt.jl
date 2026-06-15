@@ -71,10 +71,14 @@ The conversion pattern is:
 3. Copy result back to distributed array type
 """
 function SHTnsKit.fdgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, fθφ::AbstractArray)
-    # For non-Matrix types (e.g., PencilArrays), Array() gives local data only.
-    # Convert to a plain Matrix first to get the full data.
+    # Materialize to a plain Matrix. NOTE: for a distributed PencilArray this
+    # yields LOCAL data only — the size guard below rejects a partial grid so we
+    # never silently differentiate the wrong (rank-local) field.
     fθφ_mat = fθφ isa Matrix ? fθφ : Matrix(fθφ)
     nlat = size(fθφ_mat, 1); nlon = size(fθφ_mat, 2)
+    (nlat == cfg.nlat && nlon == cfg.nlon) || throw(DimensionMismatch(
+        "fdgrad_scalar_energy expects the full $(cfg.nlat)×$(cfg.nlon) grid; got $(nlat)×$(nlon) " *
+        "(a distributed PencilArray gives LOCAL data — gather to the global grid first)."))
 
     # Define energy loss function for flattened array
     function loss_flat(z)
@@ -122,6 +126,9 @@ function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vtθφ::Abstract
     # Validate dimensions match
     size(Vtθφ) == size(Vpθφ) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     nlat = length(axes(Vtθφ, 1)); nlon = length(axes(Vtθφ, 2))
+    (nlat == cfg.nlat && nlon == cfg.nlon) || throw(DimensionMismatch(
+        "fdgrad_vector_energy expects the full $(cfg.nlat)×$(cfg.nlon) grid; got $(nlat)×$(nlon) " *
+        "(a distributed PencilArray gives LOCAL data — gather to the global grid first)."))
 
     # Define vector energy functional for combined state vector [Vt; Vp]
     function loss_flat(z)

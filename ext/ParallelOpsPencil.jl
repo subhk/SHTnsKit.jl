@@ -11,7 +11,7 @@ function SHTnsKit.dist_apply_laplacian!(cfg::SHTnsKit.SHTConfig, Alm_pencil::Pen
     # Scalar-indexing the PencilArray avoids `.*=` on a row slice which, in
     # newer PencilArrays versions, tries to construct a `similar` PencilArray
     # of different size and throws `DimensionMismatch`.
-    lloc = axes(Alm_pencil, 1); gl_l = globalindices(Alm_pencil, 1)
+    lloc = axes(Alm_pencil, 1); gl_l = collect(Int, globalindices(Alm_pencil, 1))
     mloc = axes(Alm_pencil, 2)
     @inbounds for (ii, il) in enumerate(lloc)
         lval = gl_l[ii] - 1
@@ -33,11 +33,12 @@ where lm_prev = LM_index(l-1,m) and lm_next = LM_index(l+1,m).
 function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Alm_pencil::PencilArray, R_pencil::PencilArray)
     lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
-    gl_l = globalindices(Alm_pencil, 1)
-    gl_m = globalindices(Alm_pencil, 2)
+    gl_l = collect(Int, globalindices(Alm_pencil, 1))
+    gl_m = collect(Int, globalindices(Alm_pencil, 2))
     # l-dimension is NOT distributed (PencilArrays distributes along last dim = m),
     # so each rank has the full l-column locally. No Allgatherv needed.
-    col_full = Vector{ComplexF64}(undef, lmax + 1)
+    CT = promote_type(eltype(Alm_pencil), eltype(R_pencil), complex(eltype(mx)))  # AD/Float32-safe
+    col_full = Vector{CT}(undef, lmax + 1)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
         mval > mmax && continue
@@ -47,7 +48,7 @@ function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:
         end
         for (ii, il) in enumerate(lloc)
             lval = gl_l[ii] - 1
-            acc = 0.0 + 0.0im
+            acc = zero(CT)
             # Contribution from lower neighbor Y_{l-1}^m (uses mx[2*lm_prev + 2])
             if lval > mval && lval > 0
                 lm_prev = SHTnsKit.LM_index(lmax, mres, lval - 1, mval)

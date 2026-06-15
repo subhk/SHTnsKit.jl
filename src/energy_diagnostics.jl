@@ -199,8 +199,8 @@ Compute gradients of vector field kinetic energy with respect to S and T coeffic
 function grad_energy_vector_Slm_Tlm(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     grad_S, grad_T = allocate_spectral_pair(Slm, Tlm)
-    fill!(grad_S, 0.0)
-    fill!(grad_T, 0.0)
+    fill!(grad_S, zero(eltype(grad_S)))
+    fill!(grad_T, zero(eltype(grad_T)))
 
     for m in 0:mmax, l in max(1,m):lmax
         ll1 = l * (l + 1)

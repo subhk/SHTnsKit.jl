@@ -392,7 +392,7 @@ end
 Timed scalar synthesis; returns elapsed seconds and writes result into `Vr`.
 """
 function synthesis_packed_time(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Vr::AbstractVector{<:Real})
-    alm_mat = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
+    alm_mat = zeros(eltype(Qlm), cfg.lmax+1, cfg.mmax+1)
     @inbounds for m in 0:cfg.mmax
         (m % cfg.mres == 0) || continue
         for l in m:cfg.lmax

@@ -593,7 +593,15 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_ou
     CUDA.synchronize()
 
     # Transfer result back to CPU - coefficients are always complex
-    return Array(coeffs)
+    Qlm = Array(coeffs)
+    # Convert internal (orthonormal+CS) → external normalization, matching CPU analysis
+    # (the kernel produces orthonormal P̄ output; scalar path must convert like sphtor does).
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        Qout = similar(Qlm)
+        SHTnsKit.convert_alm_norm!(Qout, Qlm, cfg; to_internal=false)
+        return Qout
+    end
+    return Qlm
 end
 
 """
@@ -617,8 +625,16 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
     size(coeffs, 1) == lmax + 1 || throw(DimensionMismatch("coeffs must have $(lmax+1) rows (lmax+1), got $(size(coeffs, 1))"))
     size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
 
+    # Convert external → internal (orthonormal+CS) normalization, matching CPU synthesis
+    # (the kernel expects orthonormal-convention input; scalar path must convert like sphtor does).
+    coeffs_int = coeffs
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        coeffs_int = similar(coeffs)
+        SHTnsKit.convert_alm_norm!(coeffs_int, coeffs, cfg; to_internal=true)
+    end
+
     # Transfer coefficients to GPU
-    gpu_coeffs = CuArray(ComplexF64.(coeffs))
+    gpu_coeffs = CuArray(ComplexF64.(coeffs_int))
 
     # Allocate GPU arrays
     Plm = CUDA.zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1)
@@ -655,10 +671,13 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
                 Fφ[i_lat, 1] = result
             elseif m <= nlon ÷ 2
                 Fφ[i_lat, m + 1] = result
-                # Hermitian symmetry for real output: F_{-m} = conj(F_m)
+                # Hermitian symmetry for real output: F_{-m} = conj(F_m).
+                # Skip when the negative-m slot coincides with the positive slot
+                # (Nyquist mode m == nlon/2 for even nlon) — else conj(result)
+                # would clobber the just-written result.
                 if do_hermitian && m > 0
                     neg_m_idx = nlon - m + 1
-                    if neg_m_idx >= 1 && neg_m_idx <= nlon
+                    if neg_m_idx >= 1 && neg_m_idx <= nlon && neg_m_idx != m + 1
                         Fφ[i_lat, neg_m_idx] = conj(result)
                     end
                 end

@@ -302,7 +302,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
                 @inbounds for l in m:lmax
-                    acc = zero(ComplexF64)
+                    acc = zero(eltype(alm_batch))  # parametric: avoids F32→F64 widening and Dual instability
                     for i in 1:nlat
                         acc += (w[i] * tbl[l+1, i]) * Fφ_batch[i, col, k]
                     end
@@ -392,7 +392,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
                 @inbounds for l in m:lmax
-                    acc = zero(ComplexF64)
+                    acc = zero(eltype(alm_out))  # parametric: avoids F32→F64 widening and Dual instability
                     for i in 1:nlat
                         acc += (w[i] * tbl[l+1, i]) * Fφ_batch[i, col, k]
                     end

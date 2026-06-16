@@ -383,6 +383,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
         for l in 0:lmax
             mm = min(l, mmax)
             dl = wigner_d_matrix(l, r.β)
+            ddl = wigner_d_matrix_deriv(l, r.β)  # depends only on (l,β); hoisted out of the m-loop below
             b = zeros(eltype(Z̄), 2l + 1)
             for mp in -mm:mm
                 idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, mp) + 1
@@ -404,7 +405,6 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                 Rm = c[m + l + 1] * cis(-m * r.α)
                 gα += real(conj(ȳ[idxp]) * ((0 - 1im) * m * Rm))
                 # β
-                ddl = wigner_d_matrix_deriv(l, r.β)
                 sβ = zero(eltype(Z̄))
                 sγ = zero(eltype(Z̄))
                 for mp in -l:l

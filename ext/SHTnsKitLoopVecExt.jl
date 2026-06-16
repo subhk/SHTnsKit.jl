@@ -132,7 +132,6 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
     Fφ = Matrix{CT}(undef, nlat, nlon)
     fill!(Fφ, 0.0 + 0.0im)
 
-    G = Vector{CT}(undef, nlat)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
     # Bind cfg fields to locals so the @tturbo loops below operate on plain arrays.
     # LoopVectorization can't analyze property access (cfg.Nlm) inside @tturbo, and cfg is mutable.
@@ -150,6 +149,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
         # Few m modes: parallelize over latitude points instead
         n_tid = Threads.maxthreadid()
         thread_P_bufs = [Vector{Float64}(undef, lmax + 1) for _ in 1:n_tid]  # per-thread Legendre scratch (hoisted out of the latitude loop)
+        G = Vector{CT}(undef, nlat)  # shared latitude scratch (few-m branch: outer m-loop is serial)
         for m in 0:mmax
             col = m + 1
             if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
@@ -192,10 +192,13 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
             end
         end
     else
-        # Standard m-parallel approach with dynamic scheduling
+        # Standard m-parallel approach with dynamic scheduling.
+        # Per-m latitude scratch as columns of one pre-allocated matrix (each m owns
+        # a distinct column → race-free, no per-iteration allocation).
+        Gcols = Matrix{CT}(undef, nlat, mmax + 1)
         @threads :dynamic for m in 0:mmax
             col = m + 1
-            thread_G = Vector{CT}(undef, nlat)
+            thread_G = view(Gcols, :, col)
             if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
                 # NP_tables[col][l+1, i] = P̄_l^m already; no extra Nlm multiply
                 tbl = cfg.NP_tables[m + 1]

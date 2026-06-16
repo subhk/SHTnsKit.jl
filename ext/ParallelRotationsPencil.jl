@@ -14,7 +14,7 @@ function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
                             R_pencil::PencilArray)
     A_local = parent(Alm_pencil)
     R_local = parent(R_pencil)
-    gl_m = globalindices(Alm_pencil, 2)
+    gl_m = collect(Int, globalindices(Alm_pencil, 2))  # concrete Vector{Int} barrier (avoids ::Any boxing of phase in loop)
     nloc_l = size(A_local, 1)
     for (jj, gm) in enumerate(gl_m)
         mval = gm - 1

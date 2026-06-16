@@ -439,17 +439,15 @@ end
     w = cfg.w
     x = cfg.x
     robert_form = cfg.robert_form
-    nthreads = Threads.maxthreadid()
-    # Accumulator eltype follows the output (Slm) so AD types propagate.
-    AT = eltype(Slm)
-    thread_Sacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Tacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
+    # Accumulate directly into the output columns: Slm/Tlm are pre-zeroed by the
+    # caller and each m owns a distinct column (col=m+1), so this is race-free and
+    # drops the per-call thread-accumulator allocation. The column views carry the
+    # output eltype, so AD types (e.g. ForwardDiff.Dual) still propagate.
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
-        tid = Threads.threadid()
-        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(AT))
-        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(AT))
+        Sacc = view(Slm, :, col)
+        Tacc = view(Tlm, :, col)
         NP = cfg.NP_tables[col]
         NdP = cfg.NdP_tables[col]
         for i in 1:nlat
@@ -464,9 +462,6 @@ end
             _sphtor_analysis_kernel!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
                 NP, NdP, i, col, m, ltr_eff, scale_phi)
         end
-        for l in max(1, m):ltr_eff
-            Slm[l+1, col] = Sacc[l+1]; Tlm[l+1, col] = Tacc[l+1]
-        end
     end
 end
 
@@ -477,21 +472,18 @@ end
     w = cfg.w
     x = cfg.x
     robert_form = cfg.robert_form
-    nthreads = Threads.maxthreadid()
     thread_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
     thread_dP = _ensure_otf_scratch!(cfg._otf_scratch_dP, lmax)
     thread_Ps = _ensure_otf_scratch!(cfg._otf_scratch_Ps, lmax)
     thread_Pb = _ensure_otf_scratch!(cfg._otf_scratch_Pb, lmax + 1)  # lmax+2 for extended P̄ row
-    # Accumulator eltype follows the output (Slm) so AD types propagate.
-    AT = eltype(Slm)
-    thread_Sacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
-    thread_Tacc = [Vector{AT}(undef, lmax + 1) for _ in 1:nthreads]
+    # Accumulate directly into the output columns (see _analysis_sphtor_mloop_tbl!):
+    # pre-zeroed, one m per column → race-free, alloc-free, AD eltype preserved.
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
         col = m + 1
         tid = Threads.threadid()
-        Sacc = thread_Sacc[tid]; fill!(Sacc, zero(AT))
-        Tacc = thread_Tacc[tid]; fill!(Tacc, zero(AT))
+        Sacc = view(Slm, :, col)
+        Tacc = view(Tlm, :, col)
         P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]; Pb = thread_Pb[tid]
         for i in 1:nlat
             wi = w[i]
@@ -504,9 +496,6 @@ end
             end
             _sphtor_analysis_kernel_otf!(Sacc, Tacc, cfg, Ftheta_i, Fphi_i, wi,
                 P, dP, Ps, Pb, i, col, m, ltr_eff, scale_phi)
-        end
-        for l in max(1, m):ltr_eff
-            Slm[l+1, col] = Sacc[l+1]; Tlm[l+1, col] = Tacc[l+1]
         end
     end
 end

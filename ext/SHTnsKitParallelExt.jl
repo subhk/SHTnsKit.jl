@@ -936,15 +936,22 @@ include("ParallelLocal.jl")            # Local (per-process) operations and util
 include("ParallelTransposeTransforms.jl")  # Transpose-based distributed SHT (Task 2+)
 
 # Optimized communication patterns for large spectral arrays
+# A plain Allreduce is the correct primitive for summing spectral partials over θ:
+# a tuned MPI already performs topology-aware (hierarchical) reduction internally.
+# The former `adaptive_spectral_communication!` route selected
+# `hierarchical_spectral_reduce!`, which wraps the SAME `Allreduce!` in TWO per-call
+# `MPI.Comm_split` collectives (`tree_reduce!` is literally `Allreduce!`) for zero
+# algorithmic gain — strictly slower on the hot analysis/sphtor path. Call Allreduce
+# directly. (`adaptive_spectral_communication!` is retained for callers that opt into
+# the sparse/segmented strategies explicitly.)
 function efficient_spectral_reduce!(local_data::AbstractMatrix, comm)
-    # Delegate to adaptive strategy which selects among sparse, segmented,
-    # hierarchical, or dense reductions based on data/process characteristics.
-    return adaptive_spectral_communication!(local_data, comm; operation=+)
+    MPI.Allreduce!(local_data, +, comm)
+    return local_data
 end
 
 function efficient_spectral_reduce!(local_data::AbstractVector, comm)
-    # Vector specialization using the adaptive strategy as well.
-    return adaptive_spectral_communication!(local_data, comm; operation=+)
+    MPI.Allreduce!(local_data, +, comm)
+    return local_data
 end
 
 function hierarchical_spectral_reduce!(local_data::AbstractMatrix, comm, ppn::Int)
@@ -1072,17 +1079,25 @@ function adaptive_spectral_communication!(data::AbstractArray, comm; operation=+
     # Resolve sparsity threshold from ENV if not provided
     st = sparse_threshold === nothing ? try parse(Float64, get(ENV, "SHTNSKIT_SPARSE_THRESHOLD", "0.1")) catch; 0.1 end : sparse_threshold
     
-    # Compute sparsity ratio
-    nonzero_count = count(!iszero, data)
-    sparsity = nonzero_count / data_size
-    
-    if sparsity < st && data_size > 1000
+    # Compute sparsity ratio. CRITICAL: the branch below selects an MPI collective
+    # sequence, so the decision MUST be identical on every rank. A per-rank local
+    # sparsity diverges (each rank owns a different zero-pattern) → ranks take
+    # different branches → mismatched collectives → deadlock. Decide it GLOBALLY.
+    local_nz = count(!iszero, data)
+    gathered = MPI.Allreduce!(Float64[local_nz, data_size], +, comm)
+    sparsity = gathered[1] / gathered[2]
+
+    # NOTE: sparse_spectral_reduce! and hierarchical_spectral_reduce! are sum-only
+    # (they never consumed `operation`); gate them on `operation === +` so a
+    # non-additive reduction falls through to a general collective instead of
+    # silently being summed. segmented_spectral_reduce! and Allreduce! honor it.
+    if operation === (+) && sparsity < st && data_size > 1000
         # Use sparse communication for very sparse data (robust fallback)
         return sparse_spectral_reduce!(data, comm)
     elseif nprocs > 64 && data_size > 50000
         # Use segmented reduction for large-scale problems
         return segmented_spectral_reduce!(data, comm, operation)
-    elseif nprocs > 16 && data_size > 5000
+    elseif operation === (+) && nprocs > 16 && data_size > 5000
         # Use hierarchical reduction for medium-scale problems
         if isa(data, AbstractMatrix)
             return hierarchical_spectral_reduce!(data, comm, min(nprocs, 32))

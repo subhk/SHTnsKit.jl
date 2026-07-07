@@ -363,9 +363,15 @@ function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
     elseif name === :Nlm
         return setfield!(getfield(cfg, :_norm), :Nlm, val)
     elseif name === :norm
-        return setfield!(getfield(cfg, :_norm), :norm, val)
+        setfield!(getfield(cfg, :_norm), :norm, val)
+        # invalidate cached norm-scale matrix: it is keyed on size only, so a
+        # norm change on a same-size config would otherwise reuse stale factors.
+        getfield(cfg, :_norm).scale_matrix[] = Matrix{Float64}(undef, 0, 0)
+        return val
     elseif name === :cs_phase
-        return setfield!(getfield(cfg, :_norm), :cs_phase, val)
+        setfield!(getfield(cfg, :_norm), :cs_phase, val)
+        getfield(cfg, :_norm).scale_matrix[] = Matrix{Float64}(undef, 0, 0)  # invalidate cached scale
+        return val
     elseif name === :real_norm
         return setfield!(getfield(cfg, :_norm), :real_norm, val)
     elseif name === :robert_form
@@ -1178,7 +1184,17 @@ Precompute associated Legendre tables P_l^m(x_i) for all i and m, stored as
 function prepare_plm_tables!(cfg::SHTConfig)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat = cfg.nlat
-    
+
+    # The derivative tables use the convention NdP = -(dP̄/dθ)/sinθ, i.e. they divide
+    # by sinθ so the kernels can multiply it back (`dθY = -sinθ·NdP`). Value tables
+    # (plm/NP) have no such division and are correct everywhere, so table use stays
+    # enabled on pole-inclusive regular/DH grids. Only the derivative division must
+    # be guarded: at an EXACT pole node (x = ±1 ⇒ sinθ = 0) `-dP̄/dθ / 0` is NaN.
+    # Setting the pole entry to 0 is kernel-consistent — the kernel's ×sinθ makes
+    # `dθY = -0·NdP = 0` at the pole regardless of NdP — and avoids NaN propagation
+    # (`-0·NaN = NaN`). (Gauss nodes never hit poles, so this only affects DH/regular
+    # pole grids, and only their vector-transform derivative rows.)
+
     # Allocate storage for Legendre polynomial tables
     # Each m-order gets its own matrix: (degree+1) × (latitude points)
     tables = [zeros(Float64, lmax + 1, nlat) for _ in 0:mmax]    # P_l^m values
@@ -1203,8 +1219,9 @@ function prepare_plm_tables!(cfg::SHTConfig)
 
             # Store normalized values — no Nlm multiply needed (P̄ already = Nlm * rawP)
             @inbounds @views tbl[:, i] .= P         # P̄_l^m(x_i) for l=0:lmax
+            inv_s = s_i == 0 ? 0.0 : 1.0 / s_i  # pole guard: avoid 0/0→NaN (see header note)
             @inbounds for l in 0:lmax
-                dtbl[l+1, i] = -dPdtheta[l+1] / s_i  # -(dP̄/dθ)/sinθ (matches NdP convention)
+                dtbl[l+1, i] = -dPdtheta[l+1] * inv_s  # -(dP̄/dθ)/sinθ (matches NdP convention)
             end
         end
     end
@@ -1239,9 +1256,10 @@ function prepare_plm_tables!(cfg::SHTConfig)
         NdP = NdP_tables[m+1]
         for i in 1:nlat
             s_i = sqrt(max(0.0, 1.0 - cfg.x[i]^2))
+            inv_s = s_i == 0 ? 0.0 : 1.0 / s_i  # pole guard: avoid 0/0→NaN (see header note)
             Plm_norm_and_dPdtheta_row!(g, dg, cfg.x[i], lmax, m)
             @inbounds for l in m:lmax
-                NdP[l+1, i] = -dg[l+1] / s_i
+                NdP[l+1, i] = -dg[l+1] * inv_s
             end
         end
     end

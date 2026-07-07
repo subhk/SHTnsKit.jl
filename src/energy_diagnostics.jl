@@ -87,7 +87,8 @@ spherical harmonic transforms (Parseval's identity).
 """
 function energy_scalar(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    E = 0.0
+    # Type-stable accumulator (stays inferrable for Float32 / ForwardDiff.Dual inputs).
+    E = zero(promote_type(Float64, real(float(eltype(alm)))))
     @inbounds for m in 0:mmax, l in m:lmax
         E += _wm(m, real_field) * abs2(alm[l+1, m+1])
     end
@@ -104,7 +105,7 @@ KE = (1/2) ∫ |V|² dΩ = (1/2) Σ [l(l+1)|S_lm|² + l(l+1)|T_lm|²]
 """
 function energy_vector(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
-    E = 0.0
+    E = zero(promote_type(Float64, real(float(eltype(Slm))), real(float(eltype(Tlm)))))
     @inbounds for m in 0:mmax, l in max(1,m):lmax  # Vector fields start at l=1
         ll1 = l * (l + 1)
         E += _wm(m, real_field) * ll1 * (abs2(Slm[l+1, m+1]) + abs2(Tlm[l+1, m+1]))
@@ -168,7 +169,7 @@ Compute energy from packed spectral coefficients (1D vector format).
 """
 function energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
-    E = 0.0
+    E = zero(promote_type(Float64, real(float(eltype(Qlm)))))
     @inbounds for k in eachindex(Qlm)
         m = cfg.mi[k]
         E += _wm(m, real_field) * abs2(Qlm[k])
@@ -259,7 +260,7 @@ function energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}
 
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
-    E = 0.0
+    E = zero(promote_type(Float64, real(float(eltype(Spacked))), real(float(eltype(Tpacked)))))
     @inbounds for k in eachindex(Spacked)
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1

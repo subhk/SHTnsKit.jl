@@ -157,10 +157,9 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
         vt_local += gvt * ph + conj(gvt) * conj(ph)
         vp_local += gvp * ph + conj(gvp) * conj(ph)
     end
-    vr = MPI.Allreduce(vr_local, +, comm)
-    vt = MPI.Allreduce(vt_local, +, comm)
-    vp = MPI.Allreduce(vp_local, +, comm)
-    return real(vr), real(vt), real(vp)
+    # One batched collective instead of three separate round-trips (vr,vt,vp).
+    red = MPI.Allreduce!(ComplexF64[vr_local, vt_local, vp_local], +, comm)
+    return real(red[1]), real(red[2]), real(red[3])
 end
 
 """
@@ -226,10 +225,12 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
             Vp_local[j+1] += 2 * real(gφ * ph)
         end
     end
-    MPI.Allreduce!(Vr_local, +, comm)
-    MPI.Allreduce!(Vt_local, +, comm)
-    MPI.Allreduce!(Vp_local, +, comm)
-    return real.(Vr_local), real.(Vt_local), real.(Vp_local)
+    # One batched collective over the stacked (Vr,Vt,Vp) buffer instead of three.
+    combined = vcat(Vr_local, Vt_local, Vp_local)
+    MPI.Allreduce!(combined, +, comm)
+    return real.(@view combined[1:nphi]),
+           real.(@view combined[nphi+1:2nphi]),
+           real.(@view combined[2nphi+1:3nphi])
 end
 
 """
@@ -263,16 +264,21 @@ end
     dist_analysis_packed_cplx(cfg, z::PencilArray) -> alm_packed (LM_cplx)
 """
 function SHTnsKit.dist_analysis_packed_cplx(cfg::SHTnsKit.SHTConfig, z::PencilArray)
+    # NOTE: this delegates to the REAL-field dist_analysis, so it only represents
+    # a real field's Hermitian spectrum. The negative-m coefficients are therefore
+    # filled from the m≥0 half via a_{l,-m} = (-1)^m conj(a_{l,m}) — the correct
+    # LM_cplx values for a real field. A genuinely complex field (independent ±m)
+    # is NOT supported by this distributed path.
     Alm = SHTnsKit.dist_analysis(cfg, z; use_tables=cfg.use_plm_tables)
     lmax, mmax = cfg.lmax, cfg.mmax
     alm_p = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
-    # Pack +/- m
+    # Pack +/- m (Hermitian symmetry for the real field)
     for l in 0:lmax
         alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, 0) + 1] = Alm[l+1, 1]
         for m in 1:min(l, mmax)
-            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1] = Alm[l+1, m+1]
-            # negative m via real field relation encoded in packing — use conjugate with phase inside consumer as needed
-            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1] = Alm[l+1, m+1]  # store as-is; consumer interprets
+            ap = Alm[l+1, m+1]
+            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1] = ap
+            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1] = ((-1)^m) * conj(ap)
         end
     end
     return alm_p

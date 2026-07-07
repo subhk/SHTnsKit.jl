@@ -100,16 +100,25 @@ function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer,
     precompute_plm = !(grid_code == SHT_QUICK_INIT || grid_code == SHT_GAUSS_FLY)
     use_on_the_fly = (grid_code == SHT_GAUSS_FLY)
 
+    # Honor the documented norm/CS-phase flags (higher bits, orthogonal to the
+    # grid-type low byte). Previously these were silently ignored, so a caller
+    # passing SHT_NO_CS_PHASE / SHT_REAL_NORM got a default-normalized config.
+    cs_phase = (f & SHT_NO_CS_PHASE) == 0
+    real_norm = (f & SHT_REAL_NORM) != 0
+
     cfg = if grid_sym == :gauss
         if use_on_the_fly
             # Use on-the-fly mode for SHT_GAUSS_FLY
-            create_gauss_fly_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff)
+            create_gauss_fly_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff,
+                                    cs_phase=cs_phase, real_norm=real_norm)
         else
-            create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff)
+            create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff,
+                                cs_phase=cs_phase, real_norm=real_norm)
         end
     else
         create_regular_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nphi_eff,
-                              include_poles=include_poles, precompute_plm=precompute_plm)
+                              include_poles=include_poles, precompute_plm=precompute_plm,
+                              cs_phase=cs_phase, real_norm=real_norm)
     end
 
     if (f & SHT_SOUTH_POLE_FIRST) != 0

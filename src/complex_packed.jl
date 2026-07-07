@@ -101,7 +101,6 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
 
     lmax, mmax = cfg.lmax, cfg.mmax
     P = Vector{Float64}(undef, lmax + 1)
-    G = Vector{CT}(undef, nlat)
     # Scale continuous Fourier coefficients to DFT bins for ifft
     inv_scaleφ = phi_inv_scale(cfg)
 
@@ -110,29 +109,28 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     # loop writes each Fourier bin directly instead of relying on Hermitian
     # symmetry as the real-field packed layout does.
     xv = cfg.x  # hoist field read out of the m/l loops (cfg is mutable, so not auto-hoisted)
-    for m in -mmax:mmax
-        # build G_m(θ) = sum_l P̄_l^{|m|} alm(l,m)
-        am = abs(m)
-        # skip if no degrees for given am
-        if am > lmax; continue; end
-        αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
+    # Loop over |m| once: P̄_l^{|m|}, the CS-phase factor ((-1)^m == (-1)^{-m}) and
+    # the norm scale all depend only on |m|, so the +m and -m Fourier bins share
+    # the same Legendre row — compute it once instead of twice.
+    for am in 0:mmax
+        αm = need_norm ? cs_phase_factor(am, true, cfg.cs_phase) : 1.0
+        jp = am + 1                     # DFT bin for +am
+        jn = nlon - am + 1              # DFT bin for -am ((j-1) ≡ -am mod nlon)
         for i in 1:nlat
             Plm_norm_row!(P, xv[i], lmax, am)
-            g = zero(CT)
+            gp = zero(CT); gn = zero(CT)
             @inbounds for l in am:lmax
-                idx = LM_cplx_index(lmax, mmax, l, m) + 1
-                a = alm_packed[idx]
-                if need_norm
-                    a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
+                Pl = P[l+1]
+                ns = need_norm ? norm_scale_from_orthonormal(l, am, cfg.norm) * αm : one(αm)
+                ap = alm_packed[LM_cplx_index(lmax, mmax, l, am) + 1]
+                gp += Pl * (need_norm ? ap * ns : ap)
+                if am > 0
+                    an = alm_packed[LM_cplx_index(lmax, mmax, l, -am) + 1]
+                    gn += Pl * (need_norm ? an * ns : an)
                 end
-                g += P[l+1] * a
             end
-            G[i] = g
-        end
-        # place Fourier bin for mode m
-        j = m ≥ 0 ? (m + 1) : (nlon + m + 1)  # because (j-1) ≡ m mod nlon
-        @inbounds for i in 1:nlat
-            Fφ[i, j] = inv_scaleφ * G[i]
+            Fφ[i, jp] = inv_scaleφ * gp
+            am > 0 && (Fφ[i, jn] = inv_scaleφ * gn)
         end
     end
 
@@ -165,23 +163,29 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
     xv = cfg.x; wv = cfg.w  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
     # Read both signs of m from the FFT output and store them in LM_cplx order.
-    # Negative modes live at DFT column nlon+m+1.
-    for m in -mmax:mmax
-        am = abs(m)
-        col = m ≥ 0 ? (m + 1) : (cfg.nlon + m + 1)
-        αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
+    # Negative modes live at DFT column nlon+m+1. Loop over |m| once — P̄_l^{|m|},
+    # the CS-phase factor and the norm scale depend only on |m| — so the +m and
+    # -m columns share one Legendre row instead of recomputing it twice.
+    for am in 0:mmax
+        αm = need_norm ? cs_phase_factor(am, true, cfg.cs_phase) : 1.0
+        colp = am + 1
+        coln = cfg.nlon - am + 1
         for i in 1:cfg.nlat
             Plm_norm_row!(P, xv[i], lmax, am)
-            Fi = Fφ[i, col]
             wi = wv[i]
+            Fip = Fφ[i, colp]
+            Fin = am > 0 ? Fφ[i, coln] : zero(eltype(Fφ))
             @inbounds for l in am:lmax
-                idx = LM_cplx_index(lmax, mmax, l, m) + 1
-                a = (wi * P[l+1]) * Fi * scaleφ
-                # Convert from internal to cfg normalization if needed when storing
-                if need_norm
-                    a /= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
+                base = (wi * P[l+1]) * scaleφ
+                ns = need_norm ? norm_scale_from_orthonormal(l, am, cfg.norm) * αm : one(αm)
+                ap = base * Fip
+                need_norm && (ap /= ns)
+                alm[LM_cplx_index(lmax, mmax, l, am) + 1] += ap
+                if am > 0
+                    an = base * Fin
+                    need_norm && (an /= ns)
+                    alm[LM_cplx_index(lmax, mmax, l, -am) + 1] += an
                 end
-                alm[idx] += a
             end
         end
     end
@@ -202,21 +206,24 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     P = Vector{Float64}(undef, lmax + 1)
     acc = zero(CT)
     need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    # m from -mmax..mmax
-    for m in -mmax:mmax
-        am = abs(m)
+    # Loop over |m| once (P̄_l^{|m|}, CS-phase and norm scale depend only on |m|)
+    # and accumulate the +m and -m contributions from the shared Legendre row.
+    for am in 0:mmax
         Plm_norm_row!(P, x, lmax, am)
-        gm = zero(CT)
-        αm = need_norm ? cs_phase_factor(m, true, cfg.cs_phase) : 1.0
+        αm = need_norm ? cs_phase_factor(am, true, cfg.cs_phase) : 1.0
+        gp = zero(CT); gn = zero(CT)
         @inbounds for l in am:lmax
-            idx = LM_cplx_index(lmax, mmax, l, m) + 1
-            a = alm[idx]
-            if need_norm
-                a *= norm_scale_from_orthonormal(l, am, cfg.norm) * αm
+            Pl = P[l+1]
+            ns = need_norm ? norm_scale_from_orthonormal(l, am, cfg.norm) * αm : one(αm)
+            ap = alm[LM_cplx_index(lmax, mmax, l, am) + 1]
+            gp += Pl * (need_norm ? ap * ns : ap)
+            if am > 0
+                an = alm[LM_cplx_index(lmax, mmax, l, -am) + 1]
+                gn += Pl * (need_norm ? an * ns : an)
             end
-            gm += P[l+1] * a
         end
-        acc += gm * cis(m * phi)
+        acc += gp * cis(am * phi)
+        am > 0 && (acc += gn * cis(-am * phi))
     end
     return acc
 end

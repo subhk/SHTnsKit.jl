@@ -71,6 +71,9 @@ Evaluate a complex field along a latitude using packed LM_cplx coefficients.
 """
 function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, cost::Real; nphi::Int=cfg.nlon, ltr::Int=cfg.lmax)
     lmax, mmax = cfg.lmax, cfg.mmax
+    # The packing/indexing below assumes mres==1 (dense m). Fail loudly rather
+    # than silently returning wrong values for a strided (mres>1) configuration.
+    cfg.mres == 1 || throw(ArgumentError("SH_to_lat_cplx supports mres==1 only; got mres=$(cfg.mres)"))
     length(alm_packed) == nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("alm_packed length"))
     x = float(cost)
     CT = promote_type(eltype(alm_packed), ComplexF64)

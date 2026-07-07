@@ -171,6 +171,13 @@ for both CPU and GPU paths, and dispatches based on the array backend at runtime
 - GPU path requires GPU extension (CUDA.jl + KernelAbstractions)
 - CPU path uses @simd @fastmath @inbounds for vectorization
 - Set `SHTnsKit.set_loop_backend("SIMD")` to force CPU path
+
+!!! warning
+    Operands must be **plain variables**, not field accesses. A `getfield`
+    expression in the body (e.g. `cfg.scale`) is rewritten to the bare field
+    symbol (`scale`) when captured as a kernel argument, which does not exist in
+    the caller's scope (`UndefVarError`). Bind such values to locals first:
+    `s = cfg.scale; @sht_loop dest[i] = s * src[i] over i ∈ 1:n`.
 """
 macro sht_loop(args...)
     ex, _, itr = args

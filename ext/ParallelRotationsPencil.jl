@@ -147,6 +147,7 @@ function _yrotate_truncgather_rows!(cfg::SHTnsKit.SHTConfig,
     b_buf = Vector{ComplexF64}(undef, max_n2)
     c_buf = Vector{ComplexF64}(undef, max_n2)
     D_buf = Matrix{Float64}(undef, max_n2, max_n2)
+    lg_buf = [SHTnsKit._loggamma(i + 1) for i in 0:(2*lmax)]   # hoisted log-factorial table (was realloc'd per l-row)
 
     for ii in 1:size(A_local, 1)
         il = ii
@@ -182,7 +183,7 @@ function _yrotate_truncgather_rows!(cfg::SHTnsKit.SHTConfig,
         end
         # d-matrix multiply (Wigner-d built into the hoisted buffer)
         dl = view(D_buf, 1:n2, 1:n2)
-        SHTnsKit.wigner_d_matrix!(dl, lval, beta)
+        SHTnsKit.wigner_d_matrix!(dl, lval, float(beta), lg_buf)
         c = view(c_buf, 1:n2)
         @inbounds for mi in -lval:lval
             acc = 0.0 + 0.0im

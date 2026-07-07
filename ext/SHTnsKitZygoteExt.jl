@@ -227,15 +227,18 @@ end
 # -----------------------------
 ## Zygote-specific adjoints for rotations/operators to ensure gradients are not `nothing`
 ## These mirror the ChainRules rrules but live here to guarantee Zygote picks them up.
+## The Q̄ formulas match SHTnsKitAdvancedADExt and are FD-verified in
+## test/serial/test_rotation_gradients.jl (m>0 packed modes carry double field
+## weight ⇒ standard-inner-product adjoint is Q̄ = W·R⁻¹·(W⁻¹ ȳ), W = diag(wm)).
+_zyg_rot_wm(cfg) = Float64[cfg.mi[k] == 0 ? 1.0 : 2.0 for k in 1:cfg.nlm]
 
 Zygote.@adjoint function SHTnsKit.SH_Zrotate(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex}, alpha::Real, Rlm::AbstractVector{<:Complex})
     y = SHTnsKit.SH_Zrotate(cfg, Qlm, alpha, Rlm)
     function back(ȳ)
-        # Adjoint of SH_Zrotate w.r.t Q under real inner product:
-        # If upstream cotangent is conj(R), map Q̄ = conj(A ȳ) to recover Q (A = diag(e^{i m α}))
-        tmp = similar(Qlm)
-        SHTnsKit.SH_Zrotate(cfg, ȳ, alpha, tmp)
-        Q̄ = conj.(tmp)
+        # Diagonal Rlm = Qlm·e^{imα} ⇒ Q̄ = ȳ·e^{-imα} = SH_Zrotate(ȳ, -α).
+        # (Was conj.(SH_Zrotate(ȳ,+α)) — conjugated the cotangent, wrong for complex ȳ.)
+        Q̄ = similar(Qlm)
+        SHTnsKit.SH_Zrotate(cfg, ȳ, -alpha, Q̄)
         dα = 0.0
         for m in 0:cfg.mmax
             (m % cfg.mres == 0) || continue
@@ -253,8 +256,11 @@ end
 Zygote.@adjoint function SHTnsKit.SH_Yrotate(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex}, alpha::Real, Rlm::AbstractVector{<:Complex})
     y = SHTnsKit.SH_Yrotate(cfg, Qlm, alpha, Rlm)
     function back(ȳ)
+        # Q̄ = W·R(-α)·(W⁻¹ ȳ); bare R(-α) was off by the wm weighting.
+        wm = _zyg_rot_wm(cfg)
         Q̄ = similar(Qlm)
-        SHTnsKit.SH_Yrotate(cfg, ȳ, -alpha, Q̄)
+        SHTnsKit.SH_Yrotate(cfg, ȳ ./ wm, -alpha, Q̄)
+        Q̄ .*= wm
         # angle gradient via derivative of Wigner-d at beta=alpha
         dα = 0.0
         lmax, mmax = cfg.lmax, cfg.mmax

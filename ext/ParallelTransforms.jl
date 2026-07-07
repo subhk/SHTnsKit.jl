@@ -589,14 +589,23 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         # For a 1D θ-only split φ is complete on every rank, so first(φ_globals)
         # is identical everywhere → this column subcomm equals the full comm and
         # the previous behaviour is preserved exactly.
-        φ_globals_red = collect(globalindices(fθφ, 2))
-        reduce_comm = MPI.Comm_split(comm, Int(first(φ_globals_red)), MPI.Comm_rank(comm))
-        try
-            # Reduce packed coefficients (already normalized during accumulation)
-            # or dense partial sums; both reduce over the θ-column subcomm.
-            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, reduce_comm)
-        finally
-            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
+        if nlon_local == nlon
+            # θ-only decomposition: φ is complete on every rank, so the per-φ-column
+            # subcomm equals the full comm. Reduce directly and skip the per-call
+            # MPI.Comm_split (a synchronizing collective) entirely.
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
+        else
+            # 2D (θ×φ) pencil: group ranks by φ-partition so each θ-slab is summed
+            # exactly once. `color` guards a rank that legitimately owns zero φ
+            # columns (p2 > nlon) so first([]) can't crash it before the collective.
+            φ_globals_red = collect(globalindices(fθφ, 2))
+            color = isempty(φ_globals_red) ? 0 : Int(first(φ_globals_red))
+            reduce_comm = MPI.Comm_split(comm, color, MPI.Comm_rank(comm))
+            try
+                SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, reduce_comm)
+            finally
+                SHTnsKitParallelExt._safe_comm_free(reduce_comm)
+            end
         end
         if !use_packed_storage
             # Apply φ scaling (cphi = 2π/nlon). Nlm is NOT applied here: the
@@ -620,6 +629,16 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         end
     end
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        if use_packed_storage
+            # Alm_local is a packed Vector here; the matrix-only convert_alm_norm!
+            # can't take it (was a MethodError). Apply the identical internal→cfg
+            # scaling (divide by M = norm_scale·cs_phase) per (l,m) in place.
+            M = SHTnsKit._ensure_norm_scale_matrix!(cfg)
+            @inbounds for m in 0:mmax, l in m:lmax
+                Alm_local[storage_info.lm_to_packed[l+1, m+1]] /= M[l+1, m+1]
+            end
+            return Alm_local
+        end
         Alm_out = similar(Alm_local)
         SHTnsKit.convert_alm_norm!(Alm_out, Alm_local, cfg; to_internal=false)
         return Alm_out

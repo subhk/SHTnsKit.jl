@@ -441,7 +441,9 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
     # the old `fft_phi(_as_complex(f̄))` made a complex copy AND re-planned an
     # out-of-place fft each call. eltype preserved for the AD/DFT fallback.
     Fph̄ = fft_phi!(Matrix{complex(float(eltype(f̄)))}(undef, size(f̄)...), f̄)
-    ālm = zeros(ComplexF64, lmax + 1, mmax + 1)
+    # eltype-derived accumulator (mirrors _adjoint_synthesis_sphtor): keep Float32
+    # / ForwardDiff.Dual cotangents intact instead of upcasting to ComplexF64.
+    ālm = zeros(complex(float(eltype(f̄))), lmax + 1, mmax + 1)
     use_tbl = has_fused_scalar_tables(cfg)
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
     xv = cfg.x  # hoist field read out of the m/l loops (cfg is mutable, so not auto-hoisted)
@@ -542,7 +544,9 @@ function _adjoint_analysis(cfg::SHTConfig, Alm̄::AbstractMatrix;
                            φ_window::Union{Nothing,UnitRange{Int}}=nothing)
     nlon = cfg.nlon
     nlat_local = length(θ_globals)
-    Fφ = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    # eltype-derived buffers so Float32 / ForwardDiff.Dual cotangents survive.
+    CT = complex(float(eltype(Alm̄)))
+    Fφ = Matrix{CT}(undef, nlat_local, nlon)
     fill!(Fφ, zero(eltype(Fφ)))
     lmax, mmax = cfg.lmax, cfg.mmax
     φadj = 2π  # nlon (ifft adjoint) × cphi (2π/nlon) = 2π
@@ -567,7 +571,7 @@ function _adjoint_analysis(cfg::SHTConfig, Alm̄::AbstractMatrix;
     if φ_window === nothing
         return real.(Fφ)
     end
-    out = Matrix{Float64}(undef, nlat_local, length(φ_window))
+    out = Matrix{real(CT)}(undef, nlat_local, length(φ_window))
     @inbounds for (jj, jglob) in pairs(φ_window)
         for i in 1:nlat_local
             out[i, jj] = real(Fφ[i, jglob])

@@ -29,6 +29,7 @@ using Test
     include("test_vorticity.jl")
     include("test_vorticity_inverse.jl")
     include("test_gradients.jl")
+    include("test_rotation_gradients.jl")
     include("test_ad_convenience.jl")
     include("test_eltype_flexibility.jl")
     include("test_turbo.jl")

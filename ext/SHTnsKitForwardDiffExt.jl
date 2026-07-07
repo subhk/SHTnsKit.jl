@@ -43,7 +43,13 @@ Returns:
 """
 function SHTnsKit.fdgrad_scalar_energy(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     nlat, nlon = size(f)
-    
+    # NOTE: AbstractMatrix ≡ AbstractArray{T,2}, so this method (not the generic
+    # AbstractArray overload below) is what Julia selects for ANY 2-D input,
+    # including a 2-D PencilArray. The guard must live HERE or it never fires.
+    (nlat == cfg.nlat && nlon == cfg.nlon) || throw(DimensionMismatch(
+        "fdgrad_scalar_energy expects the full $(cfg.nlat)×$(cfg.nlon) grid; got $(nlat)×$(nlon) " *
+        "(a distributed PencilArray gives LOCAL data — gather to the global grid first)."))
+
     # Define the energy functional as a function of flattened field
     loss(x) = SHTnsKit.energy_scalar(cfg, SHTnsKit.analysis(cfg, reshape(x, nlat, nlon)))
     
@@ -183,6 +189,11 @@ function SHTnsKit.fdgrad_vector_energy(cfg::SHTnsKit.SHTConfig, Vt::AbstractMatr
     # Validate dimensions match
     size(Vt) == size(Vp) || throw(DimensionMismatch("Vt and Vp must have the same dimensions"))
     nlat, nlon = size(Vt)
+    # As with the scalar case, this AbstractMatrix method is selected for every
+    # 2-D input (incl. 2-D PencilArrays), so the full-grid guard belongs here.
+    (nlat == cfg.nlat && nlon == cfg.nlon) || throw(DimensionMismatch(
+        "fdgrad_vector_energy expects the full $(cfg.nlat)×$(cfg.nlon) grid; got $(nlat)×$(nlon) " *
+        "(a distributed PencilArray gives LOCAL data — gather to the global grid first)."))
 
     # Define vector energy functional for matrix inputs
     function loss_flat(z)

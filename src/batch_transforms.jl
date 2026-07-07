@@ -479,10 +479,12 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
         mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
     end
 
-    # Allocate FFT scratch buffer
+    # Allocate FFT scratch buffer (eltype-derived from alm_batch, matching
+    # analysis_batch, so Float32 / ForwardDiff.Dual coefficients aren't upcast)
+    CT = complex(float(eltype(alm_batch)))
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
-    Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
-    fill!(Fφ_batch, zero(ComplexF64))
+    Fφ_batch = Array{CT,3}(undef, nlat, nbins, nfields)
+    fill!(Fφ_batch, zero(CT))
     inv_scaleφ = phi_inv_scale(cfg)
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
@@ -492,7 +494,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
                 for i in 1:nlat
-                    acc = zero(ComplexF64)
+                    acc = zero(CT)
                     for l in m:lmax
                         acc += tbl[l+1, i] * alm_batch[l+1, col, k]
                     end
@@ -512,7 +514,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
                 Plm_norm_row!(P, x, lmax, m)
 
                 @inbounds for k in 1:nfields
-                    acc = zero(ComplexF64)
+                    acc = zero(CT)
                     for l in m:lmax
                         acc += P[l+1] * alm_batch[l+1, col, k]
                     end
@@ -574,10 +576,11 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
         mmax ≤ nlon ÷ 2 || throw(ArgumentError("use_rfft=true requires mmax ≤ nlon÷2"))
     end
 
-    # Reuse caller-provided scratch if given, else allocate.
+    # Reuse caller-provided scratch if given, else allocate (eltype-derived).
+    CT = complex(float(eltype(alm_batch)))
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
     if fft_batch === nothing
-        Fφ_batch = Array{ComplexF64,3}(undef, nlat, nbins, nfields)
+        Fφ_batch = Array{CT,3}(undef, nlat, nbins, nfields)
     else
         size(fft_batch) == (nlat, nbins, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, $(nbins), nfields)"))
         Fφ_batch = fft_batch
@@ -592,7 +595,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
                 for i in 1:nlat
-                    acc = zero(ComplexF64)
+                    acc = zero(CT)
                     for l in m:lmax
                         acc += tbl[l+1, i] * alm_batch[l+1, col, k]
                     end
@@ -612,7 +615,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                 Plm_norm_row!(P, x, lmax, m)
 
                 @inbounds for k in 1:nfields
-                    acc = zero(ComplexF64)
+                    acc = zero(CT)
                     for l in m:lmax
                         acc += P[l+1] * alm_batch[l+1, col, k]
                     end

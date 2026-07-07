@@ -35,12 +35,13 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
     if mmax + 1 < n_threads ÷ 2 && nlat > 32
         # Few m modes: parallelize over latitude points with thread-local accumulators
         n_tid = Threads.maxthreadid()
-        thread_alm = [Vector{ComplexF64}(undef, lmax + 1) for _ in 1:n_tid]
+        CT = eltype(alm)  # eltype-derived accumulators (this branch uses plain loops, not @tturbo)
+        thread_alm = [Vector{CT}(undef, lmax + 1) for _ in 1:n_tid]
         thread_P_bufs = [Vector{Float64}(undef, lmax + 1) for _ in 1:n_tid]  # per-thread Legendre scratch (hoisted out of the latitude loop)
         for m in 0:mmax
             col = m + 1
             for t in 1:n_tid
-                fill!(thread_alm[t], zero(ComplexF64))
+                fill!(thread_alm[t], zero(CT))
             end
             if cfg.use_plm_tables && length(cfg.NP_tables) == mmax + 1
                 # NP_tables[col][l+1, i] = P̄_l^m already; no extra Nlm multiply
@@ -69,7 +70,7 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
             end
             # Merge thread-local accumulators and apply φ scaling (Nlm already in P̄)
             @inbounds for l in m:lmax
-                acc = zero(ComplexF64)
+                acc = zero(CT)
                 for t in 1:n_tid
                     acc += thread_alm[t][l + 1]
                 end

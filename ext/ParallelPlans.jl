@@ -15,8 +15,14 @@ function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
     sig = hash((cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon,
                 cfg.norm, cfg.cs_phase, cfg.robert_form))
     root_sig = MPI.bcast(sig, 0, comm)
-    if sig != root_sig
-        throw(ArgumentError("SHTConfig diverges across ranks (rank $(MPI.Comm_rank(comm))). All ranks must construct cfg with identical parameters."))
+    # Decide the throw COLLECTIVELY: a lone throw on the mismatched rank(s) would
+    # leave the matching ranks (incl. rank 0, which always matches) proceeding into
+    # the plan's later collectives → hang. Allreduce the mismatch so all ranks
+    # raise together and no rank is left waiting.
+    n_mismatch = MPI.Allreduce(sig != root_sig ? 1 : 0, +, comm)
+    if n_mismatch != 0
+        throw(ArgumentError("SHTConfig diverges across ranks ($(n_mismatch) mismatched). " *
+                            "All ranks must construct cfg with identical parameters."))
     end
     return
 end

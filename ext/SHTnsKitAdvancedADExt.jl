@@ -57,7 +57,7 @@ import SHTnsKit: wigner_d_matrix_deriv
             ȳ = _unthunk(ȳ)
             ȳA = eltype(ȳ) <: Complex ? ȳ : complex.(ȳ)
             nfields = size(ȳA, 3)
-            f̄ = Array{Float64,3}(undef, cfg.nlat, cfg.nlon, nfields)
+            f̄ = Array{real(float(eltype(ȳA))),3}(undef, cfg.nlat, cfg.nlon, nfields)
             @inbounds for k in 1:nfields
                 f̄[:, :, k] .= _adjoint_analysis(cfg, @view ȳA[:, :, k])
             end
@@ -70,11 +70,13 @@ import SHTnsKit: wigner_d_matrix_deriv
         y = SHTnsKit.synthesis_batch(cfg, alm_batch; real_output)
         function pullback(ȳ)
             ȳ = _unthunk(ȳ)
-            ȳA = eltype(ȳ) <: Complex ? ȳ : complex.(ȳ)
-            nfields = size(ȳA, 3)
-            ālm = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1, nfields)
+            nfields = size(ȳ, 3)
+            ālm = zeros(complex(float(eltype(ȳ))), cfg.lmax + 1, cfg.mmax + 1, nfields)
             @inbounds for k in 1:nfields
-                ālm[:, :, k] .= SHTnsKit.analysis(cfg, @view ȳA[:, :, k])
+                # Adjoint of synthesis is `_adjoint_synthesis` (NO Gauss quadrature
+                # weights), matching the non-batch synthesis rrule. Using `analysis`
+                # here was wrong — off by the w_i·cphi factors (FD-checked).
+                ālm[:, :, k] .= SHTnsKit._adjoint_synthesis(cfg, @view(ȳ[:, :, k]); real_output=real_output)
             end
             return NoTangent(), NoTangent(), ālm, (; real_output=NoTangent())
         end
@@ -166,15 +168,23 @@ end
         return y, pullback
 end
 
-# Rotations: adjoints via inverse/adjoint rotation
+# Rotations: adjoints via inverse/adjoint rotation.
+# The packed real-field rotations map coefficient vectors whose m>0 entries carry
+# DOUBLE weight in the physical (field) inner product. Zygote/ChainRules use the
+# STANDARD packed inner product ⟨a,b⟩=Σ conj(a)b, so the correct adjoint of a
+# rotation R is Q̄ = W·R⁻¹·(W⁻¹ ȳ) with W = diag(wm), wm = 2 for m>0. (For the
+# diagonal Z-rotation W cancels.) All four Q̄ formulas below are FD-verified in
+# test/serial/test_rotation_gradients.jl; the angle (dα) gradients were already
+# correct and are unchanged.
+_rot_wm(cfg) = Float64[cfg.mi[k] == 0 ? 1.0 : 2.0 for k in 1:cfg.nlm]
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Zrotate), cfg::SHTnsKit.SHTConfig, Qlm, alpha::Real, Rlm)
     y = SHTnsKit.SH_Zrotate(cfg, Qlm, alpha, Rlm)
     function pullback(ȳ)
-        # Adjoint w.r.t Q under real inner product: Q̄ = conj(A ȳ)
-        tmp = similar(Qlm)
-        SHTnsKit.SH_Zrotate(cfg, ȳ, alpha, tmp)
-        Q̄ = conj.(tmp)
+        # Diagonal rotation Rlm = Qlm·e^{imα} ⇒ Q̄ = ȳ·e^{-imα} = SH_Zrotate(ȳ, -α).
+        # (Was conj.(SH_Zrotate(ȳ,+α)) = conj(ȳ)·e^{-imα} — wrong for complex ȳ.)
+        Q̄ = similar(Qlm)
+        SHTnsKit.SH_Zrotate(cfg, ȳ, -alpha, Q̄)
         # angle gradient: dR/dα = i m R
         dα = 0.0
         for m in 0:cfg.mmax
@@ -194,8 +204,12 @@ end
 function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Yrotate), cfg::SHTnsKit.SHTConfig, Qlm, alpha::Real, Rlm)
     y = SHTnsKit.SH_Yrotate(cfg, Qlm, alpha, Rlm)
     function pullback(ȳ)
+        # Q̄ = W·R(-α)·(W⁻¹ ȳ). Bare R(-α) is the field-inner-product adjoint and
+        # was off by the wm weighting.
+        wm = _rot_wm(cfg)
         Q̄ = similar(Qlm)
-        SHTnsKit.SH_Yrotate(cfg, ȳ, -alpha, Q̄)
+        SHTnsKit.SH_Yrotate(cfg, ȳ ./ wm, -alpha, Q̄)
+        Q̄ .*= wm
         # angle gradient via d/dβ of Wigner-d at β=alpha
         dα = 0.0
         lmax, mmax = cfg.lmax, cfg.mmax
@@ -232,8 +246,10 @@ end
 function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Yrotate90), cfg::SHTnsKit.SHTConfig, Qlm, Rlm)
     y = SHTnsKit.SH_Yrotate90(cfg, Qlm, Rlm)
     function pullback(ȳ)
+        wm = _rot_wm(cfg)
         Q̄ = similar(Qlm)
-        SHTnsKit.SH_Yrotate(cfg, ȳ, -π/2, Q̄)
+        SHTnsKit.SH_Yrotate(cfg, ȳ ./ wm, -π/2, Q̄)
+        Q̄ .*= wm
         return NoTangent(), NoTangent(), Q̄, ZeroTangent()
     end
     return y, pullback
@@ -242,13 +258,15 @@ end
     function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Xrotate90), cfg::SHTnsKit.SHTConfig, Qlm, Rlm)
         y = SHTnsKit.SH_Xrotate90(cfg, Qlm, Rlm)
         function pullback(ȳ)
-            Q̄ = similar(Qlm)
-            # Inverse of Xrotate90 is rotation by -90 around X: Rz(-π/2)·Ry(-π/2)·Rz(π/2)
+            # Forward Xrotate90 is ZYZ(π/2, π/2, -π/2); its inverse is
+            # ZYZ(-γ,-β,-α) = ZYZ(π/2, -π/2, -π/2) (the old (-π/2,-π/2,π/2) was
+            # not the inverse). Plus the wm weighting for the standard adjoint.
+            wm = _rot_wm(cfg)
             r = SHTnsKit.SHTRotation(cfg.lmax, cfg.mmax)
-            SHTnsKit.shtns_rotation_set_angles_ZYZ(r, -π/2, -π/2, π/2)
-            tmp = similar(Qlm)
-            SHTnsKit.shtns_rotation_apply_real(r, ȳ, tmp)
-            copyto!(Q̄, tmp)
+            SHTnsKit.shtns_rotation_set_angles_ZYZ(r, π/2, -π/2, -π/2)
+            Q̄ = similar(Qlm)
+            SHTnsKit.shtns_rotation_apply_real(r, ȳ ./ wm, Q̄)
+            Q̄ .*= wm
             return NoTangent(), NoTangent(), Q̄, ZeroTangent()
         end
         return y, pullback

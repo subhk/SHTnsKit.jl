@@ -163,6 +163,12 @@ end
 
 Apply a nearest-neighbor-in-l operator represented by `mx` to `Qlm` and write to `Rlm`.
 Both `Qlm` and `Rlm` are length `cfg.nlm` packed vectors (m≥0, SHTns LM order).
+
+!!! warning
+    `Rlm` must not alias `Qlm`. Each output couples the l-neighbors of `Qlm`, and
+    those neighbors are overwritten by earlier iterations, so an in-place call
+    (`Rlm === Qlm`) reads already-mutated values and gives wrong results. Use a
+    separate output buffer.
 """
 function SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
     # Validate input array dimensions

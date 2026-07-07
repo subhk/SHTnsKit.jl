@@ -54,6 +54,38 @@ if _HAS_ZYGOTE
         @test isapprox(dL_ad, dL_fd; rtol=5e-4, atol=1e-7)
     end
 end
+
+@testset "batch rrules: adjoint consistency with finite-difference" begin
+    # synthesis_batch's rrule must use the true synthesis adjoint per slice, NOT
+    # `analysis` (off by Gauss w_i·cphi weights). analysis_batch's adjoint is
+    # `_adjoint_analysis` per slice. Both FD-checked here.
+    lmax = 6; nlat = lmax + 2; nlon = 2*lmax + 1
+    cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+    rng = MersenneTwister(313)
+    rfalm() = begin
+        a = randn(rng, ComplexF64, lmax+1, lmax+1); a[:, 1] .= real.(a[:, 1])
+        for m in 0:lmax, l in 0:(m-1); a[l+1, m+1] = 0; end
+        a
+    end
+    ϵ = 1e-6
+
+    # synthesis_batch (spectral -> spatial), 2 fields
+    ab = cat(rfalm(), rfalm(); dims=3)
+    hb = cat(rfalm(), rfalm(); dims=3)
+    sloss(a) = sum(abs2, synthesis_batch(cfg, a; real_output=true))
+    gs = Zygote.gradient(sloss, ab)[1]
+    s_ad = real(sum(conj(gs) .* hb))
+    s_fd = (sloss(ab .+ ϵ .* hb) - sloss(ab .- ϵ .* hb)) / (2ϵ)
+    @test isapprox(s_ad, s_fd; rtol=5e-4, atol=1e-7)
+
+    # analysis_batch (spatial -> spectral), 2 fields
+    fb = randn(rng, nlat, nlon, 2); hf = randn(rng, nlat, nlon, 2)
+    aloss(f) = sum(abs2, analysis_batch(cfg, f))
+    ga = Zygote.gradient(aloss, fb)[1]
+    a_ad = sum(ga .* hf)
+    a_fd = (aloss(fb .+ ϵ .* hf) - aloss(fb .- ϵ .* hf)) / (2ϵ)
+    @test isapprox(a_ad, a_fd; rtol=5e-4, atol=1e-7)
+end
 else
     @info "Skipping synthesis-rrule FD check (Zygote not available in this test context)"
 end

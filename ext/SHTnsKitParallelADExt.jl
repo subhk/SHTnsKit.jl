@@ -36,6 +36,19 @@ using PencilArrays: PencilArray
 using SHTnsKit
 using FFTW
 
+# ----- PencilArrays compat ---------------------------------------------------
+# `communicator` and `globalindices` are internal helpers of the sibling
+# SHTnsKitParallelExt module and are NOT exported by PencilArrays (verified
+# across 0.19.8–0.19.11). This is a SEPARATE extension module, so without local
+# definitions every rrule below throws `UndefVarError` the moment it fires.
+# These mirror the primary (v0.19+) resolution paths used by the main ext.
+@inline function communicator(A)
+    hasmethod(PencilArrays.get_comm, (typeof(A),)) && return PencilArrays.get_comm(A)
+    return PencilArrays.get_comm(PencilArrays.pencil(A))
+end
+
+@inline globalindices(A, dim) = PencilArrays.range_local(PencilArrays.pencil(A))[dim]
+
 # ----- helpers ---------------------------------------------------------------
 
 # The rank-local adjoint is just the parametrized `SHTnsKit._adjoint_analysis`
@@ -134,7 +147,9 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
 
     function dist_analysis_sphtor_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
-        Slm̄, Tlm̄ = ȳ isa Tuple ? ȳ : (ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2]))
+        # unthunk EACH component — a Tuple/Tangent of Thunks would otherwise reach
+        # Matrix{ComplexF64}(::Thunk) below and error (matches the synthesis twin).
+        Slm̄, Tlm̄ = ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2])
         V̄t_parent, V̄p_parent = SHTnsKit._adjoint_analysis_sphtor(
             cfg, Matrix{ComplexF64}(Slm̄), Matrix{ComplexF64}(Tlm̄);
             θ_globals=θ_globals, φ_window=φ_window)
@@ -193,8 +208,11 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
         S̄p, T̄p = SHTnsKit._adjoint_synthesis_sphtor(cfg, V̄t_full, V̄p_full;
                                                     θ_globals=θ_globals,
                                                     real_output=real_output)
-        S̄ = MPI.Allreduce(S̄p, +, comm)
-        T̄ = MPI.Allreduce(T̄p, +, comm)
+        # One batched Allreduce over stacked (S̄,T̄) instead of two round-trips.
+        n = length(S̄p)
+        combined = MPI.Allreduce!(vcat(vec(S̄p), vec(T̄p)), +, comm)
+        S̄ = reshape(combined[1:n], size(S̄p))
+        T̄ = reshape(combined[n+1:end], size(T̄p))
         return NoTangent(), NoTangent(), S̄, T̄
     end
     return y, dist_synthesis_sphtor_pullback

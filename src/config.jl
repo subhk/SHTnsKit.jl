@@ -363,9 +363,15 @@ function Base.setproperty!(cfg::SHTConfig, name::Symbol, val)
     elseif name === :Nlm
         return setfield!(getfield(cfg, :_norm), :Nlm, val)
     elseif name === :norm
-        return setfield!(getfield(cfg, :_norm), :norm, val)
+        setfield!(getfield(cfg, :_norm), :norm, val)
+        # invalidate cached norm-scale matrix: it is keyed on size only, so a
+        # norm change on a same-size config would otherwise reuse stale factors.
+        getfield(cfg, :_norm).scale_matrix[] = Matrix{Float64}(undef, 0, 0)
+        return val
     elseif name === :cs_phase
-        return setfield!(getfield(cfg, :_norm), :cs_phase, val)
+        setfield!(getfield(cfg, :_norm), :cs_phase, val)
+        getfield(cfg, :_norm).scale_matrix[] = Matrix{Float64}(undef, 0, 0)  # invalidate cached scale
+        return val
     elseif name === :real_norm
         return setfield!(getfield(cfg, :_norm), :real_norm, val)
     elseif name === :robert_form
@@ -1178,7 +1184,22 @@ Precompute associated Legendre tables P_l^m(x_i) for all i and m, stored as
 function prepare_plm_tables!(cfg::SHTConfig)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat = cfg.nlat
-    
+
+    # The derivative tables use the convention NdP = -(dP̄/dθ)/sinθ, which divides
+    # by sinθ so the table kernels can multiply it back. At an EXACT pole node
+    # (x = ±1 ⇒ sinθ = 0) this is 0/0 → NaN, and the kernel's reciprocal ×sinθ
+    # cannot recover the true (nonzero, e.g. m=1) pole derivative anyway. Gauss
+    # nodes never hit poles, but pole-inclusive regular/DH grids do. For those we
+    # must fall back to the on-the-fly path, which handles the pole limit
+    # correctly (Plm_norm_dPdtheta_over_sinth_row!). Disable tables and return.
+    if any(xi -> abs(xi) ≥ 1, cfg.x)
+        @warn "prepare_plm_tables!: grid contains pole node(s) (sinθ=0); the table " *
+              "derivative convention is undefined there. Keeping on-the-fly Legendre " *
+              "evaluation (use_plm_tables=false) for correctness." maxlog=1
+        cfg.use_plm_tables = false
+        return cfg
+    end
+
     # Allocate storage for Legendre polynomial tables
     # Each m-order gets its own matrix: (degree+1) × (latitude points)
     tables = [zeros(Float64, lmax + 1, nlat) for _ in 0:mmax]    # P_l^m values

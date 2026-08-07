@@ -136,8 +136,7 @@ struct _ParallelExtState
     cache_enabled::Base.RefValue{Bool}                  # toggle plan caching
     pfft_cache::IdDict{Any,Any}                         # FFT plan cache (keyed by shape/type/comm)
     pfft_cache_max::Base.RefValue{Int}                  # soft cap on pfft_cache entries
-    cache_lock::Threads.ReentrantLock                   # guards pfft_cache + sparse_gather_cache
-    sparse_gather_cache::Dict{Any, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}
+    cache_lock::Threads.ReentrantLock                   # guards pfft_cache
     fftw_cache_lock::Threads.ReentrantLock              # guards local-FFTW plan caches
 end
 
@@ -146,7 +145,6 @@ const _STATE = _ParallelExtState(
     IdDict{Any,Any}(),
     Ref{Int}(parse(Int, get(ENV, "SHTNSKIT_PFFT_CACHE_MAX", "64"))),
     Threads.ReentrantLock(),
-    Dict{Any, NamedTuple{(:idx,:val),Tuple{Vector{Int},Any}}}(),
     Threads.ReentrantLock(),
 )
 
@@ -155,7 +153,6 @@ const _CACHE_PENCILFFTS    = _STATE.cache_enabled
 const _pfft_cache          = _STATE.pfft_cache
 const _PFFT_CACHE_MAX      = _STATE.pfft_cache_max
 const _cache_lock          = _STATE.cache_lock
-const _sparse_gather_cache = _STATE.sparse_gather_cache
 
 """
     pfft_cache_max!(n::Int) -> Int
@@ -935,15 +932,15 @@ include("ParallelRotationsPencil.jl") # Parallel spherical rotation operations
 include("ParallelLocal.jl")            # Local (per-process) operations and utilities
 include("ParallelTransposeTransforms.jl")  # Transpose-based distributed SHT (Task 2+)
 
-# Optimized communication patterns for large spectral arrays
-# A plain Allreduce is the correct primitive for summing spectral partials over θ:
-# a tuned MPI already performs topology-aware (hierarchical) reduction internally.
-# The former `adaptive_spectral_communication!` route selected
-# `hierarchical_spectral_reduce!`, which wraps the SAME `Allreduce!` in TWO per-call
-# `MPI.Comm_split` collectives (`tree_reduce!` is literally `Allreduce!`) for zero
-# algorithmic gain — strictly slower on the hot analysis/sphtor path. Call Allreduce
-# directly. (`adaptive_spectral_communication!` is retained for callers that opt into
-# the sparse/segmented strategies explicitly.)
+# Reduction of spectral partials over θ.
+# A plain Allreduce is the correct primitive here: a tuned MPI already performs
+# topology-aware (hierarchical) reduction internally. This used to route through
+# `adaptive_spectral_communication!` → `hierarchical_spectral_reduce!`, which wraps
+# the SAME `Allreduce!` in TWO per-call `MPI.Comm_split` collectives (`tree_reduce!`
+# was literally `Allreduce!`) for zero algorithmic gain — strictly slower on the hot
+# analysis/sphtor path. That whole adaptive/sparse/segmented/hierarchical tree has
+# been deleted rather than left unreachable; recover it from git history if a real
+# use case for the sparse or segmented strategies ever appears.
 function efficient_spectral_reduce!(local_data::AbstractMatrix, comm)
     MPI.Allreduce!(local_data, +, comm)
     return local_data
@@ -952,303 +949,6 @@ end
 function efficient_spectral_reduce!(local_data::AbstractVector, comm)
     MPI.Allreduce!(local_data, +, comm)
     return local_data
-end
-
-function hierarchical_spectral_reduce!(local_data::AbstractMatrix, comm, ppn::Int)
-    rank = MPI.Comm_rank(comm)
-    nprocs = MPI.Comm_size(comm)
-    
-    # Level 1: Intra-node reduction (shared memory optimization)
-    node_id = rank ÷ ppn
-    local_rank = rank % ppn
-    
-    # Create intra-node communicator for shared-memory optimization
-    node_comm = MPI.Comm_split(comm, node_id, local_rank)
-    node_nprocs = MPI.Comm_size(node_comm)
-    
-    if node_nprocs > 1
-        # Reduce within each compute node using optimized shared-memory path
-        MPI.Allreduce!(local_data, +, node_comm)
-    end
-    
-    # Level 2: Inter-node reduction (network-aware)
-    if local_rank == 0  # Node representatives
-        inter_node_comm = MPI.Comm_split(comm, 0, node_id)
-        inter_nprocs = MPI.Comm_size(inter_node_comm)
-        
-        if inter_nprocs > 1
-            # Use tree-based reduction between nodes for network efficiency
-            tree_reduce!(local_data, inter_node_comm)
-        end
-        
-        _safe_comm_free(inter_node_comm)
-    else
-        # Create dummy communicator for non-representatives and free it
-        dummy_comm = MPI.Comm_split(comm, 1, 0)
-        _safe_comm_free(dummy_comm)
-    end
-
-    # Level 3: Broadcast results back within nodes
-    if node_nprocs > 1
-        MPI.Bcast!(local_data, 0, node_comm)
-    end
-    
-    _safe_comm_free(node_comm)
-end
-
-function tree_reduce!(data::AbstractMatrix, comm)
-    # Use MPI.Allreduce! which is correct for all process counts
-    MPI.Allreduce!(data, +, comm)
-end
-
-function sparse_spectral_reduce!(local_data::AbstractVector{T}, comm) where {T}
-    # True sparse reduction using Allgatherv of (indices, values)
-    nz_idx = findall(!iszero, local_data)
-    send_count = length(nz_idx)
-
-    # Gather counts to all ranks and build displacements
-    counts = Allgather(send_count, comm)
-    displs = cumsum([0; counts[1:end-1]])
-    total = sum(counts)
-
-    # Prepare send buffers
-    idx_send = collect(Int, nz_idx)
-    val_send = local_data[nz_idx]
-
-    # Receive buffers (reused across calls when possible)
-    # Note: Resize operations are performed outside the lock to reduce contention.
-    # This is safe because each (T, comm) key maps to a unique buffer pair that
-    # is only used by operations on that specific communicator.
-    key = (T, MPI.Comm_rank(comm), MPI.Comm_size(comm))
-    idx_recv, val_recv = lock(_cache_lock) do
-        if haskey(_sparse_gather_cache, key)
-            buf = _sparse_gather_cache[key]
-            idx_buf = buf.idx
-            val_buf = buf.val
-            if length(idx_buf) < total
-                resize!(idx_buf, total)
-            end
-            if length(val_buf) < total
-                resize!(val_buf, total)
-            end
-            (idx_buf, val_buf)
-        else
-            idx_buf = Vector{Int}(undef, total)
-            val_buf = Vector{T}(undef, total)
-            _sparse_gather_cache[key] = (idx=idx_buf, val=val_buf)
-            (idx_buf, val_buf)
-        end
-    end
-
-    # Exchange indices and values using MPI.jl v0.20+ API
-    Allgatherv!(idx_send, VBuffer(idx_recv, counts), comm)
-    Allgatherv!(val_send, VBuffer(val_recv, counts), comm)
-
-    # Accumulate into the full dense vector
-    fill!(local_data, zero(T))
-    @inbounds for i in 1:total
-        local_data[idx_recv[i]] += val_recv[i]
-    end
-    return local_data
-end
-
-function sparse_spectral_reduce!(local_data::AbstractMatrix{T}, comm) where {T}
-    # Flattened sparse reduction on matrix storage
-    A = vec(local_data)
-    sparse_spectral_reduce!(A, comm)
-    return local_data
-end
-
-# ===== ADVANCED COMMUNICATION PATTERNS =====
-
-"""
-    adaptive_spectral_communication!(data, comm; operation, sparse_threshold=0.1)
-
-Adaptive communication pattern that automatically chooses the optimal strategy
-based on data sparsity and process count for spherical harmonic coefficients.
-
-Strategies:
-- Dense data + few processes: Standard Allreduce
-- Dense data + many processes: Hierarchical reduction  
-- Sparse data: Sparse coefficient exchange
-- Very large data: Segmented reduction with overlap
-"""
-function adaptive_spectral_communication!(data::AbstractArray, comm; operation=+, sparse_threshold=nothing)
-    nprocs = MPI.Comm_size(comm)
-    data_size = length(data)
-    # Resolve sparsity threshold from ENV if not provided
-    st = sparse_threshold === nothing ? try parse(Float64, get(ENV, "SHTNSKIT_SPARSE_THRESHOLD", "0.1")) catch; 0.1 end : sparse_threshold
-    
-    # Compute sparsity ratio. CRITICAL: the branch below selects an MPI collective
-    # sequence, so the decision MUST be identical on every rank. A per-rank local
-    # sparsity diverges (each rank owns a different zero-pattern) → ranks take
-    # different branches → mismatched collectives → deadlock. Decide it GLOBALLY.
-    local_nz = count(!iszero, data)
-    gathered = MPI.Allreduce!(Float64[local_nz, data_size], +, comm)
-    sparsity = gathered[1] / gathered[2]
-
-    # NOTE: sparse_spectral_reduce! and hierarchical_spectral_reduce! are sum-only
-    # (they never consumed `operation`); gate them on `operation === +` so a
-    # non-additive reduction falls through to a general collective instead of
-    # silently being summed. segmented_spectral_reduce! and Allreduce! honor it.
-    if operation === (+) && sparsity < st && data_size > 1000
-        # Use sparse communication for very sparse data (robust fallback)
-        return sparse_spectral_reduce!(data, comm)
-    elseif nprocs > 64 && data_size > 50000
-        # Use segmented reduction for large-scale problems
-        return segmented_spectral_reduce!(data, comm, operation)
-    elseif operation === (+) && nprocs > 16 && data_size > 5000
-        # Use hierarchical reduction for medium-scale problems
-        if isa(data, AbstractMatrix)
-            return hierarchical_spectral_reduce!(data, comm, min(nprocs, 32))
-        else
-            return hierarchical_spectral_reduce_vector!(data, comm, min(nprocs, 32))
-        end
-    else
-        # Use standard Allreduce for small problems
-        MPI.Allreduce!(data, operation, comm)
-        return data
-    end
-end
-
-"""
-    segmented_spectral_reduce!(data, comm, operation)
-
-Segmented reduction for very large spectral arrays that don't fit in memory.
-Processes data in chunks with communication/computation overlap.
-"""
-function segmented_spectral_reduce!(data::AbstractArray, comm, operation)
-    nprocs = MPI.Comm_size(comm)
-    rank = MPI.Comm_rank(comm)
-    
-    # Determine optimal segment size based on available memory
-    max_segment_mb = parse(Int, get(ENV, "SHTNSKIT_MAX_SEGMENT_MB", "128"))
-    bytes_per_element = sizeof(eltype(data))
-    max_elements_per_segment = (max_segment_mb * 1024 * 1024) ÷ bytes_per_element
-    
-    segment_size = min(length(data), max_elements_per_segment)
-    num_segments = (length(data) + segment_size - 1) ÷ segment_size
-    
-    # Process segments with overlapped communication (double-buffered)
-    temp_a = similar(data, segment_size)
-    temp_b = similar(data, segment_size)
-    prev_req = nothing
-    prev_buf = nothing  # :a or :b
-    prev_len = 0
-    prev_start = 0
-
-    try
-        for seg in 1:num_segments
-            start_idx = (seg - 1) * segment_size + 1
-            end_idx = min(seg * segment_size, length(data))
-            segment_data = view(data, start_idx:end_idx)
-            cur_len = length(segment_data)
-
-            # Choose buffer not in use by previous outstanding request
-            buf_sym = (prev_buf == :a) ? :b : :a
-            temp_view = buf_sym === :a ? view(temp_a, 1:cur_len) : view(temp_b, 1:cur_len)
-            copyto!(temp_view, segment_data)
-
-            # Launch nonblocking reduction for current segment
-            req = MPI.Iallreduce!(temp_view, operation, comm)
-
-            # Complete previous request and write back
-            if prev_req !== nothing
-                MPI.Wait(prev_req)
-                pstart = prev_start
-                pend = min(pstart + prev_len - 1, length(data))
-                prev_data = view(data, pstart:pend)
-                prev_view = (prev_buf === :a ? view(temp_a, 1:prev_len) : view(temp_b, 1:prev_len))
-                copyto!(prev_data, prev_view)
-            end
-
-            # Promote current to previous
-            prev_req = req
-            prev_buf = buf_sym
-            prev_len = cur_len
-            prev_start = start_idx
-        end
-
-        # Final pending segment
-        if prev_req !== nothing
-            MPI.Wait(prev_req)
-            prev_req = nothing
-            pstart = prev_start
-            pend = min(pstart + prev_len - 1, length(data))
-            prev_data = view(data, pstart:pend)
-            prev_view = (prev_buf === :a ? view(temp_a, 1:prev_len) : view(temp_b, 1:prev_len))
-            copyto!(prev_data, prev_view)
-        end
-    finally
-        # Drain any outstanding request so MPI doesn't retain buffer refs on error paths.
-        if prev_req !== nothing
-            try MPI.Wait(prev_req) catch end
-        end
-    end
-
-    return data
-end
-
-"""
-    hierarchical_spectral_reduce_vector!(data, comm, ppn)
-
-Vector-specialized hierarchical reduction with optimized memory access patterns.
-"""
-function hierarchical_spectral_reduce_vector!(data::AbstractVector, comm, ppn::Int)
-    rank = MPI.Comm_rank(comm)
-    nprocs = MPI.Comm_size(comm)
-    
-    # Create node-local communicator
-    node_id = rank ÷ ppn
-    local_rank = rank % ppn
-    node_comm = MPI.Comm_split(comm, node_id, local_rank)
-    node_nprocs = MPI.Comm_size(node_comm)
-    
-    # Intra-node reduction with memory-friendly chunking
-    if node_nprocs > 1
-        chunk_size = min(length(data), 10000)  # Process in chunks for cache efficiency
-        
-        for start_idx in 1:chunk_size:length(data)
-            end_idx = min(start_idx + chunk_size - 1, length(data))
-            chunk_view = view(data, start_idx:end_idx)
-            MPI.Allreduce!(chunk_view, +, node_comm)
-        end
-    end
-    
-    # Inter-node reduction (only node leaders participate)
-    if local_rank == 0
-        inter_node_comm = MPI.Comm_split(comm, 0, node_id)
-        inter_nprocs = MPI.Comm_size(inter_node_comm)
-        
-        if inter_nprocs > 1
-            # Use tree reduction for better network scaling
-            tree_reduce_vector!(data, inter_node_comm)
-        end
-        
-        _safe_comm_free(inter_node_comm)
-    else
-        # Non-leaders create dummy communicator and free it
-        dummy_comm = MPI.Comm_split(comm, 1, 0)
-        _safe_comm_free(dummy_comm)
-    end
-
-    # Broadcast results within nodes
-    if node_nprocs > 1
-        MPI.Bcast!(data, 0, node_comm)
-    end
-    
-    _safe_comm_free(node_comm)
-    return data
-end
-
-"""
-    tree_reduce_vector!(data, comm)
-
-Binary tree reduction optimized for vector data with better memory locality.
-"""
-function tree_reduce_vector!(data::AbstractVector, comm)
-    # Use MPI.Allreduce! which is correct for all process counts
-    MPI.Allreduce!(data, +, comm)
 end
 
 """

@@ -111,4 +111,31 @@ using SHTnsKit
         SHTnsKit.@sht_loop dest[I] = src[I] over I ∈ CartesianIndices(dest)
         @test dest ≈ src
     end
+
+    @testset "@sht_loop field-access hygiene" begin
+        # A field access in the body must read THAT field, never an unrelated
+        # caller local of the same name. Rewriting `cfg.scale` to the bare symbol
+        # `scale` used to silently pick up the local below and compile cleanly.
+        holder = (scale = 3.0,)
+        scale = -100.0          # decoy: same name, wrong value
+        dest = zeros(6)
+        src = collect(1.0:6.0)
+        SHTnsKit.@sht_loop dest[i] = holder.scale * src[i] over i ∈ 1:6
+        @test dest ≈ 3.0 .* src
+        @test scale == -100.0   # untouched
+
+        # Same field name reached through two different objects in one body.
+        a = (w = 2.0,)
+        b = (w = 5.0,)
+        out = zeros(4)
+        ones4 = ones(4)
+        SHTnsKit.@sht_loop out[i] = a.w * ones4[i] + b.w over i ∈ 1:4
+        @test out ≈ fill(7.0, 4)
+
+        # Repeated operands must not produce duplicate kernel argument names.
+        d2 = zeros(5)
+        s2 = collect(1.0:5.0)
+        SHTnsKit.@sht_loop d2[i] = s2[i] + s2[i] over i ∈ 1:5
+        @test d2 ≈ 2 .* s2
+    end
 end

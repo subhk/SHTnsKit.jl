@@ -216,6 +216,49 @@ end
 # ===== MPI DATA REDISTRIBUTION HELPERS =====
 
 """
+    _owned_range(globals) -> UnitRange{Int}
+
+`first(globals):last(globals)` for the global indices a rank owns along one
+dimension, but safe when the rank owns ZERO of them. That is legitimate whenever
+a pencil has more partitions than the dimension has points (e.g. `nlon = 4` on 5
+ranks), and `first`/`last` on the collected empty vector throw a BoundsError —
+which crashes that rank while its partners sit inside the gather collective, so
+the job hangs instead of failing. An empty range is what the gather helpers
+already expect: `length == 0` contributes a zero-count `Allgatherv` segment.
+"""
+_owned_range(globals) = isempty(globals) ? (1:0) : (Int(first(globals)):Int(last(globals)))
+
+"""
+    _keep_one_phi_partner!(comm, θ_first, arrays...)
+
+Prepare θ-slab partials for a plain full-comm reduction on a 2D (θ×φ) pencil.
+
+Every φ-partner of a θ-slab holds an *identical* spectral partial (the φ gather
+already handed each of them the full longitude), so reducing over the full comm
+would count each slab once per φ-partition. Zeroing all but one partner per
+θ-slab makes the subsequent full-comm sum count each slab exactly once.
+
+This replaces splitting the comm by φ-colour, which had no correct colour for a
+rank owning zero φ columns: `first([])` crashed it, and lumping such ranks under
+a shared colour silently over-counted whenever more than one φ-partition was
+empty. Grouping by θ instead is always well defined — `first` of an empty θ range
+is still a number — and the result is bit-identical to the exact θ-slab sum.
+"""
+function _keep_one_phi_partner!(comm, θ_first::Int, arrays::Vararg{AbstractArray})
+    row_comm = MPI.Comm_split(comm, θ_first, MPI.Comm_rank(comm))
+    try
+        if MPI.Comm_rank(row_comm) != 0
+            for A in arrays
+                fill!(A, zero(eltype(A)))
+            end
+        end
+    finally
+        SHTnsKitParallelExt._safe_comm_free(row_comm)
+    end
+    return nothing
+end
+
+"""
     _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
 
 Gather data distributed along φ dimension, then perform FFT along φ.
@@ -460,8 +503,8 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
             Fθm .= FFTW.rfft(local_data, 2)
         else
             φ_globals = collect(globalindices(fθφ, 2))
-            φ_range = first(φ_globals):last(φ_globals)
-            θ_range = first(θ_globals):last(θ_globals)
+            φ_range = _owned_range(φ_globals)
+            θ_range = _owned_range(θ_globals)
             SHTnsKitParallelExt.distributed_rfft_phi!(Fθm, local_data, θ_range, φ_range, nlon, comm)
         end
     elseif nlon_local == nlon
@@ -472,8 +515,8 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         # CASE B: Data distributed along φ — gather full longitude rows before FFT.
         Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
         φ_globals = collect(globalindices(fθφ, 2))
-        φ_range = first(φ_globals):last(φ_globals)
-        θ_range = first(θ_globals):last(θ_globals)
+        φ_range = _owned_range(φ_globals)
+        θ_range = _owned_range(θ_globals)
         Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
 
@@ -542,7 +585,10 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         # Original inline loop for packed storage (not the hot path).
         # Uses normalized rows (Plm_norm_row! / NP_tables): Nlm is already baked in.
         xv = cfg.x; cphi = cfg.cphi  # hoist field reads out of the loops below (cfg is mutable, so not auto-hoisted)
-        for mval in 0:mmax
+        # Stride by mres: create_packed_storage_info only assigns lm_to_packed for
+        # m % mres == 0, leaving every other entry 0. Walking all m under @inbounds
+        # therefore wrote Alm_local[0] — one element before the buffer.
+        for mval in 0:cfg.mres:mmax
             col = mval + 1
             m_fft = mval + 1
             for (ii, iglob) in enumerate(θ_globals)
@@ -582,30 +628,19 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     θ_is_distributed = (nθ_local < nlat)
 
     if θ_is_distributed
-        # Reduce only across ranks that share this rank's φ-segment (they differ
-        # in θ), so a 2D (θ×φ) pencil sums each θ-slab exactly once. φ-partners
-        # that hold the same θ-slab carry identical post-gather contributions, so
-        # reducing over the full comm would overcount by the φ-partition factor.
-        # For a 1D θ-only split φ is complete on every rank, so first(φ_globals)
-        # is identical everywhere → this column subcomm equals the full comm and
-        # the previous behaviour is preserved exactly.
+        # φ-partners that hold the same θ-slab carry identical post-gather
+        # contributions, so a full-comm reduction would overcount by the
+        # φ-partition factor. Drop all but one partner per θ-slab first.
         if nlon_local == nlon
-            # θ-only decomposition: φ is complete on every rank, so the per-φ-column
-            # subcomm equals the full comm. Reduce directly and skip the per-call
+            # θ-only decomposition: φ is complete on every rank, so there are no
+            # φ-partners to dedup. Reduce directly and skip the per-call
             # MPI.Comm_split (a synchronizing collective) entirely.
             SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
         else
-            # 2D (θ×φ) pencil: group ranks by φ-partition so each θ-slab is summed
-            # exactly once. `color` guards a rank that legitimately owns zero φ
-            # columns (p2 > nlon) so first([]) can't crash it before the collective.
-            φ_globals_red = collect(globalindices(fθφ, 2))
-            color = isempty(φ_globals_red) ? 0 : Int(first(φ_globals_red))
-            reduce_comm = MPI.Comm_split(comm, color, MPI.Comm_rank(comm))
-            try
-                SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, reduce_comm)
-            finally
-                SHTnsKitParallelExt._safe_comm_free(reduce_comm)
-            end
+            # 2D (θ×φ) pencil: keep one partner per θ-slab, then reduce over the
+            # full comm so each slab is summed exactly once.
+            _keep_one_phi_partner!(comm, first(_owned_range(θ_globals)), Alm_local)
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
         end
         if !use_packed_storage
             # Apply φ scaling (cphi = 2π/nlon). Nlm is NOT applied here: the
@@ -634,7 +669,9 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
             # can't take it (was a MethodError). Apply the identical internal→cfg
             # scaling (divide by M = norm_scale·cs_phase) per (l,m) in place.
             M = SHTnsKit._ensure_norm_scale_matrix!(cfg)
-            @inbounds for m in 0:mmax, l in m:lmax
+            # Same mres stride as the accumulation loop above — lm_to_packed is 0
+            # for every m that is not a multiple of mres.
+            @inbounds for m in 0:cfg.mres:mmax, l in m:lmax
                 Alm_local[storage_info.lm_to_packed[l+1, m+1]] /= M[l+1, m+1]
             end
             return Alm_local
@@ -855,7 +892,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     else
         # φ is distributed - extract local portion
         φ_globals = collect(globalindices(prototype_θφ, 2))
-        local_φ_range = first(φ_globals):last(φ_globals)
+        local_φ_range = _owned_range(φ_globals)
         result = fθφ_local[:, local_φ_range]
         if !real_output
             result = Complex{Float64}.(result)
@@ -910,8 +947,8 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
             Fpθm .= FFTW.rfft(local_Vp, 2)
         else
             φ_globals = collect(globalindices(Vtθφ, 2))
-            φ_range = first(φ_globals):last(φ_globals)
-            θ_range = first(θ_globals):last(θ_globals)
+            φ_range = _owned_range(φ_globals)
+            θ_range = _owned_range(θ_globals)
             SHTnsKitParallelExt.distributed_rfft_phi!(Ftθm, local_Vt, θ_range, φ_range, nlon, comm)
             SHTnsKitParallelExt.distributed_rfft_phi!(Fpθm, local_Vp, θ_range, φ_range, nlon, comm)
         end
@@ -920,8 +957,8 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
         SHTnsKitParallelExt.fft_along_dim2!(Fpθm, local_Vp)
     else
         φ_globals = collect(globalindices(Vtθφ, 2))
-        φ_range = first(φ_globals):last(φ_globals)
-        θ_range = first(θ_globals):last(θ_globals)
+        φ_range = _owned_range(φ_globals)
+        θ_range = _owned_range(θ_globals)
         Ftθm = _gather_and_fft_phi(local_Vt, θ_range, φ_range, nlon, comm)
         Fpθm = _gather_and_fft_phi(local_Vp, θ_range, φ_range, nlon, comm)
     end
@@ -967,8 +1004,8 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     # way to ~2.9 MB/call).
     if use_tbl
         _sphtor_analysis_loop_tbl!(Slm_local, Tlm_local, cfg.NP_tables, cfg.NdP_tables,
-                                   Ftθm, Fpθm, θ_globals, sθ_cache, inv_sθ_cache,
-                                   weights_cache, cfg.robert_form, scaleφ, lmax, mmax)
+                                   Ftθm, Fpθm, θ_globals, x_cache, sθ_cache, inv_sθ_cache,
+                                   weights_cache, cfg.Nlm, cfg.robert_form, scaleφ, lmax, mmax)
     else
         _sphtor_analysis_loop_otf!(Slm_local, Tlm_local, P, dPdtheta, P_over_sth, Pbuf,
                                    Ftθm, Fpθm, x_cache, sθ_cache, inv_sθ_cache,
@@ -980,17 +1017,17 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     θ_is_distributed = (nθ_local < nlat)
 
     if θ_is_distributed
-        # Reduce over the θ-column subcomm (ranks sharing this φ-segment) so a 2D
-        # (θ×φ) pencil sums each θ-slab once instead of once per φ-partner. For a
-        # 1D θ-only split this column subcomm equals the full comm (see the scalar
-        # dist_analysis_standard reduction for the detailed rationale).
-        φ_globals_red = collect(globalindices(Vtθφ, 2))
-        reduce_comm = MPI.Comm_split(comm, Int(first(φ_globals_red)), MPI.Comm_rank(comm))
-        try
-            SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, reduce_comm)
-            SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, reduce_comm)
-        finally
-            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
+        # Same dedup-then-reduce as the scalar dist_analysis_standard path (see
+        # there for the rationale): on a 2D (θ×φ) pencil the φ-partners of a
+        # θ-slab hold identical partials, so keep one per slab before summing.
+        if nlon_local == nlon
+            # θ-only decomposition: no φ-partners, so skip the MPI.Comm_split.
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, comm)
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, comm)
+        else
+            _keep_one_phi_partner!(comm, first(_owned_range(θ_globals)), Slm_local, Tlm_local)
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, comm)
+            SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, comm)
         end
     end
 
@@ -1011,8 +1048,10 @@ end
 function _sphtor_analysis_loop_tbl!(Slm::Matrix{ComplexF64}, Tlm::Matrix{ComplexF64},
                                     NP_tables::Vector{Matrix{Float64}}, NdP_tables::Vector{Matrix{Float64}},
                                     Ftθm::Matrix{ComplexF64}, Fpθm::Matrix{ComplexF64},
-                                    θ_globals::Vector{Int}, sθ_cache::Vector{Float64},
+                                    θ_globals::Vector{Int}, x_cache::Vector{Float64},
+                                    sθ_cache::Vector{Float64},
                                     inv_sθ_cache::Vector{Float64}, weights_cache::Vector{Float64},
+                                    Nlm::Matrix{Float64},
                                     robert_form::Bool, scaleφ::Float64, lmax::Int, mmax::Int)
     nθ_local = length(θ_globals)
     for mval in 0:mmax
@@ -1030,9 +1069,21 @@ function _sphtor_analysis_loop_tbl!(Slm::Matrix{ComplexF64}, Tlm::Matrix{Complex
                 Fθ_i /= sθ
                 Fφ_i /= sθ
             end
+            # At an exact pole node (pole-inclusive regular/DH grids) sinθ == 0, so
+            # the stored tables carry the guarded 0 rather than the true limit —
+            # reading them there would silently zero the whole m=1 contribution.
+            # Use the same closed forms the serial kernels use (src/kernels.jl).
+            xi = x_cache[ii]
+            is_pole = sθ < SHTnsKit.POLE_TOLERANCE_FACTOR * eps(Float64)
             @inbounds for l in max(1, mval):lmax
-                dθY       = -sθ * tblNdP[l+1, iglobθ]
-                Y_over_sθ = tblNP[l+1, iglobθ] * inv_sθ
+                if is_pole
+                    N = Nlm[l+1, col]
+                    dθY       = SHTnsKit._dPdtheta_at_pole(l, mval, xi, N)
+                    Y_over_sθ = SHTnsKit._P_over_sinth_at_pole(l, mval, xi, N)
+                else
+                    dθY       = -sθ * tblNdP[l+1, iglobθ]
+                    Y_over_sθ = tblNP[l+1, iglobθ] * inv_sθ
+                end
                 coeff = wi * scaleφ / (l * (l + 1))
                 term = (0 + 1im) * mval * Y_over_sθ
                 # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
@@ -1116,9 +1167,9 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractM
               length(cfg.NP_tables) == mmax + 1 && length(cfg.NdP_tables) == mmax + 1
     if use_tbl
         _sphtor_analysis_loop_tbl!(plan.Slm_work, plan.Tlm_work, cfg.NP_tables, cfg.NdP_tables,
-                                   plan.Ftθm, plan.Fpθm, plan.θ_globals, plan.sθ_cache,
-                                   plan.inv_sθ_cache, plan.weights_cache,
-                                   cfg.robert_form, cfg.cphi, lmax, mmax)
+                                   plan.Ftθm, plan.Fpθm, plan.θ_globals, plan.x_cache,
+                                   plan.sθ_cache, plan.inv_sθ_cache, plan.weights_cache,
+                                   cfg.Nlm, cfg.robert_form, cfg.cphi, lmax, mmax)
     else
         _sphtor_analysis_loop_otf!(plan.Slm_work, plan.Tlm_work, plan.P, plan.dPdtheta,
                                    plan.P_over_sth, plan.Pbuf, plan.Ftθm, plan.Fpθm,
@@ -1202,15 +1253,26 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
                 tblNP  = cfg.NP_tables[col]
                 tblNdP = cfg.NdP_tables[col]
 
+                # sinθ == 0 at an exact pole node (pole-inclusive regular/DH grids):
+                # the tables hold the guarded 0 there, not the true limit, so reading
+                # them would silently zero the entire m=1 contribution on those rows.
+                # Use the closed forms the serial kernels use (src/kernels.jl).
+                is_pole = sθ < SHTnsKit.POLE_TOLERANCE_FACTOR * eps(Float64)
                 @inbounds for l in max(1, mval):lmax
-                    dθY = -sθ * tblNdP[l+1, iglobθ]
-                    Y   = tblNP[l+1, iglobθ]
+                    if is_pole
+                        N = cfg.Nlm[l+1, col]
+                        dθY       = SHTnsKit._dPdtheta_at_pole(l, mval, x, N)
+                        Y_over_sθ = SHTnsKit._P_over_sinth_at_pole(l, mval, x, N)
+                    else
+                        dθY       = -sθ * tblNdP[l+1, iglobθ]
+                        Y_over_sθ = tblNP[l+1, iglobθ] * inv_sθ
+                    end
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
-                    gθ += dθY * Sl - (0 + 1im) * mval * inv_sθ * Y * Tl
+                    gθ += dθY * Sl - (0 + 1im) * mval * Y_over_sθ * Tl
                     # Vφ = (im/sinθ) * S + ∂T/∂θ
-                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
+                    gφ += (0 + 1im) * mval * Y_over_sθ * Sl + dθY * Tl
                 end
             else
                 # OTF: normalized rows — P̄, dP̄/dθ, P̄/sinθ; no extra Nlm multiply.
@@ -1270,7 +1332,7 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
         Vpθφ = real_output ? Vpθφ_local : Complex{Float64}.(Vpθφ_local)
     else
         φ_globals = collect(globalindices(prototype_θφ, 2))
-        local_φ_range = first(φ_globals):last(φ_globals)
+        local_φ_range = _owned_range(φ_globals)
         Vtθφ = Vtθφ_local[:, local_φ_range]
         Vpθφ = Vpθφ_local[:, local_φ_range]
         if !real_output
@@ -1368,15 +1430,26 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
                 tblNP  = cfg.NP_tables[col]
                 tblNdP = cfg.NdP_tables[col]
 
+                # sinθ == 0 at an exact pole node (pole-inclusive regular/DH grids):
+                # the tables hold the guarded 0 there, not the true limit, so reading
+                # them would silently zero the entire m=1 contribution on those rows.
+                # Use the closed forms the serial kernels use (src/kernels.jl).
+                is_pole = sθ < SHTnsKit.POLE_TOLERANCE_FACTOR * eps(Float64)
                 @inbounds for l in max(1, mval):lmax
-                    dθY = -sθ * tblNdP[l+1, iglobθ]
-                    Y   = tblNP[l+1, iglobθ]
+                    if is_pole
+                        N = cfg.Nlm[l+1, col]
+                        dθY       = SHTnsKit._dPdtheta_at_pole(l, mval, x, N)
+                        Y_over_sθ = SHTnsKit._P_over_sinth_at_pole(l, mval, x, N)
+                    else
+                        dθY       = -sθ * tblNdP[l+1, iglobθ]
+                        Y_over_sθ = tblNP[l+1, iglobθ] * inv_sθ
+                    end
                     Sl = Slm[l+1, col]
                     Tl = Tlm[l+1, col]
                     # Vθ = ∂S/∂θ - (im/sinθ) * T
-                    gθ += dθY * Sl - (0 + 1im) * mval * inv_sθ * Y * Tl
+                    gθ += dθY * Sl - (0 + 1im) * mval * Y_over_sθ * Tl
                     # Vφ = (im/sinθ) * S + ∂T/∂θ
-                    gφ += (0 + 1im) * mval * inv_sθ * Y * Sl + dθY * Tl
+                    gφ += (0 + 1im) * mval * Y_over_sθ * Sl + dθY * Tl
                 end
             else
                 # OTF: normalized rows — P̄, dP̄/dθ, P̄/sinθ; no extra Nlm multiply.
@@ -1431,7 +1504,7 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
         copyto!(parent(Vpθφ_out), Vpθφ_local)
     else
         φ_globals = collect(globalindices(prototype_θφ, 2))
-        local_φ_range = first(φ_globals):last(φ_globals)
+        local_φ_range = _owned_range(φ_globals)
         copyto!(parent(Vtθφ_out), view(Vtθφ_local, :, local_φ_range))
         copyto!(parent(Vpθφ_out), view(Vpθφ_local, :, local_φ_range))
     end
@@ -1828,8 +1901,8 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         φ_globals = collect(globalindices(fθφ, 2))
-        φ_range = first(φ_globals):last(φ_globals)
-        θ_range = first(θ_globals):last(θ_globals)
+        φ_range = _owned_range(φ_globals)
+        θ_range = _owned_range(θ_globals)
         Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
 
@@ -2609,8 +2682,8 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         φ_globals = collect(globalindices(fθφ, 2))
-        φ_range = first(φ_globals):last(φ_globals)
-        θ_range = first(θ_globals):last(θ_globals)
+        φ_range = _owned_range(φ_globals)
+        θ_range = _owned_range(θ_globals)
         Fθm = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, comm)
     end
 
@@ -2900,7 +2973,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         end
     else
         φ_globals = collect(globalindices(prototype_θφ, 2))
-        local_φ_range = first(φ_globals):last(φ_globals)
+        local_φ_range = _owned_range(φ_globals)
         result = fθφ_local[:, local_φ_range]
         if !real_output
             result = Complex{Float64}.(result)
@@ -3038,8 +3111,8 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         φ_globals = collect(globalindices(fθφ, 2))
-        φ_range = first(φ_globals):last(φ_globals)
-        θ_range = first(θ_globals):last(θ_globals)
+        φ_range = _owned_range(φ_globals)
+        θ_range = _owned_range(θ_globals)
         Fθm_temp = _gather_and_fft_phi(local_data, θ_range, φ_range, nlon, plan.comm)
         copyto!(Fθm, Fθm_temp)
     end

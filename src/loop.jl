@@ -172,22 +172,29 @@ for both CPU and GPU paths, and dispatches based on the array backend at runtime
 - CPU path uses @simd @fastmath @inbounds for vectorization
 - Set `SHTnsKit.set_loop_backend("SIMD")` to force CPU path
 
-!!! warning
-    Operands must be **plain variables**, not field accesses. A `getfield`
-    expression in the body (e.g. `cfg.scale`) is rewritten to the bare field
-    symbol (`scale`) when captured as a kernel argument, which does not exist in
-    the caller's scope (`UndefVarError`). Bind such values to locals first:
-    `s = cfg.scale; @sht_loop dest[i] = s * src[i] over i ∈ 1:n`.
+Field accesses in the body (e.g. `cfg.scale`) are supported: the *expression* is
+evaluated once at the call site and passed in under a hygienic name, so it can
+never pick up an unrelated caller local that happens to share the field name.
 """
 macro sht_loop(args...)
     ex, _, itr = args
     _, I, R = itr.args
-    sym = Symbol[]
-    grab!(sym, ex)                          # Extract all symbols from expression
-    setdiff!(sym, _loop_index_symbols(I))   # Don't pass loop indices as arguments
+    idx = _loop_index_symbols(I)            # loop indices are bound by the kernel, not passed in
+    ops = Any[]
+    _grab_ops!(ops, ex, idx)                # operand expressions, in first-use order
+    isempty(ops) && throw(ArgumentError("@sht_loop: loop body references no operands"))
 
-    symT = [gensym() for _ in 1:length(sym)]  # Generate type parameters
-    symWtypes = joinsymtype(rep.(sym), symT)  # Symbols with types: [a::A, b::B, ...]
+    # Plain variables keep their own name (the quote is `esc`aped, so the kernel
+    # argument resolves to the caller's binding). A field access gets a gensym
+    # instead and is passed *as the original expression*: rewriting `cfg.scale` to
+    # the bare symbol `scale` would silently bind to any caller local of that name
+    # — names like `w`, `x`, `scale`, `norm` are everywhere in transform code — and
+    # multiply by the wrong value with no error.
+    names = Symbol[op isa Symbol ? op : gensym(_field_name(op)) for op in ops]
+    body = _subst_ops(ex, ops, names)
+
+    symT = [gensym() for _ in 1:length(names)]  # Generate type parameters
+    symWtypes = joinsymtype(names, symT)        # Symbols with types: [a::A, b::B, ...]
 
     @gensym kern_cpu dispatch_kern
 
@@ -195,34 +202,34 @@ macro sht_loop(args...)
         # CPU path: SIMD loop
         function $kern_cpu($(symWtypes...), R) where {$(symT...)}
             @simd for $I ∈ R
-                @fastmath @inbounds $ex
+                @fastmath @inbounds $body
             end
         end
 
         # Dispatch function: choose backend based on array type
         function $dispatch_kern($(symWtypes...), R) where {$(symT...)}
-            first_arr = $(sym[1])
+            first_arr = $(names[1])
 
             # Check for PencilArray (MPI-distributed) - always use CPU SIMD on local data
             if $_is_pencil_array(first_arr)
                 # For PencilArrays, get local data and run SIMD
                 # Note: Caller must handle MPI communication separately
-                $kern_cpu($(sym...), R)
+                $kern_cpu($(names...), R)
             elseif $_LOOP_BACKEND[] == "SIMD" || $_is_cpu_array(first_arr)
                 # Regular CPU array - use SIMD
-                $kern_cpu($(sym...), R)
+                $kern_cpu($(names...), R)
             elseif $_GPU_LOOP_AVAILABLE[]
                 # GPU array - use GPU extension's kernel launcher
-                $_GPU_KERNEL_LAUNCHER[]($(sym...), R, $I -> $ex)
+                $_GPU_KERNEL_LAUNCHER[]($(names...), R, $I -> $body)
             else
                 # GPU array but extension not loaded - fall back to CPU
                 @warn "GPU array detected but GPU extension not loaded. Using CPU fallback." maxlog=1
-                $kern_cpu($(sym...), R)
+                $kern_cpu($(names...), R)
             end
         end
 
-        # Call the dispatcher
-        $dispatch_kern($(sym...), $R)
+        # Call the dispatcher — field accesses are evaluated HERE, in the caller
+        $dispatch_kern($(ops...), $R)
     end |> esc
 end
 
@@ -254,39 +261,64 @@ function _loop_index_symbols(I)
 end
 
 """
-    grab!(sym, ex)
+    _is_field_access(ex) -> Bool
 
-Recursively extract all symbols and composite names from expression `ex`,
-adding them to the `sym` array. Also replaces composite expressions with
-their simplified symbol forms.
+True for a literal `a.b` getproperty node. Deliberately excludes broadcast
+syntax (`f.(x)`), which shares the `:.` head but carries a tuple, not a
+`QuoteNode`, in `args[2]`.
 """
-function grab!(sym::Vector{Symbol}, ex::Expr)
-    # Grab composite name (e.g., a.b) and return
-    if ex.head == :.
-        push!(sym, Symbol(ex.args[2].value))
-        return
+_is_field_access(ex::Expr) = ex.head === :. && length(ex.args) == 2 && ex.args[2] isa QuoteNode
+_is_field_access(ex) = false
+
+_field_name(ex::Expr) = Symbol(ex.args[2].value)
+
+"""
+    _grab_ops!(ops, ex, idx)
+
+Collect the operand expressions of a loop body into `ops`, in first-use order and
+without duplicates: plain variables as `Symbol`s, field accesses as the whole
+`a.b` expression. Loop indices (`idx`) and callee names are skipped.
+"""
+function _grab_ops!(ops::Vector{Any}, ex::Expr, idx::Vector{Symbol})
+    if _is_field_access(ex)
+        ex in ops || push!(ops, ex)
+        return ops
     end
     # Don't grab function names in calls
     start = ex.head == :call ? 2 : 1
-    # Recurse into arguments
-    foreach(a -> grab!(sym, a), ex.args[start:end])
-    # Replace composites in args
-    ex.args[start:end] = rep.(ex.args[start:end])
+    for a in ex.args[start:end]
+        _grab_ops!(ops, a, idx)
+    end
+    return ops
 end
 
-function grab!(sym::Vector{Symbol}, ex::Symbol)
-    push!(sym, ex)
+function _grab_ops!(ops::Vector{Any}, ex::Symbol, idx::Vector{Symbol})
+    (ex in idx || ex in ops) || push!(ops, ex)
+    return ops
 end
 
-grab!(sym::Vector{Symbol}, ex) = nothing  # Ignore literals, etc.
+_grab_ops!(ops::Vector{Any}, ex, idx::Vector{Symbol}) = ops  # Ignore literals, etc.
 
 """
-    rep(ex)
+    _subst_ops(ex, ops, names) -> expr
 
-Replace composite expressions (like `a.b`) with just the field symbol.
+Rewrite the loop body so each operand is referred to by its kernel-argument name.
+Plain variables map to themselves; a field access maps to its hygienic gensym.
 """
-rep(ex) = ex
-rep(ex::Expr) = ex.head == :. ? Symbol(ex.args[2].value) : ex
+function _subst_ops(ex::Expr, ops::Vector{Any}, names::Vector{Symbol})
+    if _is_field_access(ex)
+        i = findfirst(==(ex), ops)
+        return i === nothing ? ex : names[i]
+    end
+    return Expr(ex.head, map(a -> _subst_ops(a, ops, names), ex.args)...)
+end
+
+function _subst_ops(ex::Symbol, ops::Vector{Any}, names::Vector{Symbol})
+    i = findfirst(==(ex), ops)
+    return i === nothing ? ex : names[i]
+end
+
+_subst_ops(ex, ops::Vector{Any}, names::Vector{Symbol}) = ex
 
 """
     joinsymtype(sym, symT)

@@ -89,6 +89,27 @@ using SHTnsKit
         @test cfg.grid_type == :regular_poles
     end
 
+    @testset "shtns_set_grid honors phase/norm flags" begin
+        # shtns_set_grid parses the same flag word as shtns_init and must apply
+        # the high-bit options too; it used to extract only SOUTH_POLE_FIRST and
+        # ALLOW_PADDING, so the C-API sequence create + set_grid silently kept the
+        # default Condon-Shortley phase.
+        lmax, mmax = 5, 5
+        cfg = shtns_create(lmax, mmax, 1, 0)
+        @test cfg.cs_phase == true
+        @test cfg.real_norm == false
+
+        @test shtns_set_grid(cfg, SHT_GAUSS | SHT_NO_CS_PHASE | SHT_REAL_NORM,
+                             1e-10, lmax + 3, 2*mmax + 3) == 0
+        @test cfg.cs_phase == false
+        @test cfg.real_norm == true
+
+        # And back off again — the flags are read fresh on every call.
+        @test shtns_set_grid(cfg, SHT_GAUSS, 1e-10, lmax + 3, 2*mmax + 3) == 0
+        @test cfg.cs_phase == true
+        @test cfg.real_norm == false
+    end
+
     @testset "shtns_create parses norm bits" begin
         # base_norm=2 → schmidt; NO_CS_PHASE flag disables CS; REAL_NORM flag sets real_norm
         flags = 2 | SHT_NO_CS_PHASE | SHT_REAL_NORM

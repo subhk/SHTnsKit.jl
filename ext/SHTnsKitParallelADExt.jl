@@ -211,8 +211,11 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
         # One batched Allreduce over stacked (S̄,T̄) instead of two round-trips.
         n = length(S̄p)
         combined = MPI.Allreduce!(vcat(vec(S̄p), vec(T̄p)), +, comm)
-        S̄ = reshape(combined[1:n], size(S̄p))
-        T̄ = reshape(combined[n+1:end], size(T̄p))
+        # `reshape(view(...))` instead of `combined[1:n]`: range indexing copies in
+        # Julia, so the slice form allocated two more full-size arrays on top of the
+        # vcat (~12 MB per backward pass at lmax=511).
+        S̄ = reshape(view(combined, 1:n), size(S̄p))
+        T̄ = reshape(view(combined, (n+1):length(combined)), size(T̄p))
         return NoTangent(), NoTangent(), S̄, T̄
     end
     return y, dist_synthesis_sphtor_pullback

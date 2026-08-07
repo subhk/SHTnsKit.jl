@@ -40,10 +40,23 @@ _grid_symbol(code::Int) = code == SHT_GAUSS ? :gauss :
 _min_nlat_for_grid(code::Int, lmax::Int) = code == SHT_REGULAR_POLES ? (lmax + 1) :
                                            (code == SHT_REGULAR || code == SHT_REG_FAST || code == SHT_QUICK_INIT ? (lmax + 2) : (lmax + 1))
 
+"""
+    _parse_phase_bits(f::Int) -> (cs_phase, real_norm)
+
+Decode the phase/normalization option bits shared by `shtns_create`,
+`shtns_init` and `shtns_set_grid`. These live in the high bits, orthogonal to
+the grid-type low byte, so every entry point that takes a flag word must apply
+them — otherwise a caller passing `SHT_NO_CS_PHASE` silently gets the default.
+"""
+function _parse_phase_bits(f::Int)
+    cs_phase = (f & SHT_NO_CS_PHASE) == 0
+    real_norm = (f & SHT_REAL_NORM) != 0
+    return cs_phase, real_norm
+end
+
 function _parse_norm_bits(nval::Int)
     base_norm = nval % 256
-    cs_phase = (nval & SHT_NO_CS_PHASE) == 0
-    real_norm = (nval & SHT_REAL_NORM) != 0
+    cs_phase, real_norm = _parse_phase_bits(nval)
     nsym = base_norm == 0 ? :orthonormal : base_norm == 1 ? :fourpi : base_norm == 2 ? :schmidt : :orthonormal
     return nsym, cs_phase, real_norm
 end
@@ -103,8 +116,7 @@ function shtns_init(flags::Integer, lmax::Integer, mmax::Integer, mres::Integer,
     # Honor the documented norm/CS-phase flags (higher bits, orthogonal to the
     # grid-type low byte). Previously these were silently ignored, so a caller
     # passing SHT_NO_CS_PHASE / SHT_REAL_NORM got a default-normalized config.
-    cs_phase = (f & SHT_NO_CS_PHASE) == 0
-    real_norm = (f & SHT_REAL_NORM) != 0
+    cs_phase, real_norm = _parse_phase_bits(f)
 
     cfg = if grid_sym == :gauss
         if use_on_the_fly
@@ -149,6 +161,7 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     grid_type = f % 256
     south_pole_first = (f & SHT_SOUTH_POLE_FIRST) != 0
     allow_padding = (f & SHT_ALLOW_PADDING) != 0
+    cs_phase, real_norm = _parse_phase_bits(f)
     grid_sym = _grid_symbol(grid_type)
     min_lat = _min_nlat_for_grid(grid_type, cfg.lmax)
     nlat = max(Int(nlat), min_lat)
@@ -193,7 +206,13 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     cfg.st = sin.(θ)
     cfg.nspat = nlat * nphi
     cfg.cphi = 2π / nphi
-  
+
+    # Same high-bit options `shtns_init` honors — this entry point used to drop
+    # them, so `shtns_create` + `shtns_set_grid(..., SHT_NO_CS_PHASE, ...)` kept
+    # the default Condon-Shortley phase. Set before prepare_plm_tables! below.
+    cfg.cs_phase = cs_phase
+    cfg.real_norm = real_norm
+
     # Reset south_pole_first before reconfiguring
     cfg.south_pole_first = false
 

@@ -264,21 +264,33 @@ end
     dist_analysis_packed_cplx(cfg, z::PencilArray) -> alm_packed (LM_cplx)
 """
 function SHTnsKit.dist_analysis_packed_cplx(cfg::SHTnsKit.SHTConfig, z::PencilArray)
-    # NOTE: this delegates to the REAL-field dist_analysis, so it only represents
-    # a real field's Hermitian spectrum. The negative-m coefficients are therefore
-    # filled from the m≥0 half via a_{l,-m} = (-1)^m conj(a_{l,m}) — the correct
-    # LM_cplx values for a real field. A genuinely complex field (independent ±m)
-    # is NOT supported by this distributed path.
-    Alm = SHTnsKit.dist_analysis(cfg, z; use_tables=cfg.use_plm_tables)
+    cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
     lmax, mmax = cfg.lmax, cfg.mmax
+    # `dist_analysis` returns the m ≥ 0 columns of exactly this expansion, so the
+    # +m half is already correct for a genuinely complex field. The −m half lives
+    # in φ-FFT bins `dist_analysis` never returns; recover it from
+    #     a_{l,-m}[z] = conj(a_{l,+m}[conj(z)])
+    # which holds because the quadrature weights, P̄_l^{|m|} and the norm scale are
+    # all real and the φ-FFT of conj(z) maps bin −m onto bin +m.
+    #
+    # For a REAL field conj(z) == z, so this collapses to a_{l,-m} = conj(a_{l,m}).
+    # There is NO (-1)^m: this LM_cplx layout uses the SAME P̄_l^{|m|} row for both
+    # signs of m (see `synthesis_packed_cplx` / `SH_to_lat_cplx`), unlike the
+    # Y_l^m convention where the Hermitian relation carries that factor.
+    Aplus = SHTnsKit.dist_analysis(cfg, z; use_tables=cfg.use_plm_tables)
+    Aminus = if eltype(z) <: Real
+        Aplus                       # conj(z) == z — reuse instead of a second transform
+    else
+        zc = similar(z)
+        parent(zc) .= conj.(parent(z))
+        SHTnsKit.dist_analysis(cfg, zc; use_tables=cfg.use_plm_tables)
+    end
     alm_p = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
-    # Pack +/- m (Hermitian symmetry for the real field)
     for l in 0:lmax
-        alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, 0) + 1] = Alm[l+1, 1]
+        alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, 0) + 1] = Aplus[l+1, 1]
         for m in 1:min(l, mmax)
-            ap = Alm[l+1, m+1]
-            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1] = ap
-            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1] = ((-1)^m) * conj(ap)
+            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1] = Aplus[l+1, m+1]
+            alm_p[SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1] = conj(Aminus[l+1, m+1])
         end
     end
     return alm_p

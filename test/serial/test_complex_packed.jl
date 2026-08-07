@@ -100,6 +100,49 @@ using SHTnsKit
         @test isapprox(alm_back, alm; rtol=1e-10, atol=1e-12)
     end
 
+    @testset "LM_cplx negative-m rule for real fields" begin
+        # This layout uses P̄_l^{|m|} for BOTH signs of m, so a real field's
+        # Hermitian relation is a_{l,-m} = conj(a_{l,m}) with NO (-1)^m factor
+        # (that factor belongs to the Y_l^m convention). Pin it: the distributed
+        # `dist_analysis_packed_cplx` builds its −m half from exactly this rule.
+        lmax = 5
+        nlat = lmax + 2
+        nlon = 2*lmax + 1
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(20260807)
+        f = randn(rng, nlat, nlon)
+
+        alm = analysis(cfg, f)                       # m ≥ 0 half
+        alm_c = analysis_packed_cplx(cfg, complex.(f))
+        for l in 0:lmax, m in 1:min(l, cfg.mmax)
+            ip = LM_cplx_index(lmax, cfg.mmax, l, m) + 1
+            im_ = LM_cplx_index(lmax, cfg.mmax, l, -m) + 1
+            @test isapprox(alm_c[ip], alm[l+1, m+1]; rtol=1e-10, atol=1e-12)
+            @test isapprox(alm_c[im_], conj(alm[l+1, m+1]); rtol=1e-10, atol=1e-12)
+        end
+
+        # Filling the −m half with conj(a) reproduces the field; the (-1)^m
+        # variant does not (and is not even real).
+        packed = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, cfg.mmax, 1))
+        wrong = similar(packed)
+        for l in 0:lmax
+            packed[LM_cplx_index(lmax, cfg.mmax, l, 0) + 1] = alm[l+1, 1]
+            wrong[LM_cplx_index(lmax, cfg.mmax, l, 0) + 1] = alm[l+1, 1]
+            for m in 1:min(l, cfg.mmax)
+                ap = alm[l+1, m+1]
+                packed[LM_cplx_index(lmax, cfg.mmax, l, m) + 1] = ap
+                packed[LM_cplx_index(lmax, cfg.mmax, l, -m) + 1] = conj(ap)
+                wrong[LM_cplx_index(lmax, cfg.mmax, l, m) + 1] = ap
+                wrong[LM_cplx_index(lmax, cfg.mmax, l, -m) + 1] = ((-1)^m) * conj(ap)
+            end
+        end
+        z = synthesis_packed_cplx(cfg, packed)
+        @test isapprox(z, complex.(synthesis(cfg, alm; real_output=true)); rtol=1e-10, atol=1e-12)
+        @test maximum(abs, imag.(z)) < 1e-12
+        zw = synthesis_packed_cplx(cfg, wrong)
+        @test !isapprox(zw, z; rtol=1e-6, atol=1e-8)
+    end
+
     @testset "Packed to matrix conversion" begin
         lmax = 5
         nlat = lmax + 2

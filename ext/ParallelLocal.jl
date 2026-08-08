@@ -277,13 +277,29 @@ function SHTnsKit.dist_analysis_packed_cplx(cfg::SHTnsKit.SHTConfig, z::PencilAr
     # There is NO (-1)^m: this LM_cplx layout uses the SAME P̄_l^{|m|} row for both
     # signs of m (see `synthesis_packed_cplx` / `SH_to_lat_cplx`), unlike the
     # Y_l^m convention where the Hermitian relation carries that factor.
-    Aplus = SHTnsKit.dist_analysis(cfg, z; use_tables=cfg.use_plm_tables)
-    Aminus = if eltype(z) <: Real
-        Aplus                       # conj(z) == z — reuse instead of a second transform
+    #
+    # A complex field is split into its real and imaginary parts rather than fed
+    # to `dist_analysis` directly: analysis is ℂ-linear in the field, so the two
+    # real transforms give BOTH halves at once —
+    #     A(z) = A(Re z) + i·A(Im z),   A(conj z) = A(Re z) − i·A(Im z)
+    # — and, unlike a complex PencilArray, real data survives the φ-gather path
+    # (`_gather_phi_rows` packs into a `Vector{Float64}`, so a ComplexF64 array on
+    # a φ-decomposed pencil threw `InexactError` on every rank). A single-pass
+    # variant that kept the ±m φ-FFT bins `dist_analysis` discards would halve
+    # this again; that needs a distributed analysis returning both halves.
+    Aplus, Aminus = if eltype(z) <: Real
+        A = SHTnsKit.dist_analysis(cfg, z; use_tables=cfg.use_plm_tables)
+        A, A                        # conj(z) == z — one transform covers both
     else
-        zc = similar(z)
-        parent(zc) .= conj.(parent(z))
-        SHTnsKit.dist_analysis(cfg, zc; use_tables=cfg.use_plm_tables)
+        RT = real(eltype(z))
+        pen = pencil(z)
+        zr = PencilArray{RT}(undef, pen)
+        zi = PencilArray{RT}(undef, pen)
+        parent(zr) .= real.(parent(z))
+        parent(zi) .= imag.(parent(z))
+        Ar = SHTnsKit.dist_analysis(cfg, zr; use_tables=cfg.use_plm_tables)
+        Ai = SHTnsKit.dist_analysis(cfg, zi; use_tables=cfg.use_plm_tables)
+        (Ar .+ im .* Ai), (Ar .- im .* Ai)
     end
     alm_p = Vector{ComplexF64}(undef, SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
     for l in 0:lmax

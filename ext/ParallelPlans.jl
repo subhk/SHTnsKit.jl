@@ -76,8 +76,8 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     reduce_comm = if θ_is_distributed && !fallback_standard
         # Reduce only across ranks sharing this φ-segment (see
         # dist_analysis_standard STEP 5 for the 2D-pencil rationale).
-        φ_globals = globalindices(prototype_θφ, 2)
-        MPI.Comm_split(comm, Int(first(φ_globals)), MPI.Comm_rank(comm))
+        φ_globals = collect(Int, globalindices(prototype_θφ, 2))
+        MPI.Comm_split(comm, _phi_column_color(φ_globals), MPI.Comm_rank(comm))
     else
         comm
     end
@@ -176,8 +176,8 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     Tlm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
     θ_is_distributed = nθ_local < cfg.nlat
     reduce_comm = if θ_is_distributed && !fallback_standard
-        φ_globals = globalindices(prototype_θφ, 2)
-        MPI.Comm_split(comm, Int(first(φ_globals)), MPI.Comm_rank(comm))
+        φ_globals = collect(Int, globalindices(prototype_θφ, 2))
+        MPI.Comm_split(comm, _phi_column_color(φ_globals), MPI.Comm_rank(comm))
     else
         comm
     end

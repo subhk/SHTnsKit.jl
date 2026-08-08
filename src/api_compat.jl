@@ -161,7 +161,6 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     grid_type = f % 256
     south_pole_first = (f & SHT_SOUTH_POLE_FIRST) != 0
     allow_padding = (f & SHT_ALLOW_PADDING) != 0
-    cs_phase, real_norm = _parse_phase_bits(f)
     grid_sym = _grid_symbol(grid_type)
     min_lat = _min_nlat_for_grid(grid_type, cfg.lmax)
     nlat = max(Int(nlat), min_lat)
@@ -210,8 +209,20 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
     # Same high-bit options `shtns_init` honors — this entry point used to drop
     # them, so `shtns_create` + `shtns_set_grid(..., SHT_NO_CS_PHASE, ...)` kept
     # the default Condon-Shortley phase. Set before prepare_plm_tables! below.
-    cfg.cs_phase = cs_phase
-    cfg.real_norm = real_norm
+    #
+    # Applied only when the caller ASSERTS a bit: in SHTns the phase/normalization
+    # convention is fixed by `shtns_create`'s norm word, and an absent bit in the
+    # *grid* word means "not specified", not "reset to default". Writing the
+    # parsed defaults unconditionally clobbered the canonical
+    # `shtns_create(..., 2 | SHT_NO_CS_PHASE)` + `shtns_set_grid(..., SHT_GAUSS, ...)`
+    # sequence back to CS-phase-on, leaving a half-converted config (Schmidt norm
+    # with CS phase) whose odd-m coefficients all carried the wrong sign.
+    if (f & SHT_NO_CS_PHASE) != 0
+        cfg.cs_phase = false
+    end
+    if (f & SHT_REAL_NORM) != 0
+        cfg.real_norm = true
+    end
 
     # Reset south_pole_first before reconfiguring
     cfg.south_pole_first = false

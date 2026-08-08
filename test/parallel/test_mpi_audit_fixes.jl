@@ -9,6 +9,10 @@
 #   3. sphtor table kernels: closed-form pole limits instead of the guarded 0
 #   4. ranks owning zero φ columns (nranks > nlon) must not crash the φ gather
 #   5. 2D (θ×φ) pencil: θ-slab reduction must not over-count φ-partners
+#   6. 2D pencil with an empty θ-partition: the slab keeper must still be a rank
+#      that owns θ rows, or a whole latitude slab drops out of the sum
+#   7. sphtor pole limits on the OTF (no-table) branch, not just the table branch
+#   8. complex dist_analysis_packed_cplx on a φ-decomposed pencil
 #
 # Run with: mpiexec -n 4 julia --project test/parallel/test_mpi_audit_fixes.jl
 
@@ -206,6 +210,93 @@ max_local_error(pa::PencilArray, F::AbstractMatrix) =
                 @test isapprox(T_d, Tref; rtol=1e-8, atol=1e-10)
                 root_println("    [PASS] 2D pencil reduction")
             end
+        end
+    end
+
+    @testset "2D pencil with an empty θ-partition" begin
+        # More θ-partitions than latitudes, so at least one rank owns zero θ rows.
+        # Electing the slab keeper by θ-colour put such a rank in the same
+        # Comm_split group as the genuine owner of global θ index 1 (an empty
+        # range still reports `first == 1`), and Comm_split orders by global rank
+        # — so the empty rank could win group rank 0 and zero the real θ=1 slab
+        # out of the reduction, silently dropping a whole latitude band.
+        lmax = 2
+        nlat, nlon = lmax + 1, 2*lmax + 1
+        # An automatic topology will not leave a θ-partition empty, so pick the
+        # process grid explicitly: pθ > nlat forces the empty partition, pφ ≥ 2
+        # keeps the φ-partner dedup (the code under test) on the critical path.
+        pθ = 0
+        for p in (nlat + 1):nprocs
+            if nprocs % p == 0 && nprocs ÷ p >= 2
+                pθ = p
+                break
+            end
+        end
+        if pθ == 0
+            root_println("    [SKIP] no (pθ>$nlat, pφ≥2) split of $nprocs ranks; needs e.g. 8")
+            @test true
+        else
+            pφ = nprocs ÷ pθ
+            pen2 = Pencil(MPITopology(comm, (pθ, pφ)), (nlat, nlon), (1, 2))
+            cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+            r = PencilArrays.range_local(pen2)
+            n_empty_θ = MPI.Allreduce(isempty(r[1]) ? 1 : 0, +, comm)
+            @test n_empty_θ > 0     # the scenario really is set up
+            rng = MersenneTwister(31337)
+            F = randn(rng, nlat, nlon)
+            @test isapprox(SHTnsKit.dist_analysis(cfg, scatter_field(pen2, F)),
+                           SHTnsKit.analysis(cfg, F); rtol=1e-9, atol=1e-11)
+            root_println("    [PASS] empty θ-partition ($(pθ)×$(pφ) grid, $n_empty_θ empty ranks)")
+        end
+    end
+
+    @testset "sphtor pole limits on the OTF branch" begin
+        # precompute_plm=false forces the on-the-fly branch, which computed
+        # Y/sinθ as P̄ * (1/sinθ). At an exact pole node 1/sinθ is guarded to 0,
+        # so that product is 0 and the entire m=1 contribution vanished from the
+        # pole rows — while the table branch next to it had already been fixed.
+        lmax = 6
+        for precompute in (false, true)
+            cfg = create_regular_config(lmax, lmax + 2; nlon=2*lmax + 3,
+                                        include_poles=true, precompute_plm=precompute)
+            rng = MersenneTwister(4242)
+            Slm = zeros(ComplexF64, lmax+1, cfg.mmax+1)
+            Tlm = zeros(ComplexF64, lmax+1, cfg.mmax+1)
+            for m in 0:cfg.mmax, l in max(1, m):lmax
+                Slm[l+1, m+1] = randn(rng, ComplexF64)
+                Tlm[l+1, m+1] = randn(rng, ComplexF64)
+            end
+            Slm[:, 1] .= real.(Slm[:, 1]); Tlm[:, 1] .= real.(Tlm[:, 1])
+
+            Vt_ref, Vp_ref = SHTnsKit.synthesis_sphtor(cfg, Slm, Tlm; real_output=true)
+            # Guard against a vacuous pass: the pole rows must carry signal.
+            @test maximum(abs, view(Vt_ref, 1, :)) > 1e-6
+
+            pen = Pencil((cfg.nlat, cfg.nlon), (1,), comm)
+            proto = PencilArray{Float64}(undef, pen)
+            Vt_d, Vp_d = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm;
+                                                        prototype_θφ=proto, real_output=true)
+            @test max_local_error(Vt_d, Vt_ref, pen) < 1e-10
+            @test max_local_error(Vp_d, Vp_ref, pen) < 1e-10
+        end
+        root_println("    [PASS] sphtor OTF pole limits")
+    end
+
+    @testset "complex packed_cplx on a φ-decomposed pencil" begin
+        # The complex path routed the field through dist_analysis, whose φ-gather
+        # helper packs into a Vector{Float64} — so a ComplexF64 PencilArray threw
+        # InexactError on every rank. Only the θ-decomposed layout was covered.
+        lmax = 5
+        nlat, nlon = lmax + 2, 2*lmax + 2
+        cfg = create_gauss_config(lmax, nlat; nlon=nlon)
+        rng = MersenneTwister(909)
+        zref = randn(rng, ComplexF64, nlat, nlon)
+        ref = SHTnsKit.analysis_packed_cplx(cfg, zref)
+        for (label, pen) in (("φ-split", Pencil((nlat, nlon), comm)),
+                             ("θ-split", Pencil((nlat, nlon), (1,), comm)))
+            got = SHTnsKit.dist_analysis_packed_cplx(cfg, scatter_field(pen, zref))
+            @test isapprox(got, ref; rtol=1e-9, atol=1e-11)
+            root_println("    [PASS] complex packed_cplx on $label pencil")
         end
     end
 end

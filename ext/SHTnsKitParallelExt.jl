@@ -776,8 +776,18 @@ function _gather_phi_rows(local_data::AbstractMatrix,
     nlat_local = length(θ_range)
     nlon_local = length(φ_range)
 
-    θ_color = Int(first(θ_range))
+    # A rank owning zero θ rows has no slab to gather, and it must NOT be coloured
+    # by `first(θ_range)`: an empty range still reports `first == 1`, so it would
+    # join the row of the genuine owner of global θ index 1 and trip the
+    # nlat_local consistency check below (killing that row while the other rows
+    # proceed, i.e. a hang). MPI_UNDEFINED — `nothing` in MPI.jl — puts it in no
+    # row at all; Comm_split hands back COMM_NULL and it skips the exchange.
+    θ_color = isempty(θ_range) ? nothing : Int(first(θ_range))
     row_comm = MPI.Comm_split(comm, θ_color, MPI.Comm_rank(comm))
+    if θ_color === nothing
+        _safe_comm_free(row_comm)
+        return Matrix{Float64}(undef, 0, nlon)
+    end
     gathered_data = try
         row_nprocs = MPI.Comm_size(row_comm)
 

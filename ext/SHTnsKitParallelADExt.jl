@@ -211,12 +211,16 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
         # One batched Allreduce over stacked (S̄,T̄) instead of two round-trips.
         n = length(S̄p)
         combined = MPI.Allreduce!(vcat(vec(S̄p), vec(T̄p)), +, comm)
-        # `reshape(view(...))` instead of `combined[1:n]`: range indexing copies in
-        # Julia, so the slice form allocated two more full-size arrays on top of the
-        # vcat (~12 MB per backward pass at lmax=511).
-        S̄ = reshape(view(combined, 1:n), size(S̄p))
-        T̄ = reshape(view(combined, (n+1):length(combined)), size(T̄p))
-        return NoTangent(), NoTangent(), S̄, T̄
+        # Scatter back into the matrices `_adjoint_synthesis_sphtor` already
+        # allocated. `combined[1:n]` would allocate two more full-size arrays on
+        # top of the vcat (~12 MB per backward pass at lmax=511), and returning
+        # `reshape(view(combined, …))` avoids that but hands back a ReshapedArray
+        # rather than a Matrix — a downstream distributed pullback that feeds the
+        # tangent straight to `MPI.Allreduce!` then fails buffer conversion.
+        # copyto! reuses S̄p/T̄p, so this is both allocation-free and an Array.
+        copyto!(S̄p, 1, combined, 1, n)
+        copyto!(T̄p, 1, combined, n + 1, length(combined) - n)
+        return NoTangent(), NoTangent(), S̄p, T̄p
     end
     return y, dist_synthesis_sphtor_pullback
 end

@@ -103,11 +103,30 @@ using SHTnsKit
                              1e-10, lmax + 3, 2*mmax + 3) == 0
         @test cfg.cs_phase == false
         @test cfg.real_norm == true
+    end
 
-        # And back off again — the flags are read fresh on every call.
+    @testset "shtns_set_grid preserves the create-time convention" begin
+        # The bits are asserted, not reset: in SHTns the phase/normalization
+        # convention belongs to shtns_create's norm word, and a *grid* word
+        # without the bit means "unspecified". A regrid must therefore leave a
+        # create-time SHT_NO_CS_PHASE alone — applying the grid word's defaults
+        # unconditionally left Schmidt norm with CS phase back on, flipping the
+        # sign of every odd-m coefficient relative to SHTns.
+        lmax, mmax = 5, 5
+        cfg = shtns_create(lmax, mmax, 1, 2 | SHT_NO_CS_PHASE)
+        @test cfg.norm == :schmidt
+        @test cfg.cs_phase == false
+
         @test shtns_set_grid(cfg, SHT_GAUSS, 1e-10, lmax + 3, 2*mmax + 3) == 0
-        @test cfg.cs_phase == true
+        @test cfg.norm == :schmidt
+        @test cfg.cs_phase == false
         @test cfg.real_norm == false
+
+        # Same for real_norm, which shtns_create can also set.
+        cfg2 = shtns_create(lmax, mmax, 1, SHT_REAL_NORM)
+        @test cfg2.real_norm == true
+        @test shtns_set_grid(cfg2, SHT_GAUSS, 1e-10, lmax + 3, 2*mmax + 3) == 0
+        @test cfg2.real_norm == true
     end
 
     @testset "shtns_create parses norm bits" begin

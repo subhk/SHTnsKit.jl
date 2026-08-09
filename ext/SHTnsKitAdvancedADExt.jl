@@ -51,17 +51,6 @@ import SHTnsKit: wigner_d_matrix_deriv
     @inline _materialize_coeff(A, cfg) =
         A isa ChainRulesCore.AbstractZero ? _coeff_zeros(cfg) : _to_complex(A)
 
-    # `AbstractZero` (ZeroTangent/NoTangent) must pass straight through: a loss
-    # that consumes only one of two outputs hands the other slot a ZeroTangent,
-    # and `similar(::ZeroTangent)` is a MethodError.
-    @inline _scale_cotangent(A::ChainRulesCore.AbstractZero, cfg; to_internal::Bool) = A
-
-    @inline function _scale_cotangent(A, cfg; to_internal::Bool)
-        _needs_norm(cfg) || return A
-        out = similar(A)
-        SHTnsKit.convert_alm_norm!(out, A, cfg; to_internal=to_internal)
-        return out
-    end
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis), cfg::SHTnsKit.SHTConfig, f)
         y = SHTnsKit.analysis(cfg, f)

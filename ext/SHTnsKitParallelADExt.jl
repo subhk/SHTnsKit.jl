@@ -75,34 +75,6 @@ a separate extension module and cannot see it.
     return false, φ_start:(φ_start + nlon_local - 1)
 end
 
-"""
-    _scale_cotangent(A, cfg; to_internal)
-
-Apply the config's normalization/phase scale `M` to a coefficient cotangent.
-
-Every distributed transform exchanges coefficients in **cfg's** convention while
-the `_adjoint_*` kernels work in the internal orthonormal+CS one, so the
-conversion is part of the operator and must appear in its adjoint:
-
-    synthesis-like   y = F(M ⊙ a)     ⇒   ā = M ⊙ Fᴴ(ȳ)
-    analysis-like    a = F(x) ⊘ M     ⇒   x̄ = Fᴴ(ā ⊘ M)
-
-`M` is real and diagonal, so there is no conjugation to worry about. Without
-this, every non-default `cfg.norm` / `cs_phase` gradient was wrong by M[l,m]
-(finite differences: 40–180% relative error on :schmidt and :fourpi). No-op —
-and no allocation — on the default config.
-"""
-# `AbstractZero` (ZeroTangent/NoTangent) passes through untouched — a loss that
-# consumes only one output hands the other slot a ZeroTangent, and
-# `similar(::ZeroTangent)` is a MethodError.
-@inline _scale_cotangent(A::ChainRulesCore.AbstractZero, cfg; to_internal::Bool) = A
-
-@inline function _scale_cotangent(A, cfg; to_internal::Bool)
-    (cfg.norm !== :orthonormal || cfg.cs_phase == false) || return A
-    out = similar(A)
-    SHTnsKit.convert_alm_norm!(out, A, cfg; to_internal=to_internal)
-    return out
-end
 
 # The rank-local adjoint is just the parametrized `SHTnsKit._adjoint_analysis`
 # called with a restricted θ subset and optional φ-window.

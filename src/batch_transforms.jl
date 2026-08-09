@@ -775,9 +775,11 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     size(Vp_batch) == size(Vr_batch) || throw(DimensionMismatch("Vr and Vp must have same shape"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
-    Qlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
-    Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
-    Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
+    # Follow the input eltype, as `analysis_batch` does.
+    CT = complex(float(eltype(Vr_batch)))
+    Qlm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
+    Slm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
+    Tlm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
     plan = SHTPlan(cfg)
 
     for k in 1:nfields

@@ -196,8 +196,13 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
         # unthunk EACH component — a Tuple/Tangent of Thunks would otherwise reach
         # Matrix{ComplexF64}(::Thunk) below and error (matches the synthesis twin).
         Slm̄, Tlm̄ = ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2])
-        S̄in = Matrix{ComplexF64}(Slm̄)
-        T̄in = Matrix{ComplexF64}(Tlm̄)
+        # A loss consuming only one output leaves the other a ZeroTangent, and
+        # `Matrix{ComplexF64}(::ZeroTangent)` is a MethodError. Same treatment the
+        # serial sphtor rrules got.
+        _mz(A) = A isa ChainRulesCore.AbstractZero ?
+                 zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1) : Matrix{ComplexF64}(A)
+        S̄in = _mz(Slm̄)
+        T̄in = _mz(Tlm̄)
         V̄t_parent, V̄p_parent = SHTnsKit._adjoint_analysis_sphtor(
             cfg, S̄in, T̄in;
             θ_globals=θ_globals, φ_window=φ_window)
@@ -238,8 +243,12 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
         # (zero-padded) cotangent, then Allreduce-summed. Previously this called
         # `dist_analysis_sphtor`, which injects Gauss weights `w[θ]·scaleφ/(l(l+1))`
         # that the synthesis adjoint must NOT carry.
-        V̄t_loc = V̄t isa PencilArray ? parent(V̄t) : V̄t
-        V̄p_loc = V̄p isa PencilArray ? parent(V̄p) : V̄p
+        # Zero spatial cotangents likewise: materialise before touching eltype.
+        nθl = length(θ_globals)
+        _mzs(A) = A isa ChainRulesCore.AbstractZero ? zeros(Float64, nθl, nlon_local) :
+                  (A isa PencilArray ? parent(A) : A)
+        V̄t_loc = _mzs(V̄t)
+        V̄p_loc = _mzs(V̄p)
         nθ_local = length(θ_globals)
         ETt = float(eltype(V̄t_loc)); ETp = float(eltype(V̄p_loc))
         V̄t_full = zeros(ETt, nθ_local, cfg.nlon)

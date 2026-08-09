@@ -65,7 +65,12 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     θ_globals = collect(Int, globalindices(prototype_θφ, 1))
     nθ_local = length(θ_globals)
     nlon_local = size(parent(prototype_θφ), 2)
-    fallback_standard = nlon_local != cfg.nlon
+    # Reduced, like θ_is_distributed and φ_is_local_all: this selects which BRANCH
+    # `dist_analysis!` takes, and the two branches enter different full-comm
+    # collectives. Per-rank, a pencil with more φ-partitions than columns sends
+    # the owner into the planned Allreduce and the empty ranks into
+    # `dist_analysis_standard`'s own Allreduce — they never pair, and the job hangs.
+    fallback_standard = MPI.Allreduce(nlon_local != cfg.nlon, |, comm)
     weights_cache = Float64[cfg.w[i] for i in θ_globals]
     x_cache = Float64[cfg.x[i] for i in θ_globals]
     P = Vector{Float64}(undef, cfg.lmax + 1)
@@ -160,7 +165,9 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
         nothing
     end
     nlon_local = size(parent(prototype_θφ), 2)
-    fallback_standard = nlon_local != nlon
+    # Reduced — see DistAnalysisPlan: a per-rank value sends different ranks
+    # into different branches, each entering its own full-comm collective.
+    fallback_standard = MPI.Allreduce(nlon_local != nlon, |, comm)
     x_cache = Vector{Float64}(undef, nθ_local)
     sθ_cache = Vector{Float64}(undef, nθ_local)
     inv_sθ_cache = Vector{Float64}(undef, nθ_local)

@@ -274,7 +274,10 @@ function analysis_qst_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex
     # not, so without this the returned triple sits on two normalizations — the
     # same defect fixed in `analysis_qst`. Mirrors that function's scaling.
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        sc = [norm_scale_from_orthonormal(l, im, cfg.norm) * cs_phase_factor(im, true, cfg.cs_phase)
+        # `analysis_sphtor_ml`/`synthesis_sphtor_ml` scale only l >= max(1,im)
+        # (l=0 has no vector part), so the l=0 slot must stay unscaled here too.
+        sc = [l < max(1, im) ? 1.0 :
+              norm_scale_from_orthonormal(l, im, cfg.norm) * cs_phase_factor(im, true, cfg.cs_phase)
               for l in im:ltr]
         Sl = Sl .* sc          # analysis_sphtor_ml returns cfg-form; make it orthonormal
         Tl = Tl .* sc
@@ -293,7 +296,10 @@ function synthesis_qst_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}
     # Inverse of the conversion in `analysis_qst_ml`: Q arrives in cfg's
     # convention (matching S/T) but `synthesis_packed_ml` expects internal.
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        sc = [norm_scale_from_orthonormal(l, im, cfg.norm) * cs_phase_factor(im, true, cfg.cs_phase)
+        # `analysis_sphtor_ml`/`synthesis_sphtor_ml` scale only l >= max(1,im)
+        # (l=0 has no vector part), so the l=0 slot must stay unscaled here too.
+        sc = [l < max(1, im) ? 1.0 :
+              norm_scale_from_orthonormal(l, im, cfg.norm) * cs_phase_factor(im, true, cfg.cs_phase)
               for l in im:ltr]
         Sl = Sl ./ sc          # synthesis_sphtor_ml wants cfg-form S/T
         Tl = Tl ./ sc

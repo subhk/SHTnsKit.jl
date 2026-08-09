@@ -839,14 +839,18 @@ function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex
     nfields = size(Qlm_batch, 3)
     nlat, nlon = cfg.nlat, cfg.nlon
 
+    # Output eltype follows the input, as in `_synthesis_batch` — hardcoding
+    # Float64/ComplexF64 mismatched the FFTW plan for a ComplexF32 batch.
+    RT = real(float(eltype(Qlm_batch)))
+    CT = complex(RT)
     if real_output
-        Vr_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-        Vt_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-        Vp_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
+        Vr_batch = Array{RT,3}(undef, nlat, nlon, nfields)
+        Vt_batch = Array{RT,3}(undef, nlat, nlon, nfields)
+        Vp_batch = Array{RT,3}(undef, nlat, nlon, nfields)
     else
-        Vr_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
-        Vt_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
-        Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+        Vr_batch = Array{CT,3}(undef, nlat, nlon, nfields)
+        Vt_batch = Array{CT,3}(undef, nlat, nlon, nfields)
+        Vp_batch = Array{CT,3}(undef, nlat, nlon, nfields)
     end
     plan = SHTPlan(cfg)
 

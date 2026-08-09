@@ -108,13 +108,10 @@ function SHTnsKit.analysis_turbo(cfg::SHTnsKit.SHTConfig, f::AbstractMatrix)
             end
         end
     end
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        alm2 = similar(alm)
-        SHTnsKit.convert_alm_norm!(alm2, alm, cfg; to_internal=false)
-        return alm2
-    else
-        return alm
-    end
+    # NO conversion: `analysis_turbo` is documented as producing the same output
+    # as `SHTnsKit.analysis`, which is orthonormal-only. Converting here made the
+    # accelerator disagree with the function it is a drop-in for.
+    return alm
 end
 
 """
@@ -138,11 +135,7 @@ function SHTnsKit.synthesis_turbo(cfg::SHTnsKit.SHTConfig, alm::AbstractMatrix; 
     # LoopVectorization can't analyze property access (cfg.Nlm) inside @tturbo, and cfg is mutable.
     xv = cfg.x
 
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        alm_int = similar(alm)
-        SHTnsKit.convert_alm_norm!(alm_int, alm, cfg; to_internal=true)
-        alm = alm_int
-    end
+    # NO conversion — see `analysis_turbo`: this mirrors orthonormal `synthesis`.
 
     # Adaptive threading: use nested parallelism for better load balancing
     n_threads = Threads.nthreads()

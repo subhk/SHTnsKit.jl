@@ -594,13 +594,10 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_ou
 
     # Transfer result back to CPU - coefficients are always complex
     Qlm = Array(coeffs)
-    # Convert internal (orthonormal+CS) → external normalization, matching CPU analysis
-    # (the kernel produces orthonormal P̄ output; scalar path must convert like sphtor does).
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        Qout = similar(Qlm)
-        SHTnsKit.convert_alm_norm!(Qout, Qlm, cfg; to_internal=false)
-        return Qout
-    end
+    # NO conversion: the kernels emit orthonormal P̄ output and CPU `analysis` is
+    # orthonormal-only, so returning the raw coefficients is what "matching CPU
+    # analysis" now means. (The sphtor GPU path still converts because its CPU
+    # twin `analysis_sphtor` still does.)
     return Qlm
 end
 
@@ -625,13 +622,10 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
     size(coeffs, 1) == lmax + 1 || throw(DimensionMismatch("coeffs must have $(lmax+1) rows (lmax+1), got $(size(coeffs, 1))"))
     size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
 
-    # Convert external → internal (orthonormal+CS) normalization, matching CPU synthesis
-    # (the kernel expects orthonormal-convention input; scalar path must convert like sphtor does).
+    # NO conversion: the kernel expects orthonormal input and CPU `synthesis` is
+    # orthonormal-only, so the coefficients pass straight through. (The sphtor GPU
+    # path still converts — its CPU twin `synthesis_sphtor` still does.)
     coeffs_int = coeffs
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        coeffs_int = similar(coeffs)
-        SHTnsKit.convert_alm_norm!(coeffs_int, coeffs, cfg; to_internal=true)
-    end
 
     # Transfer coefficients to GPU
     gpu_coeffs = CuArray(ComplexF64.(coeffs_int))

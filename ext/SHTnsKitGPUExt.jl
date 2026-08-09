@@ -594,13 +594,10 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_ou
 
     # Transfer result back to CPU - coefficients are always complex
     Qlm = Array(coeffs)
-    # Convert internal (orthonormal+CS) → external normalization, matching CPU analysis
-    # (the kernel produces orthonormal P̄ output; scalar path must convert like sphtor does).
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        Qout = similar(Qlm)
-        SHTnsKit.convert_alm_norm!(Qout, Qlm, cfg; to_internal=false)
-        return Qout
-    end
+    # NO conversion: the kernels emit orthonormal P̄ output and CPU `analysis` is
+    # orthonormal-only, so returning the raw coefficients is what "matching CPU
+    # analysis" now means. (The sphtor GPU path still converts because its CPU
+    # twin `analysis_sphtor` still does.)
     return Qlm
 end
 
@@ -625,13 +622,10 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
     size(coeffs, 1) == lmax + 1 || throw(DimensionMismatch("coeffs must have $(lmax+1) rows (lmax+1), got $(size(coeffs, 1))"))
     size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
 
-    # Convert external → internal (orthonormal+CS) normalization, matching CPU synthesis
-    # (the kernel expects orthonormal-convention input; scalar path must convert like sphtor does).
+    # NO conversion: the kernel expects orthonormal input and CPU `synthesis` is
+    # orthonormal-only, so the coefficients pass straight through. (The sphtor GPU
+    # path still converts — its CPU twin `synthesis_sphtor` still does.)
     coeffs_int = coeffs
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        coeffs_int = similar(coeffs)
-        SHTnsKit.convert_alm_norm!(coeffs_int, coeffs, cfg; to_internal=true)
-    end
 
     # Transfer coefficients to GPU
     gpu_coeffs = CuArray(ComplexF64.(coeffs_int))
@@ -886,16 +880,8 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     Slm = Array(Slm_gpu)
     Tlm = Array(Tlm_gpu)
 
-    # Convert from internal to external normalization if needed (matching CPU behavior)
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        Slm_out = similar(Slm)
-        Tlm_out = similar(Tlm)
-        SHTnsKit.convert_alm_norm!(Slm_out, Slm, cfg; to_internal=false)
-        SHTnsKit.convert_alm_norm!(Tlm_out, Tlm, cfg; to_internal=false)
-        return Slm_out, Tlm_out
-    else
-        return Slm, Tlm
-    end
+    # Orthonormal-only, like the CPU sphtor pair.
+    return Slm, Tlm
 end
 
 """
@@ -918,14 +904,8 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
     nlat, nlon = cfg.nlat, cfg.nlon
     lmax, mmax = cfg.lmax, cfg.mmax
 
-    # Convert to internal normalization if needed (matching CPU behavior)
+    # Orthonormal-only, like the CPU sphtor pair.
     Slm_int, Tlm_int = sph_coeffs, tor_coeffs
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        Slm_int = similar(sph_coeffs)
-        Tlm_int = similar(tor_coeffs)
-        SHTnsKit.convert_alm_norm!(Slm_int, sph_coeffs, cfg; to_internal=true)
-        SHTnsKit.convert_alm_norm!(Tlm_int, tor_coeffs, cfg; to_internal=true)
-    end
 
     # Transfer coefficients to GPU. Nlm is folded into P̄/dP̄ for the interior;
     # it is still needed for the pole-limit closed forms, where those tables are 0.

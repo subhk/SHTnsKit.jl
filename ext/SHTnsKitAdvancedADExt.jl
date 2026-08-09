@@ -208,8 +208,8 @@ import SHTnsKit: wigner_d_matrix_deriv
             # analysis-like: the primal divides by M on the way out, so the
             # cotangent is divided before the internal-convention adjoint.
             # `_materialize_coeff` turns a ZeroTangent slot into explicit zeros.
-            S̄ = _scale_cotangent(_materialize_coeff(Slm̄, cfg), cfg; to_internal=false)
-            T̄ = _scale_cotangent(_materialize_coeff(Tlm̄, cfg), cfg; to_internal=false)
+            S̄ = _materialize_coeff(Slm̄, cfg)
+            T̄ = _materialize_coeff(Tlm̄, cfg)
             V̄t, V̄p = _adjoint_analysis_sphtor(cfg, S̄, T̄)
             return NoTangent(), NoTangent(), V̄t, V̄p
         end
@@ -234,10 +234,6 @@ import SHTnsKit: wigner_d_matrix_deriv
             V̄t = V̄t isa ChainRulesCore.AbstractZero ? zsp() : V̄t
             V̄p = V̄p isa ChainRulesCore.AbstractZero ? zsp() : V̄p
             S̄, T̄ = SHTnsKit._adjoint_synthesis_sphtor(cfg, V̄t, V̄p; real_output=real_output)
-            # synthesis-like: the primal multiplies by M on the way in, so the
-            # adjoint's output is multiplied by the same diagonal scale.
-            S̄ = _scale_cotangent(S̄, cfg; to_internal=true)
-            T̄ = _scale_cotangent(T̄, cfg; to_internal=true)
             return NoTangent(), NoTangent(), S̄, T̄, (; real_output=NoTangent())
         end
         return (Vt, Vp), pullback
@@ -266,16 +262,12 @@ import SHTnsKit: wigner_d_matrix_deriv
         lmax, mmax = cfg.lmax, cfg.mmax
         Ap = SHTnsKit._adjoint_synthesis(cfg, z̄;        real_output=false)
         Am = SHTnsKit._adjoint_synthesis(cfg, conj.(z̄); real_output=false)
-        need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-        M = SHTnsKit._ensure_norm_scale_matrix!(cfg)
         ā = zeros(eltype(Ap), SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
         @inbounds for l in 0:lmax
-            s0 = need_norm ? M[l+1, 1] : 1.0
-            ā[LM_cplx_index(lmax, mmax, l, 0) + 1] = s0 * Ap[l+1, 1]
+            ā[LM_cplx_index(lmax, mmax, l, 0) + 1] = Ap[l+1, 1]
             for m in 1:min(l, mmax)
-                s = need_norm ? M[l+1, m+1] : 1.0
-                ā[LM_cplx_index(lmax, mmax, l,  m) + 1] = s * Ap[l+1, m+1]
-                ā[LM_cplx_index(lmax, mmax, l, -m) + 1] = s * conj(Am[l+1, m+1])
+                ā[LM_cplx_index(lmax, mmax, l,  m) + 1] = Ap[l+1, m+1]
+                ā[LM_cplx_index(lmax, mmax, l, -m) + 1] = conj(Am[l+1, m+1])
             end
         end
         return ā
@@ -296,8 +288,6 @@ import SHTnsKit: wigner_d_matrix_deriv
         length(ā) == SHTnsKit.nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("ā length"))
         CT = complex(float(eltype(ā)))
         F̄ = zeros(CT, nlat, nlon)
-        need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-        M = SHTnsKit._ensure_norm_scale_matrix!(cfg)
         P = Vector{Float64}(undef, lmax + 1)
         scaleφ = cfg.cphi
         xv = cfg.x; wv = cfg.w
@@ -310,7 +300,6 @@ import SHTnsKit: wigner_d_matrix_deriv
                 gp = zero(CT); gn = zero(CT)
                 @inbounds for l in am:lmax
                     base = wi * P[l+1]
-                    need_norm && (base /= M[l+1, am+1])
                     gp += base * ā[LM_cplx_index(lmax, mmax, l, am) + 1]
                     if am > 0
                         gn += base * ā[LM_cplx_index(lmax, mmax, l, -am) + 1]

@@ -104,11 +104,6 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     # Scale continuous Fourier coefficients to DFT bins for ifft
     inv_scaleφ = phi_inv_scale(cfg)
 
-    need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    # Cached (l,m) scale — norm_scale_from_orthonormal(l,m,cfg.norm) * the CS-phase
-    # factor — the same matrix convert_alm_norm! consumes. Evaluating that product
-    # inside the l-loop repeated it once per latitude for every (l,m).
-    M = _ensure_norm_scale_matrix!(cfg)
     # Complex packed layout stores negative and positive m explicitly, so this
     # loop writes each Fourier bin directly instead of relying on Hermitian
     # symmetry as the real-field packed layout does.
@@ -124,12 +119,11 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
             gp = zero(CT); gn = zero(CT)
             @inbounds for l in am:lmax
                 Pl = P[l+1]
-                ns = need_norm ? M[l+1, am+1] : 1.0
                 ap = alm_packed[LM_cplx_index(lmax, mmax, l, am) + 1]
-                gp += Pl * (need_norm ? ap * ns : ap)
+                gp += Pl * ap
                 if am > 0
                     an = alm_packed[LM_cplx_index(lmax, mmax, l, -am) + 1]
-                    gn += Pl * (need_norm ? an * ns : an)
+                    gn += Pl * an
                 end
             end
             Fφ[i, jp] = inv_scaleφ * gp
@@ -163,8 +157,6 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     P = Vector{Float64}(undef, lmax + 1)
     scaleφ = cfg.cphi
 
-    need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    M = _ensure_norm_scale_matrix!(cfg)  # cached (l,m) norm·CS scale; see synthesis_packed_cplx
     xv = cfg.x; wv = cfg.w  # hoist field reads out of the m/l loops (cfg is mutable, so not auto-hoisted)
     # Read both signs of m from the FFT output and store them in LM_cplx order.
     # Negative modes live at DFT column nlon+m+1. Loop over |m| once — P̄_l^{|m|},
@@ -180,13 +172,10 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
             Fin = am > 0 ? Fφ[i, coln] : zero(eltype(Fφ))
             @inbounds for l in am:lmax
                 base = (wi * P[l+1]) * scaleφ
-                ns = need_norm ? M[l+1, am+1] : 1.0
                 ap = base * Fip
-                need_norm && (ap /= ns)
                 alm[LM_cplx_index(lmax, mmax, l, am) + 1] += ap
                 if am > 0
                     an = base * Fin
-                    need_norm && (an /= ns)
                     alm[LM_cplx_index(lmax, mmax, l, -am) + 1] += an
                 end
             end
@@ -208,8 +197,6 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     CT = eltype(alm)
     P = Vector{Float64}(undef, lmax + 1)
     acc = zero(CT)
-    need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
-    M = _ensure_norm_scale_matrix!(cfg)  # cached (l,m) norm·CS scale; see synthesis_packed_cplx
     # Loop over |m| once (P̄_l^{|m|}, CS-phase and norm scale depend only on |m|)
     # and accumulate the +m and -m contributions from the shared Legendre row.
     for am in 0:mmax
@@ -217,12 +204,11 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
         gp = zero(CT); gn = zero(CT)
         @inbounds for l in am:lmax
             Pl = P[l+1]
-            ns = need_norm ? M[l+1, am+1] : 1.0
             ap = alm[LM_cplx_index(lmax, mmax, l, am) + 1]
-            gp += Pl * (need_norm ? ap * ns : ap)
+            gp += Pl * ap
             if am > 0
                 an = alm[LM_cplx_index(lmax, mmax, l, -am) + 1]
-                gn += Pl * (need_norm ? an * ns : an)
+                gn += Pl * an
             end
         end
         acc += gp * cis(am * phi)

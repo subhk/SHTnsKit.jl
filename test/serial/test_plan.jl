@@ -137,24 +137,32 @@ end
         @test_throws DimensionMismatch synthesis_sphtor!(plan, Vt, zeros(cfg.nlat, 1), S, T)
     end
 
-    @testset "Planned scalar: non-orthonormal normalization roundtrip" begin
-        # The planned path is not (yet) guaranteed to match the non-planned path
-        # under non-orthonormal normalizations, but its own analysis∘synthesis
-        # roundtrip must still recover the input coefficients.
+    @testset "Planned scalar matches the non-planned path exactly" begin
+        # `SHTPlan`'s scalar path is a drop-in accelerator for `analysis`/
+        # `synthesis`, so it must be ORTHONORMAL like them — not merely
+        # self-consistent. A self-roundtrip test cannot tell the two apart:
+        # plan∘plan closes under either convention, and only MIXING them breaks.
+        # These equality assertions are what would catch a revert.
         lmax = 6
-        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1,
-                                  norm=:schmidt, cs_phase=false)
-        plan = SHTPlan(cfg)
-        rng = MersenneTwister(204)
+        for (nrm, cs) in ((:orthonormal, true), (:schmidt, true), (:fourpi, false))
+            cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1,
+                                      norm=nrm, cs_phase=cs)
+            plan = SHTPlan(cfg)
+            rng = MersenneTwister(204)
+            alm = _rand_real_alm(rng, lmax, lmax)
 
-        alm = _rand_real_alm(rng, lmax, lmax)
-        f_plan = zeros(cfg.nlat, cfg.nlon)
-        synthesis!(plan, f_plan, alm)
-        @test all(isfinite, f_plan)
+            f_plan = zeros(cfg.nlat, cfg.nlon)
+            synthesis!(plan, f_plan, alm)
+            @test all(isfinite, f_plan)
+            # identical to the non-planned transform, not just close
+            @test f_plan == synthesis(cfg, alm; real_output=true)
 
-        alm_back = zeros(ComplexF64, lmax + 1, lmax + 1)
-        analysis!(plan, alm_back, f_plan)
-        @test isapprox(alm_back, alm; rtol=1e-9, atol=1e-11)
+            alm_back = zeros(ComplexF64, lmax + 1, lmax + 1)
+            analysis!(plan, alm_back, f_plan)
+            @test alm_back == analysis(cfg, f_plan)
+            # and the plan's own roundtrip still recovers the input
+            @test isapprox(alm_back, alm; rtol=1e-9, atol=1e-11)
+        end
     end
 
     @testset "Planned sphtor: robert_form path" begin

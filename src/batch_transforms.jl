@@ -775,9 +775,11 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     size(Vp_batch) == size(Vr_batch) || throw(DimensionMismatch("Vr and Vp must have same shape"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
-    Qlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
-    Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
-    Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
+    # Follow the input eltype, as `analysis_batch` does.
+    CT = complex(float(eltype(Vr_batch)))
+    Qlm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
+    Slm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
+    Tlm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
     plan = SHTPlan(cfg)
 
     for k in 1:nfields
@@ -789,15 +791,6 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     # the sphtor plan converts to cfg's convention, so Q must be converted here
     # or this call returns a triple on two normalizations — the same defect
     # fixed in `analysis_qst`, which this is the batch form of.
-    # Orthonormal triple: the scalar plan already is; the sphtor plan returns
-    # cfg-form, so S/T are converted back.
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        M = _ensure_norm_scale_matrix!(cfg)
-        @inbounds for k in 1:nfields, m in 0:mmax, l in m:lmax
-            Slm_batch[l+1, m+1, k] *= M[l+1, m+1]
-            Tlm_batch[l+1, m+1, k] *= M[l+1, m+1]
-        end
-    end
 
     return Qlm_batch, Slm_batch, Tlm_batch
 end
@@ -839,24 +832,23 @@ function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex
     nfields = size(Qlm_batch, 3)
     nlat, nlon = cfg.nlat, cfg.nlon
 
+    # Output eltype follows the input, as in `_synthesis_batch` — hardcoding
+    # Float64/ComplexF64 mismatched the FFTW plan for a ComplexF32 batch.
+    RT = real(float(eltype(Qlm_batch)))
+    CT = complex(RT)
     if real_output
-        Vr_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-        Vt_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-        Vp_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
+        Vr_batch = Array{RT,3}(undef, nlat, nlon, nfields)
+        Vt_batch = Array{RT,3}(undef, nlat, nlon, nfields)
+        Vp_batch = Array{RT,3}(undef, nlat, nlon, nfields)
     else
-        Vr_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
-        Vt_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
-        Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
+        Vr_batch = Array{CT,3}(undef, nlat, nlon, nfields)
+        Vt_batch = Array{CT,3}(undef, nlat, nlon, nfields)
+        Vp_batch = Array{CT,3}(undef, nlat, nlon, nfields)
     end
     plan = SHTPlan(cfg)
 
     # Q arrives in cfg's convention (matching S/T and `analysis_qst_batch`), but
     # the scalar plan is orthonormal-only — convert, mirroring `_synthesis_qst`.
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        M = _ensure_norm_scale_matrix!(cfg)
-        Slm_batch = Slm_batch ./ M
-        Tlm_batch = Tlm_batch ./ M
-    end
 
     for k in 1:nfields
         synthesis!(plan, view(Vr_batch, :, :, k), view(Qlm_batch, :, :, k);

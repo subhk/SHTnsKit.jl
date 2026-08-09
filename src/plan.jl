@@ -134,8 +134,6 @@ struct SHTPlan{FP, IP, RP, IRP}
     rfft_plan::RP                 # Real→complex FFT plan (nothing when use_rfft=false)
     irfft_plan::IRP               # Complex→real inverse FFT plan (nothing when use_rfft=false)
     use_rfft::Bool                # Flag: true = use real FFT optimization, false = complex FFT
-    norm_tmp1::Matrix{ComplexF64} # Scratch buffer for normalization conversion
-    norm_tmp2::Matrix{ComplexF64} # Second scratch buffer for vector normalization conversion
 end
 
 """
@@ -192,13 +190,9 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
         irfft_plan = nothing
     end
 
-    # Pre-allocate normalization scratch buffers for zero-allocation in-place transforms
-    norm_tmp1 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
-    norm_tmp2 = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
-
+    # No normalization scratch: the package is orthonormal-only, so nothing converts.
     return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, Pb, G, Fθk, Fθk_r, real_scratch,
-                   fft_plan, ifft_plan, rfft_plan, irfft_plan, use_rfft,
-                   norm_tmp1, norm_tmp2)
+                   fft_plan, ifft_plan, rfft_plan, irfft_plan, use_rfft)
 end
 
 """

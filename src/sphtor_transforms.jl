@@ -171,14 +171,8 @@ function _synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMat
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
 
-    # Convert to internal normalization if needed
+    # Orthonormal-only: no normalization conversion anywhere in the package.
     Slm_int, Tlm_int = Slm, Tlm
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm); T2 = similar(Tlm)
-        convert_alm_norm!(S2, Slm, cfg; to_internal=true)
-        convert_alm_norm!(T2, Tlm, cfg; to_internal=true)
-        Slm_int = S2; Tlm_int = T2
-    end
 
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(Slm_int)
@@ -270,12 +264,6 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix;
 
     _analysis_sphtor_mloop!(Slm_int, Tlm_int, cfg, Fthetam, Fphim; ltr=lmax)
 
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm_int); T2 = similar(Tlm_int)
-        convert_alm_norm!(S2, Slm_int, cfg; to_internal=false)
-        convert_alm_norm!(T2, Tlm_int, cfg; to_internal=false)
-        return S2, T2
-    end
     return Slm_int, Tlm_int
 end
 
@@ -663,12 +651,6 @@ function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractM
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
 
     Slm_int, Tlm_int = Slm, Tlm
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm); T2 = similar(Tlm)
-        convert_alm_norm!(S2, Slm, cfg; to_internal=true)
-        convert_alm_norm!(T2, Tlm, cfg; to_internal=true)
-        Slm_int = S2; Tlm_int = T2
-    end
 
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(Slm_int)
@@ -720,12 +702,6 @@ function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatri
     _analysis_sphtor_mloop!(Slm, Tlm, cfg, Fthetam, Fphim; ltr=ltr)
 
     # Normalization conversion — must match analysis_sphtor behavior
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm); T2 = similar(Tlm)
-        convert_alm_norm!(S2, Slm, cfg; to_internal=false)
-        convert_alm_norm!(T2, Tlm, cfg; to_internal=false)
-        return S2, T2
-    end
     return Slm, Tlm
 end
 
@@ -846,16 +822,6 @@ function analysis_sphtor_ml(cfg::SHTConfig, mval::Int, Vt_m::AbstractVector{<:Co
         end
     end
 
-    # Convert from internal to user normalization if needed
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        α = cs_phase_factor(mval, true, cfg.cs_phase)
-        @inbounds for l in max(1, mval):ltr
-            s = norm_scale_from_orthonormal(l, mval, cfg.norm) * α
-            Sl[l-mval+1] /= s
-            Tl[l-mval+1] /= s
-        end
-    end
-
     return Sl, Tl
 end
 
@@ -875,18 +841,7 @@ function synthesis_sphtor_ml(cfg::SHTConfig, mval::Int, Sl::AbstractVector{<:Com
     expected_len = ltr - mval + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
     length(Tl) == expected_len || throw(DimensionMismatch("Tl length mismatch"))
-
-    # Convert from user normalization to internal if needed
     Sl_int = Sl; Tl_int = Tl
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        Sl_int = copy(Sl); Tl_int = copy(Tl)
-        α = cs_phase_factor(mval, true, cfg.cs_phase)
-        @inbounds for l in max(1, mval):ltr
-            s = norm_scale_from_orthonormal(l, mval, cfg.norm) * α
-            Sl_int[l-mval+1] *= s
-            Tl_int[l-mval+1] *= s
-        end
-    end
 
     CT = complex(float(promote_type(eltype(Sl), eltype(Tl))))  # AD/Float32-safe output eltype
     inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization

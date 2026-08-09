@@ -289,12 +289,8 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
         end
     end
     
-    # Convert to cfg normalization if needed (using pre-allocated scratch buffers)
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        convert_alm_norm!(plan.norm_tmp1, Slm_out, cfg; to_internal=false)
-        convert_alm_norm!(plan.norm_tmp2, Tlm_out, cfg; to_internal=false)
-        copyto!(Slm_out, plan.norm_tmp1); copyto!(Tlm_out, plan.norm_tmp2)
-    end
+    # No conversion: the package is orthonormal-only, and the scalar plan
+    # methods match `analysis`/`synthesis` the same way.
     return Slm_out, Tlm_out
 end
 
@@ -315,13 +311,8 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
     
-    # Convert to internal normalization if needed (using pre-allocated scratch buffers)
+    # No conversion — orthonormal-only; see `analysis_sphtor!`.
     Slm_int = Slm; Tlm_int = Tlm
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        convert_alm_norm!(plan.norm_tmp1, Slm, cfg; to_internal=true)
-        convert_alm_norm!(plan.norm_tmp2, Tlm, cfg; to_internal=true)
-        Slm_int = plan.norm_tmp1; Tlm_int = plan.norm_tmp2
-    end
     
     # Two sibling passes: build Vt's Fourier buffer then Vp's, each with its
     # own m-loop formula. rfft path writes to the half-spectrum buffer and uses

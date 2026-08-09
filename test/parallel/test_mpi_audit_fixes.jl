@@ -299,6 +299,37 @@ max_local_error(pa::PencilArray, F::AbstractMatrix) =
             root_println("    [PASS] complex packed_cplx on $label pencil")
         end
     end
+    @testset "distributed transforms are orthonormal, like the serial ones" begin
+        # The package settled on ONE convention: everything orthonormal. The
+        # distributed layer used to convert to cfg's normalization, so the two
+        # backends read the same `alm` differently. These are equality checks,
+        # not roundtrip checks — a roundtrip closes under either convention and
+        # cannot detect a revert.
+        lmax = 5
+        nlat, nlon = lmax + 3, 2*lmax + 2
+        for (nrm, cs) in ((:orthonormal, true), (:schmidt, true), (:fourpi, false))
+            cfg = create_gauss_config(lmax, nlat; nlon=nlon, norm=nrm, cs_phase=cs)
+            A0 = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
+            for m in 0:cfg.mmax, l in m:lmax
+                A0[l+1, m+1] = randn(MersenneTwister(31 + 7l + m), ComplexF64)
+            end
+            A0[:, 1] .= real.(A0[:, 1])
+            F = SHTnsKit.synthesis(cfg, A0; real_output=true)
+
+            pen = Pencil((nlat, nlon), (1,), comm)
+            fpa = scatter_field(pen, F)
+
+            # dist_analysis must equal serial analysis coefficient-for-coefficient
+            @test isapprox(SHTnsKit.dist_analysis(cfg, fpa), SHTnsKit.analysis(cfg, F);
+                           rtol=1e-12, atol=1e-13)
+
+            # dist_synthesis must reproduce the field from the SAME (orthonormal) alm
+            frec = SHTnsKit.dist_synthesis(cfg, SHTnsKit.analysis(cfg, F);
+                                           prototype_θφ=fpa, real_output=true)
+            @test max_local_error(frec, F, pen) < 1e-10
+            root_println("    [PASS] distributed == serial for norm=$nrm cs_phase=$cs")
+        end
+    end
 end
 
 MPI.Barrier(comm)

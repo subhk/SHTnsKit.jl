@@ -788,21 +788,22 @@ function synthesis_tor_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}
 end
 
 """
-    analysis_sphtor_ml(cfg, im, Vt_m, Vp_m, ltr) -> (Sl, Tl)
+    analysis_sphtor_ml(cfg, mval, Vt_m, Vp_m, ltr) -> (Sl, Tl)
 
-Mode-limited transform for specific azimuthal mode im.
+Mode-limited transform for a single azimuthal order `mval` (named `mval`, not
+`im`, so it cannot shadow Julia's imaginary unit — see `synthesis_sphtor_ml`).
 Input vectors contain Fourier coefficients for mode m at all latitudes.
 Implements the proper spheroidal-toroidal decomposition using the adjoint of
 the synthesis formulas:
     Vθ = ∂S/∂θ - (im/sinθ) * T
     Vφ = (im/sinθ) * S + ∂T/∂θ
 """
-function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
+function analysis_sphtor_ml(cfg::SHTConfig, mval::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     length(Vt_m) == nlat || throw(DimensionMismatch("Vt_m length must be nlat"))
     length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat"))
 
-    num_l = ltr - im + 1
+    num_l = ltr - mval + 1
     CT = complex(float(promote_type(eltype(Vt_m), eltype(Vp_m))))  # AD/Float32-safe output eltype
     Sl = Vector{CT}(undef, num_l)
     Tl = Vector{CT}(undef, num_l)
@@ -830,28 +831,28 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
         end
 
         # Single call computes P̄, dP̄/dθ, and P̄/sinθ (bounded normalized; no overflow)
-        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im, Pbuf)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, mval, Pbuf)
 
-        @inbounds for l in max(1, im):ltr
+        @inbounds for l in max(1, mval):ltr
             dθY = dPdtheta[l+1]          # already orthonormal-normalized
             Y_over_sθ = P_over_sinth[l+1]
             ll1 = l * (l + 1)
             coeff = wi * scaleφ / ll1
-            term = 1.0im * im * Y_over_sθ
+            term = 1.0im * mval * Y_over_sθ
 
             # Adjoint of synthesis: Vθ = dθY*S - term*T, Vφ = term*S + dθY*T
-            Sl[l-im+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
-            Tl[l-im+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
+            Sl[l-mval+1] += coeff * (Fθ * dθY + conj(term) * Fφ)
+            Tl[l-mval+1] += coeff * (-conj(term) * Fθ + dθY * Fφ)
         end
     end
 
     # Convert from internal to user normalization if needed
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        α = cs_phase_factor(im, true, cfg.cs_phase)
-        @inbounds for l in max(1, im):ltr
-            s = norm_scale_from_orthonormal(l, im, cfg.norm) * α
-            Sl[l-im+1] /= s
-            Tl[l-im+1] /= s
+        α = cs_phase_factor(mval, true, cfg.cs_phase)
+        @inbounds for l in max(1, mval):ltr
+            s = norm_scale_from_orthonormal(l, mval, cfg.norm) * α
+            Sl[l-mval+1] /= s
+            Tl[l-mval+1] /= s
         end
     end
 
@@ -859,16 +860,19 @@ function analysis_sphtor_ml(cfg::SHTConfig, im::Int, Vt_m::AbstractVector{<:Comp
 end
 
 """
-    synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr) -> (Vt_m, Vp_m)
+    synthesis_sphtor_ml(cfg, mval, Sl, Tl, ltr) -> (Vt_m, Vp_m)
 
-Mode-limited synthesis for specific azimuthal mode im.
-Implements the proper spheroidal-toroidal synthesis formulas:
-    Vθ = ∂S/∂θ - (im/sinθ) * T
-    Vφ = (im/sinθ) * S + ∂T/∂θ
+Mode-limited synthesis for a single azimuthal order `mval`:
+    Vθ = ∂S/∂θ - (i·mval/sinθ) * T
+    Vφ = (i·mval/sinθ) * S + ∂T/∂θ
+
+The order argument is named `mval`, NOT `im`: a binding called `im` shadows
+Julia's imaginary unit, and `1.0im` is juxtaposition (`1.0 * im`), so the
+coupling terms above silently became real. Do not rename it back.
 """
-function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_sphtor_ml(cfg::SHTConfig, mval::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
-    expected_len = ltr - im + 1
+    expected_len = ltr - mval + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
     length(Tl) == expected_len || throw(DimensionMismatch("Tl length mismatch"))
 
@@ -876,15 +880,16 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
     Sl_int = Sl; Tl_int = Tl
     if cfg.norm !== :orthonormal || cfg.cs_phase == false
         Sl_int = copy(Sl); Tl_int = copy(Tl)
-        α = cs_phase_factor(im, true, cfg.cs_phase)
-        @inbounds for l in max(1, im):ltr
-            s = norm_scale_from_orthonormal(l, im, cfg.norm) * α
-            Sl_int[l-im+1] *= s
-            Tl_int[l-im+1] *= s
+        α = cs_phase_factor(mval, true, cfg.cs_phase)
+        @inbounds for l in max(1, mval):ltr
+            s = norm_scale_from_orthonormal(l, mval, cfg.norm) * α
+            Sl_int[l-mval+1] *= s
+            Tl_int[l-mval+1] *= s
         end
     end
 
     CT = complex(float(promote_type(eltype(Sl), eltype(Tl))))  # AD/Float32-safe output eltype
+    inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization
     Vt_m = Vector{CT}(undef, nlat)
     Vp_m = Vector{CT}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
@@ -897,21 +902,21 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
         sθ = sqrt(max(0.0, 1 - x*x))
 
         # Single call computes P̄, dP̄/dθ, and P̄/sinθ (bounded normalized; no overflow)
-        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, im, Pbuf)
+        Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, ltr, mval, Pbuf)
 
         gθ = zero(CT)
         gφ = zero(CT)
 
-        @inbounds for l in max(1, im):ltr
+        @inbounds for l in max(1, mval):ltr
             dθY = dPdtheta[l+1]          # already orthonormal-normalized
             Y_over_sθ = P_over_sinth[l+1]
-            S_coef = Sl_int[l-im+1]
-            T_coef = Tl_int[l-im+1]
+            S_coef = Sl_int[l-mval+1]
+            T_coef = Tl_int[l-mval+1]
 
-            # Vθ = ∂S/∂θ - (im/sinθ) * T
-            gθ += dθY * S_coef - 1.0im * im * Y_over_sθ * T_coef
-            # Vφ = (im/sinθ) * S + ∂T/∂θ
-            gφ += 1.0im * im * Y_over_sθ * S_coef + dθY * T_coef
+            # Vθ = ∂S/∂θ - (mval/sinθ) * T
+            gθ += dθY * S_coef - 1.0im * mval * Y_over_sθ * T_coef
+            # Vφ = (mval/sinθ) * S + ∂T/∂θ
+            gφ += 1.0im * mval * Y_over_sθ * S_coef + dθY * T_coef
         end
 
         # Apply Robert form scaling if needed
@@ -920,8 +925,11 @@ function synthesis_sphtor_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Compl
             gφ *= sθ
         end
 
-        Vt_m[i] = gθ
-        Vp_m[i] = gφ
+        # Match the full transform's φ normalization, exactly as
+        # `synthesis_packed_ml` does. Its absence left this pair off by 1/nlon
+        # from being the inverse of `analysis_sphtor_ml` (which applies cphi).
+        Vt_m[i] = gθ * inv_scaleφ
+        Vp_m[i] = gφ * inv_scaleφ
     end
 
     return Vt_m, Vp_m

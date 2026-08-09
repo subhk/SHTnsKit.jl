@@ -107,8 +107,24 @@ end
 function _synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                         ::Val{real_output}) where {real_output}
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-    # Reuse the scalar and sphtor implementations so normalization, rfft
-    # choices, and complex-output behavior stay consistent across APIs.
+    # Reuse the scalar and sphtor implementations for rfft choices and
+    # complex-output behavior — but NOT for normalization, which they disagree
+    # on: `_synthesis_sphtor` converts cfg→internal (src/sphtor_transforms.jl)
+    # while `_synthesis` is orthonormal-only by contract. A QST triple must be
+    # on ONE convention, and every other QST API (the distributed pair, and the
+    # S/T half here) uses the config's, so Q is converted to match rather than
+    # silently interpreted in a different basis from its own S and T.
+    # Broadcast, NOT `convert_alm_norm!`: this body has no rrule, so Zygote
+    # traces straight through it, and the in-place `setindex!` inside
+    # `convert_alm_norm!` raises "Mutating arrays is not supported". `M` is the
+    # same cached scale matrix that function consumes; entries with l < m are 1.
+    # Inverse of `analysis_qst`: the triple is orthonormal, `_synthesis` wants
+    # exactly that, and `_synthesis_sphtor` wants cfg-form S/T.
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = _ensure_norm_scale_matrix!(cfg)
+        Slm = Slm ./ M
+        Tlm = Tlm ./ M
+    end
     Vr = _synthesis(cfg, Qlm, Val(real_output), nothing, Val(false))
     Vt, Vp = _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(false))
 
@@ -127,9 +143,24 @@ function analysis_qst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
 
-    # Transform each component
+    # Transform each component. `analysis_sphtor` returns S/T in the config's
+    # convention while `analysis` is orthonormal-only, so Q is converted to match
+    # — otherwise this single call hands back a triple on TWO different
+    # normalizations, which then disagrees with `dist_analysis_qst` (uniformly
+    # cfg-form) and mis-evaluates if Q is passed to a converting consumer such
+    # as `SH_to_lat`. Inverse of the conversion in `_synthesis_qst`.
+    # The QST triple is ORTHONORMAL throughout, matching serial `analysis`, the
+    # energy diagnostics and the distributed backend. `analysis` already is;
+    # `analysis_sphtor` returns cfg-form, so S/T are converted back. Broadcasts,
+    # not `convert_alm_norm!`: this body has no rrule and is Zygote-traced, and an
+    # in-place write raises "Mutating arrays is not supported".
     Qlm = analysis(cfg, Vr)
     Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = _ensure_norm_scale_matrix!(cfg)
+        Slm = Slm .* M
+        Tlm = Tlm .* M
+    end
 
     return Qlm, Slm, Tlm
 end
@@ -141,6 +172,16 @@ Complex version of QST to spatial transform, preserving complex values.
 """
 function synthesis_qst_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
+    # `synthesis_sphtor_cplx` delegates to `_synthesis_sphtor`, which converts
+    # cfg→internal, while `synthesis_cplx` is orthonormal-only — so Q needs the
+    # same conversion the real-output `_synthesis_qst` applies. (Both `_cplx`
+    # sphtor wrappers are thin delegators to the CONVERTING implementations;
+    # reading the wrapper bodies alone suggests otherwise.)
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = _ensure_norm_scale_matrix!(cfg)
+        Slm = Slm ./ M
+        Tlm = Tlm ./ M
+    end
     Vr = synthesis_cplx(cfg, Qlm)
     Vt, Vp = synthesis_sphtor_cplx(cfg, Slm, Tlm)
 
@@ -158,9 +199,16 @@ function analysis_qst_cplx(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::Ab
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
 
-    # Transform each component
+    # Transform each component. `analysis_sphtor_cplx` delegates to
+    # `analysis_sphtor`, which converts internal→cfg, so Q must match or this
+    # returns a triple on two normalizations (see `analysis_qst`).
     Qlm = analysis(cfg, Vr)
     Slm, Tlm = analysis_sphtor_cplx(cfg, Vt, Vp)
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = _ensure_norm_scale_matrix!(cfg)
+        Slm = Slm .* M
+        Tlm = Tlm .* M
+    end
 
     return Qlm, Slm, Tlm
 end
@@ -199,6 +247,15 @@ end
 function _synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                           ltr::Int, ::Val{real_output}) where {real_output}
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
+    # Same convention split as `_synthesis_qst`: `_synthesis_sphtor_l` converts
+    # cfg→internal, `_synthesis_l` does not, and `analysis_qst_l` (which routes
+    # through `analysis_qst`) returns Q in cfg's convention — so convert Q here
+    # too, or the degree-limited round trip breaks for any non-default norm.
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = _ensure_norm_scale_matrix!(cfg)
+        Slm = Slm ./ M
+        Tlm = Tlm ./ M
+    end
     Vr = _synthesis_l(cfg, Qlm, ltr, Val(real_output))
     Vt, Vp = _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(real_output))
     return Vr, Vt, Vp
@@ -213,6 +270,15 @@ function analysis_qst_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex
     # Transform each component for this specific mode
     Ql = analysis_packed_ml(cfg, im, Vr_m, ltr)
     Sl, Tl = analysis_sphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
+    # `analysis_sphtor_ml` converts internal→cfg but `analysis_packed_ml` does
+    # not, so without this the returned triple sits on two normalizations — the
+    # same defect fixed in `analysis_qst`. Mirrors that function's scaling.
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        sc = [norm_scale_from_orthonormal(l, im, cfg.norm) * cs_phase_factor(im, true, cfg.cs_phase)
+              for l in im:ltr]
+        Sl = Sl .* sc          # analysis_sphtor_ml returns cfg-form; make it orthonormal
+        Tl = Tl .* sc
+    end
 
     return Ql, Sl, Tl
 end
@@ -224,6 +290,14 @@ Mode-limited synthesis for specific azimuthal mode im.
 """
 function synthesis_qst_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
     # Synthesize each component for this specific mode
+    # Inverse of the conversion in `analysis_qst_ml`: Q arrives in cfg's
+    # convention (matching S/T) but `synthesis_packed_ml` expects internal.
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        sc = [norm_scale_from_orthonormal(l, im, cfg.norm) * cs_phase_factor(im, true, cfg.cs_phase)
+              for l in im:ltr]
+        Sl = Sl ./ sc          # synthesis_sphtor_ml wants cfg-form S/T
+        Tl = Tl ./ sc
+    end
     Vr_m = synthesis_packed_ml(cfg, im, Ql, ltr)
     Vt_m, Vp_m = synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
 

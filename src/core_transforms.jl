@@ -431,6 +431,12 @@ Net effect:
 
 No `conj` on the FFT bin (FFT already carries `exp(-imφ)`). No quadrature
 weights or `cphi` — those belong to `analysis`, not the synthesis adjoint.
+
+The forward's `inv_scaleφ = phi_inv_scale(cfg)` does NOT cancel against the
+`1/nlon` in the ifft adjoint in general: the surviving factor is
+`phi_inv_scale(cfg)/nlon`, which is 1 in the `:dft` mode but `1/2π` under
+`:quad`. Treating it as always-1 made every synthesis-family gradient exactly
+2π too large whenever `cfg.phi_scale === :quad` or `SHTNSKIT_PHI_SCALE=quad`.
 """
 function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
                             θ_globals::AbstractVector{<:Integer}=1:cfg.nlat,
@@ -447,9 +453,14 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
     use_tbl = has_fused_scalar_tables(cfg)
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
     xv = cfg.x  # hoist field read out of the m/l loops (cfg is mutable, so not auto-hoisted)
+    # Forward scales bins by `inv_scaleφ = phi_inv_scale(cfg)`; adjoint of `ifft`
+    # is `(1/nlon)·fft`. The surviving factor `inv_scaleφ/nlon` is 1 only in the
+    # `:dft` mode — under `:quad` it is `1/2π`, and assuming it cancelled made
+    # every synthesis-family gradient exactly 2π too large. See the docstring.
+    φadj = phi_inv_scale(cfg) / cfg.nlon
     for m in 0:mmax
         col = m + 1
-        wm = (m == 0 || !real_output) ? 1.0 : 2.0
+        wm = ((m == 0 || !real_output) ? 1.0 : 2.0) * φadj
         if use_tbl
             NP = cfg.NP_tables[col]
             @inbounds for (ii, iglob) in pairs(θ_globals)
@@ -505,11 +516,16 @@ function _adjoint_synthesis_sphtor(cfg::SHTConfig, V̄t::AbstractMatrix, V̄p::A
     Pbuf = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
     xv = cfg.x  # hoist field read out of the m/i/l loops (cfg is mutable)
 
-    # Forward uses inv_scaleφ = nlon, adjoint of ifft is (1/nlon)·fft → factors
-    # cancel. wm accounts for the Hermitian "fill conjugate" step (real output).
+    # The forward scales its Fourier bins by `inv_scaleφ = phi_inv_scale(cfg)`
+    # and the adjoint of `ifft` is `(1/nlon)·fft`, so the surviving factor is
+    # `inv_scaleφ / nlon`. That is 1 only in the `:dft` mode; under `:quad`
+    # (`phi_scale=:quad`, or SHTNSKIT_PHI_SCALE=quad) it is `1/2π`, and assuming
+    # the cancellation made every gradient exactly 2π too large.
+    # wm accounts for the Hermitian "fill conjugate" step (real output).
+    φadj = phi_inv_scale(cfg) / cfg.nlon
     for m in 0:mmax
         col = m + 1
-        wm = (m == 0 || !real_output) ? 1.0 : 2.0
+        wm = ((m == 0 || !real_output) ? 1.0 : 2.0) * φadj
         @inbounds for (ii, iglob) in pairs(θ_globals)
             x = xv[iglob]
             Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, m, Pbuf)

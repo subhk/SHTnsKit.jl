@@ -103,7 +103,7 @@ function _batch_fft_phi!(Fφ_batch::AbstractArray{<:Complex,3}, fields::Abstract
     nfields == 0 && return Fφ_batch
 
     try
-        plan = plan_fft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE)
+        plan = plan_fft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
         @inbounds for k in 1:nfields
             Fk = view(Fφ_batch, :, :, k)
             Xk = view(fields, :, :, k)
@@ -125,7 +125,7 @@ function _batch_rfft_phi!(Fφ_batch::AbstractArray{<:Complex,3}, fields::Abstrac
     nfields == 0 && return Fφ_batch
 
     try
-        plan = plan_rfft(view(fields, :, :, 1), 2; flags=FFTW.ESTIMATE)
+        plan = plan_rfft(view(fields, :, :, 1), 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
         @inbounds for k in 1:nfields
             mul!(view(Fφ_batch, :, :, k), plan, view(fields, :, :, k))
         end
@@ -143,16 +143,23 @@ function _batch_ifft_phi!(Fφ_batch::AbstractArray{<:Complex,3})
     nfields = size(Fφ_batch, 3)
     nfields == 0 && return Fφ_batch
 
+    # `k_done` is essential: this transform is IN-PLACE, so a mid-loop FFTW
+    # failure leaves the leading slices already inverted. Restarting the fallback
+    # at k = 1 inverted them a SECOND time — silently returning garbage for those
+    # fields while the rest were correct. (The sibling helpers read from an
+    # unmutated source and are naturally idempotent; only this one corrupts.)
+    k_done = 0
     try
-        plan = plan_ifft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE)
+        plan = plan_ifft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
         @inbounds for k in 1:nfields
             Fk = view(Fφ_batch, :, :, k)
             mul!(Fk, plan, Fk)
+            k_done = k
         end
         _FFT_BACKEND[] = _FFT_BACKEND_FFTW
     catch e
         _batch_fft_fallback_error(e) || rethrow(e)
-        @inbounds for k in 1:nfields
+        @inbounds for k in (k_done + 1):nfields
             Fk = view(Fφ_batch, :, :, k)
             ifft_phi!(Fk, Fk)
         end
@@ -180,7 +187,7 @@ function _batch_irfft_phi!(f_out::AbstractArray{<:Real,3}, Fφ_batch::AbstractAr
     nfields == 0 && return f_out
 
     try
-        plan = plan_irfft(view(Fφ_batch, :, :, 1), nlon, 2; flags=FFTW.ESTIMATE)
+        plan = plan_irfft(view(Fφ_batch, :, :, 1), nlon, 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
         @inbounds for k in 1:nfields
             mul!(view(f_out, :, :, k), plan, view(Fφ_batch, :, :, k))
         end
@@ -537,11 +544,20 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
         end
     end
 
+    # Output eltype must follow the input, exactly as `Fφ_batch`'s `CT` does.
+    # Hard-coding Float64 mismatched the FFTW plan for a ComplexF32 batch —
+    # `plan_irfft` over a ComplexF32 view is a Float32-output plan, so `mul!`
+    # into a Float64 array raised a MethodError that `_batch_fft_fallback_error`
+    # swallowed, dropping the transform into the hand-written O(nlat·nlon²)
+    # Hermitian DFT. (An earlier note here claimed that path was only slower and
+    # never wrong; that was mistaken — the in-place ifft fallback above could
+    # double-invert, and the irfft plan could throw outright on odd nlon.)
+    RT = real(eltype(Fφ_batch))
     if use_rfft
-        f_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
+        f_batch = Array{RT,3}(undef, nlat, nlon, nfields)
         return _batch_irfft_phi!(f_batch, Fφ_batch, nlon)
     elseif real_output
-        f_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
+        f_batch = Array{RT,3}(undef, nlat, nlon, nfields)
         return _batch_ifft_phi_to_output!(f_batch, Fφ_batch, true)
     else
         return _batch_ifft_phi!(Fφ_batch)
@@ -769,6 +785,19 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
         analysis_sphtor!(plan, view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k),
                          view(Vt_batch, :, :, k), view(Vp_batch, :, :, k))
     end
+    # The scalar plan is orthonormal-only (matching `analysis`/`synthesis`) while
+    # the sphtor plan converts to cfg's convention, so Q must be converted here
+    # or this call returns a triple on two normalizations — the same defect
+    # fixed in `analysis_qst`, which this is the batch form of.
+    # Orthonormal triple: the scalar plan already is; the sphtor plan returns
+    # cfg-form, so S/T are converted back.
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = _ensure_norm_scale_matrix!(cfg)
+        @inbounds for k in 1:nfields, m in 0:mmax, l in m:lmax
+            Slm_batch[l+1, m+1, k] *= M[l+1, m+1]
+            Tlm_batch[l+1, m+1, k] *= M[l+1, m+1]
+        end
+    end
 
     return Qlm_batch, Slm_batch, Tlm_batch
 end
@@ -820,6 +849,14 @@ function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex
         Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
     end
     plan = SHTPlan(cfg)
+
+    # Q arrives in cfg's convention (matching S/T and `analysis_qst_batch`), but
+    # the scalar plan is orthonormal-only — convert, mirroring `_synthesis_qst`.
+    if cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = _ensure_norm_scale_matrix!(cfg)
+        Slm_batch = Slm_batch ./ M
+        Tlm_batch = Tlm_batch ./ M
+    end
 
     for k in 1:nfields
         synthesis!(plan, view(Vr_batch, :, :, k), view(Qlm_batch, :, :, k);

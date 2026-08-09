@@ -375,6 +375,28 @@ function shtns_rotation_wigner_d_matrix(r::SHTRotation, l::Integer, mx::Abstract
 end
 
 """
+    _lmcplx_ybasis_signs(lmax, mmax) -> Vector{Float64}
+
+The diagonal ε relating this package's LM_cplx layout to the Y_l^m basis that
+the Wigner-d engine works in: `ε_m = (-1)^m` for `m < 0`, `1` otherwise.
+
+Both signs of m share the SAME P̄_l^{|m|} row in this layout, so a real field
+satisfies `a_{-m} = conj(a_m)` with no CS factor — unlike the Y_l^m convention,
+whose rule is `a_{-m} = (-1)^m conj(a_m)`. ε is real and self-inverse, so
+`ε ∘ P ∘ ε` is the rotation expressed in the packed layout, and because
+`|ε x| = |x|` any norm-based loss is unchanged by it (which is why the angle
+gradients only need ε applied to their inputs).
+"""
+function _lmcplx_ybasis_signs(lmax::Integer, mmax::Integer)
+    lmax = Int(lmax); mmax = Int(mmax)
+    v = ones(Float64, nlm_cplx_calc(lmax, mmax, 1))
+    for l in 0:lmax, m in -min(l, mmax):-1
+        isodd(m) && (v[LM_cplx_index(lmax, mmax, l, m) + 1] = -1.0)
+    end
+    return v
+end
+
+"""
     shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
 
 Apply rotation with Euler angles (ZYZ/ZXZ) to complex SH coefficients in LM_cplx packing (mres==1).
@@ -398,11 +420,27 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
     for l in 0:r.lmax
         mm = min(l, r.mmax)
         n = 2l + 1
-        # Build input vector b_m' = e^{-i m' γ} A_{m'} for m' in [-mm..mm]
+        # Build input vector b_m' = e^{-i m' γ} A_{m'} for m' in [-mm..mm].
+        #
+        # The Wigner-d machinery below is written for the Y_l^m basis, whose
+        # Hermitian rule is a_{-m} = (-1)^m conj(a_m). This package's LM_cplx
+        # layout is NOT that basis: both signs of m share the SAME P̄_l^{|m|} row,
+        # so a real field there satisfies a_{-m} = conj(a_m) with no (-1)^m (see
+        # `synthesis_packed_cplx` / `SH_to_lat_cplx`). The two differ by the
+        # diagonal ε_m = (-1)^m on m < 0 only, applied on the way in and undone
+        # on the way out.
+        #
+        # Without it this function was a valid rotation in the wrong basis: it
+        # stayed unitary (per-l norm preserved), so nothing caught it, but
+        # rotating a REAL field produced a complex one — a_{l,0} came back with a
+        # non-zero imaginary part. Verified against a spatial-rotation reference.
+        # ε is diagonal and commutes with the α/γ phase diagonals, so pure
+        # Z-rotations are unaffected.
         fill!(view(b, 1:n), zero(ComplexF64))
         for mp in -mm:mm
             idx = LM_cplx_index(r.lmax, r.mmax, l, mp) + 1
-            b[mp + l + 1] = Zlm[idx] * cis(-mp * γ)
+            εp = (mp < 0 && isodd(mp)) ? -1.0 : 1.0
+            b[mp + l + 1] = (εp * Zlm[idx]) * cis(-mp * γ)
         end
         # Multiply with d^l(β) — computed in-place into pre-allocated buffer
         wigner_d_matrix!(dl, l, β, lg)
@@ -415,10 +453,12 @@ function shtns_rotation_apply_cplx(r::SHTRotation, Zlm::AbstractVector{<:Complex
             end
             c[mi + l + 1] = acc
         end
-        # Apply phase e^{-i m α} and write back only for allowed |m| ≤ mm
+        # Apply phase e^{-i m α} and write back only for allowed |m| ≤ mm,
+        # undoing the ε basis change applied when b was built.
         for m in -mm:mm
             idx = LM_cplx_index(r.lmax, r.mmax, l, m) + 1
-            Rlm[idx] = c[m + l + 1] * cis(-m * α)
+            εm = (m < 0 && isodd(m)) ? -1.0 : 1.0
+            Rlm[idx] = εm * (c[m + l + 1] * cis(-m * α))
         end
     end
     return Rlm
@@ -433,7 +473,9 @@ function shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex
     expected = nlm_calc(r.lmax, r.mmax, 1)
     length(Qlm) == expected || throw(DimensionMismatch("LM packed size mismatch"))
     length(Rlm) == expected || throw(DimensionMismatch("LM packed size mismatch"))
-    # Build LM_cplx array Zlm from real-packed Qlm using Hermitian symmetry a_{-m} = (-1)^m conj(a_m)
+    # Build LM_cplx array Zlm from real-packed Qlm using this layout's Hermitian
+    # rule a_{-m} = conj(a_m) — NO (-1)^m; see the note at the write below and
+    # `_lmcplx_ybasis_signs` for why the CS factor lives inside apply_cplx now.
     Z = Vector{ComplexF64}(undef, nlm_cplx_calc(r.lmax, r.mmax, 1))
     
     # initialize zeros
@@ -450,7 +492,10 @@ function shtns_rotation_apply_real(r::SHTRotation, Qlm::AbstractVector{<:Complex
             idxc_n = LM_cplx_index(r.lmax, r.mmax, l, -m) + 1
             Am = Qlm[idxp]
             Z[idxc_p] = Am
-            Z[idxc_n] = (-1)^m * conj(Am)
+            # LM_cplx here is the P̄_l^{|m|} layout, whose real-field rule carries
+            # NO (-1)^m; `shtns_rotation_apply_cplx` now converts to/from the
+            # Y_l^m basis itself, so this must not pre-apply that factor too.
+            Z[idxc_n] = conj(Am)
         end
     end
     R = similar(Z)

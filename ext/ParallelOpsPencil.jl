@@ -35,13 +35,34 @@ function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:
     lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
     gl_l = collect(Int, globalindices(Alm_pencil, 1))
     gl_m = collect(Int, globalindices(Alm_pencil, 2))
-    # l-dimension is NOT distributed (PencilArrays distributes along last dim = m),
-    # so each rank has the full l-column locally. No Allgatherv needed.
+    # This kernel reads the l±1 neighbours of every local coefficient out of a
+    # full l-column, so it is only valid when the l dimension is NOT distributed
+    # (the usual case: PencilArrays splits the last dim, m). That was asserted in
+    # a comment only — on an l-decomposed pencil the unowned entries of
+    # `col_full` stayed uninitialized and the operator silently returned garbage.
+    # Check it instead: the condition is rank-local and identical in form on
+    # every rank, so a violating pencil throws everywhere rather than deadlocking.
+    if length(gl_l) != lmax + 1
+        throw(ArgumentError("dist_SH_mul_mx! requires the l dimension to be local " *
+                            "(rank owns $(length(gl_l)) of $(lmax+1) degrees); " *
+                            "decompose the spectral pencil along m only"))
+    end
     CT = promote_type(eltype(Alm_pencil), eltype(R_pencil), complex(eltype(mx)))  # AD/Float32-safe
-    col_full = Vector{CT}(undef, lmax + 1)
+    col_full = zeros(CT, lmax + 1)
     for (jj, jm) in enumerate(mloc)
         mval = gl_m[jj] - 1
-        mval > mmax && continue
+        # Columns this operator does not compute must still be DEFINED: the
+        # caller's `R_pencil` is typically freshly `undef`-allocated, so a bare
+        # `continue` would leave them holding garbage rather than the zero the
+        # operator implies. Zero, then skip.
+        #   * m > mmax          — outside the spectral band (dealiased grids)
+        #   * m % mres != 0     — not a stored order; `LM_index` throws on these
+        if mval > mmax || (mval % mres != 0)
+            @inbounds for il in lloc
+                R_pencil[il, jm] = zero(eltype(R_pencil))
+            end
+            continue
+        end
         # Extract the full l-column from local data
         @inbounds for (ii, il) in enumerate(lloc)
             col_full[gl_l[ii]] = Alm_pencil[il, jm]

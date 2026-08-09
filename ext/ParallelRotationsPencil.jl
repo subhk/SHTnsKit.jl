@@ -61,16 +61,16 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
         mm = min(lval, mmax)
         n2 = 2*lval + 1
         b = view(b_buf, 1:n2); fill!(b, 0.0 + 0.0im)
+        # NO norm/CS conversion: distributed spectral arrays are orthonormal
+        # (matching serial `analysis`/`synthesis`), and the serial rotations are
+        # themselves norm-agnostic. Converting in and back out does NOT cancel,
+        # because the Wigner rotation mixes m: R(M⊙a)/M != R(a).
         if lval >= 0
-            k0 = SHTnsKit.norm_scale_from_orthonormal(lval, 0, cfg.norm)
-            α0 = SHTnsKit.cs_phase_factor(0, true, cfg.cs_phase)
-            b[0 + lval + 1] = (k0 * α0) * a_full[1]
+            b[0 + lval + 1] = a_full[1]
         end
 
         for m in 1:mm
-            km = SHTnsKit.norm_scale_from_orthonormal(lval, m, cfg.norm)
-            αm = SHTnsKit.cs_phase_factor(m, true, cfg.cs_phase)
-            a_int = (km * αm) * a_full[m+1]
+            a_int = a_full[m+1]
             b[m + lval + 1] = a_int
             b[-m + lval + 1] = (-1.0)^m * conj(a_int)
         end
@@ -89,10 +89,7 @@ function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
         for (jj, jm) in enumerate(mloc)
             mval = gl_m[jj] - 1
             if mval <= lval
-                cm = c[mval + lval + 1]
-                km = SHTnsKit.norm_scale_from_orthonormal(lval, mval, cfg.norm)
-                αm = SHTnsKit.cs_phase_factor(mval, true, cfg.cs_phase)
-                R_pencil[il, jm] = cm / (km * αm)
+                R_pencil[il, jm] = c[mval + lval + 1]
             else
                 R_pencil[il, jm] = 0.0 + 0.0im
             end
@@ -169,15 +166,14 @@ function _yrotate_truncgather_rows!(cfg::SHTnsKit.SHTConfig,
         # Build symmetric b of size 2l+1 from positive m part
         n2 = 2*lval + 1
         b = view(b_buf, 1:n2); fill!(b, 0.0 + 0.0im)
+        # No norm/CS conversion — see the sibling path above: distributed spectral
+        # arrays are orthonormal and the rotation mixes m, so converting in and
+        # back out would not cancel.
         if lval >= 0
-            k0 = SHTnsKit.norm_scale_from_orthonormal(lval, 0, cfg.norm)
-            α0 = SHTnsKit.cs_phase_factor(0, true, cfg.cs_phase)
-            b[0 + lval + 1] = (k0 * α0) * (mm >= 0 ? a_full[1] : 0.0 + 0.0im)
+            b[0 + lval + 1] = (mm >= 0 ? a_full[1] : 0.0 + 0.0im)
         end
         for m in 1:mm
-            km = SHTnsKit.norm_scale_from_orthonormal(lval, m, cfg.norm)
-            αm = SHTnsKit.cs_phase_factor(m, true, cfg.cs_phase)
-            a_int = (km * αm) * a_full[m+1]
+            a_int = a_full[m+1]
             b[m + lval + 1] = a_int
             b[-m + lval + 1] = (-1.0)^m * conj(a_int)
         end
@@ -196,10 +192,7 @@ function _yrotate_truncgather_rows!(cfg::SHTnsKit.SHTConfig,
         @inbounds for jj in 1:nm_local
             mval = gl_m[jj] - 1
             if mval <= lval
-                cm = c[mval + lval + 1]
-                km = SHTnsKit.norm_scale_from_orthonormal(lval, mval, cfg.norm)
-                αm = SHTnsKit.cs_phase_factor(mval, true, cfg.cs_phase)
-                R_local[il, jj] = cm / (km * αm)
+                R_local[il, jj] = c[mval + lval + 1]
             else
                 R_local[il, jj] = 0.0 + 0.0im
             end

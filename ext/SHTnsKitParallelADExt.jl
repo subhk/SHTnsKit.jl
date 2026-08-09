@@ -51,12 +51,64 @@ end
 
 # ----- helpers ---------------------------------------------------------------
 
+"""
+    _phi_window(φ_globals, nlon_local, cfg_nlon) -> (φ_is_local, φ_window)
+
+The rank's global φ slice as a range, or `nothing` when φ is replicated.
+
+A rank can legitimately own ZERO φ columns — a pencil with more partitions than
+the dimension has points, e.g. `nlon = 4` on 5 ranks. The raw
+`first(φ_globals)` throws `BoundsError` there, and because these rrules run
+inside a collective region (the pullbacks `MPI.Allreduce` below) that kills one
+rank while the others block forever, so the job hangs instead of failing. An
+empty window is what the zero-pad path already wants: nothing is copied into
+`f̄_full`, so this rank contributes an all-zero partial to the Allreduce.
+
+Mirrors `_owned_range` in ext/ParallelTransforms.jl — duplicated because this is
+a separate extension module and cannot see it.
+"""
+@inline function _phi_window(φ_globals, nlon_local::Int, cfg_nlon::Int)
+    φ_is_local = (nlon_local == cfg_nlon)
+    φ_is_local && return true, nothing
+    isempty(φ_globals) && return false, 1:0
+    φ_start = Int(first(φ_globals))
+    return false, φ_start:(φ_start + nlon_local - 1)
+end
+
+"""
+    _scale_cotangent(A, cfg; to_internal)
+
+Apply the config's normalization/phase scale `M` to a coefficient cotangent.
+
+Every distributed transform exchanges coefficients in **cfg's** convention while
+the `_adjoint_*` kernels work in the internal orthonormal+CS one, so the
+conversion is part of the operator and must appear in its adjoint:
+
+    synthesis-like   y = F(M ⊙ a)     ⇒   ā = M ⊙ Fᴴ(ȳ)
+    analysis-like    a = F(x) ⊘ M     ⇒   x̄ = Fᴴ(ā ⊘ M)
+
+`M` is real and diagonal, so there is no conjugation to worry about. Without
+this, every non-default `cfg.norm` / `cs_phase` gradient was wrong by M[l,m]
+(finite differences: 40–180% relative error on :schmidt and :fourpi). No-op —
+and no allocation — on the default config.
+"""
+# `AbstractZero` (ZeroTangent/NoTangent) passes through untouched — a loss that
+# consumes only one output hands the other slot a ZeroTangent, and
+# `similar(::ZeroTangent)` is a MethodError.
+@inline _scale_cotangent(A::ChainRulesCore.AbstractZero, cfg; to_internal::Bool) = A
+
+@inline function _scale_cotangent(A, cfg; to_internal::Bool)
+    (cfg.norm !== :orthonormal || cfg.cs_phase == false) || return A
+    out = similar(A)
+    SHTnsKit.convert_alm_norm!(out, A, cfg; to_internal=to_internal)
+    return out
+end
+
 # The rank-local adjoint is just the parametrized `SHTnsKit._adjoint_analysis`
 # called with a restricted θ subset and optional φ-window.
 @inline function _local_adjoint_analysis(cfg::SHTnsKit.SHTConfig, Alm̄,
                                           θ_globals::AbstractVector{<:Integer},
-                                          nlon_local::Int, φ_start::Int, φ_is_local::Bool)
-    φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
+                                          φ_window)
     return SHTnsKit._adjoint_analysis(cfg, Alm̄; θ_globals=θ_globals, φ_window=φ_window)
 end
 
@@ -69,15 +121,13 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
     θ_globals = collect(globalindices(fθφ, 1))
     φ_globals = collect(globalindices(fθφ, 2))
     nlon_local = length(φ_globals)
-    φ_start = first(φ_globals)
-    φ_is_local = (nlon_local == cfg.nlon)
+    φ_is_local, φ_window = _phi_window(φ_globals, nlon_local, cfg.nlon)
 
     function dist_analysis_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
         # Alm̄ may arrive replicated (standard) or as a partial tangent.
         Alm̄ = ȳ isa AbstractMatrix ? ȳ : collect(ȳ)
-        f̄_parent = _local_adjoint_analysis(cfg, Alm̄, θ_globals,
-                                            nlon_local, φ_start, φ_is_local)
+        f̄_parent = _local_adjoint_analysis(cfg, Alm̄, θ_globals, φ_window)
         # Wrap in a PencilArray sharing fθφ's pencil so downstream grads stay distributed.
         f̄ = PencilArray(fθφ.pencil, f̄_parent)
         return NoTangent(), NoTangent(), f̄
@@ -97,9 +147,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis),
     θ_globals = collect(globalindices(prototype_θφ, 1))
     φ_globals = collect(globalindices(prototype_θφ, 2))
     nlon_local = length(φ_globals)
-    φ_start = first(φ_globals)
-    φ_is_local = (nlon_local == cfg.nlon)
-    φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
+    φ_is_local, φ_window = _phi_window(φ_globals, nlon_local, cfg.nlon)
 
     function dist_synthesis_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
@@ -141,17 +189,17 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
     θ_globals = collect(globalindices(Vtθφ, 1))
     φ_globals = collect(globalindices(Vtθφ, 2))
     nlon_local = length(φ_globals)
-    φ_start = first(φ_globals)
-    φ_is_local = (nlon_local == cfg.nlon)
-    φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
+    φ_is_local, φ_window = _phi_window(φ_globals, nlon_local, cfg.nlon)
 
     function dist_analysis_sphtor_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
         # unthunk EACH component — a Tuple/Tangent of Thunks would otherwise reach
         # Matrix{ComplexF64}(::Thunk) below and error (matches the synthesis twin).
         Slm̄, Tlm̄ = ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2])
+        S̄in = Matrix{ComplexF64}(Slm̄)
+        T̄in = Matrix{ComplexF64}(Tlm̄)
         V̄t_parent, V̄p_parent = SHTnsKit._adjoint_analysis_sphtor(
-            cfg, Matrix{ComplexF64}(Slm̄), Matrix{ComplexF64}(Tlm̄);
+            cfg, S̄in, T̄in;
             θ_globals=θ_globals, φ_window=φ_window)
         V̄t = PencilArray(Vtθφ.pencil, V̄t_parent)
         V̄p = PencilArray(Vpθφ.pencil, V̄p_parent)
@@ -178,9 +226,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
     θ_globals = collect(globalindices(prototype_θφ, 1))
     φ_globals = collect(globalindices(prototype_θφ, 2))
     nlon_local = length(φ_globals)
-    φ_start = first(φ_globals)
-    φ_is_local = (nlon_local == cfg.nlon)
-    φ_window = φ_is_local ? nothing : (φ_start:(φ_start + nlon_local - 1))
+    φ_is_local, φ_window = _phi_window(φ_globals, nlon_local, cfg.nlon)
 
     function dist_synthesis_sphtor_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)

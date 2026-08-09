@@ -229,23 +229,6 @@ already expect: `length == 0` contributes a zero-count `Allgatherv` segment.
 _owned_range(globals) = isempty(globals) ? (1:0) : (Int(first(globals)):Int(last(globals)))
 
 """
-    _phi_column_color(φ_globals) -> Int
-
-`MPI.Comm_split` colour that groups the ranks of one θ-column — those sharing a
-φ-segment — so a 2D (θ×φ) pencil sums each θ-slab once rather than once per
-φ-partner. The colour is the first global φ index the rank owns.
-
-A rank owning zero φ columns has no segment of its own, and the raw
-`first(φ_globals)` throws a BoundsError there — killing that rank while its
-partners are already blocked inside `Comm_split`/`Allreduce!`, so the job hangs
-instead of failing. Such a rank is folded into the column that owns global φ
-index 1: its spatial contribution is all-zero so it cannot perturb that column's
-sum, and in exchange it receives the complete θ-summed spectrum, which it still
-needs for whatever spectral coefficients it owns.
-"""
-_phi_column_color(φ_globals) = isempty(φ_globals) ? 1 : Int(first(φ_globals))
-
-"""
     _keep_one_phi_partner!(φ_globals, arrays...)
 
 Prepare θ-slab partials for a plain full-comm reduction on a 2D (θ×φ) pencil.
@@ -263,8 +246,12 @@ its partial is dropped like any other non-keeper.
 Two earlier forms of this are wrong, and both are avoided here:
 
   * splitting the comm by φ-colour had no correct colour for a rank owning zero
-    φ columns — `first([])` crashed it, and a shared colour for all such ranks
-    over-counted whenever more than one φ-partition was empty;
+    φ columns — `first([])` crashed it, and folding all such ranks into colour 1
+    over-counted: the φ gather hands a zero-column rank the FULL longitude row,
+    so its partial is a non-zero duplicate of the colour-1 owner's θ-slab, not
+    the all-zero contribution that folding would require. (A `_phi_column_color`
+    helper encoding that folding existed until every caller was converted to
+    this function; do not reintroduce it.);
   * splitting by *θ*-colour looks safe (`first(1:0)` is still a number) but a
     rank owning zero θ rows collides with the genuine owner of global θ index 1,
     and `Comm_split` orders by global rank — so the empty rank can win rank 0 of
@@ -522,10 +509,19 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         @warn "use_rfft=true ignored — spatial data is not real." maxlog=1
     end
 
+    # φ-locality must be agreed by ALL ranks, not decided per-rank: on a pencil
+    # with more φ-partitions than columns the sole owner sees `nlon_local == nlon`
+    # and takes a purely local FFT while the empty ranks fall through to the
+    # gather and enter `distributed_*_phi!` alone — the mirror of the θ predicate
+    # fixed elsewhere in this file, and it hangs the same way. Reduced here,
+    # above the branch, so every rank executes the collective unconditionally
+    # (`use_rfft_effective` is itself uniform: a keyword plus a shared eltype).
+    φ_is_local_all = MPI.Allreduce(nlon_local == nlon, &, comm)
+
     if use_rfft_effective
         nbins = nlon ÷ 2 + 1
         Fθm = Matrix{ComplexF64}(undef, nlat_local, nbins)
-        if nlon_local == nlon
+        if φ_is_local_all
             Fθm .= FFTW.rfft(local_data, 2)
         else
             φ_globals = collect(globalindices(fθφ, 2))
@@ -533,8 +529,8 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
             θ_range = _owned_range(θ_globals)
             SHTnsKitParallelExt.distributed_rfft_phi!(Fθm, local_data, θ_range, φ_range, nlon, comm)
         end
-    elseif nlon_local == nlon
-        # CASE A: Data distributed along θ only (φ is complete on each rank).
+    elseif φ_is_local_all
+        # CASE A: Data distributed along θ only (φ is complete on EVERY rank).
         Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
@@ -651,13 +647,18 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     # IMPORTANT: Only reduce if θ is actually distributed!
     # - If θ is distributed: each rank has different θ points → need Allreduce
     # - If only φ is distributed: all ranks have same θ points after gather → skip reduction
-    θ_is_distributed = (nθ_local < nlat)
+    # Reduced, not per-rank: `nθ_local < nlat` is not uniform when a pencil has
+    # more θ partitions than rows (nlat=1 on ≥2 θ-ranks), and the lone owner would
+    # then skip the block while the empty ranks enter the collective alone and hang.
+    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, comm)
 
     if θ_is_distributed
         # φ-partners that hold the same θ-slab carry identical post-gather
         # contributions, so a full-comm reduction would overcount by the
         # φ-partition factor. Drop all but one partner per θ-slab first.
-        if nlon_local == nlon
+        # Reduced flag, not the per-rank test: if some ranks dedup and others do
+        # not, the full-comm sum below is silently wrong rather than hanging.
+        if φ_is_local_all
             # θ-only decomposition: φ is complete on every rank, so there are no
             # φ-partners to dedup. Reduce directly.
             SHTnsKitParallelExt.efficient_spectral_reduce!(Alm_local, comm)
@@ -688,25 +689,11 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
             end
         end
     end
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        if use_packed_storage
-            # Alm_local is a packed Vector here; the matrix-only convert_alm_norm!
-            # can't take it (was a MethodError). Apply the identical internal→cfg
-            # scaling (divide by M = norm_scale·cs_phase) per (l,m) in place.
-            M = SHTnsKit._ensure_norm_scale_matrix!(cfg)
-            # Same mres stride as the accumulation loop above — lm_to_packed is 0
-            # for every m that is not a multiple of mres.
-            @inbounds for m in 0:cfg.mres:mmax, l in m:lmax
-                Alm_local[storage_info.lm_to_packed[l+1, m+1]] /= M[l+1, m+1]
-            end
-            return Alm_local
-        end
-        Alm_out = similar(Alm_local)
-        SHTnsKit.convert_alm_norm!(Alm_out, Alm_local, cfg; to_internal=false)
-        return Alm_out
-    else
-        return Alm_local
-    end
+        # NO normalization conversion: the distributed transforms are
+        # orthonormal-only, matching serial `analysis`/`synthesis` and the energy
+        # diagnostics. (They used to convert to cfg's convention, which made the
+        # two backends read the same `alm` differently.)
+    return Alm_local
 end
 
 """
@@ -789,11 +776,7 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
         end
     end
 
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        SHTnsKit.convert_alm_norm!(Alm_out, plan.Alm_work, cfg; to_internal=false)
-    else
-        copyto!(Alm_out, plan.Alm_work)
-    end
+    copyto!(Alm_out, plan.Alm_work)
     return Alm_out
 end
 
@@ -837,6 +820,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 
     # Check if φ is fully local or distributed
     φ_is_local = (nlon_local == nlon)
+
 
     # rfft now supported in both Case A and Case B (it only needs real output).
     use_rfft_effective = use_rfft && real_output
@@ -890,7 +874,14 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     # FULL nlon width; downstream slicing (Case B below) extracts this rank's
     # local φ window. Keeping the same shape for complex and rfft paths means
     # robert_form application and result slicing don't need to branch.
-    fθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
+    #
+    # The eltype must follow `real_output`: a Float64 destination selects the
+    # real-output `ifft_along_dim2!` method, which keeps only `real(temp[j])`.
+    # For `real_output=false` that discarded the imaginary half of the field
+    # (and halved the real part), so complex synthesis silently disagreed with
+    # serial `synthesis(cfg, alm; real_output=false)`.
+    fθφ_local = real_output ? Matrix{Float64}(undef, nθ_local, nlon) :
+                              Matrix{ComplexF64}(undef, nθ_local, nlon)
     if use_rfft_effective
         fθφ_local .= FFTW.irfft(Fθm, nlon, 2)
     else
@@ -913,15 +904,12 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     # If φ is distributed, we need to scatter results back
     if φ_is_local
         # Data is distributed along θ only - return local matrix wrapped properly
-        result = real_output ? fθφ_local : Complex{Float64}.(fθφ_local)
+        result = fθφ_local
     else
         # φ is distributed - extract local portion
         φ_globals = collect(globalindices(prototype_θφ, 2))
         local_φ_range = _owned_range(φ_globals)
         result = fθφ_local[:, local_φ_range]
-        if !real_output
-            result = Complex{Float64}.(result)
-        end
     end
 
     return result
@@ -933,6 +921,15 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; prot
 end
 
 function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::PencilArray; real_output::Bool=true)
+    # `dist_synthesis` now returns a genuinely complex field for real_output=false
+    # (it used to hand back a real buffer re-wrapped as complex), so a real output
+    # array can no longer absorb it. Reject up front, before any collective, as
+    # the sphtor twin does — the check is on local eltypes, identical on every
+    # rank, so all ranks throw together instead of deadlocking.
+    if !real_output && eltype(fθφ_out) <: Real
+        throw(ArgumentError("dist_synthesis! with real_output=false needs a complex output " *
+                            "PencilArray; got eltype=$(eltype(fθφ_out))"))
+    end
     f = SHTnsKit.dist_synthesis(plan.cfg, Alm; prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
     copyto!(fθφ_out, f)
     return fθφ_out
@@ -961,13 +958,17 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     if use_rfft && !use_rfft_effective && MPI.Comm_rank(comm) == 0
         @warn "use_rfft=true ignored — Vt/Vp are not real-valued." maxlog=1
     end
+    # φ-locality must be agreed by ALL ranks (see `dist_analysis_standard`): a
+    # per-rank test lets the sole owner of a short φ dimension take the local
+    # branch while empty ranks enter the collective alone.
+    φ_is_local_all = MPI.Allreduce(nlon_local == nlon, &, comm)
 
     nbins = use_rfft_effective ? (nlon ÷ 2 + 1) : nlon
     Ftθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
     Fpθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
 
     if use_rfft_effective
-        if nlon_local == nlon
+        if φ_is_local_all
             Ftθm .= FFTW.rfft(local_Vt, 2)
             Fpθm .= FFTW.rfft(local_Vp, 2)
         else
@@ -977,7 +978,7 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
             SHTnsKitParallelExt.distributed_rfft_phi!(Ftθm, local_Vt, θ_range, φ_range, nlon, comm)
             SHTnsKitParallelExt.distributed_rfft_phi!(Fpθm, local_Vp, θ_range, φ_range, nlon, comm)
         end
-    elseif nlon_local == nlon
+    elseif φ_is_local_all
         SHTnsKitParallelExt.fft_along_dim2!(Ftθm, local_Vt)
         SHTnsKitParallelExt.fft_along_dim2!(Fpθm, local_Vp)
     else
@@ -1039,13 +1040,16 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
 
     # Only reduce if θ is actually distributed across processes
     # When φ is distributed but θ is not, all ranks compute identical results after gathering φ
-    θ_is_distributed = (nθ_local < nlat)
+    # Reduced, not per-rank: `nθ_local < nlat` is not uniform when a pencil has
+    # more θ partitions than rows (nlat=1 on ≥2 θ-ranks), and the lone owner would
+    # then skip the block while the empty ranks enter the collective alone and hang.
+    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, comm)
 
     if θ_is_distributed
         # Same dedup-then-reduce as the scalar dist_analysis_standard path (see
         # there for the rationale): on a 2D (θ×φ) pencil the φ-partners of a
         # θ-slab hold identical partials, so keep one per slab before summing.
-        if nlon_local == nlon
+        if φ_is_local_all
             # θ-only decomposition: no φ-partners to dedup.
             SHTnsKitParallelExt.efficient_spectral_reduce!(Slm_local, comm)
             SHTnsKitParallelExt.efficient_spectral_reduce!(Tlm_local, comm)
@@ -1056,15 +1060,9 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
         end
     end
 
-    # Convert to cfg's requested normalization if needed
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm_local); T2 = similar(Tlm_local)
-        SHTnsKit.convert_alm_norm!(S2, Slm_local, cfg; to_internal=false)
-        SHTnsKit.convert_alm_norm!(T2, Tlm_local, cfg; to_internal=false)
-        return S2, T2
-    else
-        return Slm_local, Tlm_local
-    end
+    # Orthonormal-only, like serial `analysis_sphtor`'s internal form and the
+    # rest of the distributed layer.
+    return Slm_local, Tlm_local
 end
 
 # Function barriers for the sphtor analysis accumulation (see the scalar
@@ -1194,13 +1192,8 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractM
         MPI.Allreduce!(plan.Tlm_work, +, plan.reduce_comm)
     end
 
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        SHTnsKit.convert_alm_norm!(Slm_out, plan.Slm_work, cfg; to_internal=false)
-        SHTnsKit.convert_alm_norm!(Tlm_out, plan.Tlm_work, cfg; to_internal=false)
-    else
-        copyto!(Slm_out, plan.Slm_work)
-        copyto!(Tlm_out, plan.Tlm_work)
-    end
+    copyto!(Slm_out, plan.Slm_work)
+    copyto!(Tlm_out, plan.Tlm_work)
     return Slm_out, Tlm_out
 end
 
@@ -1213,15 +1206,6 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     size(Slm, 1) == lmax + 1 && size(Slm, 2) == mmax + 1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm, 1) == lmax + 1 && size(Tlm, 2) == mmax + 1 || throw(DimensionMismatch("Tlm dims"))
 
-    # Convert incoming coefficients to internal normalization if needed
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm)
-        T2 = similar(Tlm)
-        SHTnsKit.convert_alm_norm!(S2, Slm, cfg; to_internal = true)
-        SHTnsKit.convert_alm_norm!(T2, Tlm, cfg; to_internal = true)
-        Slm = S2
-        Tlm = T2
-    end
 
     # Get the local portion info from the prototype
     θ_globals = collect(globalindices(prototype_θφ, 1))  # Global θ indices this process owns
@@ -1285,9 +1269,15 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
         end
     end
 
-    # Perform inverse FFT along φ
-    Vtθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
-    Vpθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
+    # Perform inverse FFT along φ. As in `dist_synthesis`, the destination eltype
+    # must follow `real_output`: a Float64 buffer picks the real-output
+    # `ifft_along_dim2!` method, which keeps only the real part — so
+    # `real_output=false` came back with `imag == 0` everywhere.
+    Vtθφ_local, Vpθφ_local = if real_output
+        Matrix{Float64}(undef, nθ_local, nlon), Matrix{Float64}(undef, nθ_local, nlon)
+    else
+        Matrix{ComplexF64}(undef, nθ_local, nlon), Matrix{ComplexF64}(undef, nθ_local, nlon)
+    end
     if use_rfft_effective
         Vtθφ_local .= FFTW.irfft(Fθm, nlon, 2)
         Vpθφ_local .= FFTW.irfft(Fφm, nlon, 2)
@@ -1310,17 +1300,13 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
 
     # If φ is distributed, extract local portion
     if φ_is_local
-        Vtθφ = real_output ? Vtθφ_local : Complex{Float64}.(Vtθφ_local)
-        Vpθφ = real_output ? Vpθφ_local : Complex{Float64}.(Vpθφ_local)
+        Vtθφ = Vtθφ_local
+        Vpθφ = Vpθφ_local
     else
         φ_globals = collect(globalindices(prototype_θφ, 2))
         local_φ_range = _owned_range(φ_globals)
         Vtθφ = Vtθφ_local[:, local_φ_range]
         Vpθφ = Vpθφ_local[:, local_φ_range]
-        if !real_output
-            Vtθφ = Complex{Float64}.(Vtθφ)
-            Vpθφ = Complex{Float64}.(Vpθφ)
-        end
     end
 
     return Vtθφ, Vpθφ
@@ -1335,7 +1321,21 @@ end
 
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
                                          Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
-    if plan.with_spatial_scratch && plan.spatial_scratch !== nothing
+    # A complex field cannot be written into real output arrays. Reject that
+    # combination up front, BEFORE any collective: previously the scratch path
+    # silently stored only the real part, and routing it to the allocating path
+    # instead turns the silent truncation into an `InexactError` from `copyto!`
+    # part-way through a collective region. The check is on local eltypes, which
+    # every rank agrees on, so all ranks throw together and nothing deadlocks.
+    if !real_output && (eltype(Vtθφ_out) <: Real || eltype(Vpθφ_out) <: Real)
+        throw(ArgumentError("dist_synthesis_sphtor! with real_output=false needs complex output " *
+                            "PencilArrays; got eltype(Vt)=$(eltype(Vtθφ_out)), eltype(Vp)=$(eltype(Vpθφ_out))"))
+    end
+
+    # The scratch spatial buffers are `Matrix{Float64}` (see `_SphtorScratch`), so
+    # they can only carry a real field; a complex request must take the
+    # allocating path or it would silently lose the imaginary half.
+    if plan.with_spatial_scratch && plan.spatial_scratch !== nothing && real_output
         # Use pre-allocated scratch buffers for zero-allocation synthesis
         scratch = plan.spatial_scratch::_SphtorScratch
         _dist_synthesis_sphtor_with_scratch!(plan.cfg, Slm, Tlm, scratch, Vtθφ_out, Vpθφ_out;
@@ -1359,15 +1359,6 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
     size(Slm, 1) == lmax + 1 && size(Slm, 2) == mmax + 1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm, 1) == lmax + 1 && size(Tlm, 2) == mmax + 1 || throw(DimensionMismatch("Tlm dims"))
 
-    # Convert incoming coefficients to internal normalization if needed
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        S2 = similar(Slm)
-        T2 = similar(Tlm)
-        SHTnsKit.convert_alm_norm!(S2, Slm, cfg; to_internal = true)
-        SHTnsKit.convert_alm_norm!(T2, Tlm, cfg; to_internal = true)
-        Slm = S2
-        Tlm = T2
-    end
 
     # Get the local portion info from the prototype
     θ_globals = collect(globalindices(prototype_θφ, 1))
@@ -1849,7 +1840,10 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     # FFT along φ
     Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
-    if nlon_local == nlon
+    # φ-locality must be agreed by ALL ranks (see `dist_analysis_standard`): a
+    # per-rank test lets the sole owner of a short φ dimension take the local
+    # branch while empty ranks enter the collective alone.
+    if MPI.Allreduce(nlon_local == nlon, &, comm)
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         φ_globals = collect(globalindices(fθφ, 2))
@@ -1907,19 +1901,29 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     # Only reduce if θ is distributed across ranks (if all ranks have all latitudes,
     # each rank's local_contrib is already the complete answer)
-    θ_is_distributed = (nθ_local < cfg.nlat)
+    # Reduce the flag so every rank agrees. Computed per-rank it is not uniform:
+    # on a pencil with more θ partitions than rows (e.g. nlat=1 on 2 θ-ranks,
+    # reachable with the explicit MPITopology the empty-partition cases need) the
+    # single owner sees `1 < 1 == false` and skips the block while the empty
+    # ranks see `0 < 1 == true` and enter the full-comm Allreduce alone — which
+    # never completes. One extra small collective buys a matched one below.
+    θ_is_distributed = MPI.Allreduce(nθ_local < cfg.nlat, |, comm)
     if θ_is_distributed
-        # Reduce over the θ-column subcomm (ranks sharing this φ-segment) so a 2D
-        # (θ×φ) spatial pencil sums each θ-slab once, not once per φ-partner. For
-        # φ-complete inputs every rank has the same color → subcomm == full comm.
-        φ_globals_red = collect(Int, globalindices(fθφ, 2))
-        reduce_comm = MPI.Comm_split(comm, _phi_column_color(φ_globals_red), MPI.Comm_rank(comm))
-        try
-            MPI.Allreduce!(local_contrib, +, reduce_comm)
-        finally
-            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
-        end
+        # A 2D (θ×φ) spatial pencil must sum each θ-slab once, not once per
+        # φ-partner: `_gather_and_fft_phi` hands every partner the FULL longitude
+        # row, so their `local_contrib` are identical.
+        #
+        # Colour-splitting by φ is NOT usable here. A rank owning zero φ columns
+        # still receives the complete gathered row, so its partial is a full,
+        # non-zero duplicate of its partners', and folding it into colour 1 puts
+        # it alongside the genuine owner of global φ index 1, double-counting that
+        # θ-slab. Zero the non-keepers instead and
+        # reduce over the full comm, exactly as `dist_analysis_standard` does;
+        # that also drops a Comm_split from the hot path.
+        _keep_one_phi_partner!(collect(Int, globalindices(fθφ, 2)), local_contrib)
+        MPI.Allreduce!(local_contrib, +, comm)
     end
+
 
     # Create output distributed array and extract local portion
     result = create_distributed_spectral_array(plan, ComplexF64)
@@ -2630,7 +2634,10 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     # FFT along φ
     Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
-    if nlon_local == nlon
+    # φ-locality must be agreed by ALL ranks (see `dist_analysis_standard`): a
+    # per-rank test lets the sole owner of a short φ dimension take the local
+    # branch while empty ranks enter the collective alone.
+    if MPI.Allreduce(nlon_local == nlon, &, comm)
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         φ_globals = collect(globalindices(fθφ, 2))
@@ -2681,21 +2688,18 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         end
     end
 
-    # Check if θ is distributed
-    θ_is_distributed = (nθ_local < nlat)
+    # Check if θ is distributed. Reduced, not per-rank: see the same guard in
+    # `dist_analysis_distributed` — an unmatched full-comm Allreduce hangs.
+    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, comm)
 
     if θ_is_distributed
-        # Reduce over the θ-column subcomm (ranks sharing this φ-segment) so a
-        # 2D (θ×φ) spatial pencil sums each θ-slab once rather than once per
-        # φ-partner. For φ-complete inputs the color is identical on every rank,
-        # so this subcomm equals plan.comm and behaviour is unchanged.
-        φ_globals_red = collect(Int, globalindices(fθφ, 2))
-        reduce_comm = MPI.Comm_split(comm, _phi_column_color(φ_globals_red), MPI.Comm_rank(comm))
-        try
-            MPI.Allreduce!(local_contrib, +, reduce_comm)
-        finally
-            SHTnsKitParallelExt._safe_comm_free(reduce_comm)
-        end
+        # Same reasoning as `dist_analysis_distributed`: every φ-partner of a
+        # θ-slab holds an identical partial after the φ gather (including a rank
+        # owning zero φ columns, which still receives the full row), so keep one
+        # partner per slab and reduce over the full comm. A φ-colour Comm_split
+        # would double-count the empty-φ ranks in colour 1.
+        _keep_one_phi_partner!(collect(Int, globalindices(fθφ, 2)), local_contrib)
+        MPI.Allreduce!(local_contrib, +, comm)
     end
 
     # Apply φ scaling only. Nlm is NOT applied here: the normalized recurrence /
@@ -2711,21 +2715,6 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     for (i, (l, m)) in enumerate(plan.local_lm_indices)
         result.local_coeffs[i] = local_contrib[l+1, m+1]
-    end
-
-    # Handle normalization conversion if needed
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        # Convert from internal (orthonormal) form to user-requested normalization
-        # Gather local coefficients into a dense matrix, convert, then scatter back
-        dense = zeros(ComplexF64, lmax+1, mmax+1)
-        for (i, (l, m)) in enumerate(plan.local_lm_indices)
-            dense[l+1, m+1] = result.local_coeffs[i]
-        end
-        dense_out = similar(dense)
-        SHTnsKit.convert_alm_norm!(dense_out, dense, cfg; to_internal=false)
-        for (i, (l, m)) in enumerate(plan.local_lm_indices)
-            result.local_coeffs[i] = dense_out[l+1, m+1]
-        end
     end
 
     return result
@@ -2812,7 +2801,11 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         Fθm = scratch_buf.Fθm
         P = scratch_buf.P
         P_complex = scratch_buf.P_complex
-        fθφ_local = scratch_buf.fθφ_local
+        # Scratch spatial buffers are real; a complex request needs a complex
+        # destination or `ifft_along_dim2!` drops the imaginary half (see
+        # `dist_synthesis`). Fall back to a fresh complex buffer in that case.
+        fθφ_local = real_output ? scratch_buf.fθφ_local :
+                                  Matrix{ComplexF64}(undef, nθ_local, nlon)
         fθφ_result = scratch_buf.fθφ_result  # Separate result buffer to avoid copy
     else
         θ_globals = collect(globalindices(prototype_θφ, 1))
@@ -2821,7 +2814,8 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
         Fθm = Matrix{ComplexF64}(undef, nθ_local, nlon)
         P = Vector{Float64}(undef, lmax + 1)
         P_complex = Vector{ComplexF64}(undef, lmax + 1)
-        fθφ_local = Matrix{Float64}(undef, nθ_local, nlon)
+        fθφ_local = real_output ? Matrix{Float64}(undef, nθ_local, nlon) :
+                                  Matrix{ComplexF64}(undef, nθ_local, nlon)
         fθφ_result = nothing  # Will allocate on return
     end
 
@@ -2831,6 +2825,7 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
     if !isempty(m_range)
         # Gather within l-communicator to get all l values for local m values
         alm_partial = gather_to_dense_2d(alm)
+
 
         inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
         xv = cfg.x  # hoist field read out of the loops below (cfg is mutable, so not auto-hoisted)
@@ -2921,16 +2916,13 @@ function dist_synthesis_distributed_2d_optimized(cfg::SHTnsKit.SHTConfig, alm::D
             # When no scratch, output_buffer is fθφ_local - must copy
             return fθφ_result !== nothing ? output_buffer : copy(output_buffer)
         else
-            return Complex{Float64}.(output_buffer)
+            # output_buffer is already the complex buffer allocated above
+            return output_buffer
         end
     else
         φ_globals = collect(globalindices(prototype_θφ, 2))
         local_φ_range = _owned_range(φ_globals)
-        result = fθφ_local[:, local_φ_range]
-        if !real_output
-            result = Complex{Float64}.(result)
-        end
-        return result
+        return fθφ_local[:, local_φ_range]
     end
 end
 
@@ -3059,7 +3051,10 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     end
 
     # FFT along φ
-    if nlon_local == nlon
+    # φ-locality must be agreed by ALL ranks (see `dist_analysis_standard`): a
+    # per-rank test lets the sole owner of a short φ dimension take the local
+    # branch while empty ranks enter the collective alone.
+    if MPI.Allreduce(nlon_local == nlon, &, plan.comm)
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         φ_globals = collect(globalindices(fθφ, 2))
@@ -3114,7 +3109,11 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # Reduce contributions within l-communicator only
     # This is the key efficiency gain: O(lmax²/p_m) communication within p_l ranks
     # instead of O(lmax²) global communication
-    θ_is_distributed = (nθ_local < nlat)
+    # Reduced, not per-rank: `nθ_local < nlat` is not uniform when a pencil has
+    # more θ partitions than rows (nlat=1 on ≥2 θ-ranks), and the lone owner would
+    # then skip the block while the empty ranks enter the collective alone and hang. Reduced over `l_comm`,
+    # which is the communicator the guarded Allreduce below actually uses.
+    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, l_comm)
 
     if θ_is_distributed
         # Use packed communication to avoid sending zeros in triangular region
@@ -3181,19 +3180,6 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         @inbounds for (i, (l, m)) in enumerate(plan.local_lm_indices)
             m_col = (m - m_range_start) ÷ mres + 1
             result.local_coeffs[i] = local_contrib[l+1, m_col]
-        end
-    end
-
-    # Handle normalization conversion if needed
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        dense = zeros(ComplexF64, lmax+1, mmax+1)
-        for (i, (l, m)) in enumerate(plan.local_lm_indices)
-            dense[l+1, m+1] = result.local_coeffs[i]
-        end
-        dense_out = similar(dense)
-        SHTnsKit.convert_alm_norm!(dense_out, dense, cfg; to_internal=false)
-        for (i, (l, m)) in enumerate(plan.local_lm_indices)
-            result.local_coeffs[i] = dense_out[l+1, m+1]
         end
     end
 

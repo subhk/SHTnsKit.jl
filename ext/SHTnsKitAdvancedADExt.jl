@@ -18,6 +18,51 @@ import SHTnsKit: wigner_d_matrix_deriv
     # Local alias kept for backward compat with any users touching this symbol.
     const _adjoint_analysis = SHTnsKit._adjoint_analysis
 
+    # ---- normalization in the adjoint -------------------------------------
+    #
+    # The `_adjoint_*` helpers work entirely in the INTERNAL (orthonormal + CS)
+    # convention. Some primals do not: the sphtor pair converts on the way in
+    # (`synthesis_sphtor`, src/sphtor_transforms.jl:178) and on the way out
+    # (`analysis_sphtor`, :275). That conversion is a real diagonal scale `M`,
+    # so it has to appear in the adjoint too:
+    #
+    #     synthesis-like   y = F(M ⊙ a)     ⇒   ā = M ⊙ Fᴴ(ȳ)
+    #     analysis-like    a = F(x) ⊘ M     ⇒   x̄ = Fᴴ(ā ⊘ M)
+    #
+    # Omitting it left every non-default `cfg.norm`/`cs_phase` gradient wrong by
+    # M[l,m] — finite differences showed 40–180% relative error on :schmidt and
+    # :fourpi, while the dense scalar pair (which never converts) was exact.
+    # Both are no-ops on the default config, so the hot path is untouched.
+    # `_ensure_norm_scale_matrix!` lazily BUILDS and caches a constant (l,m) table
+    # on the config. Its `setindex!` is invisible to a caller but fatal to Zygote
+    # ("Mutating arrays is not supported") whenever a differentiated function
+    # reaches it — e.g. `analysis_qst`/`_synthesis_qst`, which have no rrule and
+    # are traced through. The table does not depend on any differentiated value,
+    # so declare the whole builder non-differentiable; that covers every traced
+    # call site at once instead of rewriting each one to dodge the cache.
+    ChainRulesCore.@non_differentiable SHTnsKit._ensure_norm_scale_matrix!(::Any)
+
+    _needs_norm(cfg) = cfg.norm !== :orthonormal || cfg.cs_phase == false
+
+    # A loss that consumes only ONE of a two-output transform hands the other slot
+    # a `ZeroTangent`. The `_adjoint_*` kernels take arrays, so materialise it to
+    # an explicit zero matrix of the right shape rather than letting it reach them.
+    @inline _coeff_zeros(cfg) = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    @inline _materialize_coeff(A, cfg) =
+        A isa ChainRulesCore.AbstractZero ? _coeff_zeros(cfg) : _to_complex(A)
+
+    # `AbstractZero` (ZeroTangent/NoTangent) must pass straight through: a loss
+    # that consumes only one of two outputs hands the other slot a ZeroTangent,
+    # and `similar(::ZeroTangent)` is a MethodError.
+    @inline _scale_cotangent(A::ChainRulesCore.AbstractZero, cfg; to_internal::Bool) = A
+
+    @inline function _scale_cotangent(A, cfg; to_internal::Bool)
+        _needs_norm(cfg) || return A
+        out = similar(A)
+        SHTnsKit.convert_alm_norm!(out, A, cfg; to_internal=to_internal)
+        return out
+    end
+
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis), cfg::SHTnsKit.SHTConfig, f)
         y = SHTnsKit.analysis(cfg, f)
         function pullback(ȳ)
@@ -84,19 +129,55 @@ import SHTnsKit: wigner_d_matrix_deriv
     end
 
     # Packed scalar transforms: analysis_packed, synthesis_packed
+    #
+    # `analysis_packed = pack ∘ analysis ∘ reshape` and
+    # `synthesis_packed = vec ∘ synthesis ∘ unpack`. Packing is pure re-indexing
+    # (it drops the m not divisible by mres, which unpack leaves at zero), so
+    # `adjoint(pack) = unpack` and `adjoint(unpack) = pack`; the transform half of
+    # each adjoint is the corresponding `_adjoint_*` helper. Using the *inverse*
+    # transform instead — `analysis_packed` as the adjoint of `synthesis_packed`
+    # and vice versa — is wrong for exactly the reason spelled out above the
+    # dense `synthesis` rrule: analysis carries the Gauss weights `w_i·cphi` that
+    # the synthesis adjoint must not, and misses the `wm = 2` doubling for m > 0.
+
+    # Dense (l+1, m+1) matrix ↔ packed LM-order vector, skipping m % mres ≠ 0.
+    function _unpack_lm(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector)
+        A = zeros(eltype(Qlm), cfg.lmax + 1, cfg.mmax + 1)
+        @inbounds for m in 0:cfg.mmax
+            (m % cfg.mres == 0) || continue
+            for l in m:cfg.lmax
+                A[l+1, m+1] = Qlm[LM_index(cfg.lmax, cfg.mres, l, m) + 1]
+            end
+        end
+        return A
+    end
+
+    function _pack_lm(cfg::SHTnsKit.SHTConfig, A::AbstractMatrix)
+        Qlm = zeros(eltype(A), cfg.nlm)
+        @inbounds for m in 0:cfg.mmax
+            (m % cfg.mres == 0) || continue
+            for l in m:cfg.lmax
+                Qlm[LM_index(cfg.lmax, cfg.mres, l, m) + 1] = A[l+1, m+1]
+            end
+        end
+        return Qlm
+    end
+
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_packed), cfg::SHTnsKit.SHTConfig, Vr)
         y = SHTnsKit.analysis_packed(cfg, Vr)
         function pullback(ȳ)
-            Vr̄ = SHTnsKit.synthesis_packed(cfg, _to_complex(ȳ))
+            Ā = _unpack_lm(cfg, _to_complex(ȳ))
+            Vr̄ = vec(_adjoint_analysis(cfg, Ā))
             return NoTangent(), NoTangent(), Vr̄
-end
+        end
         return y, pullback
-end
+    end
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_packed), cfg::SHTnsKit.SHTConfig, Qlm)
         y = SHTnsKit.synthesis_packed(cfg, Qlm)
         function pullback(ȳ)
-            Qlm̄ = SHTnsKit.analysis_packed(cfg, ȳ)
+            f̄ = reshape(_unthunk(ȳ), cfg.nlat, cfg.nlon)
+            Qlm̄ = _pack_lm(cfg, SHTnsKit._adjoint_synthesis(cfg, f̄; real_output=true))
             return NoTangent(), NoTangent(), Qlm̄
         end
         return y, pullback
@@ -124,7 +205,12 @@ end
         Slm, Tlm = SHTnsKit.analysis_sphtor(cfg, Vt, Vp)
         function pullback(ṠTl)
             Slm̄, Tlm̄ = ṠTl
-            V̄t, V̄p = _adjoint_analysis_sphtor(cfg, _to_complex(Slm̄), _to_complex(Tlm̄))
+            # analysis-like: the primal divides by M on the way out, so the
+            # cotangent is divided before the internal-convention adjoint.
+            # `_materialize_coeff` turns a ZeroTangent slot into explicit zeros.
+            S̄ = _scale_cotangent(_materialize_coeff(Slm̄, cfg), cfg; to_internal=false)
+            T̄ = _scale_cotangent(_materialize_coeff(Tlm̄, cfg), cfg; to_internal=false)
+            V̄t, V̄p = _adjoint_analysis_sphtor(cfg, S̄, T̄)
             return NoTangent(), NoTangent(), V̄t, V̄p
         end
         return (Slm, Tlm), pullback
@@ -143,17 +229,104 @@ end
             # a sum(abs2,·) loss delivers thunked cotangents in a Tangent tuple.
             V̄t = ChainRulesCore.unthunk(Ṽ[1])
             V̄p = ChainRulesCore.unthunk(Ṽ[2])
+            # A loss touching only Vt (or only Vp) leaves the other a ZeroTangent.
+            zsp() = zeros(Float64, cfg.nlat, cfg.nlon)
+            V̄t = V̄t isa ChainRulesCore.AbstractZero ? zsp() : V̄t
+            V̄p = V̄p isa ChainRulesCore.AbstractZero ? zsp() : V̄p
             S̄, T̄ = SHTnsKit._adjoint_synthesis_sphtor(cfg, V̄t, V̄p; real_output=real_output)
+            # synthesis-like: the primal multiplies by M on the way in, so the
+            # adjoint's output is multiplied by the same diagonal scale.
+            S̄ = _scale_cotangent(S̄, cfg; to_internal=true)
+            T̄ = _scale_cotangent(T̄, cfg; to_internal=true)
             return NoTangent(), NoTangent(), S̄, T̄, (; real_output=NoTangent())
         end
         return (Vt, Vp), pullback
     end
 
-    # Complex packed
+    # Complex packed (LM_cplx layout — both signs of m stored explicitly).
+    #
+    # Both transforms are ℂ-linear in their argument (no `real()` anywhere), so
+    # each adjoint is the conjugate transpose of the forward operator — NOT the
+    # other transform, which differs by the quadrature weights `w_i·cphi` exactly
+    # as in the real packed pair above.
+
+    """
+        _adjoint_synthesis_packed_cplx(cfg, z̄) -> packed LM_cplx cotangent
+
+    Adjoint of `synthesis_packed_cplx`. The forward writes DFT bin `am+1` from
+    `a_{l,+am}` and bin `nlon-am+1` from `a_{l,-am}`, both through the SAME real
+    row `P̄_l^{|m|}` and the same real norm·CS scale `M[l,|m|]`. `_adjoint_synthesis`
+    (with `real_output=false`, i.e. no `wm` doubling) already delivers
+    `Σ_i P̄ · fft(·)[i, am+1]`, so the +m half is a direct call; the −m half uses
+    `fft(conj z̄)[i, am+1] = conj(fft(z̄)[i, nlon-am+1])` to reach the mirrored bins
+    with the same kernel.
+    """
+    function _adjoint_synthesis_packed_cplx(cfg::SHTnsKit.SHTConfig, z̄::AbstractMatrix)
+        cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
+        lmax, mmax = cfg.lmax, cfg.mmax
+        Ap = SHTnsKit._adjoint_synthesis(cfg, z̄;        real_output=false)
+        Am = SHTnsKit._adjoint_synthesis(cfg, conj.(z̄); real_output=false)
+        need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = SHTnsKit._ensure_norm_scale_matrix!(cfg)
+        ā = zeros(eltype(Ap), SHTnsKit.nlm_cplx_calc(lmax, mmax, 1))
+        @inbounds for l in 0:lmax
+            s0 = need_norm ? M[l+1, 1] : 1.0
+            ā[LM_cplx_index(lmax, mmax, l, 0) + 1] = s0 * Ap[l+1, 1]
+            for m in 1:min(l, mmax)
+                s = need_norm ? M[l+1, m+1] : 1.0
+                ā[LM_cplx_index(lmax, mmax, l,  m) + 1] = s * Ap[l+1, m+1]
+                ā[LM_cplx_index(lmax, mmax, l, -m) + 1] = s * conj(Am[l+1, m+1])
+            end
+        end
+        return ā
+    end
+
+    """
+        _adjoint_analysis_packed_cplx(cfg, ā) -> spatial cotangent (nlat × nlon)
+
+    Adjoint of `analysis_packed_cplx`. Mirrors `SHTnsKit._adjoint_analysis`
+    (`F̄ = w_i·cphi·Σ_l P̄·ā`, then `adjoint(fft) = nlon·ifft`) but keeps BOTH DFT
+    bins per `|m|` and does not take `real()` — the forward input is a complex
+    field, so its cotangent is complex too.
+    """
+    function _adjoint_analysis_packed_cplx(cfg::SHTnsKit.SHTConfig, ā::AbstractVector)
+        cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
+        lmax, mmax = cfg.lmax, cfg.mmax
+        nlat, nlon = cfg.nlat, cfg.nlon
+        length(ā) == SHTnsKit.nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("ā length"))
+        CT = complex(float(eltype(ā)))
+        F̄ = zeros(CT, nlat, nlon)
+        need_norm = cfg.norm !== :orthonormal || cfg.cs_phase == false
+        M = SHTnsKit._ensure_norm_scale_matrix!(cfg)
+        P = Vector{Float64}(undef, lmax + 1)
+        scaleφ = cfg.cphi
+        xv = cfg.x; wv = cfg.w
+        for am in 0:mmax
+            colp = am + 1
+            coln = nlon - am + 1
+            for i in 1:nlat
+                SHTnsKit.Plm_norm_row!(P, xv[i], lmax, am)
+                wi = wv[i] * scaleφ
+                gp = zero(CT); gn = zero(CT)
+                @inbounds for l in am:lmax
+                    base = wi * P[l+1]
+                    need_norm && (base /= M[l+1, am+1])
+                    gp += base * ā[LM_cplx_index(lmax, mmax, l, am) + 1]
+                    if am > 0
+                        gn += base * ā[LM_cplx_index(lmax, mmax, l, -am) + 1]
+                    end
+                end
+                F̄[i, colp] += gp
+                am > 0 && (F̄[i, coln] += gn)
+            end
+        end
+        return nlon .* SHTnsKit.ifft_phi(F̄)
+    end
+
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_packed_cplx), cfg::SHTnsKit.SHTConfig, z)
         y = SHTnsKit.analysis_packed_cplx(cfg, z)
         function pullback(ȳ)
-            z̄ = SHTnsKit.synthesis_packed_cplx(cfg, _to_complex(ȳ))
+            z̄ = _adjoint_analysis_packed_cplx(cfg, _to_complex(ȳ))
             return NoTangent(), NoTangent(), z̄
         end
         return y, pullback
@@ -162,11 +335,11 @@ end
     function ChainRulesCore.rrule(::typeof(SHTnsKit.synthesis_packed_cplx), cfg::SHTnsKit.SHTConfig, alm)
         y = SHTnsKit.synthesis_packed_cplx(cfg, alm)
         function pullback(ȳ)
-            alm̄ = SHTnsKit.analysis_packed_cplx(cfg, _to_complex(ȳ))
+            alm̄ = _adjoint_synthesis_packed_cplx(cfg, _to_complex(ȳ))
             return NoTangent(), NoTangent(), alm̄
         end
         return y, pullback
-end
+    end
 
 # Rotations: adjoints via inverse/adjoint rotation.
 # The packed real-field rotations map coefficient vectors whose m>0 entries carry
@@ -280,51 +453,65 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
         Z̄ = similar(Zlm)
         fill!(Z̄, zero(eltype(Z̄)))
         α, β, γ = r.α, r.β, r.γ
+        # This pullback reimplements the Wigner engine, which works in the Y_l^m
+        # basis, while the primal is `ε ∘ engine ∘ ε` in the packed LM_cplx layout
+        # (see SHTnsKit._lmcplx_ybasis_signs). Convert both the input and the
+        # incoming cotangent into the engine's basis and convert the result back;
+        # ε is real and self-inverse, so the angle gradients are unaffected.
+        # NOTE: bind to NEW locals. `Zlm` is captured from the enclosing rrule, and
+        # assigning to a captured variable inside a closure rebinds its box — so
+        # `Zlm = ε .* Zlm` would apply ε again on every subsequent call, leaving
+        # the angle gradients wrong (by O(1)) from the second invocation onward.
+        # `ȳ` is the closure's own argument and would be safe, but is renamed too
+        # so the pair reads the same way.
+        ε = SHTnsKit._lmcplx_ybasis_signs(lmax, mmax)
+        Zε = ε .* Zlm
+        ȳε = ε .* ȳ
         gα = 0.0; gβ = 0.0; gγ = 0.0
         for l in 0:lmax
             mm = min(l, mmax)
             n = 2l + 1
             # c̄_m = e^{+i m α} ȳ_m
-            cbar = zeros(eltype(Zlm), n)
+            cbar = zeros(eltype(Zε), n)
             for m in -mm:mm
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
-                cbar[m + l + 1] = ȳ[idx] * cis(m * α)
+                cbar[m + l + 1] = ȳε[idx] * cis(m * α)
                 # α gradient uses -i m R_m -> inner product conj(ȳ_m) * (-i m R_m)
                 # R_m = e^{-i m α} c_m
                 # We need c_m; recompute below after d multiplication
             end
             # b̄ = d^T(β) c̄
             dl = wigner_d_matrix(l, β)
-            bbar = zeros(eltype(Zlm), n)
+            bbar = zeros(eltype(Zε), n)
             for mp in -l:l
-                s = zero(eltype(Zlm))
+                s = zero(eltype(Zε))
                 for m in -l:l
                     s += dl[m + l + 1, mp + l + 1] * cbar[m + l + 1]
                 end
                 bbar[mp + l + 1] = s
             end
             # compute forward intermediates for angle grads
-            b = zeros(eltype(Zlm), n)
+            b = zeros(eltype(Zε), n)
             for mp in -mm:mm
                 idx = LM_cplx_index(lmax, mmax, l, mp) + 1
-                b[mp + l + 1] = Zlm[idx] * cis(-mp * γ)
+                b[mp + l + 1] = Zε[idx] * cis(-mp * γ)
             end
             c = dl * b
             # α-grad: sum_m conj(ȳ_m) * (-i m) R_m = real(sum conj(ȳ_m) * (-i m) e^{-i m α} c_m )
             for m in -mm:mm
                 idx = LM_cplx_index(lmax, mmax, l, m) + 1
                 Rm = c[m + l + 1] * cis(-m * α)
-                gα += real(conj(ȳ[idx]) * ((0 - 1im) * m * Rm))
+                gα += real(conj(ȳε[idx]) * ((0 - 1im) * m * Rm))
             end
             # γ-grad: sum_m conj(ȳ_m) * phaseL * d * (-i m') b_{m'}
             gγ_l = 0.0
             for m in -mm:mm
                 idxm = LM_cplx_index(lmax, mmax, l, m) + 1
-                s = zero(eltype(Zlm))
+                s = zero(eltype(Zε))
                 for mp in -l:l
                     s += dl[m + l + 1, mp + l + 1] * ((0 - 1im) * mp * b[mp + l + 1])
                 end
-                gγ_l += real(conj(ȳ[idxm]) * (s * cis(-m * α)))
+                gγ_l += real(conj(ȳε[idxm]) * (s * cis(-m * α)))
             end
             gγ += gγ_l
             # β-grad: use derivative d'(β)
@@ -332,11 +519,11 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
             gβ_l = 0.0
             for m in -mm:mm
                 idxm = LM_cplx_index(lmax, mmax, l, m) + 1
-                s = zero(eltype(Zlm))
+                s = zero(eltype(Zε))
                 for mp in -l:l
                     s += ddl[m + l + 1, mp + l + 1] * b[mp + l + 1]
                 end
-                gβ_l += real(conj(ȳ[idxm]) * (s * cis(-m * α)))
+                gβ_l += real(conj(ȳε[idxm]) * (s * cis(-m * α)))
             end
             gβ += gβ_l
             # Ā_m' = e^{+i m' γ} b̄_m'
@@ -345,6 +532,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
                 Z̄[idx] += bbar[mp + l + 1] * cis(mp * γ)
             end
         end
+        Z̄ .*= ε   # back to the packed layout
         rt = Tangent{SHTnsKit.SHTRotation}(; α=gα, β=gβ, γ=gγ)
         return NoTangent(), rt, Z̄, ZeroTangent()
     end

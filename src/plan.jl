@@ -459,11 +459,14 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
         end
     end
 
-    # Convert to cfg normalization if needed (using pre-allocated scratch buffer)
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        convert_alm_norm!(plan.norm_tmp1, alm_out, cfg; to_internal=false)
-        copyto!(alm_out, plan.norm_tmp1)
-    end
+    # NO normalization conversion: the scalar `SHTPlan` is a drop-in accelerator
+    # for `analysis`/`synthesis`, which are orthonormal-only by documented
+    # contract, so it must return exactly what they return. It previously
+    # converted to cfg's convention, which meant swapping the plan in silently
+    # changed the coefficients — plan∘plan and dense∘dense each round-tripped,
+    # but mixing them (e.g. `synthesis(cfg, analysis!(plan, alm, f))`) was off by
+    # M[l,m] plus a sign on odd m. The sphtor plan methods above DO convert, and
+    # correctly so: their non-plan twins convert too.
     return alm_out
 end
 
@@ -482,12 +485,9 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     size(alm,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
 
-    # Convert alm to internal normalization if needed (using pre-allocated scratch buffer)
+    # NO normalization conversion — see `analysis!(::SHTPlan, …)` above: this
+    # mirrors the orthonormal-only `synthesis`, not the converting sphtor plan.
     alm_int = alm
-    if cfg.norm !== :orthonormal || cfg.cs_phase == false
-        convert_alm_norm!(plan.norm_tmp1, alm, cfg; to_internal=true)
-        alm_int = plan.norm_tmp1
-    end
 
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)

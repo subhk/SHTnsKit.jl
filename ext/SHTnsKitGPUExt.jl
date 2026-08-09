@@ -713,6 +713,32 @@ end
 # Vector field GPU operations using proper spectral method
 # ============================================================================
 
+# Pole limits for the sphtor kernels — device twins of `_dPdtheta_at_pole` /
+# `_P_over_sinth_at_pole` in src/kernels.jl.
+#
+# At an exact pole node (sinθ == 0, i.e. a pole-inclusive regular or
+# Driscoll-Healy grid) the tables give dP̄/dθ = -sinθ·dP̄/dx = 0 and P̄/sinθ = 0
+# because `inv_sθ` is guarded to 0. Both are wrong: the true limits are finite
+# and non-zero for m = 1, so without this branch the GPU silently dropped the
+# entire m = 1 contribution from the two pole rows and disagreed with the CPU
+# for the same cfg. `(-1)^k` is written as an `isodd`/`iseven` select to stay
+# allocation- and intrinsic-free inside a kernel.
+const _GPU_POLE_TOL = SHTnsKit.POLE_TOLERANCE_FACTOR * eps(Float64)
+
+@inline function _gpu_dPdtheta_at_pole(l::Int, m::Int, x::Float64, N::Float64)
+    m == 1 || return 0.0
+    ll1 = 0.5 * Float64(l * (l + 1))
+    s = x > 0 ? -1.0 : (isodd(l) ? 1.0 : -1.0)   # north: -1;  south: (-1)^(l+1)
+    return s * N * ll1
+end
+
+@inline function _gpu_P_over_sinth_at_pole(l::Int, m::Int, x::Float64, N::Float64)
+    m == 1 || return 0.0
+    ll1 = 0.5 * Float64(l * (l + 1))
+    s = x > 0 ? -1.0 : (iseven(l) ? 1.0 : -1.0)  # north: -1;  south: (-1)^l
+    return s * N * ll1
+end
+
 """
     gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 
@@ -740,9 +766,11 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     gpu_fft!(gpu_vθ, 2)
     gpu_fft!(gpu_vφ, 2)
 
-    # Transfer config data to GPU
+    # Transfer config data to GPU. `Nlm` is only read on the pole branch below,
+    # where the P̄/dP̄ tables collapse to 0 and the closed-form limits need N.
     x_values = CuArray(cfg.x)
     weights = CuArray(cfg.w)
+    Nlm_values = CuArray(cfg.Nlm)
     scaleφ = cfg.cphi
     robert_form = cfg.robert_form
 
@@ -761,7 +789,7 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
     T_contrib = CUDA.zeros(ComplexF64, nlat, lmax+1, mmax+1)
 
     @kernel function vector_analysis_contrib_kernel!(S_out, T_out, Fθ, Fφ, Plm, dPlm,
-                                                      x_vals, w_vals, scale,
+                                                      x_vals, w_vals, Nlm_vals, scale,
                                                       nlat, lmax, mmax, do_robert)
         i_lat, l_idx, m_idx = @index(Global, NTuple)
 
@@ -773,7 +801,8 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
             if l >= max(1, m)
                 x = x_vals[i_lat]
                 sθ = sqrt(max(0.0, 1.0 - x * x))
-                inv_sθ = sθ < 1e-14 ? 0.0 : 1.0 / sθ
+                is_pole = sθ < _GPU_POLE_TOL
+                inv_sθ = is_pole ? 0.0 : 1.0 / sθ
                 wi = w_vals[i_lat]
 
                 # Get Fourier modes for this latitude and m
@@ -781,7 +810,7 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
                 Fφ_val = Fφ[i_lat, m_idx]
 
                 # Robert-form handling: input is sin(θ)*V, divide by sin(θ)
-                if do_robert && sθ > 1e-14
+                if do_robert && !is_pole
                     Fθ_val /= sθ
                     Fφ_val /= sθ
                 end
@@ -790,20 +819,27 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
                 P = Plm[i_lat, l_idx, m_idx]   # P̄_l^m
                 dP = dPlm[i_lat, l_idx, m_idx]  # dP̄_l^m/dx
 
-                # ∂Ȳ_l^m/∂θ = -sinθ * dP̄_l^m/dx
+                # ∂Ȳ_l^m/∂θ = -sinθ * dP̄_l^m/dx, and Ȳ/sinθ = P̄ * inv_sθ — both
+                # collapse to 0 at an exact pole node, so substitute the closed-form
+                # limits there (mirrors `_sphtor_analysis_kernel!` on the CPU).
                 dθY = -sθ * dP
-                Y = P
+                Y_over_s = P * inv_sθ
+                if is_pole
+                    N = Nlm_vals[l_idx, m_idx]
+                    dθY = _gpu_dPdtheta_at_pole(l, m, x, N)
+                    Y_over_s = _gpu_P_over_sinth_at_pole(l, m, x, N)
+                end
 
                 # Compute coefficient and term
                 coeff = wi * scale / (l * (l + 1))
                 term_re = 0.0
-                term_im = m * inv_sθ * Y
+                term_im = m * Y_over_s
 
                 # Adjoint of synthesis formulas:
                 # S_lm += coeff * (Fθ * dθY + conj(term) * Fφ)
                 # T_lm += coeff * (-conj(term) * Fθ + dθY * Fφ)
 
-                # conj(term) = (term_re, -term_im) = (0, -m*inv_sθ*Y)
+                # conj(term) = (term_re, -term_im) = (0, -m*Ȳ/sinθ)
                 Fθ_re = real(Fθ_val)
                 Fθ_im = imag(Fθ_val)
                 Fφ_re = real(Fφ_val)
@@ -836,7 +872,7 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 
     contrib_kernel! = vector_analysis_contrib_kernel!(backend)
     contrib_kernel!(S_contrib, T_contrib, gpu_vθ, gpu_vφ, Plm, dPlm,
-                    x_values, weights, scaleφ,
+                    x_values, weights, Nlm_values, scaleφ,
                     nlat, lmax, mmax, robert_form;
                     ndrange=(nlat, lmax+1, mmax+1))
     CUDA.synchronize()
@@ -891,10 +927,12 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
         SHTnsKit.convert_alm_norm!(Tlm_int, tor_coeffs, cfg; to_internal=true)
     end
 
-    # Transfer coefficients to GPU (no Nlm upload needed — folded into P̄)
+    # Transfer coefficients to GPU. Nlm is folded into P̄/dP̄ for the interior;
+    # it is still needed for the pole-limit closed forms, where those tables are 0.
     gpu_Slm = CuArray(ComplexF64.(Slm_int))
     gpu_Tlm = CuArray(ComplexF64.(Tlm_int))
     x_values = CuArray(cfg.x)
+    Nlm_values = CuArray(cfg.Nlm)
 
     # Compute ORTHONORMAL normalized P̄_l^m AND dP̄/dx on GPU.
     # Both arrays include Nlm — downstream kernel must NOT multiply by Nlm.
@@ -916,12 +954,14 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
 
     # Kernel for spectral vector synthesis - compute Fourier modes for each (latitude, m).
     # Plm holds P̄_l^m and dPlm holds dP̄_l^m/dx (both orthonormal-normalized, no Nlm factor).
-    @kernel function vector_spectral_synthesis_kernel!(Ftheta, Fphi, Slm, Tlm, Plm, dPlm, sintheta, nlat, nlon, lmax, mmax, inv_scale)
+    @kernel function vector_spectral_synthesis_kernel!(Ftheta, Fphi, Slm, Tlm, Plm, dPlm, sintheta, x_vals, Nlm_vals, nlat, nlon, lmax, mmax, inv_scale)
         i, m_idx = @index(Global, NTuple)
         if i <= nlat && m_idx <= mmax + 1
             m = m_idx - 1
             sθ = sintheta[i]
-            inv_sθ = abs(sθ) < 1e-14 ? 0.0 : 1.0 / sθ
+            x = x_vals[i]
+            is_pole = abs(sθ) < _GPU_POLE_TOL
+            inv_sθ = is_pole ? 0.0 : 1.0 / sθ
 
             gθ = ComplexF64(0, 0)
             gφ = ComplexF64(0, 0)
@@ -932,16 +972,25 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
                 Y    = Plm[i, l_idx, m_idx]   # P̄_l^m
                 dP   = dPlm[i, l_idx, m_idx]  # dP̄_l^m/dx
 
-                # ∂Ȳ_l^m/∂θ = -sinθ * dP̄_l^m/dx
-                dYdθ = -sθ * dP
+                # ∂Ȳ_l^m/∂θ = -sinθ * dP̄_l^m/dx and Ȳ/sinθ = P̄ * inv_sθ. At an
+                # exact pole node both are 0 (inv_sθ is guarded), which drops the
+                # whole m=1 term; substitute the closed-form limits as the CPU
+                # `_sphtor_synthesis_kernel` does.
+                dYdθ     = -sθ * dP
+                Y_over_s = Y * inv_sθ
+                if is_pole
+                    N = Nlm_vals[l_idx, m_idx]
+                    dYdθ     = _gpu_dPdtheta_at_pole(l, m, x, N)
+                    Y_over_s = _gpu_P_over_sinth_at_pole(l, m, x, N)
+                end
 
                 Sl = Slm[l_idx, m_idx]
                 Tl = Tlm[l_idx, m_idx]
 
                 # V_θ = ∂S/∂θ - (im/sinθ) * T
-                gθ += dYdθ * Sl - ComplexF64(0, m) * inv_sθ * Y * Tl
+                gθ += dYdθ * Sl - ComplexF64(0, m) * Y_over_s * Tl
                 # V_φ = (im/sinθ) * S + ∂T/∂θ
-                gφ += ComplexF64(0, m) * inv_sθ * Y * Sl + dYdθ * Tl
+                gφ += ComplexF64(0, m) * Y_over_s * Sl + dYdθ * Tl
             end
 
             # Store in Fourier coefficient array
@@ -951,7 +1000,7 @@ function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get
     end
 
     synth_kernel! = vector_spectral_synthesis_kernel!(backend)
-    synth_kernel!(Fθ, Fφ, gpu_Slm, gpu_Tlm, Plm, dPlm, sintheta, nlat, nlon, lmax, mmax, inv_scaleφ; ndrange=(nlat, mmax+1))
+    synth_kernel!(Fθ, Fφ, gpu_Slm, gpu_Tlm, Plm, dPlm, sintheta, x_values, Nlm_values, nlat, nlon, lmax, mmax, inv_scaleφ; ndrange=(nlat, mmax+1))
     CUDA.synchronize()
 
     # Apply Hermitian symmetry for real output

@@ -12,6 +12,10 @@ using SHTnsKit
                    real_output::Bool=true) -> Vector
 
 Evaluate along a latitude (cosθ = cost) from distributed Alm. All ranks receive the full vector.
+
+`Alm_pencil` holds ORTHONORMAL coefficients — the form `dist_analysis` returns,
+matching serial `analysis`/`synthesis_point`. It is NOT the packed `SH_to_lat`
+convention, which applies the cfg norm/CS scale.
 """
 function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray, cost::Real;
                                  nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax,
@@ -62,6 +66,8 @@ end
 
 Evaluate spherical harmonic expansion at a single point for a real-valued field.
 Uses Hermitian symmetry: negative-m contribution added via 2*real(...) for m > 0.
+
+`Alm_pencil` holds orthonormal coefficients (see [`dist_SH_to_lat`](@ref)).
 """
 function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray, cost::Real, phi::Real)
     comm = communicator(Alm_pencil)
@@ -104,6 +110,8 @@ end
 
 """
     dist_SHqst_to_point(cfg, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost, phi) -> (vr, vt, vp)
+
+`Q_p`/`S_p`/`T_p` hold orthonormal coefficients (see [`dist_SH_to_lat`](@ref)).
 """
 function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real, phi::Real)
     comm = communicator(Q_p)
@@ -126,9 +134,10 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
             lval = gl_l[ii] - 1
             Y = P[lval+1]
             dθY = dPdtheta[lval+1]
-            vr_local += Y   * Q_p[il, mloc[j0]]
-            vt_local += dθY * S_p[il, mloc[j0]]
-            vp_local += dθY * T_p[il, mloc[j0]]  # Vφ = dθY * T for m=0
+                aQ = Q_p[il, mloc[j0]]; aS = S_p[il, mloc[j0]]; aT = T_p[il, mloc[j0]]
+            vr_local += Y   * aQ
+            vt_local += dθY * aS
+            vp_local += dθY * aT  # Vφ = dθY * T for m=0
         end
     end
     # m>0 (use pole-safe Legendre functions)
@@ -145,11 +154,12 @@ function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray,
                 Y = P[lval+1]
                 dθY = dPdtheta[lval+1]
                 Y_over_sθ = P_over_sinth[lval+1]
-                gvr += Y   * Q_p[il, jm]
+                aQ = Q_p[il, jm]; aS = S_p[il, jm]; aT = T_p[il, jm]
+                gvr += Y   * aQ
                 # Vθ = ∂S/∂θ - (im/sinθ) * T
-                gvt += dθY * S_p[il, jm] - (0 + 1im) * mval * Y_over_sθ * T_p[il, jm]
+                gvt += dθY * aS - (0 + 1im) * mval * Y_over_sθ * aT
                 # Vφ = (im/sinθ) * S + ∂T/∂θ
-                gvp += (0 + 1im) * mval * Y_over_sθ * S_p[il, jm] + dθY * T_p[il, jm]
+                gvp += (0 + 1im) * mval * Y_over_sθ * aS + dθY * aT
             end
         end
         ph = cis(mval * phi)
@@ -165,6 +175,8 @@ end
 """
     dist_SHqst_to_lat(cfg, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real;
                       nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax) -> Vr, Vt, Vp
+
+`Q_p`/`S_p`/`T_p` hold orthonormal coefficients (see [`dist_SH_to_lat`](@ref)).
 """
 function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real;
                                     nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax)
@@ -190,9 +202,10 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
             if lval <= ltr
                 Y = P[lval+1]
                 dθY = dPdtheta[lval+1]
-                g0  += Y * Q_p[il, mloc[j0]]
-                gθ0 += dθY * S_p[il, mloc[j0]]
-                gφ0 += dθY * T_p[il, mloc[j0]]  # Vφ = dθY * T for m=0
+                aQ = Q_p[il, mloc[j0]]; aS = S_p[il, mloc[j0]]; aT = T_p[il, mloc[j0]]
+                g0  += Y * aQ
+                gθ0 += dθY * aS
+                gφ0 += dθY * aT  # Vφ = dθY * T for m=0
             end
         end
         Vr_local .+= g0; Vt_local .+= gθ0; Vp_local .+= gφ0
@@ -211,11 +224,12 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
                 Y = P[lval+1]
                 dθY = dPdtheta[lval+1]
                 Y_over_sθ = P_over_sinth[lval+1]
-                g  += Y   * Q_p[il, jm]
+                aQ = Q_p[il, jm]; aS = S_p[il, jm]; aT = T_p[il, jm]
+                g  += Y   * aQ
                 # Vθ = ∂S/∂θ - (im/sinθ) * T
-                gθ += dθY * S_p[il, jm] - (0 + 1im) * mval * Y_over_sθ * T_p[il, jm]
+                gθ += dθY * aS - (0 + 1im) * mval * Y_over_sθ * aT
                 # Vφ = (im/sinθ) * S + ∂T/∂θ
-                gφ += (0 + 1im) * mval * Y_over_sθ * S_p[il, jm] + dθY * T_p[il, jm]
+                gφ += (0 + 1im) * mval * Y_over_sθ * aS + dθY * aT
             end
         end
         @inbounds for j in 0:(nphi-1)
@@ -238,8 +252,11 @@ end
 """
 function SHTnsKit.dist_analysis_packed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ)
-    Qlm = Vector{ComplexF64}(undef, cfg.nlm)
+    # `LM_index` throws unless m is a multiple of mres, so stride like the serial
+    # twin `analysis_packed` (src/transforms.jl:120) instead of walking every m.
+    Qlm = zeros(ComplexF64, cfg.nlm)
     for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
         for l in m:cfg.lmax
             lm = SHTnsKit.LM_index(cfg.lmax, cfg.mres, l, m) + 1
             Qlm[lm] = Alm[l+1, m+1]
@@ -253,9 +270,14 @@ end
 """
 function SHTnsKit.dist_synthesis_packed(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex}; prototype_θφ::PencilArray, real_output::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length"))
+    # Same mres stride as `synthesis_packed` (src/transforms.jl:141); without it
+    # `LM_index` throws on the first order that is not a multiple of mres.
     Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    for m in 0:cfg.mmax, l in m:cfg.lmax
-        Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(cfg.lmax, cfg.mres, l, m) + 1]
+    for m in 0:cfg.mmax
+        (m % cfg.mres == 0) || continue
+        for l in m:cfg.lmax
+            Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(cfg.lmax, cfg.mres, l, m) + 1]
+        end
     end
     return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output)
 end
@@ -316,14 +338,31 @@ end
     dist_synthesis_packed_cplx(cfg, alm_packed::AbstractVector{<:Complex}; prototype_θφ) -> PencilArray complex field
 """
 function SHTnsKit.dist_synthesis_packed_cplx(cfg::SHTnsKit.SHTConfig, alm_packed::AbstractVector{<:Complex}; prototype_θφ::PencilArray)
+    cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
     lmax, mmax = cfg.lmax, cfg.mmax
     length(alm_packed) == SHTnsKit.nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("alm_packed length"))
-    Alm = zeros(ComplexF64, lmax+1, mmax+1)
+    # `dist_synthesis` only knows the m ≥ 0 columns of `Alm` and never writes the
+    # negative-m DFT bins, so feeding it the +m half alone silently dropped every
+    # m < 0 coefficient (serial `synthesis_packed_cplx` writes both bin `am+1`
+    # and bin `nlon-am+1`). Recover the −m half from the same ℂ-linearity the
+    # analysis twin uses: with
+    #     S(A)[θ,φ] = Σ_{m≥0} A[l,m] P̄_l^m(cosθ) e^{imφ}
+    # the m < 0 sum is conj(S(conj(A₋))) because P̄ and the norm scale are real —
+    # the conjugation flips e^{imφ} to e^{-imφ}. The m = 0 column of A₋ is zeroed
+    # so it is not counted twice.
+    #
+    # There is NO (-1)^m: this layout uses the SAME P̄_l^{|m|} row for both signs
+    # of m (see `synthesis_packed_cplx`), unlike the Y_l^m convention.
+    Aplus  = zeros(ComplexF64, lmax+1, mmax+1)
+    Aminus = zeros(ComplexF64, lmax+1, mmax+1)
     for l in 0:lmax
-        Alm[l+1, 1] = alm_packed[SHTnsKit.LM_cplx_index(lmax, mmax, l, 0) + 1]
+        Aplus[l+1, 1] = alm_packed[SHTnsKit.LM_cplx_index(lmax, mmax, l, 0) + 1]
         for m in 1:min(l, mmax)
-            Alm[l+1, m+1] = alm_packed[SHTnsKit.LM_cplx_index(lmax, mmax, l, m) + 1]
+            Aplus[l+1, m+1]  = alm_packed[SHTnsKit.LM_cplx_index(lmax, mmax, l,  m) + 1]
+            Aminus[l+1, m+1] = conj(alm_packed[SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1])
         end
     end
-    return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output=false)
+    zp = SHTnsKit.dist_synthesis(cfg, Aplus;  prototype_θφ, real_output=false)
+    zn = SHTnsKit.dist_synthesis(cfg, Aminus; prototype_θφ, real_output=false)
+    return zp .+ conj.(zn)
 end

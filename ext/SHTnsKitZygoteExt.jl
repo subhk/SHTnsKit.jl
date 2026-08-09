@@ -144,7 +144,9 @@ function SHTnsKit.zgrad_rotation_angles_real(cfg::SHTnsKit.SHTConfig, Qlm::Abstr
         dl = SHTnsKit.wigner_d_matrix(l, float(β))
         ddl = SHTnsKit.wigner_d_matrix_deriv(l, float(β))
         n = 2l + 1
-        b = Vector{ComplexF64}(undef, n)
+        b = zeros(ComplexF64, n)   # zeros, NOT undef: only |mp| <= min(l,mmax) is filled below,
+                                   # and `dl * b` reads the whole 2l+1 range — with `undef` the
+                                   # l > mmax slots fed malloc garbage into the gradients.
         # Build complex A_m' then b = e^{-i m' γ} A
         for mp in -mm:mm
             idxp = SHTnsKit.LM_index(lmax, 1, l, abs(mp)) + 1
@@ -187,6 +189,13 @@ function SHTnsKit.zgrad_rotation_angles_cplx(lmax::Integer, mmax::Integer, Zlm::
     R = similar(Zlm)
     r = SHTnsKit.SHTRotation(lmax, mmax; α=float(α), β=float(β), γ=float(γ))
     SHTnsKit.shtns_rotation_apply_cplx(r, Zlm, R)
+    # The loop below reimplements the Wigner engine, which works in the Y_l^m
+    # basis, while the public transform is `ε ∘ engine ∘ ε` in the packed layout.
+    # `|εx| = |x|`, so L is unchanged — but the intermediates must be the
+    # engine's, i.e. built from εZ and compared against εR.
+    ε = SHTnsKit._lmcplx_ybasis_signs(lmax, mmax)
+    Zlm = ε .* Zlm
+    R = ε .* R
     gα = 0.0; gβ = 0.0; gγ = 0.0
     for l in 0:lmax
         mm = min(l, mmax)
@@ -194,8 +203,14 @@ function SHTnsKit.zgrad_rotation_angles_cplx(lmax::Integer, mmax::Integer, Zlm::
         ddl = SHTnsKit.wigner_d_matrix_deriv(l, float(β))
         n = 2l + 1
         # Build b_m' = e^{-i m' γ} Z_{l,m'} for m' in [-l..l]
-        b = Vector{ComplexF64}(undef, n)
-        for mp in -l:l
+        b = zeros(ComplexF64, n)   # zeros, NOT undef: only |mp| <= min(l,mmax) is filled below,
+                                   # and `dl * b` reads the whole 2l+1 range — with `undef` the
+                                   # l > mmax slots fed malloc garbage into the gradients.
+        # Only |mp| <= min(l, mmax) exists in the LM_cplx layout; `LM_cplx_index`
+        # throws beyond that, while the primal simply truncates there. Iterate the
+        # stored range and leave the rest at zero, matching the primal.
+        mml = min(l, mmax)
+        for mp in -mml:mml
             idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, mp) + 1
             b[mp + l + 1] = Zlm[idx] * cis(-mp * float(γ))
         end

@@ -64,6 +64,14 @@ Constructed via `DistTransposePlan(cfg; comm, nlev, use_rfft, with_vector)`.
 - `NP`              : `NP[mi]` = `(lmax+1, nlat)` matrix of P̄_l^{m_local[mi]}(cos θ_i)
 - `dP`              : `dP[mi]` = `(lmax+1, nlat)` matrix of dP̄_l^m/dθ at each latitude
 - `Pos`             : `Pos[mi]` = `(lmax+1, nlat)` matrix of P̄_l^m/sinθ at each latitude
+- `need_norm`       : whether `cfg` uses a non-internal convention (`norm !== :orthonormal`
+                       or `cs_phase == false`), so coefficients need converting
+- `Mloc`            : `(lmax+1, length(m_local))` external↔internal scale for the local m's,
+                       i.e. `norm_scale_from_orthonormal(l,m,cfg.norm) * cs_phase_factor(m,…)`
+
+Coefficients crossing this plan's API are in **cfg's convention**, matching
+`dist_analysis`/`dist_synthesis` and the `dist_analysis_sphtor` family. The
+Legendre tables are orthonormal, so the transforms convert with `Mloc`.
 """
 struct DistTransposePlan{TP, TFB, TSP}
     cfg           :: SHTnsKit.SHTConfig
@@ -82,6 +90,43 @@ struct DistTransposePlan{TP, TFB, TSP}
     dP            :: Vector{Matrix{Float64}} # dP[mi] = (lmax+1, nlat) dP̄_l^m/dθ table
     Pos           :: Vector{Matrix{Float64}} # Pos[mi] = (lmax+1, nlat) P̄_l^m/sinθ table
     with_vector   :: Bool                    # whether dP/Pos were built (sphtor/qst capable)
+    need_norm     :: Bool                    # cfg.norm !== :orthonormal || !cfg.cs_phase
+    Mloc          :: Matrix{Float64}         # (lmax+1, n_m_local) cfg↔internal scale
+    alm_scratch   :: Array{ComplexF64,3}     # synthesis-side conversion buffer (empty unless need_norm)
+end
+
+"""
+    _scale_alm_to_internal!(A, plan)
+    _scale_alm_to_cfg!(A, plan)
+
+Convert a local spectral parent array `A[l+1, mi, lev]` between cfg's
+normalization/phase and the internal orthonormal+CS form the Legendre tables
+expect. No-ops unless `plan.need_norm`. Applied once per call outside the θ loop,
+so the (default) orthonormal path costs nothing and the converted path adds
+O(lmax·m_local·nlev) rather than a multiply per (l, θ).
+"""
+@inline function _scale_alm_to_internal!(A::AbstractArray, plan::DistTransposePlan)
+    plan.need_norm || return A
+    M = plan.Mloc
+    @inbounds for lev in axes(A, 3), mi in eachindex(plan.m_local)
+        m = plan.m_local[mi]
+        for l in m:plan.lmax
+            A[l+1, mi, lev] *= M[l+1, mi]
+        end
+    end
+    return A
+end
+
+@inline function _scale_alm_to_cfg!(A::AbstractArray, plan::DistTransposePlan)
+    plan.need_norm || return A
+    M = plan.Mloc
+    @inbounds for lev in axes(A, 3), mi in eachindex(plan.m_local)
+        m = plan.m_local[mi]
+        for l in m:plan.lmax
+            A[l+1, mi, lev] /= M[l+1, mi]
+        end
+    end
+    return A
 end
 
 # ---------------------------------------------------------------------------
@@ -198,10 +243,42 @@ function SHTnsKit.DistTransposePlan(
         NP[mi] = tbl_NP
     end
 
+    # 7. Per-local-m external↔internal scale. The Legendre tables above are
+    #    orthonormal+CS, but this plan's API exchanges coefficients in cfg's
+    #    convention (as `dist_analysis`/`dist_synthesis` do), so the transforms
+    #    convert with this matrix. Without it a `norm=:schmidt` or
+    #    `cs_phase=false` config silently disagreed with the cfg-form paths.
+    # The transpose path is ORTHONORMAL-only, like every other distributed
+    # transform and serial `analysis`/`synthesis`. `need_norm` is therefore always
+    # false; the Mloc/scratch machinery is retained but inert so the struct and
+    # the (no-op) scale helpers keep a single shape.
+    need_norm = false
+    #    Allocated only when it is actually consulted, so a default-config plan
+    #    carries neither the scale matrix nor the conversion scratch.
+    Mloc = if need_norm
+        Mfull = SHTnsKit._ensure_norm_scale_matrix!(cfg)
+        M = Matrix{Float64}(undef, lmax + 1, length(m_local))
+        fill!(M, 1.0)
+        for (mi, m) in enumerate(m_local), l in m:lmax
+            M[l+1, mi] = Mfull[l+1, m+1]
+        end
+        M
+    else
+        Matrix{Float64}(undef, 0, 0)
+    end
+    #    Synthesis must not mutate the caller's coefficients, so it converts into
+    #    a buffer. Allocating that buffer per call (~32 MB at lmax=511, 64 local
+    #    m's, nlev=64) would break this plan's whole zero-allocation design point,
+    #    so it is owned by the plan and reused. Sized for the FULL local column
+    #    count, which on a dealiased grid exceeds length(m_local).
+    n_cols_local = length(range_local(spectral_pencil)[2])
+    alm_scratch = need_norm ? Array{ComplexF64,3}(undef, lmax + 1, n_cols_local, nlev) :
+                              Array{ComplexF64,3}(undef, 0, 0, 0)
+
     return DistTransposePlan(
         cfg, nlat, nlon, lmax, mmax, nlev, comm,
         fft_plan, F_buf, F_buf2, spectral_pencil,
-        m_local, NP, dP, Pos, with_vector,
+        m_local, NP, dP, Pos, with_vector, need_norm, Mloc, alm_scratch,
     )
 end
 
@@ -262,6 +339,8 @@ function SHTnsKit.dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::P
             end
         end
     end
+    # Tables are orthonormal; hand back coefficients in cfg's convention.
+    _scale_alm_to_cfg!(A, plan)
     return Alm
 end
 
@@ -294,6 +373,13 @@ function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::
     lmax = plan.lmax
     nlat = plan.nlat
     nlev = plan.nlev
+
+    # Incoming coefficients are in cfg's convention; the tables are orthonormal.
+    # Convert a copy so the caller's array is left untouched (no-op, and no
+    # allocation, on the default orthonormal+CS config).
+    if plan.need_norm
+        A = _scale_alm_to_internal!(copyto!(view(plan.alm_scratch, :, axes(A, 2), :), A), plan)
+    end
 
     # Legendre expansion: for each local m, sum over l → F[i, mi, lev]
     # NP[mi] is (lmax+1, nlat) column-major; iterating i (fast dim of F) is cache-friendly.
@@ -379,6 +465,9 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistTransposePlan,
             end
         end
     end
+    # Tables are orthonormal; hand back coefficients in cfg's convention.
+    _scale_alm_to_cfg!(S, plan)
+    _scale_alm_to_cfg!(T, plan)
     return Slm, Tlm
 end
 
@@ -411,6 +500,15 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
     lmax = plan.lmax
     nlat = plan.nlat
     nlev = plan.nlev
+
+    # Incoming coefficients are in cfg's convention; convert copies (no-op on the
+    # default orthonormal+CS config) so the caller's arrays are left untouched.
+    if plan.need_norm
+        # Two buffers are needed at once, so S borrows the plan scratch and T
+        # takes a fresh copy; only the S half is amortized.
+        S = _scale_alm_to_internal!(copyto!(view(plan.alm_scratch, :, axes(S, 2), :), S), plan)
+        T = _scale_alm_to_internal!(copy(T), plan)
+    end
 
     # Legendre expansion: for each local m, sum over l → Ft[i,mi,lev], Fp[i,mi,lev]
     # Kernel (from kernels.jl _sphtor_synthesis_kernel_otf):

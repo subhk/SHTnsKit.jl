@@ -72,15 +72,19 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     nbins = use_rfft ? (cfg.nlon ÷ 2 + 1) : cfg.nlon
     Fθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
     Alm_work = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
-    θ_is_distributed = nθ_local < cfg.nlat
-    reduce_comm = if θ_is_distributed && !fallback_standard
-        # Reduce only across ranks sharing this φ-segment (see
-        # dist_analysis_standard STEP 5 for the 2D-pencil rationale).
-        φ_globals = collect(Int, globalindices(prototype_θφ, 2))
-        MPI.Comm_split(comm, _phi_column_color(φ_globals), MPI.Comm_rank(comm))
-    else
-        comm
-    end
+    # Reduced, not per-rank. The consumers (`dist_analysis!`,
+    # `dist_analysis_sphtor!`) guard a full-comm `MPI.Allreduce!` with this flag,
+    # so a topology where one rank owns every latitude and the rest own none
+    # (nlat=1 over ≥2 θ-partitions) would have the owner skip while the empty
+    # ranks block forever. Computed once at plan construction, not per call.
+    θ_is_distributed = MPI.Allreduce(nθ_local < cfg.nlat, |, comm)
+    # No Comm_split: this branch requires `!fallback_standard`, i.e. the rank owns
+    # the COMPLETE φ range, so every rank's φ-colour would be 1 and the
+    # split just duplicates `comm` — at the cost of a synchronizing collective
+    # and a live communicator per plan, reclaimed only when GC runs the
+    # finalizer. Code that rebuilds a plan per shell or timestep can exhaust the
+    # MPI communicator pool that way.
+    reduce_comm = comm
     return DistAnalysisPlan(cfg, prototype_θφ, use_rfft, fallback_standard,
                             θ_globals, weights_cache, x_cache, P, Fθm, Alm_work,
                             θ_is_distributed, reduce_comm)
@@ -174,13 +178,13 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     Fpθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
     Slm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
     Tlm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
-    θ_is_distributed = nθ_local < cfg.nlat
-    reduce_comm = if θ_is_distributed && !fallback_standard
-        φ_globals = collect(Int, globalindices(prototype_θφ, 2))
-        MPI.Comm_split(comm, _phi_column_color(φ_globals), MPI.Comm_rank(comm))
-    else
-        comm
-    end
+    # Reduced, not per-rank. The consumers (`dist_analysis!`,
+    # `dist_analysis_sphtor!`) guard a full-comm `MPI.Allreduce!` with this flag,
+    # so a topology where one rank owns every latitude and the rest own none
+    # (nlat=1 over ≥2 θ-partitions) would have the owner skip while the empty
+    # ranks block forever. Computed once at plan construction, not per call.
+    θ_is_distributed = MPI.Allreduce(nθ_local < cfg.nlat, |, comm)
+    reduce_comm = comm   # see DistAnalysisPlan: the split was provably a no-op here
     return DistSphtorPlan(cfg, prototype_θφ, use_rfft, with_spatial_scratch, scratch,
                           fallback_standard, θ_globals, x_cache, sθ_cache, inv_sθ_cache,
                           weights_cache,

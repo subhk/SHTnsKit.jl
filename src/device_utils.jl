@@ -1,23 +1,30 @@
 # Strict typed device selection and vendor-neutral GPU adapter routing.
 
 const _DEVICE_STATE = Ref{Union{Nothing,ComputeDevice}}(nothing)
+const _DEVICE_STATE_LOCK = ReentrantLock()
 
 # Extension modules own adapter objects strongly. Core retains only weak
 # references, keyed by stable vendor names and traversed in sorted order.
 const _GPU_ADAPTERS = Dict{Symbol,WeakRef}()
+const _GPU_ADAPTERS_LOCK = ReentrantLock()
 
 function _register_gpu_adapter!(name::Symbol, adapter)
-    _GPU_ADAPTERS[name] = WeakRef(adapter)
+    lock(_GPU_ADAPTERS_LOCK) do
+        _GPU_ADAPTERS[name] = WeakRef(adapter)
+    end
     return adapter
 end
 
 function _registered_gpu_adapters()
-    adapters = Pair{Symbol,Any}[]
-    for name in sort!(collect(keys(_GPU_ADAPTERS)))
-        adapter = _GPU_ADAPTERS[name].value
-        adapter === nothing || push!(adapters, name => adapter)
+    adapters = lock(_GPU_ADAPTERS_LOCK) do
+        snapshot = Pair{Symbol,Any}[]
+        for (name, reference) in _GPU_ADAPTERS
+            adapter = reference.value
+            adapter === nothing || push!(snapshot, name => adapter)
+        end
+        snapshot
     end
-    return adapters
+    return sort!(adapters; by=first)
 end
 
 # Adapter protocol. Vendor extensions add methods without introducing package
@@ -38,24 +45,43 @@ function _gpu_adapter_synthesis(adapter, cfg, coefficients; kwargs...)
 end
 
 function _functional_gpu_adapters()
-    return filter(_registered_gpu_adapters()) do entry
-        try
-            Bool(_gpu_adapter_functional(entry.second))
-        catch
-            false
-        end
-    end
+    functional, _ = _probe_gpu_adapters()
+    return functional
 end
 
-function _no_gpu_error(operation::Symbol)
+function _probe_gpu_adapters()
+    functional = Pair{Symbol,Any}[]
+    failures = Pair{Symbol,Any}[]
+    # `_registered_gpu_adapters` returns a strong snapshot. Runtime probes run
+    # after its registry lock is released because vendor probes may block or
+    # call back into package code.
+    for entry in _registered_gpu_adapters()
+        try
+            Bool(_gpu_adapter_functional(entry.second)) && push!(functional, entry)
+        catch err
+            push!(failures, entry.first => err)
+        end
+    end
+    return functional, failures
+end
+
+function _no_gpu_error(operation::Symbol, failures::AbstractVector=Pair{Symbol,Any}[])
+    detail = "no loaded GPU adapter is functional; load CUDA.jl or AMDGPU.jl and verify its runtime"
+    if !isempty(failures)
+        causes = join(("$name: $(sprint(showerror, err))" for (name, err) in failures), "; ")
+        detail *= "; functional probe failures: $causes"
+    end
     return BackendUnavailableError(
         operation,
-        "no loaded GPU adapter is functional; load CUDA.jl or AMDGPU.jl and verify its runtime",
+        detail,
     )
 end
 
 function _gpu_adapter(prototype=nothing; operation::Symbol=:gpu)
-    if prototype !== nothing && on_device(prototype) isa GPU
+    if prototype !== nothing
+        prototype isa AbstractArray && on_device(prototype) isa GPU || throw(ArgumentError(
+            "GPU prototype for `$operation` must already use GPU storage, got $(typeof(prototype))",
+        ))
         matches = filter(_registered_gpu_adapters()) do entry
             _gpu_adapter_matches(entry.second, prototype)
         end
@@ -67,17 +93,23 @@ function _gpu_adapter(prototype=nothing; operation::Symbol=:gpu)
             "multiple GPU adapters recognize prototype $(typeof(prototype)) for `$operation`",
         ))
         name, adapter = only(matches)
-        _gpu_adapter_functional(adapter) || throw(BackendUnavailableError(
+        functional = try
+            Bool(_gpu_adapter_functional(adapter))
+        catch err
+            throw(BackendUnavailableError(
+                operation,
+                "$name functional probe failed for $(typeof(prototype)): $(sprint(showerror, err))",
+            ))
+        end
+        functional || throw(BackendUnavailableError(
             operation,
             "$name recognizes $(typeof(prototype)) but its runtime is not functional",
         ))
         return adapter
-    elseif prototype !== nothing && !(on_device(prototype) isa CPU)
-        throw(ArgumentError("prototype for `$operation` must be a CPU or GPU array"))
     end
 
-    functional = _functional_gpu_adapters()
-    isempty(functional) && throw(_no_gpu_error(operation))
+    functional, failures = _probe_gpu_adapters()
+    isempty(functional) && throw(_no_gpu_error(operation, failures))
     length(functional) == 1 && return only(functional).second
     names = join(first.(functional), ", ")
     throw(ArgumentError(
@@ -87,9 +119,12 @@ end
 
 """Return the preferred compute device without silently relabelling requests."""
 function get_device()
-    requested = _DEVICE_STATE[]
+    requested = lock(_DEVICE_STATE_LOCK) do
+        _DEVICE_STATE[]
+    end
     if requested isa GPU
-        isempty(_functional_gpu_adapters()) && throw(_no_gpu_error(:get_device))
+        functional, failures = _probe_gpu_adapters()
+        isempty(functional) && throw(_no_gpu_error(:get_device, failures))
         return requested
     elseif requested isa CPU
         return requested
@@ -99,8 +134,13 @@ end
 
 """Select `CPU()` or `GPU()` as the preferred compute device."""
 function set_device!(device::ComputeDevice)
-    device isa GPU && isempty(_functional_gpu_adapters()) && throw(_no_gpu_error(:set_device!))
-    _DEVICE_STATE[] = device
+    if device isa GPU
+        functional, failures = _probe_gpu_adapters()
+        isempty(functional) && throw(_no_gpu_error(:set_device!, failures))
+    end
+    lock(_DEVICE_STATE_LOCK) do
+        _DEVICE_STATE[] = device
+    end
     return device
 end
 
@@ -112,7 +152,7 @@ function to_device(::GPU, value)
 end
 
 function to_device(::GPU, value, prototype)
-    on_device(prototype) isa GPU || throw(ArgumentError(
+    prototype isa AbstractArray && on_device(prototype) isa GPU || throw(ArgumentError(
         "GPU placement prototype must already be a device array, got $(typeof(prototype))",
     ))
     adapter = _gpu_adapter(prototype; operation=:to_device)

@@ -8,9 +8,13 @@ using SHTnsKit
     @test GPU() == GPU()
     @test CPU() != GPU()
 
-    old_device = SHTnsKit._DEVICE_STATE[]
+    old_device = lock(SHTnsKit._DEVICE_STATE_LOCK) do
+        SHTnsKit._DEVICE_STATE[]
+    end
     try
-        SHTnsKit._DEVICE_STATE[] = nothing
+        lock(SHTnsKit._DEVICE_STATE_LOCK) do
+            SHTnsKit._DEVICE_STATE[] = nothing
+        end
 
         @test get_device() == CPU()
         @test set_device!(CPU()) == CPU()
@@ -18,9 +22,13 @@ using SHTnsKit
         @test_throws MethodError set_device!(:cpu)
 
         @test_throws BackendUnavailableError set_device!(GPU())
-        @test SHTnsKit._DEVICE_STATE[] == CPU()
+        @test lock(SHTnsKit._DEVICE_STATE_LOCK) do
+            SHTnsKit._DEVICE_STATE[] == CPU()
+        end
     finally
-        SHTnsKit._DEVICE_STATE[] = old_device
+        lock(SHTnsKit._DEVICE_STATE_LOCK) do
+            SHTnsKit._DEVICE_STATE[] = old_device
+        end
     end
 
     arr = rand(5, 5)

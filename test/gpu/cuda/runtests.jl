@@ -5,6 +5,20 @@ using GPUArrays
 using GPUArraysCore
 using KernelAbstractions
 
+struct SafeFallbackRedispatchError <: Exception end
+
+struct SafeFallbackArray{T,N,A<:AbstractArray{T,N}} <: AbstractArray{T,N}
+    parent::A
+end
+
+Base.size(array::SafeFallbackArray) = size(array.parent)
+Base.getindex(array::SafeFallbackArray, indices...) = getindex(array.parent, indices...)
+SHTnsKit.on_device(::SafeFallbackArray) = SHTnsKit.GPU()
+SHTnsKit.analysis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
+    throw(SafeFallbackRedispatchError())
+SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
+    throw(SafeFallbackRedispatchError())
+
 @testset "CUDA backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitGPUExt)
     @test extension !== nothing
@@ -52,6 +66,48 @@ using KernelAbstractions
 
         @test gpu_analysis_safe(cfg, field) ≈ coefficients
         @test gpu_synthesis_safe(cfg, coefficients) ≈ synthesis(cfg, coefficients)
+        wrapped_field = SafeFallbackArray(field)
+        wrapped_coefficients = SafeFallbackArray(coefficients)
+        wrapped_analysis = try
+            gpu_analysis_safe(cfg, wrapped_field; device=SHTnsKit.GPU())
+        catch err
+            err
+        end
+        wrapped_synthesis = try
+            gpu_synthesis_safe(cfg, wrapped_coefficients; device=SHTnsKit.GPU())
+        catch err
+            err
+        end
+        @test wrapped_analysis isa Matrix
+        @test wrapped_synthesis isa Matrix
+        if wrapped_analysis isa Matrix
+            @test wrapped_analysis ≈ coefficients
+            @test on_device(wrapped_analysis) isa SHTnsKit.CPU
+        end
+        if wrapped_synthesis isa Matrix
+            @test wrapped_synthesis ≈ synthesis(cfg, coefficients)
+            @test on_device(wrapped_synthesis) isa SHTnsKit.CPU
+        end
+
+        oom_helper_defined = isdefined(extension, :_with_cuda_oom_fallback)
+        @test oom_helper_defined
+        if oom_helper_defined
+            injected = SafeFallbackRedispatchError()
+            @test_throws SafeFallbackRedispatchError extension._with_cuda_oom_fallback(
+                () -> throw(injected),
+                () -> :cpu,
+            )
+            @test_throws ErrorException extension._with_cuda_oom_fallback(
+                () -> error("illegal memory access"),
+                () -> :cpu,
+            )
+            @test_logs (:warn, r"GPU out of memory") begin
+                @test extension._with_cuda_oom_fallback(
+                    () -> throw(CUDA.OutOfGPUMemoryError()),
+                    () -> :cpu,
+                ) == :cpu
+            end
+        end
         safe_analysis = try
             gpu_analysis_safe(cfg, field; device=SHTnsKit.GPU())
         catch err

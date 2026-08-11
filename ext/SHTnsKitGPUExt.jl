@@ -912,17 +912,12 @@ Check if sufficient GPU memory is available.
 """
 function check_gpu_memory(required_bytes::Int)
     CUDA.functional() || return false
-    try
-        mem_info = gpu_memory_info()
-        if mem_info.free < required_bytes
-            @warn "Insufficient memory: need $(required_bytes÷(1024^3)) GB, have $(mem_info.free÷(1024^3)) GB available"
-            return false
-        end
-        return true
-    catch e
-        @warn "Could not check memory availability: $e"
+    mem_info = gpu_memory_info()
+    if mem_info.free < required_bytes
+        @warn "Insufficient memory: need $(required_bytes÷(1024^3)) GB, have $(mem_info.free÷(1024^3)) GB available"
         return false
     end
+    return true
 end
 
 """
@@ -962,6 +957,31 @@ function estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
     end
 end
 
+function _cpu_analysis_fallback(cfg::SHTConfig, spatial_data)
+    cpu_data = SHTnsKit.to_device(SHTnsKit.CPU(), spatial_data)
+    return SHTnsKit.analysis(SHTnsKit.CPU(), cfg, cpu_data)
+end
+
+function _cpu_synthesis_fallback(cfg::SHTConfig, coefficients; real_output::Bool)
+    cpu_coefficients = SHTnsKit.to_device(SHTnsKit.CPU(), coefficients)
+    return SHTnsKit.synthesis(
+        SHTnsKit.CPU(),
+        cfg,
+        cpu_coefficients;
+        real_output=real_output,
+    )
+end
+
+function _with_cuda_oom_fallback(gpu_call, cpu_call)
+    try
+        return gpu_call()
+    catch err
+        err isa CUDA.OutOfGPUMemoryError || rethrow()
+        @warn "GPU out of memory, falling back to CPU" exception=(err, catch_backtrace())
+        return cpu_call()
+    end
+end
+
 """
     gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device())
 
@@ -969,25 +989,19 @@ Memory-safe GPU analysis with automatic fallback to CPU.
 """
 function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device())
     if _is_cpu_device(device) || !CUDA.functional()
-        return SHTnsKit.analysis(cfg, spatial_data)
+        return _cpu_analysis_fallback(cfg, spatial_data)
     end
 
     required_memory = estimate_memory_usage(cfg, :analysis)
     if !check_gpu_memory(required_memory)
         @info "Falling back to CPU due to memory constraints"
-        return SHTnsKit.analysis(cfg, spatial_data)
+        return _cpu_analysis_fallback(cfg, spatial_data)
     end
 
-    try
-        return gpu_analysis(cfg, spatial_data; device=device)
-    catch e
-        if isa(e, CUDA.OutOfGPUMemoryError) || contains(string(e), "memory")
-            @warn "GPU out of memory, falling back to CPU: $e"
-            return SHTnsKit.analysis(cfg, spatial_data)
-        else
-            rethrow(e)
-        end
-    end
+    return _with_cuda_oom_fallback(
+        () -> gpu_analysis(cfg, spatial_data; device=device),
+        () -> _cpu_analysis_fallback(cfg, spatial_data),
+    )
 end
 
 """
@@ -997,25 +1011,19 @@ Memory-safe GPU synthesis with automatic fallback to CPU.
 """
 function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
     if _is_cpu_device(device) || !CUDA.functional()
-        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+        return _cpu_synthesis_fallback(cfg, coeffs; real_output=real_output)
     end
 
     required_memory = estimate_memory_usage(cfg, :synthesis)
     if !check_gpu_memory(required_memory)
         @info "Falling back to CPU due to memory constraints"
-        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
+        return _cpu_synthesis_fallback(cfg, coeffs; real_output=real_output)
     end
 
-    try
-        return gpu_synthesis(cfg, coeffs; device=device, real_output=real_output)
-    catch e
-        if isa(e, CUDA.OutOfGPUMemoryError) || contains(string(e), "memory")
-            @warn "GPU out of memory, falling back to CPU: $e"
-            return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
-        else
-            rethrow(e)
-        end
-    end
+    return _with_cuda_oom_fallback(
+        () -> gpu_synthesis(cfg, coeffs; device=device, real_output=real_output),
+        () -> _cpu_synthesis_fallback(cfg, coeffs; real_output=real_output),
+    )
 end
 
 # Types defined by this extension.

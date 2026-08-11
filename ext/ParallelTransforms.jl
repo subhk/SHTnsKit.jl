@@ -131,6 +131,7 @@ function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
                                   expected::Tuple{Int,Int}, operation::Symbol;
                                   comm=communicator(array), peer=nothing,
                                   require_full_first_dim::Bool=false,
+                                  required_decomposition=nothing,
                                   use_rfft::Bool=false, real_output::Bool=true,
                                   require_real_input::Bool=false,
                                   require_complex_input::Bool=false)
@@ -140,6 +141,9 @@ function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
     local_size = size(parent(array))
     (local_size == (length(ranges[1]), length(ranges[2]))) || (flags |= 0x0002)
     require_full_first_dim && length(ranges[1]) != expected[1] && (flags |= 0x0002)
+    required_decomposition !== nothing &&
+        PencilArrays.decomposition(pencil(array)) != required_decomposition &&
+        (flags |= 0x0002)
     code = _scalar_precision_code(eltype(array))
     code == 0 && (flags |= 0x0004)
     require_complex_input && !(eltype(array) <: Complex) && (flags |= 0x0004)
@@ -158,11 +162,70 @@ function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
     return _collective_validation_error(comm, flags, operation)
 end
 
+function _validate_explicit_comm!(known_comm, explicit_comm, operation::Symbol)
+    explicit_count = MPI.Allreduce(explicit_comm === nothing ? 0 : 1, +, known_comm)
+    comm_size = MPI.Comm_size(known_comm)
+    explicit_count == 0 && return nothing
+    if explicit_count != comm_size
+        return _collective_validation_error(known_comm, UInt32(0x0008), operation)
+    end
+    compatible = try
+        MPI.Comm_size(explicit_comm) == MPI.Comm_size(known_comm) &&
+            MPI.Comm_compare(explicit_comm, known_comm) in (MPI.IDENT, MPI.CONGRUENT)
+    catch
+        false
+    end
+    flags = compatible ? UInt32(0) : UInt32(0x0008)
+    return _collective_validation_error(known_comm, flags, operation)
+end
+
+function _validate_spectral_pencil_plan!(cfg::SHTnsKit.SHTConfig, pen::Pencil,
+                                         comm, operation::Symbol)
+    flags = UInt32(0)
+    size_global(pen) == (cfg.lmax + 1, cfg.mmax + 1) || (flags |= 0x0001)
+    PencilArrays.decomposition(pen) == (2,) || (flags |= 0x0002)
+    plan_comm = PencilArrays.get_comm(pen)
+    compatible = MPI.Comm_size(plan_comm) == MPI.Comm_size(comm) &&
+                 MPI.Comm_compare(plan_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+    compatible || (flags |= 0x0008)
+    return _collective_validation_error(comm, flags, operation)
+end
+
+function _validate_dense_spectral_matrix!(cfg::SHTnsKit.SHTConfig,
+                                          Alm::AbstractMatrix, comm,
+                                          operation::Symbol)
+    flags = UInt32(0)
+    size(Alm) == (cfg.lmax + 1, cfg.mmax + 1) || (flags |= 0x0001)
+    code = _scalar_precision_code(eltype(Alm))
+    code in (2, 4) || (flags |= 0x0004)
+    min_code = MPI.Allreduce(code, min, comm)
+    max_code = MPI.Allreduce(code, max, comm)
+    min_code == max_code || (flags |= 0x0004)
+    _collective_validation_error(comm, flags, operation)
+
+    reference = copy(Alm)
+    MPI.Bcast!(reference, 0, comm)
+    mismatch = !isequal(Alm, reference)
+    any_mismatch = MPI.Allreduce(mismatch, |, comm)
+    any_mismatch && throw(ArgumentError(
+        "$operation requires a coefficient matrix replicated identically on every rank",
+    ))
+    return nothing
+end
+
 function _validate_dense_synthesis!(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix,
                                     prototype::PencilArray;
                                     real_output::Bool, use_rfft::Bool,
                                     Aminus=nothing)
     comm = communicator(prototype)
+    minus_count = MPI.Allreduce(Aminus === nothing ? 0 : 1, +, comm)
+    comm_size = MPI.Comm_size(comm)
+    if minus_count != 0 && minus_count != comm_size
+        throw(ArgumentError(
+            "dist_synthesis requires Aminus to be present on either every rank or no rank",
+        ))
+    end
+    has_minus = minus_count == comm_size
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     flags = UInt32(0)
     size(Alm) == expected || (flags |= 0x0001)
@@ -171,7 +234,7 @@ function _validate_dense_synthesis!(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix
     min_code = MPI.Allreduce(code, min, comm)
     max_code = MPI.Allreduce(code, max, comm)
     min_code == max_code || (flags |= 0x0004)
-    if Aminus !== nothing
+    if has_minus
         size(Aminus) == expected || (flags |= 0x0001)
         _scalar_precision_code(eltype(Aminus)) == code || (flags |= 0x0004)
         real_output && (flags |= 0x0080)
@@ -186,7 +249,7 @@ function _validate_dense_synthesis!(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix
     reference = copy(Alm)
     MPI.Bcast!(reference, 0, comm)
     mismatch = !isequal(Alm, reference)
-    if Aminus !== nothing
+    if has_minus
         reference_minus = copy(Aminus)
         MPI.Bcast!(reference_minus, 0, comm)
         mismatch |= !isequal(Aminus, reference_minus)

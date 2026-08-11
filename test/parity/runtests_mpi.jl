@@ -147,7 +147,7 @@ function _all_ranks_catch(call, comm)
         call()
         ""
     catch err
-        sprint(showerror, err)
+        "$(typeof(err)): $(sprint(showerror, err))"
     end
     reference = MPI.bcast(message, 0, comm)
     caught_same = !isempty(message) && message == reference
@@ -160,6 +160,9 @@ function test_collective_validation(adapter::MPIScalarAdapter)
     cfg = _scalar_config(:gauss, 3, 8)
     _, field = _closed_form_low_order(cfg, Float64)
     spatial = place(adapter, cfg, field, :spatial)
+    coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    spectral = place(adapter, cfg, coefficients, :spectral)
+    @test spectral_pencil_to_matrix(cfg, spectral; comm=adapter.comm) == coefficients
 
     malformed_pen = Pencil((cfg.lmax + 2, cfg.mmax + 1), adapter.comm)
     malformed = PencilArray{ComplexF64}(undef, malformed_pen)
@@ -168,10 +171,81 @@ function test_collective_validation(adapter::MPIScalarAdapter)
         synthesis(cfg, malformed; prototype_θφ=spatial)
     end
 
+    rank = MPI.Comm_rank(adapter.comm)
+    malformed_matrix = rank == 0 ? coefficients :
+        zeros(ComplexF64, cfg.lmax + 2, cfg.mmax + 1)
+    @test _all_ranks_catch(adapter.comm) do
+        matrix_to_spectral_pencil(cfg, malformed_matrix; comm=adapter.comm)
+    end
+
+    rank_varying_matrix = copy(coefficients)
+    rank_varying_matrix[1, 1] = rank
+    @test _all_ranks_catch(adapter.comm) do
+        matrix_to_spectral_pencil(cfg, rank_varying_matrix; comm=adapter.comm)
+    end
+
+    helper_shape = rank == 0 ?
+        (cfg.lmax + 1, cfg.mmax + 1) : (cfg.lmax + 2, cfg.mmax + 1)
+    helper_malformed_pen = Pencil(helper_shape, adapter.comm)
+    helper_malformed = PencilArray{ComplexF64}(undef, helper_malformed_pen)
+    fill!(parent(helper_malformed), 0)
+    @test _all_ranks_catch(adapter.comm) do
+        spectral_pencil_to_matrix(cfg, helper_malformed)
+    end
+
+    varying_precision_matrix = rank == 0 ?
+        zeros(ComplexF32, size(coefficients)) : coefficients
+    @test _all_ranks_catch(adapter.comm) do
+        matrix_to_spectral_pencil(cfg, varying_precision_matrix; comm=adapter.comm)
+    end
+
+    varying_precision_spectral = if rank == 0
+        PencilArray{ComplexF32}(undef, pencil(spectral))
+    else
+        spectral
+    end
+    fill!(parent(varying_precision_spectral), 0)
+    @test _all_ranks_catch(adapter.comm) do
+        spectral_pencil_to_matrix(cfg, varying_precision_spectral)
+    end
+
+    wrong_decomposition_pen = Pencil(
+        (cfg.lmax + 1, cfg.mmax + 1), (1,), adapter.comm,
+    )
+    wrong_decomposition = PencilArray{ComplexF64}(undef, wrong_decomposition_pen)
+    fill!(parent(wrong_decomposition), 0)
+    @test _all_ranks_catch(adapter.comm) do
+        spectral_pencil_to_matrix(cfg, wrong_decomposition)
+    end
+
+    @test _all_ranks_catch(adapter.comm) do
+        spectral_pencil_to_matrix(cfg, spectral; comm=MPI.COMM_SELF)
+    end
+
+    optional_comm = rank == 0 ? nothing : adapter.comm
+    @test _all_ranks_catch(adapter.comm) do
+        spectral_pencil_to_matrix(cfg, spectral; comm=optional_comm)
+    end
+
     rank_varying = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
-    rank_varying[1, 1] = MPI.Comm_rank(adapter.comm)
+    rank_varying[1, 1] = rank
     @test _all_ranks_catch(adapter.comm) do
         dist_synthesis(cfg, rank_varying; prototype_θφ=spatial)
+    end
+
+    optional_minus = rank == 0 ? copy(coefficients) : nothing
+    @test _all_ranks_catch(adapter.comm) do
+        dist_synthesis(
+            cfg, coefficients; prototype_θφ=spatial,
+            real_output=false, Aminus=optional_minus,
+        )
+    end
+
+    malformed_spatial_pen = Pencil((cfg.nlat + 1, cfg.nlon), (1,), adapter.comm)
+    malformed_spatial = PencilArray{Float64}(undef, malformed_spatial_pen)
+    fill!(parent(malformed_spatial), 0)
+    @test _all_ranks_catch(adapter.comm) do
+        dist_synthesis(cfg, coefficients; prototype_θφ=malformed_spatial)
     end
     return nothing
 end

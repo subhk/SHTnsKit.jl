@@ -67,10 +67,13 @@ Each rank receives its local portion of the m-distributed array.
 """
 function SHTnsKit.matrix_to_spectral_pencil(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; comm=MPI.COMM_WORLD)
     _record_pencil_scalar_stat!(:full_matrix_helper_calls, 1)
-    size(Alm) == (cfg.lmax + 1, cfg.mmax + 1) || throw(DimensionMismatch(
-        "Alm size $(size(Alm)) does not match expected ($((cfg.lmax + 1, cfg.mmax + 1)))"))
-
     pen = SHTnsKit.create_spectral_pencil(cfg; comm)
+    known_comm = PencilArrays.get_comm(pen)
+    _validate_explicit_comm!(known_comm, comm, :matrix_to_spectral_pencil)
+    _validate_cfg_replicated(cfg, known_comm)
+    _validate_spectral_pencil_plan!(cfg, pen, known_comm, :matrix_to_spectral_pencil)
+    _validate_dense_spectral_matrix!(cfg, Alm, known_comm, :matrix_to_spectral_pencil)
+
     Alm_p = PencilArray{eltype(Alm)}(undef, pen)
 
     # Copy only the local portion
@@ -91,15 +94,21 @@ function SHTnsKit.matrix_to_spectral_pencil(cfg::SHTnsKit.SHTConfig, Alm::Abstra
 end
 
 """
-    spectral_pencil_to_matrix(cfg, Alm_p::PencilArray; comm=MPI.COMM_WORLD)
+    spectral_pencil_to_matrix(cfg, Alm_p::PencilArray; comm=nothing)
 
 Gather a distributed spectral PencilArray to a dense matrix on all ranks.
 """
 function SHTnsKit.spectral_pencil_to_matrix(cfg::SHTnsKit.SHTConfig, Alm_p::PencilArray; comm=nothing)
     _record_pencil_scalar_stat!(:full_matrix_helper_calls, 1)
-    if comm === nothing
-        comm = communicator(Alm_p)
-    end
+    known_comm = communicator(Alm_p)
+    _validate_cfg_replicated(cfg, known_comm)
+    _validate_explicit_comm!(known_comm, comm, :spectral_pencil_to_matrix)
+    _validate_scalar_pencil!(
+        cfg, Alm_p, (cfg.lmax + 1, cfg.mmax + 1),
+        :spectral_pencil_to_matrix;
+        comm=known_comm, require_full_first_dim=true,
+        required_decomposition=(2,), require_complex_input=true,
+    )
 
     Alm = zeros(eltype(Alm_p), cfg.lmax + 1, cfg.mmax + 1)
 
@@ -118,7 +127,10 @@ function SHTnsKit.spectral_pencil_to_matrix(cfg::SHTnsKit.SHTConfig, Alm_p::Penc
     end
 
     # Allreduce to combine contributions from all ranks
-    MPI.Allreduce!(Alm, +, comm)
+    # Always use the Pencil's communicator. An explicitly supplied congruent
+    # communicator is accepted above, but may be a different duplicate on each
+    # rank; using the known communicator keeps collective context ordering safe.
+    MPI.Allreduce!(Alm, +, known_comm)
 
     return Alm
 end

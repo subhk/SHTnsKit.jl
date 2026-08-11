@@ -5,6 +5,19 @@ include(joinpath(@__DIR__, "..", "parity", "capabilities.jl"))
 using .SHTns37TestCapabilities
 
 @testset "SHTns 3.7 capability contract" begin
+    required_family_members = (
+        :synthesis_sph, :synthesis_sph_cplx,
+        :synthesis_sph_l, :synthesis_sph_l_cplx, :synthesis_sph_ml,
+        :synthesis_tor, :synthesis_tor_cplx,
+        :synthesis_tor_l, :synthesis_tor_l_cplx, :synthesis_tor_ml,
+        :synthesis_sphtor_l_cplx, :synthesis_qst_l_cplx,
+        :synthesis_sphtor_batch_cplx, :synthesis_qst_batch_cplx,
+    )
+    @test all(in(SHTns37TestCapabilities.ENTRYPOINTS), required_family_members)
+    @test all(group -> !isempty(group), SHTns37TestCapabilities.ENTRYPOINT_GROUPS)
+    @test length(unique(SHTns37TestCapabilities.ENTRYPOINTS)) ==
+        length(SHTns37TestCapabilities.ENTRYPOINTS)
+
     contract_names = (
         :SHTns37Capability, :SHTNS37_BACKENDS,
         :SHTNS37_CAPABILITIES, :shtns37_capabilities,

@@ -465,7 +465,7 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
     # `:dft` mode — under `:quad` it is `1/2π`, and assuming it cancelled made
     # every synthesis-family gradient exactly 2π too large. See the docstring.
     φadj = phi_inv_scale(cfg) / cfg.nlon
-    for m in 0:mmax
+    for m in 0:cfg.mres:mmax
         col = m + 1
         wm = ((m == 0 || !real_output) ? 1.0 : 2.0) * φadj
         if use_tbl
@@ -578,7 +578,7 @@ function _adjoint_analysis(cfg::SHTConfig, Alm̄::AbstractMatrix;
     φadj = 2π  # nlon (ifft adjoint) × cphi (2π/nlon) = 2π
     use_tbl = has_fused_scalar_tables(cfg)
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
-    for m in 0:mmax
+    for m in 0:cfg.mres:mmax
         col = m + 1
         if use_tbl
             NP = cfg.NP_tables[m+1]
@@ -635,6 +635,7 @@ end
     nlat = cfg.nlat
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         for i in 1:nlat
@@ -649,6 +650,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         @inbounds for i in 1:nlat
@@ -675,6 +677,7 @@ end
     P = thread_local_P[1]
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         for i in 1:nlat
             _scalar_analysis_kernel_otf!(alm, cfg, Fph, P, i, col, m, lmax, scale_phi)
@@ -687,6 +690,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         P = thread_local_P[Threads.threadid()]
         @inbounds for i in 1:nlat
@@ -745,6 +749,7 @@ end
     nlat = cfg.nlat
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         for i in 1:nlat
@@ -760,6 +765,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         @inbounds for i in 1:nlat
@@ -789,6 +795,7 @@ end
     P = thread_local_P[1]
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         for i in 1:nlat
             Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(
@@ -803,6 +810,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         P = thread_local_P[Threads.threadid()]
         @inbounds for i in 1:nlat

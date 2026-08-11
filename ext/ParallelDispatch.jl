@@ -69,7 +69,7 @@ function SHTnsKit.matrix_to_spectral_pencil(cfg::SHTnsKit.SHTConfig, Alm::Abstra
         "Alm size $(size(Alm)) does not match expected ($((cfg.lmax + 1, cfg.mmax + 1)))"))
 
     pen = SHTnsKit.create_spectral_pencil(cfg; comm)
-    Alm_p = PencilArray{ComplexF64}(undef, pen)
+    Alm_p = PencilArray{eltype(Alm)}(undef, pen)
 
     # Copy only the local portion
     lloc = axes(Alm_p, 1)
@@ -98,7 +98,7 @@ function SHTnsKit.spectral_pencil_to_matrix(cfg::SHTnsKit.SHTConfig, Alm_p::Penc
         comm = communicator(Alm_p)
     end
 
-    Alm = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    Alm = zeros(eltype(Alm_p), cfg.lmax + 1, cfg.mmax + 1)
 
     # Copy local portion
     lloc = axes(Alm_p, 1)
@@ -125,8 +125,14 @@ end
 ##########
 
 function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
-                            prototype_θφ::PencilArray, real_output::Bool=true)
-    return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output)
+                            prototype_θφ::PencilArray, real_output::Bool=true,
+                            use_rfft::Bool=false)
+    local_result = SHTnsKit.dist_synthesis(
+        cfg, Alm; prototype_θφ, real_output, use_rfft,
+    )
+    result = PencilArray{eltype(local_result)}(undef, pencil(prototype_θφ))
+    copyto!(parent(result), local_result)
+    return result
 end
 
 function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;

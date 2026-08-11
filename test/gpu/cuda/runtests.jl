@@ -5,6 +5,24 @@ using GPUArrays
 using GPUArraysCore
 using KernelAbstractions
 
+include("../../parity/scalar_full.jl")
+
+struct CUDAScalarAdapter <: ScalarParityAdapter end
+function place(::CUDAScalarAdapter, ::SHTConfig, value, ::Symbol)
+    if value isa PermutedDimsArray
+        padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
+        @views padded[:, 1:2:end] .= value
+        storage = CuArray(padded)
+        return @view storage[:, 1:2:end]
+    end
+    return CuArray(value)
+end
+collect_result(::CUDAScalarAdapter, value, ::SHTConfig) = Array(value)
+analysis_call(::CUDAScalarAdapter, cfg, field) = analysis(GPU(), cfg, field)
+synthesis_call(::CUDAScalarAdapter, cfg, coefficients, _prototype; real_output) =
+    synthesis(GPU(), cfg, coefficients; real_output)
+assert_resident(::CUDAScalarAdapter, value) = @test value isa CUDA.AnyCuArray
+
 struct SafeFallbackRedispatchError <: Exception end
 
 struct SafeFallbackArray{T,N,A<:AbstractArray{T,N}} <: AbstractArray{T,N}
@@ -22,6 +40,19 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
 @testset "CUDA backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitGPUExt)
     @test extension !== nothing
+    @test isdefined(extension.GPUCommon, :scalar_analysis_kernel!)
+    @test isdefined(extension.GPUCommon, :scalar_synthesis_kernel!)
+    @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)
+    @test isdefined(extension, :_cuda_scalar_analysis)
+    @test isdefined(extension, :_cuda_scalar_synthesis)
+    run_shared_scalar_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
+    source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitGPUExt.jl"), String)
+    ordinary_pipeline = split(
+        split(source, "function _cuda_scalar_analysis"; limit=2)[2],
+        "function _gpu_adapter_analysis"; limit=2,
+    )[1]
+    @test !occursin(r"\bArray\s*\(", ordinary_pipeline)
+    @test !occursin(r"\bcollect\s*\(", ordinary_pipeline)
 
     @test which(on_device, Tuple{CUDA.AnyCuArray}).module === extension
     @test which(
@@ -154,5 +185,20 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         coefficient_view = @view coefficients[:, :]
         @test synthesis(SHTnsKit.GPU(), cfg, coefficients) isa CuArray
         @test synthesis(cfg, coefficient_view) isa CUDA.AnyCuArray
+        legacy_coefficients = gpu_analysis(cfg, host)
+        @test legacy_coefficients isa Matrix
+        @test gpu_synthesis(cfg, legacy_coefficients) isa Matrix
+
+        CUDA.allowscalar(false)
+        run_scalar_full_parity(
+            CUDAScalarAdapter();
+            grid_kinds=_SCALAR_GRID_KINDS,
+            precisions=(Float32, Float64),
+            mres_values=(1, 2),
+            norms=(:orthonormal, :fourpi, :schmidt),
+            real_norm_values=(false, true),
+            cs_phase_values=(false, true),
+            pole_orders=(false, true),
+        )
     end
 end

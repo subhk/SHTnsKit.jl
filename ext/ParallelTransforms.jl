@@ -290,9 +290,10 @@ This reduces O(nlat) MPI calls to O(1), significantly improving scalability.
 function _gather_and_fft_phi(local_data::AbstractMatrix, θ_range::AbstractRange,
                               φ_range::AbstractRange, nlon::Int, comm)
     nlat_local = length(θ_range)
+    RT = typeof(float(real(zero(eltype(local_data)))))
 
     # Allocate output buffer
-    Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+    Fθm = Matrix{Complex{RT}}(undef, nlat_local, nlon)
 
     # Use optimized distributed FFT with single all-to-all communication
     SHTnsKitParallelExt.distributed_fft_phi!(Fθm, local_data, θ_range, φ_range, nlon, comm)
@@ -313,9 +314,10 @@ function _scatter_from_fft_phi(Fθm::AbstractMatrix{<:Complex}, θ_range::Abstra
                                 φ_range::AbstractRange, nlon::Int, comm)
     nlat_local = length(θ_range)
     nlon_local = length(φ_range)
+    RT = typeof(real(zero(eltype(Fθm))))
 
     # Allocate output for local portion
-    local_data = Matrix{Float64}(undef, nlat_local, nlon_local)
+    local_data = Matrix{RT}(undef, nlat_local, nlon_local)
 
     # Use optimized distributed IFFT
     SHTnsKitParallelExt.distributed_ifft_phi!(local_data, Fθm, θ_range, φ_range, nlon, comm)
@@ -373,12 +375,12 @@ that allows Julia to generate specialized, allocation-free code.
 - Called O(1) times per dist_analysis call
 - Inner loop complexity: O(mmax × nθ_local × lmax)
 """
-function _analysis_loop_no_tables!(temp_dense::Matrix{ComplexF64}, P::Vector{Float64},
-                                   Fθm::Matrix{ComplexF64}, weights_cache::Vector{Float64},
+function _analysis_loop_no_tables!(temp_dense::Matrix{Complex{T}}, P::Vector{Float64},
+                                   Fθm::Matrix{Complex{T}}, weights_cache::Vector{Float64},
                                    x_cache::Vector{Float64}, θ_globals::Vector{Int},
-                                   lmax::Int, mmax::Int)
+                                   lmax::Int, mmax::Int, mres::Int=1) where {T<:AbstractFloat}
     nθ_local = length(θ_globals)
-    @inbounds for mval in 0:mmax
+    @inbounds for mval in 0:mres:mmax
         col = mval + 1
         m_fft = mval + 1
         for ii in 1:nθ_local
@@ -414,12 +416,13 @@ This is a "function barrier" - see _analysis_loop_no_tables! for explanation.
 - Faster than no-tables version when tables are pre-computed
 - Memory vs speed tradeoff: tables use O(lmax² × nlat) memory
 """
-function _analysis_loop_with_tables!(temp_dense::Matrix{ComplexF64},
+function _analysis_loop_with_tables!(temp_dense::Matrix{Complex{T}},
                                      plm_tables::Vector{Matrix{Float64}},
-                                     Fθm::Matrix{ComplexF64}, weights_cache::Vector{Float64},
-                                     θ_globals::Vector{Int}, lmax::Int, mmax::Int)
+                                     Fθm::Matrix{Complex{T}}, weights_cache::Vector{Float64},
+                                     θ_globals::Vector{Int}, lmax::Int, mmax::Int,
+                                     mres::Int=1) where {T<:AbstractFloat}
     nθ_local = length(θ_globals)
-    @inbounds for mval in 0:mmax
+    @inbounds for mval in 0:mres:mmax
         col = mval + 1
         m_fft = mval + 1
         for ii in 1:nθ_local
@@ -486,6 +489,8 @@ function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use
     # ===== STEP 1: Extract local data and determine distribution =====
     # parent(fθφ) gives the underlying Array without PencilArray wrapper
     local_data = parent(fθφ)
+    RT = typeof(float(real(zero(eltype(local_data)))))
+    CT = Complex{RT}
     nlat_local, nlon_local = size(local_data)
 
     # Anti-scaling guard: a φ(longitude)-distributed input forces an Allgatherv
@@ -525,7 +530,7 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
 
     if use_rfft_effective
         nbins = nlon ÷ 2 + 1
-        Fθm = Matrix{ComplexF64}(undef, nlat_local, nbins)
+        Fθm = Matrix{CT}(undef, nlat_local, nbins)
         if φ_is_local_all
             Fθm .= FFTW.rfft(local_data, 2)
         else
@@ -536,11 +541,11 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         end
     elseif φ_is_local_all
         # CASE A: Data distributed along θ only (φ is complete on EVERY rank).
-        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+        Fθm = Matrix{CT}(undef, nlat_local, nlon)
         SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
     else
         # CASE B: Data distributed along φ — gather full longitude rows before FFT.
-        Fθm = Matrix{ComplexF64}(undef, nlat_local, nlon)
+        Fθm = Matrix{CT}(undef, nlat_local, nlon)
         φ_globals = collect(globalindices(fθφ, 2))
         φ_range = _owned_range(φ_globals)
         θ_range = _owned_range(θ_globals)
@@ -553,7 +558,7 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
 
     if use_packed_storage
         # Packed storage: only store coefficients where l ≥ m (~50% memory savings)
-        Alm_local = zeros(ComplexF64, storage_info.nlm_packed)
+        Alm_local = zeros(CT, storage_info.nlm_packed)
         temp_dense = nothing  # NOTE: This creates Union type - handled by function barrier
         if get(ENV, "SHTNSKIT_VERBOSE_STORAGE", "0") == "1"
             dense_bytes, packed_bytes, savings = estimate_memory_savings(lmax, mmax)
@@ -561,7 +566,7 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         end
     else
         # Dense storage: full (lmax+1) × (mmax+1) matrix (simpler, faster for small problems)
-        Alm_local = zeros(ComplexF64, lmax+1, mmax+1)
+        Alm_local = zeros(CT, lmax+1, mmax+1)
         temp_dense = Alm_local  # Alias - same memory
     end
 
@@ -639,10 +644,12 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         end
     elseif use_tbl
         # Use function barrier for tables path (zero allocation)
-        _analysis_loop_with_tables!(temp_dense, cfg.plm_tables, Fθm, weights_cache, θ_globals, lmax, mmax)
+        _analysis_loop_with_tables!(temp_dense, cfg.NP_tables, Fθm, weights_cache,
+                                    θ_globals, lmax, mmax, cfg.mres)
     else
         # Use function barrier for no-tables path (zero allocation)
-        _analysis_loop_no_tables!(temp_dense, P, Fθm, weights_cache, x_cache, θ_globals, lmax, mmax)
+        _analysis_loop_no_tables!(temp_dense, P, Fθm, weights_cache, x_cache,
+                                  θ_globals, lmax, mmax, cfg.mres)
     end
     
     # ===== STEP 5: MPI reduction to combine partial results =====
@@ -677,7 +684,7 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
             # Apply φ scaling (cphi = 2π/nlon). Nlm is NOT applied here: the
             # normalized recurrence Plm_norm_row! already bakes Nlm into P̄.
             cphi = cfg.cphi  # hoist field read out of the normalization loop (cfg is mutable)
-            @inbounds for m in 0:mmax
+            @inbounds for m in 0:cfg.mres:mmax
                 @simd ivdep for l in m:lmax
                     Alm_local[l+1, m+1] *= cphi
                 end
@@ -687,7 +694,7 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         # θ is not distributed - no reduction needed, just apply φ scaling
         if !use_packed_storage
             cphi = cfg.cphi  # hoist field read out of the normalization loop (cfg is mutable)
-            @inbounds for m in 0:mmax
+            @inbounds for m in 0:cfg.mres:mmax
                 @simd ivdep for l in m:lmax
                     Alm_local[l+1, m+1] *= cphi
                 end
@@ -698,7 +705,7 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
         # orthonormal-only, matching serial `analysis`/`synthesis` and the energy
         # diagnostics. (They used to convert to cfg's convention, which made the
         # two backends read the same `alm` differently.)
-    return Alm_local
+    return SHTnsKit._externalize_coefficients!(Alm_local, cfg)
 end
 
 function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
@@ -778,6 +785,10 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
         real_output && throw(ArgumentError("dist_synthesis with Aminus requires real_output=false"))
         size(Aminus) == size(Alm) || throw(DimensionMismatch("Aminus must match Alm's shape"))
     end
+    Alm_int = SHTnsKit._internal_coefficients(Alm, cfg)
+    Aminus_int = Aminus === nothing ? nothing : SHTnsKit._internal_coefficients(Aminus, cfg)
+    CT = eltype(Alm_int)
+    RT = typeof(real(zero(CT)))
 
     # Contract: Alm must be replicated identically on every rank. Sample-hash a
     # bounded prefix + a small tail slice instead of the full matrix so the check
@@ -817,14 +828,14 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
 
     # Allocate Fourier coefficient matrix. Shape depends on rfft/complex path.
     nbins = use_rfft_effective ? (nlon ÷ 2 + 1) : nlon
-    Fθm = zeros(ComplexF64, nθ_local, nbins)
+    Fθm = zeros(CT, nθ_local, nbins)
 
     P = Vector{Float64}(undef, lmax + 1)
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
     xv = cfg.x  # hoist field read out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis: for each m mode, compute Legendre series
-    for mval in 0:mmax
+    for mval in 0:cfg.mres:mmax
         col = mval + 1
 
         # Compute synthesized values for each local θ
@@ -833,29 +844,29 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
             # `gm` accumulates the negative-m half from `Aminus` on the SAME
             # Legendre row — P̄_l^{|m|} depends only on |m|, so the -m bin costs
             # one extra multiply-add per l instead of a whole second traversal.
-            gm = 0.0 + 0.0im
-            want_minus = Aminus !== nothing && mval > 0
+            gm = zero(CT)
+            want_minus = Aminus_int !== nothing && mval > 0
             if cfg.use_plm_tables && !isempty(cfg.NP_tables)
                 # NP_tables[col][l+1, iglob] = P̄_l^m already; no extra Nlm multiply
                 tbl = cfg.NP_tables[col]
-                g = 0.0 + 0.0im
+                g = zero(CT)
                 @inbounds @simd for l in mval:lmax
-                    g += tbl[l+1, iglob] * Alm[l+1, col]
+                    g += tbl[l+1, iglob] * Alm_int[l+1, col]
                 end
                 if want_minus
                     @inbounds @simd for l in mval:lmax
-                        gm += tbl[l+1, iglob] * Aminus[l+1, col]
+                        gm += tbl[l+1, iglob] * Aminus_int[l+1, col]
                     end
                 end
             else
                 SHTnsKit.Plm_norm_row!(P, xv[iglob], lmax, mval)
-                g = 0.0 + 0.0im
+                g = zero(CT)
                 @inbounds @simd for l in mval:lmax
-                    g += P[l+1] * Alm[l+1, col]
+                    g += P[l+1] * Alm_int[l+1, col]
                 end
                 if want_minus
                     @inbounds @simd for l in mval:lmax
-                        gm += P[l+1] * Aminus[l+1, col]
+                        gm += P[l+1] * Aminus_int[l+1, col]
                     end
                 end
             end
@@ -887,8 +898,8 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     # For `real_output=false` that discarded the imaginary half of the field
     # (and halved the real part), so complex synthesis silently disagreed with
     # serial `synthesis(cfg, alm; real_output=false)`.
-    fθφ_local = real_output ? Matrix{Float64}(undef, nθ_local, nlon) :
-                              Matrix{ComplexF64}(undef, nθ_local, nlon)
+    fθφ_local = real_output ? Matrix{RT}(undef, nθ_local, nlon) :
+                              Matrix{CT}(undef, nθ_local, nlon)
     if use_rfft_effective
         fθφ_local .= FFTW.irfft(Fθm, nlon, 2)
     else

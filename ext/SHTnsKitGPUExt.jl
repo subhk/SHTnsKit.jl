@@ -9,7 +9,10 @@ using CUDA
 using CUDA.CUFFT
 
 include("GPUCommon.jl")
-using .GPUCommon: laplacian_kernel!
+using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
+                  scalar_analysis_kernel!, scalar_synthesis_kernel!,
+                  coefficient_conversion_kernel!, scalar_config_signature,
+                  scalar_host_tables
 
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
@@ -58,15 +61,106 @@ function _gpu_adapter_adapt(::CUDAAdapter, value)
     return CuArray(value)
 end
 
+struct CUDAScalarTables{TX,TW,TP,TS}
+    x::TX
+    weights::TW
+    Plm::TP
+    scales::TS
+end
+
+const _CUDA_SCALAR_CACHE = Dict{Tuple{Int,UInt,DataType},Any}()
+const _CUDA_SCALAR_CACHE_LOCK = ReentrantLock()
+
+function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
+    key = (CUDA.deviceid(CUDA.device()), scalar_config_signature(cfg), T)
+    cached = lock(_CUDA_SCALAR_CACHE_LOCK) do
+        get(_CUDA_SCALAR_CACHE, key, nothing)
+    end
+    cached === nothing || return cached
+
+    x_host, weights_host, scales_host = scalar_host_tables(cfg, T)
+    x = CuArray(x_host)
+    weights = CuArray(weights_host)
+    scales = CuArray(scales_host)
+    Plm = CUDA.zeros(T, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1)
+    backend = CUDABackend()
+    kernel! = legendre_table_kernel!(backend)
+    kernel!(Plm, x, cfg.lmax, cfg.mmax;
+            ndrange=(cfg.nlat, cfg.mmax + 1))
+    CUDA.synchronize()
+    built = CUDAScalarTables(x, weights, Plm, scales)
+
+    return lock(_CUDA_SCALAR_CACHE_LOCK) do
+        get!(_CUDA_SCALAR_CACHE, key, built)
+    end
+end
+
+function _cuda_scalar_analysis(cfg::SHTConfig, field::CUDA.AnyCuArray;
+                               use_rfft::Bool=false, fft_scratch=nothing)
+    size(field) == (cfg.nlat, cfg.nlon) || throw(DimensionMismatch(
+        "field must have size ($(cfg.nlat), $(cfg.nlon)), got $(size(field))",
+    ))
+    fft_scratch === nothing || throw(ArgumentError(
+        "CUDA scalar transforms do not accept a host fft_scratch",
+    ))
+    RT = typeof(float(real(zero(eltype(field)))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    fourier = CT.(field)
+    gpu_fft!(fourier, 2)
+
+    backend = CUDABackend()
+    canonical = CUDA.zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+    analyze! = scalar_analysis_kernel!(backend)
+    analyze!(canonical, fourier, tables.Plm, tables.weights, RT(cfg.cphi),
+             cfg.lmax, cfg.mmax, cfg.mres;
+             ndrange=(cfg.lmax + 1, cfg.mmax + 1))
+
+    configured = similar(canonical)
+    convert! = coefficient_conversion_kernel!(backend)
+    convert!(configured, canonical, tables.scales, cfg.lmax, cfg.mmax, false;
+             ndrange=(cfg.lmax + 1, cfg.mmax + 1))
+    CUDA.synchronize()
+    return configured
+end
+
+function _cuda_scalar_synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray;
+                                real_output::Bool=true, use_rfft::Bool=false,
+                                fft_scratch=nothing)
+    size(coefficients) == (cfg.lmax + 1, cfg.mmax + 1) || throw(DimensionMismatch(
+        "coefficients must have size ($(cfg.lmax + 1), $(cfg.mmax + 1)), got $(size(coefficients))",
+    ))
+    fft_scratch === nothing || throw(ArgumentError(
+        "CUDA scalar transforms do not accept a host fft_scratch",
+    ))
+    RT = typeof(float(real(zero(eltype(coefficients)))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    configured = CT.(coefficients)
+    canonical = similar(configured)
+    backend = CUDABackend()
+    convert! = coefficient_conversion_kernel!(backend)
+    convert!(canonical, configured, tables.scales, cfg.lmax, cfg.mmax, true;
+             ndrange=(cfg.lmax + 1, cfg.mmax + 1))
+
+    fourier = CUDA.zeros(CT, cfg.nlat, cfg.nlon)
+    synthesize! = scalar_synthesis_kernel!(backend)
+    synthesize!(fourier, canonical, tables.Plm, RT(SHTnsKit.phi_inv_scale(cfg)),
+                cfg.nlon, cfg.lmax, cfg.mmax, cfg.mres, real_output;
+                ndrange=(cfg.nlat, cfg.mmax + 1))
+    CUDA.synchronize()
+    gpu_ifft!(fourier, 2)
+    return real_output ? real.(fourier) : fourier
+end
+
 function _gpu_adapter_analysis(::CUDAAdapter, cfg::SHTConfig, field::CUDA.AnyCuArray; kwargs...)
-    # The compatibility wrapper currently materializes its result on the host.
-    # Typed routing restores device residency; Task 5 replaces this bridge with
-    # the fully device-resident shared scalar pipeline.
-    return CuArray(gpu_analysis(cfg, field; device=SHTnsKit.GPU(), kwargs...))
+    _require_cuda(:analysis, SHTnsKit.GPU())
+    return _cuda_scalar_analysis(cfg, field; kwargs...)
 end
 
 function _gpu_adapter_synthesis(::CUDAAdapter, cfg::SHTConfig, coefficients::CUDA.AnyCuArray; kwargs...)
-    return CuArray(gpu_synthesis(cfg, coefficients; device=SHTnsKit.GPU(), kwargs...))
+    _require_cuda(:synthesis, SHTnsKit.GPU())
+    return _cuda_scalar_synthesis(cfg, coefficients; kwargs...)
 end
 
 analysis(cfg::SHTConfig, field::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
@@ -373,71 +467,10 @@ Implements: a_lm = ∫∫ f(θ,φ) Y_l^m*(θ,φ) sin(θ) dθ dφ
 Fully parallelized: all (l,m) coefficients computed in a single kernel launch.
 
 """
-function gpu_analysis(cfg::SHTConfig, spatial_data; device=SHTnsKit.GPU())
+function gpu_analysis(cfg::SHTConfig, spatial_data; device=SHTnsKit.GPU(), kwargs...)
     _require_cuda(:gpu_analysis, device)
-
-    # Validate input dimensions
-    nlat, nlon = cfg.nlat, cfg.nlon
-    size(spatial_data, 1) == nlat || throw(DimensionMismatch("spatial_data must have $nlat rows (nlat), got $(size(spatial_data, 1))"))
-    size(spatial_data, 2) == nlon || throw(DimensionMismatch("spatial_data must have $nlon columns (nlon), got $(size(spatial_data, 2))"))
-
-    # Transfer input data to GPU
-    gpu_data = CuArray(ComplexF64.(spatial_data))
-
-    # Allocate GPU arrays
-    coeffs = CUDA.zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    Plm = CUDA.zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1)
-    weights = CuArray(cfg.w)
-    x_values = CuArray(cfg.x)  # cos(θ) values at Gauss points
-
-    # Step 1: Precompute ORTHONORMAL normalized Legendre functions P̄_l^m on GPU.
-    # P̄ = Nlm·P_l^m is bounded (|P̄| ≲ 1) at all lmax — no overflow.
-    # Normalization Nlm is folded into P̄; downstream kernels must NOT multiply by Nlm.
-    backend = CUDABackend()
-    legendre_kernel! = legendre_associated_kernel!(backend)
-    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax; ndrange=(cfg.nlat, cfg.mmax+1))
-    CUDA.synchronize()
-
-    # Step 2: FFT along φ direction (dimension 2) using cuFFT
-    # After FFT: gpu_data[:, m+1] contains the m-th Fourier mode for m = 0, 1, ..., nlon-1
-    gpu_fft!(gpu_data, 2)
-
-    # Scaling factor for φ integration (matches CPU: cfg.cphi = 2π/nlon)
-    scaleφ = cfg.cphi
-
-    # Step 3: Fully parallel Legendre integration - ALL (l,m) pairs in one kernel.
-    # Each thread computes one a_lm coefficient.
-    # Plm already holds P̄_l^m (orthonormal-normalized); no separate Nlm factor needed.
-    @kernel function analysis_kernel!(coeffs, Fφ, Plm, weights, nlat, nlon, lmax, mmax, scale)
-        l_idx, m_idx = @index(Global, NTuple)
-        if l_idx <= lmax + 1 && m_idx <= mmax + 1
-            l = l_idx - 1
-            m = m_idx - 1
-            # Only compute for l >= m (triangular structure)
-            if l >= m && m <= nlon ÷ 2
-                result = ComplexF64(0, 0)
-                @inbounds for i_lat = 1:nlat
-                    # Gauss-Legendre quadrature: weight * P̄_l^m * Fourier_mode
-                    # Fourier mode m is in column m+1; P̄ already includes Nlm.
-                    result += weights[i_lat] * Plm[i_lat, l_idx, m_idx] * Fφ[i_lat, m_idx]
-                end
-                coeffs[l_idx, m_idx] = result * scale
-            end
-        end
-    end
-
-    analysis_k! = analysis_kernel!(backend)
-    analysis_k!(coeffs, gpu_data, Plm, weights,
-                cfg.nlat, cfg.nlon, cfg.lmax, cfg.mmax, scaleφ;
-                ndrange=(cfg.lmax+1, cfg.mmax+1))
-    CUDA.synchronize()
-
-    # Transfer result back to CPU - coefficients are always complex
-    Qlm = Array(coeffs)
-    # NO conversion: the kernels emit orthonormal P̄ output and CPU `analysis` is
-    # orthonormal-only, so returning the raw coefficients is what "matching CPU
-    # analysis" means. The GPU sphtor path does the same, as does its CPU twin.
-    return Qlm
+    device_data = spatial_data isa CUDA.AnyCuArray ? spatial_data : CuArray(spatial_data)
+    return Array(_cuda_scalar_analysis(cfg, device_data; kwargs...))
 end
 
 """
@@ -451,93 +484,13 @@ Implements: f(θ,φ) = Σ_l Σ_m a_lm Y_l^m(θ,φ)
 
 Fully parallelized: all (θ,m) Fourier modes computed in a single kernel launch.
 """
-function gpu_synthesis(cfg::SHTConfig, coeffs; device=SHTnsKit.GPU(), real_output=true)
+function gpu_synthesis(cfg::SHTConfig, coeffs; device=SHTnsKit.GPU(),
+                       real_output=true, kwargs...)
     _require_cuda(:gpu_synthesis, device)
-
-    # Validate input dimensions
-    lmax, mmax = cfg.lmax, cfg.mmax
-    size(coeffs, 1) == lmax + 1 || throw(DimensionMismatch("coeffs must have $(lmax+1) rows (lmax+1), got $(size(coeffs, 1))"))
-    size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
-
-    # NO conversion: the kernel expects orthonormal input and CPU `synthesis` is
-    # orthonormal-only, so the coefficients pass straight through. The GPU sphtor
-    # path does the same, as does its CPU twin.
-    coeffs_int = coeffs
-
-    # Transfer coefficients to GPU
-    gpu_coeffs = CuArray(ComplexF64.(coeffs_int))
-
-    # Allocate GPU arrays
-    Plm = CUDA.zeros(Float64, cfg.nlat, cfg.lmax+1, cfg.mmax+1)
-    x_values = CuArray(cfg.x)  # cos(θ) values at Gauss points
-
-    backend = CUDABackend()
-
-    # Step 1: Precompute ORTHONORMAL normalized Legendre functions P̄_l^m on GPU.
-    # P̄ = Nlm·P_l^m is bounded (|P̄| ≲ 1) at all lmax — no overflow.
-    # Normalization Nlm is folded into P̄; downstream kernel must NOT multiply by Nlm.
-    legendre_kernel! = legendre_associated_kernel!(backend)
-    legendre_kernel!(Plm, x_values, cfg.lmax, cfg.mmax; ndrange=(cfg.nlat, cfg.mmax+1))
-    CUDA.synchronize()
-
-    # Step 2: Fully parallel Legendre summation - ALL (θ, m) pairs in one kernel.
-    # Each thread computes F_m(θ_i) = Σ_l a_lm * P̄_l^m(cos θ_i) for one (lat, m).
-    # Plm already holds P̄_l^m; no separate Nlm factor needed.
-    fourier_modes = CUDA.zeros(ComplexF64, cfg.nlat, cfg.nlon)
-
-    @kernel function synthesis_kernel!(Fφ, coeffs, Plm, nlat, nlon, lmax, mmax, do_hermitian)
-        i_lat, m_idx = @index(Global, NTuple)
-        if i_lat <= nlat && m_idx <= mmax + 1
-            m = m_idx - 1
-            # Compute F_m(θ_i) = Σ_l a_lm * P̄_l^m(cos θ_i)
-            result = ComplexF64(0, 0)
-            @inbounds for l = m:lmax
-                l_idx = l + 1
-                result += coeffs[l_idx, m_idx] * Plm[i_lat, l_idx, m_idx]
-            end
-
-            # Place in Fourier mode slots for IFFT
-            # FFT convention: [0, 1, 2, ..., N/2, -N/2+1, ..., -1]
-            if m == 0
-                Fφ[i_lat, 1] = result
-            elseif m <= nlon ÷ 2
-                Fφ[i_lat, m + 1] = result
-                # Hermitian symmetry for real output: F_{-m} = conj(F_m).
-                # Skip when the negative-m slot coincides with the positive slot
-                # (Nyquist mode m == nlon/2 for even nlon) — else conj(result)
-                # would clobber the just-written result.
-                if do_hermitian && m > 0
-                    neg_m_idx = nlon - m + 1
-                    if neg_m_idx >= 1 && neg_m_idx <= nlon && neg_m_idx != m + 1
-                        Fφ[i_lat, neg_m_idx] = conj(result)
-                    end
-                end
-            end
-        end
-    end
-
-    synthesis_k! = synthesis_kernel!(backend)
-    synthesis_k!(fourier_modes, gpu_coeffs, Plm,
-                 cfg.nlat, cfg.nlon, cfg.lmax, cfg.mmax, real_output;
-                 ndrange=(cfg.nlat, cfg.mmax+1))
-    CUDA.synchronize()
-
-    # Step 3: Inverse FFT along φ direction (dimension 2) using cuFFT
-    gpu_ifft!(fourier_modes, 2)
-
-    # Apply inverse φ scaling (matches CPU: phi_inv_scale(cfg))
-    # For Gauss grids: nlon; for regular grids: nlon/(2π)
-    inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
-    fourier_modes .*= inv_scaleφ
-
-    # Transfer result back to CPU
-    result = Array(fourier_modes)
-
-    if real_output
-        return real(result)
-    else
-        return result
-    end
+    device_coefficients = coeffs isa CUDA.AnyCuArray ? coeffs : CuArray(coeffs)
+    return Array(_cuda_scalar_synthesis(
+        cfg, device_coefficients; real_output, kwargs...,
+    ))
 end
 
 # ============================================================================
@@ -927,6 +880,9 @@ Clear the active CUDA device's memory cache.
 """
 function gpu_clear_cache!()
     _require_cuda(:gpu_clear_cache!, SHTnsKit.GPU())
+    lock(_CUDA_SCALAR_CACHE_LOCK) do
+        empty!(_CUDA_SCALAR_CACHE)
+    end
     try
         CUDA.reclaim()
         @info "CUDA memory cache cleared"

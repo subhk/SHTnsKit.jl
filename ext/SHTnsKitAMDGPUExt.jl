@@ -12,7 +12,7 @@ using .GPUCommon: legendre_table_kernel!, scalar_analysis_kernel!,
                   scalar_synthesis_kernel!, coefficient_conversion_kernel!,
                   scalar_config_signature, scalar_host_tables
 
-import SHTnsKit: analysis, synthesis, on_device,
+import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis
@@ -159,5 +159,7 @@ analysis(cfg::SHTConfig, field::AMDGPU.AnyROCArray{T,2}; kwargs...) where {T} =
     analysis(SHTnsKit.GPU(), cfg, field; kwargs...)
 synthesis(cfg::SHTConfig, coefficients::AMDGPU.AnyROCArray{T,2}; kwargs...) where {T} =
     synthesis(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
+synthesis_cplx(cfg::SHTConfig, coefficients::AMDGPU.AnyROCArray{T,2}) where {T} =
+    synthesis_cplx(SHTnsKit.GPU(), cfg, coefficients)
 
 end # module SHTnsKitAMDGPUExt

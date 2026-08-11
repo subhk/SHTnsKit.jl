@@ -191,6 +191,11 @@ function synthesis(::CPU, cfg::SHTConfig, coefficients::AbstractMatrix; kwargs..
     return synthesis(cfg, coefficients; kwargs...)
 end
 
+function synthesis_cplx(::CPU, cfg::SHTConfig, coefficients::AbstractMatrix)
+    _require_cpu_storage(:synthesis_cplx, coefficients)
+    return synthesis_cplx(cfg, coefficients)
+end
+
 function analysis(::GPU, cfg::SHTConfig, field::AbstractMatrix; prototype=nothing, kwargs...)
     selection = prototype === nothing && on_device(field) isa GPU ? field : prototype
     adapter = _gpu_adapter(selection; operation=:analysis)
@@ -209,4 +214,11 @@ function synthesis(::GPU, cfg::SHTConfig, coefficients::AbstractMatrix; prototyp
     end
     device_coefficients = _gpu_adapter_matches(adapter, coefficients) ? coefficients : _gpu_adapter_adapt(adapter, coefficients)
     return _gpu_adapter_synthesis(adapter, cfg, device_coefficients; kwargs...)
+end
+
+function synthesis_cplx(::GPU, cfg::SHTConfig, coefficients::AbstractMatrix;
+                        prototype=nothing)
+    return synthesis(
+        GPU(), cfg, coefficients; prototype, real_output=false,
+    )
 end

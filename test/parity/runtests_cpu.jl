@@ -7,3 +7,10 @@ run_scalar_full_parity(CPUScalarAdapter())
 @testset "scalar mres adjoint parity" begin
     test_mres_scalar_adjoints()
 end
+
+@testset "typed explicit complex synthesis" begin
+    cfg = _scalar_config(:gauss, 3, 8)
+    coefficients = zeros(ComplexF32, cfg.lmax + 1, cfg.mmax + 1)
+    coefficients[3, 3] = 0.2f0 - 0.1f0im
+    @test synthesis_cplx(CPU(), cfg, coefficients) ≈ synthesis_cplx(cfg, coefficients)
+end

@@ -45,6 +45,8 @@ end
 analysis_call(::MPIScalarAdapter, cfg, field) = analysis(cfg, field; return_pencil=true)
 synthesis_call(::MPIScalarAdapter, cfg, coefficients, prototype; real_output) =
     synthesis(cfg, coefficients; prototype_θφ=prototype, real_output)
+synthesis_cplx_call(::MPIScalarAdapter, cfg, coefficients, prototype) =
+    synthesis_cplx(cfg, coefficients; prototype_θφ=prototype)
 assert_resident(::MPIScalarAdapter, value) = @test value isa PencilArray
 
 function test_phi_split_complex_float32(adapter::MPIScalarAdapter)

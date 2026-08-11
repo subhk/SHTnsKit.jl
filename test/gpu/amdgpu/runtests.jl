@@ -21,6 +21,8 @@ collect_result(::AMDGPUScalarAdapter, value, ::SHTConfig) = Array(value)
 analysis_call(::AMDGPUScalarAdapter, cfg, field) = analysis(GPU(), cfg, field)
 synthesis_call(::AMDGPUScalarAdapter, cfg, coefficients, _prototype; real_output) =
     synthesis(GPU(), cfg, coefficients; real_output)
+synthesis_cplx_call(::AMDGPUScalarAdapter, cfg, coefficients, _prototype) =
+    synthesis_cplx(cfg, coefficients)
 assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArray
 
 @testset "AMDGPU backend routing" begin
@@ -31,6 +33,12 @@ assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArr
     @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)
     @test isdefined(extension, :_amdgpu_scalar_analysis)
     @test isdefined(extension, :_amdgpu_scalar_synthesis)
+    @test which(
+        synthesis_cplx, Tuple{SHTConfig,ROCArray{ComplexF32,2}},
+    ).module === extension
+    @test which(
+        synthesis_cplx, Tuple{SHTnsKit.GPU,SHTConfig,ROCArray{ComplexF32,2}},
+    ).module === SHTnsKit
     run_shared_scalar_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitAMDGPUExt.jl"), String)
     ordinary_pipeline = split(
@@ -79,7 +87,10 @@ assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArr
         @test to_device(host, SHTnsKit.GPU(), device) isa ROCArray
 
         @test analysis(cfg, device_view) isa AMDGPU.AnyROCArray
-        @test analysis(SHTnsKit.GPU(), cfg, device_view) isa AMDGPU.AnyROCArray
+        coefficients = analysis(SHTnsKit.GPU(), cfg, device_view)
+        @test coefficients isa AMDGPU.AnyROCArray
+        @test synthesis_cplx(SHTnsKit.GPU(), cfg, coefficients) isa AMDGPU.AnyROCArray
+        @test synthesis_cplx(cfg, coefficients) isa AMDGPU.AnyROCArray
 
         AMDGPU.allowscalar(false)
         run_scalar_full_parity(

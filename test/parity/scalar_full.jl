@@ -11,6 +11,8 @@ collect_result(::CPUScalarAdapter, value, ::SHTConfig) = Array(value)
 analysis_call(::CPUScalarAdapter, cfg, field) = analysis(CPU(), cfg, field)
 synthesis_call(::CPUScalarAdapter, cfg, coefficients, _prototype; real_output) =
     synthesis(CPU(), cfg, coefficients; real_output)
+synthesis_cplx_call(::CPUScalarAdapter, cfg, coefficients, _prototype) =
+    synthesis_cplx(cfg, coefficients)
 assert_resident(::CPUScalarAdapter, value) = @test on_device(value) isa CPU
 
 const _SCALAR_GRID_KINDS = (:gauss, :gauss_fly, :regular, :regular_poles)
@@ -112,6 +114,15 @@ function _test_scalar_case(adapter::ScalarParityAdapter, cfg, ::Type{T}) where {
     reconstructed_complex_host = collect_result(adapter, reconstructed_complex, cfg)
     @test eltype(reconstructed_complex_host) === CT
     @test reconstructed_complex_host ≈ reference_complex atol=tol.atol rtol=tol.rtol
+
+    reconstructed_explicit = synthesis_cplx_call(
+        adapter, cfg, device_complex_coefficients, prototype,
+    )
+    assert_resident(adapter, reconstructed_explicit)
+    reconstructed_explicit_host = collect_result(adapter, reconstructed_explicit, cfg)
+    @test eltype(reconstructed_explicit_host) === CT
+    @test reconstructed_explicit_host ≈ reference_complex atol=tol.atol rtol=tol.rtol
+    @test reconstructed_explicit_host ≈ reconstructed_complex_host atol=tol.atol rtol=tol.rtol
 
     complex_input = CT.(reference_real, T(0.3) .* reference_real)
     complex_prototype = place(adapter, cfg, complex_input, :spatial)

@@ -22,7 +22,7 @@ import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_s
                  estimate_memory_usage, get_available_gpus, set_gpu_device
 
 # Import device routing functions to extend.
-import SHTnsKit: analysis, synthesis, on_device,
+import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis
@@ -167,6 +167,8 @@ analysis(cfg::SHTConfig, field::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
     analysis(SHTnsKit.GPU(), cfg, field; kwargs...)
 synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
     synthesis(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
+synthesis_cplx(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}) where {T} =
+    synthesis_cplx(SHTnsKit.GPU(), cfg, coefficients)
 
 """
     _to_gpu_impl(arr::AbstractArray)

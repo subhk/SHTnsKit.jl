@@ -21,6 +21,8 @@ collect_result(::CUDAScalarAdapter, value, ::SHTConfig) = Array(value)
 analysis_call(::CUDAScalarAdapter, cfg, field) = analysis(GPU(), cfg, field)
 synthesis_call(::CUDAScalarAdapter, cfg, coefficients, _prototype; real_output) =
     synthesis(GPU(), cfg, coefficients; real_output)
+synthesis_cplx_call(::CUDAScalarAdapter, cfg, coefficients, _prototype) =
+    synthesis_cplx(cfg, coefficients)
 assert_resident(::CUDAScalarAdapter, value) = @test value isa CUDA.AnyCuArray
 
 struct SafeFallbackRedispatchError <: Exception end
@@ -45,6 +47,12 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)
     @test isdefined(extension, :_cuda_scalar_analysis)
     @test isdefined(extension, :_cuda_scalar_synthesis)
+    @test which(
+        synthesis_cplx, Tuple{SHTConfig,CuArray{ComplexF32,2}},
+    ).module === extension
+    @test which(
+        synthesis_cplx, Tuple{SHTnsKit.GPU,SHTConfig,CuArray{ComplexF32,2}},
+    ).module === SHTnsKit
     run_shared_scalar_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitGPUExt.jl"), String)
     ordinary_pipeline = split(
@@ -185,6 +193,8 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         coefficient_view = @view coefficients[:, :]
         @test synthesis(SHTnsKit.GPU(), cfg, coefficients) isa CuArray
         @test synthesis(cfg, coefficient_view) isa CUDA.AnyCuArray
+        @test synthesis_cplx(SHTnsKit.GPU(), cfg, coefficient_view) isa CUDA.AnyCuArray
+        @test synthesis_cplx(cfg, coefficient_view) isa CUDA.AnyCuArray
         legacy_coefficients = gpu_analysis(cfg, host)
         @test legacy_coefficients isa Matrix
         @test gpu_synthesis(cfg, legacy_coefficients) isa Matrix

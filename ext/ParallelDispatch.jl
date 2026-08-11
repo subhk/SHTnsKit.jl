@@ -135,6 +135,13 @@ function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
     return result
 end
 
+function SHTnsKit.synthesis_cplx(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
+                                 prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis(
+        cfg, Alm; prototype_θφ, real_output=false,
+    )
+end
+
 function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
                            use_rfft::Bool=false, return_pencil::Bool=false)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)

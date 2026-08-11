@@ -12,7 +12,8 @@ include("GPUCommon.jl")
 using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
                   scalar_analysis_kernel!, scalar_synthesis_kernel!,
                   coefficient_conversion_kernel!, scalar_config_signature,
-                  scalar_host_tables
+                  scalar_host_tables, ScalarTableCache, scalar_cache_lookup,
+                  scalar_cache_insert!, scalar_cache_clear!, scalar_cache_size
 
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
@@ -25,7 +26,8 @@ import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_s
 import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
-                 _gpu_adapter_analysis, _gpu_adapter_synthesis
+                 _gpu_adapter_analysis, _gpu_adapter_synthesis,
+                 _gpu_adapter_clear_cache!
 
 # ============================================================================
 # CUDA Backend Integration with device_utils.jl
@@ -68,14 +70,15 @@ struct CUDAScalarTables{TX,TW,TP,TS}
     scales::TS
 end
 
-const _CUDA_SCALAR_CACHE = Dict{Tuple{Int,UInt,DataType},Any}()
-const _CUDA_SCALAR_CACHE_LOCK = ReentrantLock()
+const _CUDA_SCALAR_CACHE = ScalarTableCache(8)
 
 function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
-    key = (CUDA.deviceid(CUDA.device()), scalar_config_signature(cfg), T)
-    cached = lock(_CUDA_SCALAR_CACHE_LOCK) do
-        get(_CUDA_SCALAR_CACHE, key, nothing)
-    end
+    device = CUDA.deviceid(CUDA.device())
+    identity = objectid(cfg)
+    signature = scalar_config_signature(cfg)
+    cached = scalar_cache_lookup(
+        _CUDA_SCALAR_CACHE, device, identity, T, signature,
+    )
     cached === nothing || return cached
 
     x_host, weights_host, scales_host = scalar_host_tables(cfg, T)
@@ -90,9 +93,19 @@ function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
     CUDA.synchronize()
     built = CUDAScalarTables(x, weights, Plm, scales)
 
-    return lock(_CUDA_SCALAR_CACHE_LOCK) do
-        get!(_CUDA_SCALAR_CACHE, key, built)
-    end
+    return scalar_cache_insert!(
+        _CUDA_SCALAR_CACHE, device, identity, T, signature, built,
+    )
+end
+
+function _cuda_clear_scalar_cache!(; device=nothing)
+    scalar_cache_clear!(_CUDA_SCALAR_CACHE; device)
+    return nothing
+end
+
+function _gpu_adapter_clear_cache!(::CUDAAdapter)
+    _cuda_clear_scalar_cache!()
+    return nothing
 end
 
 function _cuda_scalar_analysis(cfg::SHTConfig, field::CUDA.AnyCuArray;
@@ -103,9 +116,14 @@ function _cuda_scalar_analysis(cfg::SHTConfig, field::CUDA.AnyCuArray;
     fft_scratch === nothing || throw(ArgumentError(
         "CUDA scalar transforms do not accept a host fft_scratch",
     ))
+    use_rfft && !(eltype(field) <: Real) && throw(ArgumentError(
+        "use_rfft=true requires a real-valued input",
+    ))
     RT = typeof(float(real(zero(eltype(field)))))
     CT = Complex{RT}
     tables = _cuda_scalar_tables(cfg, RT)
+    # `use_rfft` is a performance hint. CUDA currently uses the complex CUFFT
+    # pipeline for valid real transforms; the mathematical result is identical.
     fourier = CT.(field)
     gpu_fft!(fourier, 2)
 
@@ -133,6 +151,12 @@ function _cuda_scalar_synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray;
     fft_scratch === nothing || throw(ArgumentError(
         "CUDA scalar transforms do not accept a host fft_scratch",
     ))
+    use_rfft && !real_output && throw(ArgumentError(
+        "use_rfft=true implies real_output",
+    ))
+    use_rfft && cfg.mmax > cfg.nlon ÷ 2 && throw(ArgumentError(
+        "use_rfft=true requires mmax ≤ nlon÷2, got mmax=$(cfg.mmax), nlon=$(cfg.nlon)",
+    ))
     RT = typeof(float(real(zero(eltype(coefficients)))))
     CT = Complex{RT}
     tables = _cuda_scalar_tables(cfg, RT)
@@ -143,6 +167,8 @@ function _cuda_scalar_synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray;
     convert!(canonical, configured, tables.scales, cfg.lmax, cfg.mmax, true;
              ndrange=(cfg.lmax + 1, cfg.mmax + 1))
 
+    # Keep one complex CUFFT implementation for both valid modes until a vendor
+    # rFFT plan is measurably preferable; `use_rfft` does not alter semantics.
     fourier = CUDA.zeros(CT, cfg.nlat, cfg.nlon)
     synthesize! = scalar_synthesis_kernel!(backend)
     synthesize!(fourier, canonical, tables.Plm, RT(SHTnsKit.phi_inv_scale(cfg)),
@@ -882,9 +908,9 @@ Clear the active CUDA device's memory cache.
 """
 function gpu_clear_cache!()
     _require_cuda(:gpu_clear_cache!, SHTnsKit.GPU())
-    lock(_CUDA_SCALAR_CACHE_LOCK) do
-        empty!(_CUDA_SCALAR_CACHE)
-    end
+    # Preserve the historical API's process-wide scalar-cache clear while
+    # `CUDA.reclaim()` releases the active device's allocator cache.
+    _cuda_clear_scalar_cache!()
     try
         CUDA.reclaim()
         @info "CUDA memory cache cleared"

@@ -16,14 +16,20 @@ MAIN PUBLIC FUNCTIONS
 
 ALGORITHM OVERVIEW
 ------------------
-Analysis (spatial → spectral):
+Dense compatibility analysis (spatial → replicated spectral):
 1. If φ is distributed: MPI.Allgatherv! to collect full longitude rows
 2. FFT along φ dimension: spatial f(θ,φ) → Fourier coefficients F(θ,m)
 3. Legendre integration: For each m, integrate F(θ,m) * P_l^m(cos θ) * w(θ)
 4. If θ is distributed: MPI.Allreduce! to sum partial contributions
 5. Normalization: Apply spherical harmonic normalization factors
 
-Synthesis (spectral → spatial):
+Ordinary Pencil-native analysis instead reduces only each destination rank's
+owned m-column block. Ordinary Pencil-native synthesis evaluates locally owned
+modes and reduces slab-sized Fourier buffers; neither path forms a global
+coefficient matrix. Dense `dist_*` entry points retain the compatibility
+algorithms described here.
+
+Dense compatibility synthesis (replicated spectral → spatial):
 1. Legendre summation: For each m, sum A_lm * P_l^m(cos θ)
 2. IFFT along φ dimension: Fourier coefficients → spatial values
 3. If φ is distributed: Extract local portion and scatter
@@ -63,6 +69,134 @@ DEBUGGING CHECKLIST
 =#
 
 # ===== RANK-SYMMETRIC TOPOLOGY PREDICATES =====
+
+# Test-visible instrumentation for the ordinary Pencil-native scalar path. This
+# records only counts/shapes; transform scratch always remains call-local.
+const _PENCIL_SCALAR_STATS_LOCK = ReentrantLock()
+const _PENCIL_SCALAR_STATS = Dict{Symbol,Int}(
+    :full_matrix_helper_calls => 0,
+    :analysis_max_message_elements => 0,
+    :synthesis_max_message_elements => 0,
+)
+
+function _reset_pencil_scalar_stats!()
+    lock(_PENCIL_SCALAR_STATS_LOCK) do
+        for key in keys(_PENCIL_SCALAR_STATS)
+            _PENCIL_SCALAR_STATS[key] = 0
+        end
+    end
+    return nothing
+end
+
+function _record_pencil_scalar_stat!(key::Symbol, value::Int; maximum::Bool=false)
+    lock(_PENCIL_SCALAR_STATS_LOCK) do
+        _PENCIL_SCALAR_STATS[key] = maximum ? max(_PENCIL_SCALAR_STATS[key], value) :
+                                             _PENCIL_SCALAR_STATS[key] + value
+    end
+    return nothing
+end
+
+function _pencil_scalar_stats()
+    return lock(_PENCIL_SCALAR_STATS_LOCK) do
+        (
+            full_matrix_helper_calls=_PENCIL_SCALAR_STATS[:full_matrix_helper_calls],
+            analysis_max_message_elements=_PENCIL_SCALAR_STATS[:analysis_max_message_elements],
+            synthesis_max_message_elements=_PENCIL_SCALAR_STATS[:synthesis_max_message_elements],
+        )
+    end
+end
+
+@inline _scalar_precision_code(::Type{Float32}) = 1
+@inline _scalar_precision_code(::Type{ComplexF32}) = 2
+@inline _scalar_precision_code(::Type{Float64}) = 3
+@inline _scalar_precision_code(::Type{ComplexF64}) = 4
+@inline _scalar_precision_code(::Type) = 0
+
+function _collective_validation_error(comm, local_flags::UInt32, operation::Symbol)
+    flags = MPI.Allreduce(local_flags, |, comm)
+    flags == 0 && return nothing
+    descriptions = String[]
+    flags & 0x0001 != 0 && push!(descriptions, "global shape mismatch")
+    flags & 0x0002 != 0 && push!(descriptions, "local Pencil storage/decomposition mismatch")
+    flags & 0x0004 != 0 && push!(descriptions, "unsupported or rank-varying precision")
+    flags & 0x0008 != 0 && push!(descriptions, "communicator mismatch")
+    flags & 0x0010 != 0 && push!(descriptions, "use_rfft=true requires a real-valued input")
+    flags & 0x0020 != 0 && push!(descriptions, "use_rfft=true implies real_output")
+    flags & 0x0040 != 0 && push!(descriptions, "use_rfft=true requires mmax ≤ nlon÷2")
+    flags & 0x0080 != 0 && push!(descriptions, "Aminus requires real_output=false")
+    throw(ArgumentError("$operation collective validation failed: $(join(descriptions, ", "))"))
+end
+
+function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
+                                  expected::Tuple{Int,Int}, operation::Symbol;
+                                  comm=communicator(array), peer=nothing,
+                                  require_full_first_dim::Bool=false,
+                                  use_rfft::Bool=false, real_output::Bool=true,
+                                  require_real_input::Bool=false,
+                                  require_complex_input::Bool=false)
+    flags = UInt32(0)
+    size_global(array) == expected || (flags |= 0x0001)
+    ranges = PencilArrays.range_local(pencil(array))
+    local_size = size(parent(array))
+    (local_size == (length(ranges[1]), length(ranges[2]))) || (flags |= 0x0002)
+    require_full_first_dim && length(ranges[1]) != expected[1] && (flags |= 0x0002)
+    code = _scalar_precision_code(eltype(array))
+    code == 0 && (flags |= 0x0004)
+    require_complex_input && !(eltype(array) <: Complex) && (flags |= 0x0004)
+    min_code = MPI.Allreduce(code, min, comm)
+    max_code = MPI.Allreduce(code, max, comm)
+    min_code == max_code || (flags |= 0x0004)
+    if peer !== nothing
+        peer_comm = communicator(peer)
+        compatible = MPI.Comm_size(peer_comm) == MPI.Comm_size(comm) &&
+                     MPI.Comm_compare(peer_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+        compatible || (flags |= 0x0008)
+    end
+    use_rfft && require_real_input && !(eltype(array) <: Real) && (flags |= 0x0010)
+    use_rfft && !real_output && (flags |= 0x0020)
+    use_rfft && cfg.mmax > cfg.nlon ÷ 2 && (flags |= 0x0040)
+    return _collective_validation_error(comm, flags, operation)
+end
+
+function _validate_dense_synthesis!(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix,
+                                    prototype::PencilArray;
+                                    real_output::Bool, use_rfft::Bool,
+                                    Aminus=nothing)
+    comm = communicator(prototype)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    flags = UInt32(0)
+    size(Alm) == expected || (flags |= 0x0001)
+    code = _scalar_precision_code(eltype(Alm))
+    code in (2, 4) || (flags |= 0x0004)
+    min_code = MPI.Allreduce(code, min, comm)
+    max_code = MPI.Allreduce(code, max, comm)
+    min_code == max_code || (flags |= 0x0004)
+    if Aminus !== nothing
+        size(Aminus) == expected || (flags |= 0x0001)
+        _scalar_precision_code(eltype(Aminus)) == code || (flags |= 0x0004)
+        real_output && (flags |= 0x0080)
+    end
+    use_rfft && !real_output && (flags |= 0x0020)
+    use_rfft && cfg.mmax > cfg.nlon ÷ 2 && (flags |= 0x0040)
+    _collective_validation_error(comm, flags, :dist_synthesis)
+
+    # Dense dist_* compatibility requires identical replicated coefficients.
+    # Broadcast an exact rank-0 copy, then reduce the mismatch so every rank
+    # takes the same error path before the transform begins.
+    reference = copy(Alm)
+    MPI.Bcast!(reference, 0, comm)
+    mismatch = !isequal(Alm, reference)
+    if Aminus !== nothing
+        reference_minus = copy(Aminus)
+        MPI.Bcast!(reference_minus, 0, comm)
+        mismatch |= !isequal(Aminus, reference_minus)
+    end
+    any_mismatch = MPI.Allreduce(mismatch, |, comm)
+    any_mismatch && throw(ArgumentError(
+        "dist_synthesis requires coefficient matrices replicated identically on every rank",
+    ))
+    return nothing
+end
 #
 # `φ_is_local_all` and `θ_is_distributed` decide which branch a transform takes,
 # and the branches enter different collectives, so both must be REDUCED rather
@@ -438,6 +572,126 @@ function _analysis_loop_with_tables!(temp_dense::Matrix{Complex{T}},
     return nothing
 end
 
+function _pencil_scalar_fourier(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                                use_rfft::Bool=false)
+    comm = communicator(fθφ)
+    local_data = parent(fθφ)
+    RT = typeof(float(real(zero(eltype(local_data)))))
+    CT = Complex{RT}
+    nlat_local, nlon_local = size(local_data)
+    θ_globals = collect(Int, globalindices(fθφ, 1))
+    φ_globals = collect(Int, globalindices(fθφ, 2))
+    φ_is_local_all, θ_is_distributed = _pencil_topology(
+        fθφ, comm, length(θ_globals), nlon_local, cfg.nlat, cfg.nlon,
+    )
+    if use_rfft
+        Fθm = Matrix{CT}(undef, nlat_local, cfg.nlon ÷ 2 + 1)
+        if φ_is_local_all
+            Fθm .= FFTW.rfft(local_data, 2)
+        else
+            SHTnsKitParallelExt.distributed_rfft_phi!(
+                Fθm, local_data, _owned_range(θ_globals),
+                _owned_range(φ_globals), cfg.nlon, comm,
+            )
+        end
+    elseif φ_is_local_all
+        Fθm = Matrix{CT}(undef, nlat_local, cfg.nlon)
+        SHTnsKitParallelExt.fft_along_dim2!(Fθm, local_data)
+    else
+        Fθm = _gather_and_fft_phi(
+            local_data, _owned_range(θ_globals), _owned_range(φ_globals),
+            cfg.nlon, comm,
+        )
+    end
+    return Fθm, θ_globals, φ_globals, φ_is_local_all, θ_is_distributed
+end
+
+function _analysis_owned_block!(block::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConfig,
+                                Fθm::AbstractMatrix{CT}, θ_globals,
+                                first_m_index::Int) where {CT<:Complex}
+    fill!(block, zero(CT))
+    P = Vector{Float64}(undef, cfg.lmax + 1)
+    RT = typeof(real(zero(CT)))
+    cphi = RT(cfg.cphi)
+    use_tbl = cfg.use_plm_tables && !isempty(cfg.NP_tables)
+    @inbounds for local_m in axes(block, 2)
+        m_index = first_m_index + local_m - 1
+        m = m_index - 1
+        (0 <= m <= cfg.mmax && m % cfg.mres == 0) || continue
+        for (ii, iglob) in pairs(θ_globals)
+            Fi = Fθm[ii, m_index]
+            wi = RT(cfg.w[iglob])
+            if use_tbl
+                table = cfg.NP_tables[m_index]
+                @simd for l in m:cfg.lmax
+                    block[l + 1, local_m] += wi * RT(table[l + 1, iglob]) * Fi
+                end
+            else
+                SHTnsKit.Plm_norm_row!(P, cfg.x[iglob], cfg.lmax, m)
+                @simd for l in m:cfg.lmax
+                    block[l + 1, local_m] += wi * RT(P[l + 1]) * Fi
+                end
+            end
+        end
+        @simd for l in m:cfg.lmax
+            block[l + 1, local_m] *= cphi
+        end
+    end
+    return block
+end
+
+"""
+Pencil-native ordinary scalar analysis. Each reduction targets only one rank's
+owned m-columns; no rank allocates or receives the global spectral matrix.
+"""
+function dist_analysis_pencil(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                              use_rfft::Bool=false)
+    comm = communicator(fθφ)
+    _validate_scalar_pencil!(
+        cfg, fθφ, (cfg.nlat, cfg.nlon), :analysis;
+        comm, use_rfft, require_real_input=true,
+    )
+    Fθm, θ_globals, φ_globals, φ_is_local_all, _ =
+        _pencil_scalar_fourier(cfg, fθφ; use_rfft)
+    CT = eltype(Fθm)
+    RT = typeof(real(zero(CT)))
+    output = PencilArray{CT}(undef, SHTnsKit.create_spectral_pencil(cfg; comm))
+    fill!(parent(output), zero(CT))
+
+    local_m = collect(Int, globalindices(output, 2))
+    local_first = isempty(local_m) ? 1 : first(local_m)
+    starts = Int.(MPI.Allgather(Int32(local_first), comm))
+    counts = Int.(MPI.Allgather(Int32(length(local_m)), comm))
+    rank = MPI.Comm_rank(comm)
+    for root in 0:(MPI.Comm_size(comm) - 1)
+        count = counts[root + 1]
+        send = zeros(CT, cfg.lmax + 1, count)
+        _analysis_owned_block!(send, cfg, Fθm, θ_globals, starts[root + 1])
+        φ_is_local_all || _keep_one_phi_partner!(φ_globals, send)
+        receive = zeros(CT, size(send))
+        _record_pencil_scalar_stat!(
+            :analysis_max_message_elements, length(send); maximum=true,
+        )
+        MPI.Reduce!(send, receive, +, root, comm)
+        if rank == root
+            destination = parent(output)
+            l_globals = collect(Int, globalindices(output, 1))
+            @inbounds for j in axes(destination, 2), (i, l_index) in pairs(l_globals)
+                m_index = starts[root + 1] + j - 1
+                l = l_index - 1
+                m = m_index - 1
+                if l >= m && m % cfg.mres == 0
+                    scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+                    destination[i, j] = receive[l_index, j] / scale
+                else
+                    destination[i, j] = zero(CT)
+                end
+            end
+        end
+    end
+    return output
+end
+
 """
     dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage) -> Alm
 
@@ -482,6 +736,10 @@ println("Global indices φ: ", globalindices(fθφ, 2))
 """
 function dist_analysis_standard(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
     comm = communicator(fθφ)
+    _validate_scalar_pencil!(
+        cfg, fθφ, (cfg.nlat, cfg.nlon), :dist_analysis;
+        comm, use_rfft, require_real_input=true,
+    )
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
     nlat = cfg.nlat
@@ -512,10 +770,7 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     # ===== STEP 2 & 3: FFT along longitude (φ) dimension =====
     # Complex path: Fθm shape (nlat_local, nlon). rfft path: (nlat_local, nlon÷2+1).
     # rfft requires real spatial data; both Case A (φ replicated) and Case B (φ split) supported.
-    use_rfft_effective = use_rfft && eltype(local_data) <: Real
-    if use_rfft && !use_rfft_effective && MPI.Comm_rank(comm) == 0
-        @warn "use_rfft=true ignored — spatial data is not real." maxlog=1
-    end
+    use_rfft_effective = use_rfft
 
     # φ-locality must be agreed by ALL ranks, not decided per-rank: on a pencil
     # with more φ-partitions than columns the sole owner sees `nlon_local == nlon`
@@ -781,35 +1036,19 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
     nlat = cfg.nlat
-    if Aminus !== nothing
-        real_output && throw(ArgumentError("dist_synthesis with Aminus requires real_output=false"))
-        size(Aminus) == size(Alm) || throw(DimensionMismatch("Aminus must match Alm's shape"))
-    end
+    comm = communicator(prototype_θφ)
+    _validate_scalar_pencil!(
+        cfg, prototype_θφ, (cfg.nlat, cfg.nlon), :dist_synthesis_prototype;
+        comm,
+    )
+    _validate_dense_synthesis!(
+        cfg, Alm, prototype_θφ; real_output, use_rfft, Aminus,
+    )
     Alm_int = SHTnsKit._internal_coefficients(Alm, cfg)
     Aminus_int = Aminus === nothing ? nothing : SHTnsKit._internal_coefficients(Aminus, cfg)
     CT = eltype(Alm_int)
     RT = typeof(real(zero(CT)))
 
-    # Contract: Alm must be replicated identically on every rank. Sample-hash a
-    # bounded prefix + a small tail slice instead of the full matrix so the check
-    # stays O(1) regardless of lmax.
-    comm = communicator(prototype_θφ)
-    if MPI.Comm_size(comm) > 1
-        n = length(Alm)
-        k = min(n, 128)
-        probe_head = n == 0 ? UInt64(0) : hash(view(Alm, 1:k))
-        probe_tail = n <= k ? UInt64(0) : hash(view(Alm, (n - k + 1):n))
-        # `Aminus` must be replicated too — it feeds the same collective-free
-        # local traversal, so a rank-varying copy would silently produce a
-        # different field per rank.
-        probe_minus = Aminus === nothing ? UInt64(0) :
-                      hash((hash(view(Aminus, 1:k)), n <= k ? UInt64(0) : hash(view(Aminus, (n - k + 1):n))))
-        local_sig = hash((size(Alm, 1), size(Alm, 2), probe_head, probe_tail, probe_minus))
-        rank0_sig = MPI.bcast(local_sig, 0, comm)
-        if local_sig != rank0_sig
-            throw(ArgumentError("dist_synthesis requires Alm replicated across ranks (signature mismatch on rank $(MPI.Comm_rank(comm)))."))
-        end
-    end
 
     # Get the local portion info from the prototype
     θ_globals = collect(globalindices(prototype_θφ, 1))  # Global θ indices this process owns
@@ -820,11 +1059,9 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     φ_is_local = (nlon_local == nlon)
 
 
-    # rfft now supported in both Case A and Case B (it only needs real output).
-    use_rfft_effective = use_rfft && real_output
-    if use_rfft && !real_output && MPI.Comm_rank(comm) == 0
-        @warn "use_rfft=true ignored — requires real_output=true." maxlog=1
-    end
+    # rfft is valid only for real output; collective validation above rejects
+    # invalid combinations on every rank before work begins.
+    use_rfft_effective = use_rfft
 
     # Allocate Fourier coefficient matrix. Shape depends on rfft/complex path.
     nbins = use_rfft_effective ? (nlon ÷ 2 + 1) : nlon
@@ -933,9 +1170,156 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
     return result
 end
 
-function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    Alm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Alm)
-    return SHTnsKit.dist_synthesis(cfg, Alm_dense; prototype_θφ, real_output, use_rfft)
+function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConfig,
+                                 Alm::PencilArray, θ_first::Int,
+                                 real_output::Bool, use_rfft::Bool) where {CT<:Complex}
+    fill!(Fθm, zero(CT))
+    coefficients = parent(Alm)
+    l_globals = collect(Int, globalindices(Alm, 1))
+    m_globals = collect(Int, globalindices(Alm, 2))
+    RT = typeof(real(zero(CT)))
+    P = Vector{Float64}(undef, cfg.lmax + 1)
+    use_tbl = cfg.use_plm_tables && !isempty(cfg.NP_tables)
+    inv_scale = RT(SHTnsKit.phi_inv_scale(cfg))
+    @inbounds for (local_m, m_index) in pairs(m_globals)
+        m = m_index - 1
+        m % cfg.mres == 0 || continue
+        for local_θ in axes(Fθm, 1)
+            iglob = θ_first + local_θ - 1
+            radial = zero(CT)
+            if use_tbl
+                table = cfg.NP_tables[m_index]
+                for (local_l, l_index) in pairs(l_globals)
+                    l = l_index - 1
+                    if l >= m
+                        scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+                        radial += RT(table[l_index, iglob]) * scale * coefficients[local_l, local_m]
+                    end
+                end
+            else
+                SHTnsKit.Plm_norm_row!(P, cfg.x[iglob], cfg.lmax, m)
+                for (local_l, l_index) in pairs(l_globals)
+                    l = l_index - 1
+                    if l >= m
+                        scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+                        radial += RT(P[l_index]) * scale * coefficients[local_l, local_m]
+                    end
+                end
+            end
+            bin = inv_scale * radial
+            Fθm[local_θ, m_index] = bin
+            if real_output && !use_rfft && m > 0
+                negative_index = cfg.nlon - m + 1
+                negative_index != m_index && (Fθm[local_θ, negative_index] = conj(bin))
+            end
+        end
+    end
+    return Fθm
+end
+
+function _spatial_owner_descriptors(prototype::PencilArray, comm)
+    θ = collect(Int, globalindices(prototype, 1))
+    φ = collect(Int, globalindices(prototype, 2))
+    θ_first = isempty(θ) ? 1 : first(θ)
+    φ_first = isempty(φ) ? 1 : first(φ)
+    return (
+        θ_starts=Int.(MPI.Allgather(Int32(θ_first), comm)),
+        θ_counts=Int.(MPI.Allgather(Int32(length(θ)), comm)),
+        φ_starts=Int.(MPI.Allgather(Int32(φ_first), comm)),
+        φ_counts=Int.(MPI.Allgather(Int32(length(φ)), comm)),
+    )
+end
+
+"""
+Pencil-native scalar synthesis. Spectral ranks evaluate only their owned
+m-columns. Slab-sized Fourier partials are reduced to one owner per unique
+latitude slab, transformed there, then only local longitude slices are sent to
+the other owners of that slab.
+"""
+function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
+                                 prototype_θφ::PencilArray,
+                                 real_output::Bool=true, use_rfft::Bool=false)
+    comm = communicator(prototype_θφ)
+    _validate_scalar_pencil!(
+        cfg, Alm, (cfg.lmax + 1, cfg.mmax + 1), :synthesis;
+        comm, peer=prototype_θφ, require_full_first_dim=true,
+        use_rfft, real_output, require_complex_input=true,
+    )
+    _validate_scalar_pencil!(
+        cfg, prototype_θφ, (cfg.nlat, cfg.nlon), :synthesis_prototype;
+        comm, peer=Alm,
+    )
+
+    CT = eltype(Alm)
+    RT = typeof(real(zero(CT)))
+    output_type = real_output ? RT : CT
+    output = Matrix{output_type}(undef, size(parent(prototype_θφ)))
+    fill!(output, zero(output_type))
+    descriptors = _spatial_owner_descriptors(prototype_θφ, comm)
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+    group_roots = Int[]
+    seen = Set{Tuple{Int,Int}}()
+    for candidate in 0:(nranks - 1)
+        descriptor = (
+            descriptors.θ_starts[candidate + 1],
+            descriptors.θ_counts[candidate + 1],
+        )
+        descriptor[2] == 0 && continue
+        if !(descriptor in seen)
+            push!(seen, descriptor)
+            push!(group_roots, candidate)
+        end
+    end
+
+    nbins = use_rfft ? cfg.nlon ÷ 2 + 1 : cfg.nlon
+    for (group_index, root) in pairs(group_roots)
+        θ_first = descriptors.θ_starts[root + 1]
+        θ_count = descriptors.θ_counts[root + 1]
+        send = zeros(CT, θ_count, nbins)
+        _synthesis_owned_modes!(send, cfg, Alm, θ_first, real_output, use_rfft)
+        receive = zeros(CT, size(send))
+        _record_pencil_scalar_stat!(
+            :synthesis_max_message_elements, length(send); maximum=true,
+        )
+        MPI.Reduce!(send, receive, +, root, comm)
+
+        if rank == root
+            slab = real_output ? Matrix{RT}(undef, θ_count, cfg.nlon) :
+                                 Matrix{CT}(undef, θ_count, cfg.nlon)
+            if use_rfft
+                slab .= FFTW.irfft(receive, cfg.nlon, 2)
+            else
+                SHTnsKitParallelExt.ifft_along_dim2!(slab, receive)
+            end
+            if cfg.robert_form
+                @inbounds for i in axes(slab, 1)
+                    x = cfg.x[θ_first + i - 1]
+                    sθ = sqrt(max(0.0, 1 - x*x))
+                    @views slab[i, :] .*= sθ
+                end
+            end
+            for destination in 0:(nranks - 1)
+                same_slab = descriptors.θ_starts[destination + 1] == θ_first &&
+                            descriptors.θ_counts[destination + 1] == θ_count
+                same_slab || continue
+                φ_count = descriptors.φ_counts[destination + 1]
+                φ_count == 0 && continue
+                φ_first = descriptors.φ_starts[destination + 1]
+                piece = copy(@view slab[:, φ_first:(φ_first + φ_count - 1)])
+                if destination == root
+                    copyto!(output, piece)
+                else
+                    MPI.Send(piece, destination, 8100 + group_index, comm)
+                end
+            end
+        elseif descriptors.θ_starts[rank + 1] == θ_first &&
+               descriptors.θ_counts[rank + 1] == θ_count &&
+               descriptors.φ_counts[rank + 1] > 0
+            MPI.Recv!(output, root, 8100 + group_index, comm)
+        end
+    end
+    return output
 end
 
 function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::PencilArray; real_output::Bool=true)

@@ -36,8 +36,9 @@ Prefer this over the bare `Pencil((nlat, nlon), comm)`: PencilArrays splits the
 analysis path `Allgatherv!`s the full longitude onto every rank and then
 replicates the Legendre transform, so it does NOT scale (it usually gets slower
 with more ranks). Latitude decomposition instead divides the Legendre work per
-rank and only reduces the small `(lmax+1, mmax+1)` spectral matrix, which
-strong-scales.
+rank. Ordinary `analysis(cfg, pencil)` reduces only each destination rank's
+owned m-columns; pass `return_pencil=false` explicitly for the replicated dense
+compatibility result.
 """
 function SHTnsKit.create_spatial_pencil(cfg::SHTnsKit.SHTConfig; comm=MPI.COMM_WORLD)
     # Decompose dimension 1 (θ / latitude). The (1,) tuple selects which global
@@ -65,6 +66,7 @@ Convert a dense spectral coefficient matrix to a distributed PencilArray.
 Each rank receives its local portion of the m-distributed array.
 """
 function SHTnsKit.matrix_to_spectral_pencil(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; comm=MPI.COMM_WORLD)
+    _record_pencil_scalar_stat!(:full_matrix_helper_calls, 1)
     size(Alm) == (cfg.lmax + 1, cfg.mmax + 1) || throw(DimensionMismatch(
         "Alm size $(size(Alm)) does not match expected ($((cfg.lmax + 1, cfg.mmax + 1)))"))
 
@@ -94,6 +96,7 @@ end
 Gather a distributed spectral PencilArray to a dense matrix on all ranks.
 """
 function SHTnsKit.spectral_pencil_to_matrix(cfg::SHTnsKit.SHTConfig, Alm_p::PencilArray; comm=nothing)
+    _record_pencil_scalar_stat!(:full_matrix_helper_calls, 1)
     if comm === nothing
         comm = communicator(Alm_p)
     end
@@ -142,14 +145,18 @@ function SHTnsKit.synthesis_cplx(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
     )
 end
 
+"""
+Analyze a distributed field. The ordinary/default result is a spectral
+`PencilArray`; `return_pencil=false` preserves the replicated dense
+compatibility result from `dist_analysis`.
+"""
 function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
-                           use_rfft::Bool=false, return_pencil::Bool=false)
-    Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)
-
+                           use_rfft::Bool=false, return_pencil::Bool=true)
     if return_pencil
-        return SHTnsKit.matrix_to_spectral_pencil(cfg, Alm; comm=communicator(fθφ))
+        return dist_analysis_pencil(cfg, fθφ; use_rfft)
     else
-        return Alm
+        # Dense return is the preserved compatibility path.
+        return SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)
     end
 end
 

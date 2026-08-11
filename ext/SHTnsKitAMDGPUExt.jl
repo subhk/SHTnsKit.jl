@@ -10,12 +10,15 @@ using FFTW
 include("GPUCommon.jl")
 using .GPUCommon: legendre_table_kernel!, scalar_analysis_kernel!,
                   scalar_synthesis_kernel!, coefficient_conversion_kernel!,
-                  scalar_config_signature, scalar_host_tables
+                  scalar_config_signature, scalar_host_tables,
+                  ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
+                  scalar_cache_clear!, scalar_cache_size
 
 import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
-                 _gpu_adapter_analysis, _gpu_adapter_synthesis
+                 _gpu_adapter_analysis, _gpu_adapter_synthesis,
+                 _gpu_adapter_clear_cache!
 
 mutable struct AMDGPUAdapter end
 const AMDGPU_ADAPTER = AMDGPUAdapter()
@@ -55,14 +58,15 @@ struct AMDGPUScalarTables{TX,TW,TP,TS}
     scales::TS
 end
 
-const _AMDGPU_SCALAR_CACHE = Dict{Tuple{Int,UInt,DataType},Any}()
-const _AMDGPU_SCALAR_CACHE_LOCK = ReentrantLock()
+const _AMDGPU_SCALAR_CACHE = ScalarTableCache(8)
 
 function _amdgpu_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
-    key = (AMDGPU.device_id(), scalar_config_signature(cfg), T)
-    cached = lock(_AMDGPU_SCALAR_CACHE_LOCK) do
-        get(_AMDGPU_SCALAR_CACHE, key, nothing)
-    end
+    device = AMDGPU.device_id()
+    identity = objectid(cfg)
+    signature = scalar_config_signature(cfg)
+    cached = scalar_cache_lookup(
+        _AMDGPU_SCALAR_CACHE, device, identity, T, signature,
+    )
     cached === nothing || return cached
 
     x_host, weights_host, scales_host = scalar_host_tables(cfg, T)
@@ -77,9 +81,19 @@ function _amdgpu_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloa
     AMDGPU.synchronize()
     built = AMDGPUScalarTables(x, weights, Plm, scales)
 
-    return lock(_AMDGPU_SCALAR_CACHE_LOCK) do
-        get!(_AMDGPU_SCALAR_CACHE, key, built)
-    end
+    return scalar_cache_insert!(
+        _AMDGPU_SCALAR_CACHE, device, identity, T, signature, built,
+    )
+end
+
+function _amdgpu_clear_scalar_cache!(; device=nothing)
+    scalar_cache_clear!(_AMDGPU_SCALAR_CACHE; device)
+    return nothing
+end
+
+function _gpu_adapter_clear_cache!(::AMDGPUAdapter)
+    _amdgpu_clear_scalar_cache!()
+    return nothing
 end
 
 function _amdgpu_scalar_analysis(cfg::SHTConfig, field::AMDGPU.AnyROCArray;
@@ -91,9 +105,14 @@ function _amdgpu_scalar_analysis(cfg::SHTConfig, field::AMDGPU.AnyROCArray;
     fft_scratch === nothing || throw(ArgumentError(
         "AMDGPU scalar transforms do not accept a host fft_scratch",
     ))
+    use_rfft && !(eltype(field) <: Real) && throw(ArgumentError(
+        "use_rfft=true requires a real-valued input",
+    ))
     RT = typeof(float(real(zero(eltype(field)))))
     CT = Complex{RT}
     tables = _amdgpu_scalar_tables(cfg, RT)
+    # `use_rfft` is a performance hint. The current rocFFT adapter deliberately
+    # shares the complex pipeline for valid real transforms.
     fourier = CT.(field)
     FFTW.fft!(fourier, 2)
 
@@ -123,6 +142,12 @@ function _amdgpu_scalar_synthesis(cfg::SHTConfig,
     fft_scratch === nothing || throw(ArgumentError(
         "AMDGPU scalar transforms do not accept a host fft_scratch",
     ))
+    use_rfft && !real_output && throw(ArgumentError(
+        "use_rfft=true implies real_output",
+    ))
+    use_rfft && cfg.mmax > cfg.nlon ÷ 2 && throw(ArgumentError(
+        "use_rfft=true requires mmax ≤ nlon÷2, got mmax=$(cfg.mmax), nlon=$(cfg.nlon)",
+    ))
     RT = typeof(float(real(zero(eltype(coefficients)))))
     CT = Complex{RT}
     tables = _amdgpu_scalar_tables(cfg, RT)
@@ -133,6 +158,7 @@ function _amdgpu_scalar_synthesis(cfg::SHTConfig,
     convert!(canonical, configured, tables.scales, cfg.lmax, cfg.mmax, true;
              ndrange=(cfg.lmax + 1, cfg.mmax + 1))
 
+    # The complex rocFFT route is mathematically identical for this valid hint.
     fourier = AMDGPU.zeros(CT, cfg.nlat, cfg.nlon)
     synthesize! = scalar_synthesis_kernel!(backend)
     synthesize!(fourier, canonical, tables.Plm, RT(SHTnsKit.phi_inv_scale(cfg)),

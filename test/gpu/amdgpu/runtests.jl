@@ -18,9 +18,11 @@ function place(::AMDGPUScalarAdapter, ::SHTConfig, value, ::Symbol)
     return ROCArray(value)
 end
 collect_result(::AMDGPUScalarAdapter, value, ::SHTConfig) = Array(value)
-analysis_call(::AMDGPUScalarAdapter, cfg, field) = analysis(GPU(), cfg, field)
-synthesis_call(::AMDGPUScalarAdapter, cfg, coefficients, _prototype; real_output) =
-    synthesis(GPU(), cfg, coefficients; real_output)
+analysis_call(::AMDGPUScalarAdapter, cfg, field; use_rfft=false) =
+    analysis(GPU(), cfg, field; use_rfft)
+synthesis_call(::AMDGPUScalarAdapter, cfg, coefficients, _prototype;
+               real_output, use_rfft=false) =
+    synthesis(GPU(), cfg, coefficients; real_output, use_rfft)
 synthesis_cplx_call(::AMDGPUScalarAdapter, cfg, coefficients, _prototype) =
     synthesis_cplx(cfg, coefficients)
 assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArray
@@ -33,6 +35,19 @@ assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArr
     @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)
     @test isdefined(extension, :_amdgpu_scalar_analysis)
     @test isdefined(extension, :_amdgpu_scalar_synthesis)
+    @test isdefined(extension, :_amdgpu_clear_scalar_cache!)
+    @test which(gpu_clear_cache!, Tuple{SHTnsKit.GPU}).module === SHTnsKit
+    @test hasmethod(
+        SHTnsKit._gpu_adapter_clear_cache!, Tuple{typeof(extension.AMDGPU_ADAPTER)},
+    )
+    cache_device = typemax(Int)
+    extension.GPUCommon.scalar_cache_insert!(
+        extension._AMDGPU_SCALAR_CACHE, cache_device, UInt(1), Float32, UInt(1), :sentinel,
+    )
+    extension._amdgpu_clear_scalar_cache!(; device=cache_device)
+    @test extension.GPUCommon.scalar_cache_size(
+        extension._AMDGPU_SCALAR_CACHE; device=cache_device,
+    ) == 0
     @test which(
         synthesis_cplx, Tuple{SHTConfig,ROCArray{ComplexF32,2}},
     ).module === extension
@@ -47,6 +62,8 @@ assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArr
     )[1]
     @test !occursin(r"\bArray\s*\(", ordinary_pipeline)
     @test !occursin(r"\bcollect\s*\(", ordinary_pipeline)
+    @test occursin("use_rfft=true requires a real-valued input", ordinary_pipeline)
+    @test occursin("use_rfft=true implies real_output", ordinary_pipeline)
 
     @test which(on_device, Tuple{AMDGPU.AnyROCArray}).module === extension
     @test which(

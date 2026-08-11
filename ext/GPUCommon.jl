@@ -5,7 +5,103 @@ using SHTnsKit
 
 export laplacian_kernel!, legendre_table_kernel!, scalar_analysis_kernel!,
        scalar_synthesis_kernel!, coefficient_conversion_kernel!,
-       scalar_config_signature, scalar_host_tables
+       scalar_config_signature, scalar_host_tables,
+       ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
+       scalar_cache_clear!, scalar_cache_size
+
+"""One cached table set plus its mutable-configuration signature and LRU tick."""
+struct ScalarTableCacheEntry
+    signature::UInt
+    tick::UInt64
+    value::Any
+end
+
+"""
+Thread-safe, per-device bounded cache for immutable scalar transform tables.
+
+The dictionary key deliberately uses configuration identity rather than its
+mutable signature. A convention/grid mutation therefore replaces the stale
+entry instead of accumulating another device allocation. Values are built
+outside this cache's lock by the vendor extension.
+"""
+mutable struct ScalarTableCache
+    entries::Dict{Tuple{Any,UInt,DataType},ScalarTableCacheEntry}
+    tick::UInt64
+    max_per_device::Int
+    lock::ReentrantLock
+end
+
+function ScalarTableCache(max_per_device::Integer=8)
+    max_per_device > 0 || throw(ArgumentError("max_per_device must be positive"))
+    return ScalarTableCache(
+        Dict{Tuple{Any,UInt,DataType},ScalarTableCacheEntry}(),
+        0, Int(max_per_device), ReentrantLock(),
+    )
+end
+
+function scalar_cache_lookup(cache::ScalarTableCache, device, identity::UInt,
+                             precision::DataType, signature::UInt)
+    key = (device, identity, precision)
+    return lock(cache.lock) do
+        entry = get(cache.entries, key, nothing)
+        entry === nothing && return nothing
+        if entry.signature != signature
+            delete!(cache.entries, key)
+            return nothing
+        end
+        cache.tick += 1
+        cache.entries[key] = ScalarTableCacheEntry(signature, cache.tick, entry.value)
+        return entry.value
+    end
+end
+
+function scalar_cache_insert!(cache::ScalarTableCache, device, identity::UInt,
+                              precision::DataType, signature::UInt, value)
+    key = (device, identity, precision)
+    return lock(cache.lock) do
+        existing = get(cache.entries, key, nothing)
+        if existing !== nothing && existing.signature == signature
+            cache.tick += 1
+            cache.entries[key] = ScalarTableCacheEntry(
+                signature, cache.tick, existing.value,
+            )
+            return existing.value
+        end
+
+        # Replacement for the same config identity does not consume capacity.
+        existing === nothing || delete!(cache.entries, key)
+        device_keys = Tuple{Any,UInt,DataType}[
+            candidate for candidate in keys(cache.entries) if candidate[1] == device
+        ]
+        if length(device_keys) >= cache.max_per_device
+            oldest = argmin(candidate -> cache.entries[candidate].tick, device_keys)
+            delete!(cache.entries, oldest)
+        end
+        cache.tick += 1
+        cache.entries[key] = ScalarTableCacheEntry(signature, cache.tick, value)
+        return value
+    end
+end
+
+function scalar_cache_clear!(cache::ScalarTableCache; device=nothing)
+    lock(cache.lock) do
+        if device === nothing
+            empty!(cache.entries)
+        else
+            for key in collect(keys(cache.entries))
+                key[1] == device && delete!(cache.entries, key)
+            end
+        end
+    end
+    return nothing
+end
+
+function scalar_cache_size(cache::ScalarTableCache; device=nothing)
+    return lock(cache.lock) do
+        device === nothing && return length(cache.entries)
+        return count(key -> key[1] == device, keys(cache.entries))
+    end
+end
 
 """
 Fingerprint every host-owned configuration value consumed by a scalar GPU

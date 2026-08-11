@@ -8,9 +8,11 @@ struct CPUScalarAdapter <: ScalarParityAdapter end
 
 place(::CPUScalarAdapter, ::SHTConfig, value, ::Symbol) = value
 collect_result(::CPUScalarAdapter, value, ::SHTConfig) = Array(value)
-analysis_call(::CPUScalarAdapter, cfg, field) = analysis(CPU(), cfg, field)
-synthesis_call(::CPUScalarAdapter, cfg, coefficients, _prototype; real_output) =
-    synthesis(CPU(), cfg, coefficients; real_output)
+analysis_call(::CPUScalarAdapter, cfg, field; use_rfft=false) =
+    analysis(CPU(), cfg, field; use_rfft)
+synthesis_call(::CPUScalarAdapter, cfg, coefficients, _prototype;
+               real_output, use_rfft=false) =
+    synthesis(CPU(), cfg, coefficients; real_output, use_rfft)
 synthesis_cplx_call(::CPUScalarAdapter, cfg, coefficients, _prototype) =
     synthesis_cplx(cfg, coefficients)
 assert_resident(::CPUScalarAdapter, value) = @test on_device(value) isa CPU
@@ -41,6 +43,80 @@ end
 
 _scalar_tol(::Type{Float32}) = (atol=2f-4, rtol=2f-4)
 _scalar_tol(::Type{Float64}) = (atol=3e-11, rtol=3e-11)
+
+"""Closed-form harmonics through l=2, independent of package recurrence helpers."""
+function _closed_form_low_order(cfg, ::Type{T}) where {T<:AbstractFloat}
+    coefficients = zeros(Complex{T}, cfg.lmax + 1, cfg.mmax + 1)
+    coefficients[1, 1] = Complex{T}(T(0.31), 0)
+    coefficients[2, 1] = Complex{T}(T(-0.17), 0)
+    coefficients[2, 2] = Complex{T}(T(0.13), T(-0.09))
+    coefficients[3, 1] = Complex{T}(T(0.07), 0)
+    coefficients[3, 2] = Complex{T}(T(-0.08), T(0.04))
+    coefficients[3, 3] = Complex{T}(T(0.05), T(0.03))
+    field = Matrix{T}(undef, cfg.nlat, cfg.nlon)
+    y00 = inv(sqrt(T(4pi)))
+    y10_scale = sqrt(T(3) / T(4pi))
+    y11_scale = -sqrt(T(3) / T(8pi))
+    y20_scale = sqrt(T(5) / T(16pi))
+    y21_scale = -sqrt(T(15) / T(8pi))
+    y22_scale = sqrt(T(15) / T(32pi))
+    for j in 1:cfg.nlon, i in 1:cfg.nlat
+        x = T(cfg.x[i])
+        y10 = y10_scale * x
+        sinθ = sqrt(max(zero(T), one(T) - x * x))
+        wave = cis(T(cfg.φ[j]))
+        y11 = y11_scale * sinθ * wave
+        y20 = y20_scale * (T(3) * x * x - one(T))
+        y21 = y21_scale * x * sinθ * wave
+        y22 = y22_scale * sinθ * sinθ * wave * wave
+        field[i, j] = real(coefficients[1, 1] * y00 +
+                           coefficients[2, 1] * y10 +
+                           T(2) * coefficients[2, 2] * y11 +
+                           coefficients[3, 1] * y20 +
+                           T(2) * coefficients[3, 2] * y21 +
+                           T(2) * coefficients[3, 3] * y22)
+    end
+    return coefficients, field
+end
+
+function _test_closed_form_low_order(adapter::ScalarParityAdapter)
+    cfg = _scalar_config(:gauss, 2, 6)
+    coefficients, field = _closed_form_low_order(cfg, Float64)
+    prototype = place(adapter, cfg, field, :spatial)
+    spectral = place(adapter, cfg, coefficients, :spectral)
+    got_field = synthesis_call(adapter, cfg, spectral, prototype; real_output=true)
+    @test collect_result(adapter, got_field, cfg) ≈ field atol=3e-12 rtol=3e-12
+    got_coefficients = analysis_call(adapter, cfg, prototype)
+    @test collect_result(adapter, got_coefficients, cfg) ≈ coefficients atol=3e-12 rtol=3e-12
+    return nothing
+end
+
+function _test_use_rfft_contract(adapter::ScalarParityAdapter)
+    cfg = _scalar_config(:gauss, 3, 8)
+    coefficients, field = _closed_form_low_order(cfg, Float64)
+    prototype = place(adapter, cfg, field, :spatial)
+    spectral = place(adapter, cfg, coefficients, :spectral)
+    complex_prototype = place(adapter, cfg, complex.(field), :spatial)
+
+    analyzed = analysis_call(adapter, cfg, prototype; use_rfft=true)
+    baseline = analysis_call(adapter, cfg, prototype; use_rfft=false)
+    @test collect_result(adapter, analyzed, cfg) ≈ collect_result(adapter, baseline, cfg)
+    synthesized = synthesis_call(
+        adapter, cfg, spectral, prototype; real_output=true, use_rfft=true,
+    )
+    baseline_field = synthesis_call(
+        adapter, cfg, spectral, prototype; real_output=true, use_rfft=false,
+    )
+    @test collect_result(adapter, synthesized, cfg) ≈
+          collect_result(adapter, baseline_field, cfg)
+    @test_throws ArgumentError analysis_call(
+        adapter, cfg, complex_prototype; use_rfft=true,
+    )
+    @test_throws ArgumentError synthesis_call(
+        adapter, cfg, spectral, prototype; real_output=false, use_rfft=true,
+    )
+    return nothing
+end
 
 function _canonical_coefficients(cfg, coefficients)
     canonical = similar(coefficients)
@@ -213,6 +289,8 @@ function run_scalar_full_parity(adapter::ScalarParityAdapter;
         end
         _test_noncontiguous_scalar_input(adapter)
         _test_mres_filters_unstored_orders(adapter)
+        _test_closed_form_low_order(adapter)
+        _test_use_rfft_contract(adapter)
     end
     return nothing
 end
@@ -232,6 +310,41 @@ function run_shared_scalar_kernel_reference(common, backend)
     signature = common.scalar_config_signature(cfg)
     cfg.norm = :fourpi
     @test common.scalar_config_signature(cfg) != signature
+    cfg.norm = :schmidt
+
+    cache = common.ScalarTableCache(2)
+    identity = objectid(cfg)
+    sig1 = common.scalar_config_signature(cfg)
+    @test common.scalar_cache_lookup(cache, 0, identity, Float32, sig1) === nothing
+    @test common.scalar_cache_insert!(cache, 0, identity, Float32, sig1, :first) === :first
+    @test common.scalar_cache_lookup(cache, 0, identity, Float32, sig1) === :first
+    cfg.norm = :fourpi
+    sig2 = common.scalar_config_signature(cfg)
+    @test common.scalar_cache_lookup(cache, 0, identity, Float32, sig2) === nothing
+    @test common.scalar_cache_insert!(cache, 0, identity, Float32, sig2, :replacement) === :replacement
+    @test common.scalar_cache_size(cache; device=0) == 1
+    @test common.scalar_cache_lookup(cache, 0, identity, Float32, sig1) === nothing
+    for id in UInt(10):UInt(12)
+        common.scalar_cache_insert!(cache, 0, id, Float32, UInt(id), id)
+    end
+    @test common.scalar_cache_size(cache; device=0) <= 2
+    @test common.scalar_cache_lookup(cache, 0, UInt(10), Float32, UInt(10)) === nothing
+    @test common.scalar_cache_lookup(cache, 0, UInt(12), Float32, UInt(12)) == UInt(12)
+    common.scalar_cache_insert!(cache, 1, UInt(20), Float64, UInt(20), :other_device)
+    @test common.scalar_cache_size(cache; device=1) == 1
+    common.scalar_cache_clear!(cache; device=0)
+    @test common.scalar_cache_size(cache; device=0) == 0
+    @test common.scalar_cache_size(cache; device=1) == 1
+    common.scalar_cache_clear!(cache)
+    @test common.scalar_cache_size(cache) == 0
+
+    threaded = common.ScalarTableCache(4)
+    Threads.@threads for i in 1:64
+        id = UInt(mod1(i, 8))
+        common.scalar_cache_insert!(threaded, 0, id, Float32, id, i)
+        common.scalar_cache_lookup(threaded, 0, id, Float32, id)
+    end
+    @test common.scalar_cache_size(threaded; device=0) <= 4
     cfg.norm = :schmidt
 
     x, weights, scales = common.scalar_host_tables(cfg, T)

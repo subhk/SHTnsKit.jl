@@ -44,6 +44,12 @@ function _gpu_adapter_synthesis(adapter, cfg, coefficients; kwargs...)
     throw(BackendUnavailableError(:synthesis, "the selected GPU adapter does not yet implement scalar synthesis"))
 end
 
+function _gpu_adapter_clear_cache!(adapter)
+    throw(BackendUnavailableError(
+        :gpu_clear_cache!, "the selected GPU adapter does not expose cache clearing",
+    ))
+end
+
 function _functional_gpu_adapters()
     functional, _ = _probe_gpu_adapters()
     return functional
@@ -221,4 +227,11 @@ function synthesis_cplx(::GPU, cfg::SHTConfig, coefficients::AbstractMatrix;
     return synthesis(
         GPU(), cfg, coefficients; prototype, real_output=false,
     )
+end
+
+"""Clear scalar-table caches for the selected GPU vendor."""
+function gpu_clear_cache!(::GPU; prototype=nothing)
+    adapter = _gpu_adapter(prototype; operation=:gpu_clear_cache!)
+    _gpu_adapter_clear_cache!(adapter)
+    return nothing
 end

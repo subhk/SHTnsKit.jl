@@ -18,9 +18,11 @@ function place(::CUDAScalarAdapter, ::SHTConfig, value, ::Symbol)
     return CuArray(value)
 end
 collect_result(::CUDAScalarAdapter, value, ::SHTConfig) = Array(value)
-analysis_call(::CUDAScalarAdapter, cfg, field) = analysis(GPU(), cfg, field)
-synthesis_call(::CUDAScalarAdapter, cfg, coefficients, _prototype; real_output) =
-    synthesis(GPU(), cfg, coefficients; real_output)
+analysis_call(::CUDAScalarAdapter, cfg, field; use_rfft=false) =
+    analysis(GPU(), cfg, field; use_rfft)
+synthesis_call(::CUDAScalarAdapter, cfg, coefficients, _prototype;
+               real_output, use_rfft=false) =
+    synthesis(GPU(), cfg, coefficients; real_output, use_rfft)
 synthesis_cplx_call(::CUDAScalarAdapter, cfg, coefficients, _prototype) =
     synthesis_cplx(cfg, coefficients)
 assert_resident(::CUDAScalarAdapter, value) = @test value isa CUDA.AnyCuArray
@@ -47,6 +49,19 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)
     @test isdefined(extension, :_cuda_scalar_analysis)
     @test isdefined(extension, :_cuda_scalar_synthesis)
+    @test isdefined(extension, :_cuda_clear_scalar_cache!)
+    @test which(gpu_clear_cache!, Tuple{SHTnsKit.GPU}).module === SHTnsKit
+    @test hasmethod(
+        SHTnsKit._gpu_adapter_clear_cache!, Tuple{typeof(extension.CUDA_ADAPTER)},
+    )
+    cache_device = typemax(Int)
+    extension.GPUCommon.scalar_cache_insert!(
+        extension._CUDA_SCALAR_CACHE, cache_device, UInt(1), Float32, UInt(1), :sentinel,
+    )
+    extension._cuda_clear_scalar_cache!(; device=cache_device)
+    @test extension.GPUCommon.scalar_cache_size(
+        extension._CUDA_SCALAR_CACHE; device=cache_device,
+    ) == 0
     @test which(
         synthesis_cplx, Tuple{SHTConfig,CuArray{ComplexF32,2}},
     ).module === extension
@@ -61,6 +76,8 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     )[1]
     @test !occursin(r"\bArray\s*\(", ordinary_pipeline)
     @test !occursin(r"\bcollect\s*\(", ordinary_pipeline)
+    @test occursin("use_rfft=true requires a real-valued input", ordinary_pipeline)
+    @test occursin("use_rfft=true implies real_output", ordinary_pipeline)
 
     @test which(on_device, Tuple{CUDA.AnyCuArray}).module === extension
     @test which(

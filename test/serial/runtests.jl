@@ -9,6 +9,7 @@ using Test
     include("test_indexing.jl")
     include("test_layout.jl")
     include("test_normalization.jl")
+    include("test_convention_parity.jl")
     include("test_legendre.jl")
     include("test_mathutils.jl")
     include("test_fft_utils.jl")

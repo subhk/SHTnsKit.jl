@@ -205,11 +205,9 @@ function SHTnsKit.DistTransposePlan(
         NP[mi] = tbl_NP
     end
 
-    # 7. Per-local-m external↔internal scale. The Legendre tables above are
-    #    orthonormal+CS, but this plan's API exchanges coefficients in cfg's
-    #    convention (as `dist_analysis`/`dist_synthesis` do), so the transforms
-    #    convert with this matrix. Without it a `norm=:schmidt` or
-    #    `cs_phase=false` config silently disagreed with the cfg-form paths.
+    # No per-m normalization table is built or stored: the Legendre tables above
+    # are orthonormal+CS and so is this plan's API, matching `dist_analysis`/
+    # `dist_synthesis` and every other transform. Nothing to convert.
 
     return DistTransposePlan(
         cfg, nlat, nlon, lmax, mmax, nlev, comm,
@@ -308,9 +306,8 @@ function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::
     nlat = plan.nlat
     nlev = plan.nlev
 
-    # Incoming coefficients are in cfg's convention; the tables are orthonormal.
-    # Convert a copy so the caller's array is left untouched (no-op, and no
-    # allocation, on the default orthonormal+CS config).
+    # Incoming coefficients are orthonormal+CS, matching the tables — read them
+    # directly, no copy and no conversion.
 
     # Legendre expansion: for each local m, sum over l → F[i, mi, lev]
     # NP[mi] is (lmax+1, nlat) column-major; iterating i (fast dim of F) is cache-friendly.
@@ -429,8 +426,8 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
     nlat = plan.nlat
     nlev = plan.nlev
 
-    # Incoming coefficients are in cfg's convention; convert copies (no-op on the
-    # default orthonormal+CS config) so the caller's arrays are left untouched.
+    # Incoming coefficients are orthonormal+CS, matching the tables — read them
+    # directly, no copies and no conversion.
 
     # Legendre expansion: for each local m, sum over l → Ft[i,mi,lev], Fp[i,mi,lev]
     # Kernel (from kernels.jl _sphtor_synthesis_kernel_otf):

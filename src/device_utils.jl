@@ -281,7 +281,13 @@ cpu_arr = to_device(gpu_arr, :cpu)
 function to_device(arr::AbstractArray, backend::Symbol=current_backend())
     if backend == :cpu
         return _to_cpu(arr)
-    elseif backend == :gpu
+    elseif backend == :gpu || backend == :cuda || backend == :amdgpu
+        # `:cuda`/`:amdgpu` are aliases for `:gpu`, not extra backends. The config
+        # vocabulary enforced by `set_config_device!` is `:cpu`/`:cuda`/`:amdgpu`,
+        # while this function's own is `:cpu`/`:gpu`, and the legacy
+        # `device_transfer_arrays(cfg, ...)` forwards `cfg.compute_device`
+        # straight here — so without these a config that `is_gpu_config` reports
+        # as valid threw `ArgumentError: Unknown backend: cuda` on every transfer.
         return _to_gpu(arr)
     else
         throw(ArgumentError("Unknown backend: $backend"))

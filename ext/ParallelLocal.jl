@@ -252,17 +252,9 @@ end
 """
 function SHTnsKit.dist_analysis_packed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray)
     Alm = SHTnsKit.dist_analysis(cfg, fθφ)
-    # `LM_index` throws unless m is a multiple of mres, so stride like the serial
-    # twin `analysis_packed` (src/transforms.jl:120) instead of walking every m.
-    Qlm = zeros(ComplexF64, cfg.nlm)
-    for m in 0:cfg.mmax
-        (m % cfg.mres == 0) || continue
-        for l in m:cfg.lmax
-            lm = SHTnsKit.LM_index(cfg.lmax, cfg.mres, l, m) + 1
-            Qlm[lm] = Alm[l+1, m+1]
-        end
-    end
-    return Qlm
+    # Shared with the serial twin `analysis_packed`; `pack_lm` carries the
+    # `m % mres == 0` stride that `LM_index` requires.
+    return SHTnsKit.pack_lm(cfg, Alm)
 end
 
 """
@@ -270,15 +262,9 @@ end
 """
 function SHTnsKit.dist_synthesis_packed(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector{<:Complex}; prototype_θφ::PencilArray, real_output::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length"))
-    # Same mres stride as `synthesis_packed` (src/transforms.jl:141); without it
-    # `LM_index` throws on the first order that is not a multiple of mres.
-    Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-    for m in 0:cfg.mmax
-        (m % cfg.mres == 0) || continue
-        for l in m:cfg.lmax
-            Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(cfg.lmax, cfg.mres, l, m) + 1]
-        end
-    end
+    # Shared with the serial twin `synthesis_packed`; `unpack_lm` carries the
+    # `m % mres == 0` stride that `LM_index` requires.
+    Alm = SHTnsKit.unpack_lm(cfg, Qlm)
     return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output)
 end
 
@@ -362,7 +348,11 @@ function SHTnsKit.dist_synthesis_packed_cplx(cfg::SHTnsKit.SHTConfig, alm_packed
             Aminus[l+1, m+1] = conj(alm_packed[SHTnsKit.LM_cplx_index(lmax, mmax, l, -m) + 1])
         end
     end
-    zp = SHTnsKit.dist_synthesis(cfg, Aplus;  prototype_θφ, real_output=false)
-    zn = SHTnsKit.dist_synthesis(cfg, Aminus; prototype_θφ, real_output=false)
-    return zp .+ conj.(zn)
+    # Single pass: `dist_synthesis` fills the −m φ-FFT bins from `Aminus` in the
+    # same θ/m traversal that fills the +m bins, reusing one Legendre row per
+    # (m, θ) — P̄_l^{|m|} depends only on |m|. This used to be two full distributed
+    # syntheses combined as `zp + conj(zn)`, which doubled the Legendre work, the
+    # inverse FFT and, on a φ-distributed pencil, the communication. Same shape as
+    # the serial twin `synthesis_packed_cplx` (src/complex_packed.jl:110-130).
+    return SHTnsKit.dist_synthesis(cfg, Aplus; prototype_θφ, real_output=false, Aminus)
 end

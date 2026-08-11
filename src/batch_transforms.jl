@@ -98,12 +98,36 @@ This mirrors the `shtns_set_many` functionality from the SHTns C library.
 # Batch FFT helpers build one plan from the first field and reuse it for every
 # sibling slice. Fallback delegates to scalar FFT wrappers so AD element types
 # keep the same behavior as the non-batch API.
+"""
+    _fftw_planable(T) -> Bool
+
+Whether `SHTPlan` can carry element type `T`.
+
+`SHTPlan`'s scratch buffers are `Matrix{ComplexF64}` with FFTW plans built over
+them, and FFTW has plans only for `Float32`/`Float64` and their complex forms.
+A `ForwardDiff.Dual` therefore cannot go through a plan at all — `analysis!` hits
+`plan.Fθk[i,j] = f[i,j]` and raises `MethodError: Float64(::Dual)`.
+
+The plan-free `cfg`-form transforms have no such limit: their φ transform falls
+back to the pure-Julia `_dft_phi` (src/fftutils.jl), which is generic. So the
+batch entry points test this and route non-FFTW element types field-by-field
+through the `cfg`-form functions — slower than a shared plan, but differentiable,
+which is the whole point of passing Duals in.
+"""
+_fftw_planable(::Type{<:Union{Float32,Float64}}) = true
+_fftw_planable(::Type{Complex{Float32}}) = true
+_fftw_planable(::Type{Complex{Float64}}) = true
+_fftw_planable(::Type) = false
+
 function _batch_fft_phi!(Fφ_batch::AbstractArray{<:Complex,3}, fields::AbstractArray{<:Real,3})
     nfields = size(fields, 3)
     nfields == 0 && return Fφ_batch
 
     try
-        plan = plan_fft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
+        # Reuse the shared plan cache rather than re-planning on every call.
+        # Every k-slice of a 3D array has identical size and strides, so one cache
+        # entry serves the whole batch; the cache passes UNALIGNED for us.
+        plan = _cached_local_fft_plan(:fft, view(Fφ_batch, :, :, 1))
         @inbounds for k in 1:nfields
             Fk = view(Fφ_batch, :, :, k)
             Xk = view(fields, :, :, k)
@@ -125,7 +149,7 @@ function _batch_rfft_phi!(Fφ_batch::AbstractArray{<:Complex,3}, fields::Abstrac
     nfields == 0 && return Fφ_batch
 
     try
-        plan = plan_rfft(view(fields, :, :, 1), 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
+        plan = _cached_local_fft_plan(:rfft, view(fields, :, :, 1))
         @inbounds for k in 1:nfields
             mul!(view(Fφ_batch, :, :, k), plan, view(fields, :, :, k))
         end
@@ -150,7 +174,7 @@ function _batch_ifft_phi!(Fφ_batch::AbstractArray{<:Complex,3})
     # unmutated source and are naturally idempotent; only this one corrupts.)
     k_done = 0
     try
-        plan = plan_ifft!(view(Fφ_batch, :, :, 1), 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
+        plan = _cached_local_fft_plan(:ifft, view(Fφ_batch, :, :, 1))
         @inbounds for k in 1:nfields
             Fk = view(Fφ_batch, :, :, k)
             mul!(Fk, plan, Fk)
@@ -187,7 +211,7 @@ function _batch_irfft_phi!(f_out::AbstractArray{<:Real,3}, Fφ_batch::AbstractAr
     nfields == 0 && return f_out
 
     try
-        plan = plan_irfft(view(Fφ_batch, :, :, 1), nlon, 2; flags=FFTW.ESTIMATE | FFTW.UNALIGNED)
+        plan = _cached_local_fft_plan(:irfft, view(Fφ_batch, :, :, 1), nlon)
         @inbounds for k in 1:nfields
             mul!(view(f_out, :, :, k), plan, view(Fφ_batch, :, :, k))
         end
@@ -689,10 +713,24 @@ function analysis_sphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3}
     size(Vp_batch) == size(Vt_batch) || throw(DimensionMismatch("Vt and Vp must have same shape"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
-    Slm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
-    Tlm_batch = zeros(ComplexF64, lmax + 1, mmax + 1, nfields)
-    plan = SHTPlan(cfg)
+    # Follow the inputs, promoted across both components — hardcoding ComplexF64
+    # truncated Float32 data and made Dual inputs unwritable.
+    CT = complex(float(promote_type(eltype(Vt_batch), eltype(Vp_batch))))
+    Slm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
+    Tlm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
 
+    if !_fftw_planable(CT)
+        # No FFTW plan exists for this element type; go through the plan-free
+        # `cfg`-form transform per field so AD types still work.
+        for k in 1:nfields
+            S, T = analysis_sphtor(cfg, view(Vt_batch, :, :, k), view(Vp_batch, :, :, k))
+            Slm_batch[:, :, k] .= S
+            Tlm_batch[:, :, k] .= T
+        end
+        return Slm_batch, Tlm_batch
+    end
+
+    plan = SHTPlan(cfg)
     for k in 1:nfields
         analysis_sphtor!(plan, view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k),
                          view(Vt_batch, :, :, k), view(Vp_batch, :, :, k))
@@ -735,15 +773,27 @@ function _synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Comp
     nfields = size(Slm_batch, 3)
     nlat, nlon = cfg.nlat, cfg.nlon
 
-    if real_output
-        Vt_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-        Vp_batch = Array{Float64,3}(undef, nlat, nlon, nfields)
-    else
-        Vt_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
-        Vp_batch = Array{ComplexF64,3}(undef, nlat, nlon, nfields)
-    end
-    plan = SHTPlan(cfg)
+    # Follow the inputs, promoted across both — hardcoding Float64/ComplexF64
+    # truncated ComplexF32 data and made Dual coefficients unwritable.
+    RT = real(float(promote_type(eltype(Slm_batch), eltype(Tlm_batch))))
+    CT = complex(RT)
+    OT = real_output ? RT : CT
+    Vt_batch = Array{OT,3}(undef, nlat, nlon, nfields)
+    Vp_batch = Array{OT,3}(undef, nlat, nlon, nfields)
 
+    if !_fftw_planable(CT)
+        # No FFTW plan for this element type — per-field `cfg`-form transform,
+        # which stays differentiable.
+        for k in 1:nfields
+            Vt, Vp = synthesis_sphtor(cfg, view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k);
+                                      real_output=real_output)
+            Vt_batch[:, :, k] .= Vt
+            Vp_batch[:, :, k] .= Vp
+        end
+        return Vt_batch, Vp_batch
+    end
+
+    plan = SHTPlan(cfg)
     for k in 1:nfields
         synthesis_sphtor!(plan, view(Vt_batch, :, :, k), view(Vp_batch, :, :, k),
                           view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k);
@@ -775,22 +825,37 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     size(Vp_batch) == size(Vr_batch) || throw(DimensionMismatch("Vr and Vp must have same shape"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
-    # Follow the input eltype, as `analysis_batch` does.
-    CT = complex(float(eltype(Vr_batch)))
+    # Follow the input eltype, as `analysis_batch` does — but promote across all
+    # three fields, not just Vr: S/T are computed from Vt/Vp, so keying on Vr
+    # alone silently truncates them (and makes Dual inputs unwritable) whenever
+    # the three arrays differ in precision.
+    CT = complex(float(promote_type(eltype(Vr_batch), eltype(Vt_batch), eltype(Vp_batch))))
     Qlm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
     Slm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
     Tlm_batch = zeros(CT, lmax + 1, mmax + 1, nfields)
-    plan = SHTPlan(cfg)
 
+    if !_fftw_planable(CT)
+        # No FFTW plan for this element type (e.g. ForwardDiff.Dual) — take the
+        # plan-free `cfg`-form transform per field so gradients flow.
+        for k in 1:nfields
+            Q, S, T = analysis_qst(cfg, view(Vr_batch, :, :, k),
+                                   view(Vt_batch, :, :, k), view(Vp_batch, :, :, k))
+            Qlm_batch[:, :, k] .= Q
+            Slm_batch[:, :, k] .= S
+            Tlm_batch[:, :, k] .= T
+        end
+        return Qlm_batch, Slm_batch, Tlm_batch
+    end
+
+    plan = SHTPlan(cfg)
     for k in 1:nfields
         analysis!(plan, view(Qlm_batch, :, :, k), view(Vr_batch, :, :, k))
         analysis_sphtor!(plan, view(Slm_batch, :, :, k), view(Tlm_batch, :, :, k),
                          view(Vt_batch, :, :, k), view(Vp_batch, :, :, k))
     end
-    # The scalar plan is orthonormal-only (matching `analysis`/`synthesis`) while
-    # the sphtor plan converts to cfg's convention, so Q must be converted here
-    # or this call returns a triple on two normalizations — the same defect
-    # fixed in `analysis_qst`, which this is the batch form of.
+    # No normalization conversion here, by design: the scalar plan and the sphtor
+    # plan are both orthonormal+CS, as is every other transform in the package, so
+    # Q/S/T come back on one convention. See `analysis_qst`, the non-batch form.
 
     return Qlm_batch, Slm_batch, Tlm_batch
 end
@@ -833,8 +898,10 @@ function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex
     nlat, nlon = cfg.nlat, cfg.nlon
 
     # Output eltype follows the input, as in `_synthesis_batch` — hardcoding
-    # Float64/ComplexF64 mismatched the FFTW plan for a ComplexF32 batch.
-    RT = real(float(eltype(Qlm_batch)))
+    # Float64/ComplexF64 mismatched the FFTW plan for a ComplexF32 batch. Promote
+    # across all three spectral arrays: Vt/Vp come from S/T, so keying on Q alone
+    # would round them down to Q's precision.
+    RT = real(float(promote_type(eltype(Qlm_batch), eltype(Slm_batch), eltype(Tlm_batch))))
     CT = complex(RT)
     if real_output
         Vr_batch = Array{RT,3}(undef, nlat, nlon, nfields)
@@ -845,11 +912,22 @@ function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex
         Vt_batch = Array{CT,3}(undef, nlat, nlon, nfields)
         Vp_batch = Array{CT,3}(undef, nlat, nlon, nfields)
     end
+    # Q/S/T all arrive orthonormal+CS — the one convention the whole package uses
+    # — so nothing is converted here, mirroring `_synthesis_qst`.
+
+    if !_fftw_planable(CT)
+        # No FFTW plan for this element type — per-field `cfg`-form transform.
+        for k in 1:nfields
+            Vr, Vt, Vp = _synthesis_qst(cfg, view(Qlm_batch, :, :, k), view(Slm_batch, :, :, k),
+                                        view(Tlm_batch, :, :, k), Val(real_output))
+            Vr_batch[:, :, k] .= Vr
+            Vt_batch[:, :, k] .= Vt
+            Vp_batch[:, :, k] .= Vp
+        end
+        return Vr_batch, Vt_batch, Vp_batch
+    end
+
     plan = SHTPlan(cfg)
-
-    # Q arrives in cfg's convention (matching S/T and `analysis_qst_batch`), but
-    # the scalar plan is orthonormal-only — convert, mirroring `_synthesis_qst`.
-
     for k in 1:nfields
         synthesis!(plan, view(Vr_batch, :, :, k), view(Qlm_batch, :, :, k);
                    real_output=real_output)

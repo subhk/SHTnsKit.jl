@@ -141,11 +141,9 @@ Complex version of QST to spatial transform, preserving complex values.
 """
 function synthesis_qst_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-    # `synthesis_sphtor_cplx` delegates to `_synthesis_sphtor`, which converts
-    # cfg→internal, while `synthesis_cplx` is orthonormal-only — so Q needs the
-    # same conversion the real-output `_synthesis_qst` applies. (Both `_cplx`
-    # sphtor wrappers are thin delegators to the CONVERTING implementations;
-    # reading the wrapper bodies alone suggests otherwise.)
+    # No conversion on either component: `synthesis_cplx` and the `_synthesis_sphtor`
+    # that `synthesis_sphtor_cplx` delegates to are both orthonormal-only, so Q/S/T
+    # enter on one convention. Matches the real-output `_synthesis_qst`.
     Vr = synthesis_cplx(cfg, Qlm)
     Vt, Vp = synthesis_sphtor_cplx(cfg, Slm, Tlm)
 
@@ -163,9 +161,9 @@ function analysis_qst_cplx(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::Ab
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
 
-    # Transform each component. `analysis_sphtor_cplx` delegates to
-    # `analysis_sphtor`, which converts internal→cfg, so Q must match or this
-    # returns a triple on two normalizations (see `analysis_qst`).
+    # Transform each component. `analysis` and the `analysis_sphtor` that
+    # `analysis_sphtor_cplx` delegates to are both orthonormal-only, so the
+    # returned triple sits on one convention (see `analysis_qst`).
     Qlm = analysis(cfg, Vr)
     Slm, Tlm = analysis_sphtor_cplx(cfg, Vt, Vp)
 
@@ -206,10 +204,9 @@ end
 function _synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                           ltr::Int, ::Val{real_output}) where {real_output}
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-    # Same convention split as `_synthesis_qst`: `_synthesis_sphtor_l` converts
-    # cfg→internal, `_synthesis_l` does not, and `analysis_qst_l` (which routes
-    # through `analysis_qst`) returns Q in cfg's convention — so convert Q here
-    # too, or the degree-limited round trip breaks for any non-default norm.
+    # Same single convention as `_synthesis_qst`: neither `_synthesis_l` nor
+    # `_synthesis_sphtor_l` converts, and `analysis_qst_l` returns Q orthonormal,
+    # so the degree-limited round trip closes for every `cfg.norm`.
     Vr = _synthesis_l(cfg, Qlm, ltr, Val(real_output))
     Vt, Vp = _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(real_output))
     return Vr, Vt, Vp
@@ -224,9 +221,9 @@ function analysis_qst_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex
     # Transform each component for this specific mode
     Ql = analysis_packed_ml(cfg, im, Vr_m, ltr)
     Sl, Tl = analysis_sphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
-    # `analysis_sphtor_ml` converts internal→cfg but `analysis_packed_ml` does
-    # not, so without this the returned triple sits on two normalizations — the
-    # same defect fixed in `analysis_qst`. Mirrors that function's scaling.
+    # `analysis_packed_ml` and `analysis_sphtor_ml` are both orthonormal-only, so
+    # the returned triple sits on one convention — no scaling here, matching
+    # `analysis_qst`.
 
     return Ql, Sl, Tl
 end
@@ -237,9 +234,9 @@ end
 Mode-limited synthesis for specific azimuthal mode im.
 """
 function synthesis_qst_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
-    # Synthesize each component for this specific mode
-    # Inverse of the conversion in `analysis_qst_ml`: Q arrives in cfg's
-    # convention (matching S/T) but `synthesis_packed_ml` expects internal.
+    # Synthesize each component for this specific mode. Exact inverse of
+    # `analysis_qst_ml`: Q/S/T all arrive orthonormal, which is what
+    # `synthesis_packed_ml` and `synthesis_sphtor_ml` expect — nothing to convert.
     Vr_m = synthesis_packed_ml(cfg, im, Ql, ltr)
     Vt_m, Vp_m = synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
 

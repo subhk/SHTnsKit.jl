@@ -45,17 +45,21 @@ function dist_SH_Yrotate(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix, beta::Rea
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Alm,1)==lmax+1 && size(Alm,2)==mmax+1 || throw(DimensionMismatch("Alm dims"))
     size(Rlm,1)==lmax+1 && size(Rlm,2)==mmax+1 || throw(DimensionMismatch("Rlm dims"))
-    Q = Vector{complex(float(eltype(Alm)))}(undef, cfg.nlm)
-    @inbounds for m in 0:mmax, l in m:lmax
-        idx = SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1
-        Q[idx] = Alm[l+1, m+1]
-    end
+    # A Y-rotation mixes orders, so it cannot be expressed in an mres-strided
+    # layout at all: rotating an mres=2 field produces m=1 components with nowhere
+    # to live. `shtns_rotation_apply_real` states the same restriction. Say so
+    # here rather than failing downstream with `m must be a multiple of mres`
+    # (what the un-strided loop used to do) or `LM packed size mismatch`.
+    cfg.mres == 1 || throw(ArgumentError("dist_SH_Yrotate requires mres==1 (got mres=$(cfg.mres)); " *
+                                         "a Y-rotation mixes orders and cannot be represented in an mres-strided layout"))
+    # Canonical packed↔dense pair (src/layout.jl) instead of an open-coded loop.
+    Q = SHTnsKit.pack_lm(cfg, complex(float(eltype(Alm))).(Alm))
     R = similar(Q)
     SHTnsKit.SH_Yrotate(cfg, Q, beta, R)
-    @inbounds for m in 0:mmax, l in m:lmax
-        idx = SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1
-        Rlm[l+1, m+1] = R[idx]
-    end
+    # Orders absent from the packed layout have no rotated value to write back;
+    # zero them rather than leaving whatever the caller's buffer held.
+    fill!(Rlm, zero(eltype(Rlm)))
+    SHTnsKit.unpack_lm!(Rlm, cfg, R)
     return Rlm
 end
 
@@ -76,6 +80,11 @@ function dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Al
     # - Y_{l-1}^m contributes to Y_l^m via b_{l-1}^m (the upward coefficient from l-1)
     # - Y_{l+1}^m contributes to Y_l^m via a_{l+1}^m (the downward coefficient from l+1)
     @inbounds for m in 0:mmax, l in m:lmax
+        # `LM_index` throws unless m is a multiple of mres, so stride like every
+        # other packed-index loop in the package (`analysis_packed`,
+        # `synthesis_packed`, `pack_lm!`). Without this the whole dense operator
+        # path died on the first m=1 for any mres>1 config.
+        (m % cfg.mres == 0) || continue
         acc = zero(promote_type(eltype(Alm), eltype(Rlm), complex(eltype(mx))))  # eltype-preserving accumulator (AD-safe)
         # Contribution from lower degree neighbor Y_{l-1}^m
         if l > m && l > 0

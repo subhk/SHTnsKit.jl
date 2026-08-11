@@ -297,12 +297,16 @@ using SHTnsKit
         @test length(Ql_rec) == lmax + 1
         # m=0 coefficients should be real (imaginary part ~0)
         @test maximum(abs.(imag.(Ql_rec))) < 1e-10
-        # Roundtrip may differ by a consistent scaling factor.
-        # Verify proportionality: Ql_rec = scale * Ql for a single scale factor.
-        # Find scale from first non-negligible coefficient.
-        idx = findfirst(i -> abs(real(Ql[i])) > 1e-10, 1:length(Ql))
-        scale = real(Ql_rec[idx]) / real(Ql[idx])
-        @test isapprox(real.(Ql_rec), scale .* real.(Ql); rtol=1e-9, atol=1e-11)
+        # The round trip is an IDENTITY, not a proportionality. This used to
+        # divide out a fitted scale factor, which made the assertion blind to the
+        # missing φ quadrature factor (cphi*nlon = 2π) in `analysis_axisym` — the
+        # test passed while every returned coefficient was 1/2π too small. Assert
+        # the absolute values so a revert is caught.
+        @test isapprox(real.(Ql_rec), real.(Ql); rtol=1e-9, atol=1e-11)
+        # And pin it to the full transform: axisym analysis must equal the m=0
+        # column of `analysis` on the same field.
+        f2d = repeat(f_lat, 1, cfg.nlon)
+        @test isapprox(Ql_rec, analysis(cfg, f2d)[:, 1]; rtol=1e-9, atol=1e-11)
     end
 
     @testset "Axisymmetric truncated transforms (analysis_axisym_l/synthesis_axisym_l)" begin

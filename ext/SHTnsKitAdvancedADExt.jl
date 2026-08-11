@@ -20,29 +20,29 @@ import SHTnsKit: wigner_d_matrix_deriv
 
     # ---- normalization in the adjoint -------------------------------------
     #
-    # The `_adjoint_*` helpers work entirely in the INTERNAL (orthonormal + CS)
-    # convention. Some primals do not: the sphtor pair converts on the way in
-    # (`synthesis_sphtor`, src/sphtor_transforms.jl:178) and on the way out
-    # (`analysis_sphtor`, :275). That conversion is a real diagonal scale `M`,
-    # so it has to appear in the adjoint too:
+    # There is NO normalization factor in any adjoint here, and adding one would
+    # be a bug. Every transform in the package — scalar, sphtor, QST, plan,
+    # distributed, GPU — now emits and consumes coefficients in the single
+    # INTERNAL (orthonormal + CS) convention, which is exactly the convention the
+    # `_adjoint_*` helpers work in. Primal and adjoint therefore agree with no
+    # scaling on either side, for every `cfg.norm`/`cs_phase`.
     #
-    #     synthesis-like   y = F(M ⊙ a)     ⇒   ā = M ⊙ Fᴴ(ȳ)
-    #     analysis-like    a = F(x) ⊘ M     ⇒   x̄ = Fᴴ(ā ⊘ M)
+    # This block used to say the opposite, because the sphtor pair once converted
+    # on the way in and out with a real diagonal scale `M`, which forced a
+    # matching `M`/`1/M` into the pullbacks. Those conversions are gone. If you
+    # reintroduce an `M ⊙ ȳ` here to "match the primal", every non-default-norm
+    # gradient becomes wrong by M[l,m] (finite differences: 40–180% relative
+    # error on :schmidt and :fourpi) and nothing in the suite will catch it —
+    # the regression tests assert forward equality only.
     #
-    # Omitting it left every non-default `cfg.norm`/`cs_phase` gradient wrong by
-    # M[l,m] — finite differences showed 40–180% relative error on :schmidt and
-    # :fourpi, while the dense scalar pair (which never converts) was exact.
-    # Both are no-ops on the default config, so the hot path is untouched.
-    # `_ensure_norm_scale_matrix!` lazily BUILDS and caches a constant (l,m) table
-    # on the config. Its `setindex!` is invisible to a caller but fatal to Zygote
-    # ("Mutating arrays is not supported") whenever a differentiated function
-    # reaches it — e.g. `analysis_qst`/`_synthesis_qst`, which have no rrule and
-    # are traced through. The table does not depend on any differentiated value,
-    # so declare the whole builder non-differentiable; that covers every traced
-    # call site at once instead of rewriting each one to dodge the cache.
+    # `convert_alm_norm!` survives as a standalone public utility for callers who
+    # want coefficients in some other convention; no transform calls it. It does
+    # reach `_ensure_norm_scale_matrix!`, which lazily BUILDS and caches a
+    # constant (l,m) table on the config. That `setindex!` is invisible to a
+    # caller but fatal to Zygote ("Mutating arrays is not supported") if a
+    # differentiated function ever reaches it. The table does not depend on any
+    # differentiated value, so keep the builder declared non-differentiable.
     ChainRulesCore.@non_differentiable SHTnsKit._ensure_norm_scale_matrix!(::Any)
-
-    _needs_norm(cfg) = cfg.norm !== :orthonormal || cfg.cs_phase == false
 
     # A loss that consumes only ONE of a two-output transform hands the other slot
     # a `ZeroTangent`. The `_adjoint_*` kernels take arrays, so materialise it to
@@ -130,27 +130,10 @@ import SHTnsKit: wigner_d_matrix_deriv
     # the synthesis adjoint must not, and misses the `wm = 2` doubling for m > 0.
 
     # Dense (l+1, m+1) matrix ↔ packed LM-order vector, skipping m % mres ≠ 0.
-    function _unpack_lm(cfg::SHTnsKit.SHTConfig, Qlm::AbstractVector)
-        A = zeros(eltype(Qlm), cfg.lmax + 1, cfg.mmax + 1)
-        @inbounds for m in 0:cfg.mmax
-            (m % cfg.mres == 0) || continue
-            for l in m:cfg.lmax
-                A[l+1, m+1] = Qlm[LM_index(cfg.lmax, cfg.mres, l, m) + 1]
-            end
-        end
-        return A
-    end
-
-    function _pack_lm(cfg::SHTnsKit.SHTConfig, A::AbstractMatrix)
-        Qlm = zeros(eltype(A), cfg.nlm)
-        @inbounds for m in 0:cfg.mmax
-            (m % cfg.mres == 0) || continue
-            for l in m:cfg.lmax
-                Qlm[LM_index(cfg.lmax, cfg.mres, l, m) + 1] = A[l+1, m+1]
-            end
-        end
-        return Qlm
-    end
+    # Thin aliases over the canonical pair in src/layout.jl — this file used to
+    # carry its own copy of both loops.
+    const _unpack_lm = SHTnsKit.unpack_lm
+    const _pack_lm = SHTnsKit.pack_lm
 
     function ChainRulesCore.rrule(::typeof(SHTnsKit.analysis_packed), cfg::SHTnsKit.SHTConfig, Vr)
         y = SHTnsKit.analysis_packed(cfg, Vr)

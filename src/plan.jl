@@ -450,8 +450,8 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     # converted to cfg's convention, which meant swapping the plan in silently
     # changed the coefficients — plan∘plan and dense∘dense each round-tripped,
     # but mixing them (e.g. `synthesis(cfg, analysis!(plan, alm, f))`) was off by
-    # M[l,m] plus a sign on odd m. The sphtor plan methods above DO convert, and
-    # correctly so: their non-plan twins convert too.
+    # M[l,m] plus a sign on odd m. The sphtor plan methods above do not convert
+    # either, for the same reason: their non-plan twins do not.
     return alm_out
 end
 

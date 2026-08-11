@@ -126,6 +126,7 @@ using Base.Threads  # For multi-threading support
 phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : Float64(nlon))
 
 # Include all module source files
+include("shtns37_contract.jl")               # Executable SHTns 3.7 parity inventory
 include("devices.jl")                        # Typed CPU()/GPU() device markers
 include("loop.jl")                           # Unified CPU/GPU loop abstraction
 include("fftutils.jl")                      # FFT utility functions and helpers
@@ -170,6 +171,10 @@ include("batch_transforms.jl")                # Batch (multi-field) transforms
 include("parallel_dense.jl")                  # Parallel dense matrix operations
 include("device_utils.jl")                    # GPU device utilities and management
 
+# ===== SHTNS 3.7 CAPABILITY CONTRACT =====
+export SHTns37Capability, SHTNS37_BACKENDS, SHTNS37_CAPABILITIES
+export shtns37_capabilities
+
 # ===== CORE CONFIGURATION AND SETUP =====
 export SHTConfig, create_gauss_config, create_regular_config, create_config, destroy_config  # Configuration management
 export create_gauss_fly_config, set_on_the_fly!, set_use_tables!, is_on_the_fly  # On-the-fly mode
@@ -210,6 +215,7 @@ export scratch_fft, scratch_spatial
 
 # ===== VECTOR FIELD TRANSFORMS =====
 export analysis_sphtor, synthesis_sphtor, synthesis_sph, synthesis_tor, synthesis_sph_cplx, synthesis_tor_cplx
+export synthesis_grad, synthesis_grad_l, synthesis_grad_ml
 export divergence_from_spheroidal, divergence_from_spheroidal!, spheroidal_from_divergence, spheroidal_from_divergence!
 export vorticity_from_toroidal, vorticity_from_toroidal!, toroidal_from_vorticity, toroidal_from_vorticity!
 export analysis_qst, synthesis_qst, analysis_qst_cplx, synthesis_qst_cplx  # Q,S,T decomposition
@@ -226,7 +232,8 @@ export suggest_pencil_grid, set_fft_plan_cache!, enable_fft_plan_cache!, disable
 
 # ===== MATRIX OPERATIONS AND DIFFERENTIAL OPERATORS =====
 export mul_ct_matrix, st_dt_matrix, SH_mul_mx          # Matrix multiplication utilities
-export SH_to_lat, SHqst_to_lat                         # Latitude-specific transforms
+export SH_to_lat, SH_to_lat_cplx, SHqst_to_lat         # Latitude-specific transforms
+export SHqst_to_point, SH_to_grad_point                 # Point-specific vector transforms
 
 # ===== ROTATIONS =====
 export SH_Zrotate                                       # Z-axis rotations

@@ -4,6 +4,7 @@
 using Test
 
 @testset "SHTnsKit Serial Tests" begin
+    include("test_shtns37_contract.jl")
     include("test_configuration.jl")
     include("test_indexing.jl")
     include("test_layout.jl")

@@ -431,14 +431,36 @@ end
             spectral_orders = PencilArrays.range_local(
                 create_spectral_pencil(complex_cfg; comm=adapter.comm),
             )[2]
-            local_unpack_active = 2sum((
-                ltr_complex - m + 1 for m_index in spectral_orders
+            local_unpack_active = sum((
+                (m == 0 ? 1 : 2) * (ltr_complex - m + 1)
+                for m_index in spectral_orders
                 for m in (m_index - 1,) if m ≤ ltr_complex
             ); init=0)
             @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements ==
                   MPI.Allreduce(local_unpack_active, max, adapter.comm)
             @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements <
                   2nlm_cplx_calc(complex_cfg.lmax, complex_cfg.mmax, 1)
+
+            # At ltr=0 the sole active entry is (l,m)=(0,0), so an exact
+            # complex-packed unpack sends one value, not a padded ±m pair.
+            for edge_ltr in (0, complex_cfg.lmax)
+                extension._reset_pencil_scalar_stats!()
+                edge_reconstructed = synthesis_packed_cplx_l(
+                    complex_cfg, noisy_pencil, edge_ltr;
+                    prototype_θφ=complex_spatial,
+                )
+                @test _collect_spatial(edge_reconstructed, complex_cfg) ≈
+                      synthesis_packed_cplx_l(
+                          complex_cfg, noisy, edge_ltr,
+                      ) atol=4e-4 rtol=4e-4
+                edge_local_payload = sum((
+                    (m == 0 ? 1 : 2) * (edge_ltr - m + 1)
+                    for m_index in spectral_orders
+                    for m in (m_index - 1,) if m ≤ edge_ltr
+                ); init=0)
+                @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements ==
+                      MPI.Allreduce(edge_local_payload, max, adapter.comm)
+            end
 
             rank = MPI.Comm_rank(adapter.comm)
             varying_ltr = rank == 0 ? ltr_complex : ltr_complex - 1

@@ -760,17 +760,20 @@ function _unpack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
             push!(entries, (l, m,
                 SHTnsKit.LM_cplx_index(cfg.lmax, cfg.mmax, l, m) + 1))
         end
-        send = zeros(eltype(packed), 2length(entries))
+        negative_count = count(entry -> entry[2] > 0, entries)
+        send = zeros(eltype(packed), length(entries) + negative_count)
+        negative_slot = length(entries)
         @inbounds for (k, (l, m, positive_index)) in pairs(entries)
             if packed_first ≤ positive_index ≤ packed_last
                 send[k] = parent(packed)[positive_index - packed_first + 1, 1]
             end
             if m > 0
+                negative_slot += 1
                 negative_index = SHTnsKit.LM_cplx_index(
                     cfg.lmax, cfg.mmax, l, -m,
                 ) + 1
                 if packed_first ≤ negative_index ≤ packed_last
-                    send[length(entries) + k] = conj(
+                    send[negative_slot] = conj(
                         parent(packed)[negative_index - packed_first + 1, 1],
                     )
                 end
@@ -782,11 +785,14 @@ function _unpack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
         )
         MPI.Reduce!(send, receive, +, root, comm)
         if rank == root
+            negative_slot = length(entries)
             @inbounds for (k, (l, m, _)) in pairs(entries)
                 local_m = m + 1 - first_m_index + 1
                 parent(Aplus)[l + 1, local_m] = receive[k]
-                m > 0 && (parent(Aminus)[l + 1, local_m] =
-                              receive[length(entries) + k])
+                if m > 0
+                    negative_slot += 1
+                    parent(Aminus)[l + 1, local_m] = receive[negative_slot]
+                end
             end
         end
     end

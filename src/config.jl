@@ -1012,10 +1012,11 @@ end
                           robert_form::Bool=false, include_poles::Bool=false,
                           precompute_plm::Bool=true, use_dh_weights::Bool=false) -> SHTConfig
 
-Create an equiangular (regular) grid configuration. Regular grids use simple
-`θ = (i+0.5)π/nlat` nodes by default; set `include_poles=true` to place nodes
-directly on the poles. By default associated Legendre tables are precomputed,
-which mirrors SHTns' regular-grid behaviour and improves performance.
+Create an equiangular (regular) grid configuration. Regular grids use
+Fejér's first rule on `θ = (i+0.5)π/nlat` nodes by default; set
+`include_poles=true` to use pole-inclusive Clenshaw–Curtis nodes and weights.
+By default associated Legendre tables are precomputed, which mirrors SHTns'
+regular-grid behaviour and improves performance.
 
 # Driscoll-Healy Quadrature
 
@@ -1068,8 +1069,9 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
                 x[i+1] = cos(θi)
             end
         else
-            # Use trapezoidal rule with both poles
-            # Poles (θ=0 and θ=π) get half-weight per the trapezoidal rule
+            # Use pole-inclusive Clenshaw–Curtis quadrature. The endpoint
+            # weights are nonzero because these weights integrate in x=cos(θ),
+            # rather than applying a trapezoidal rule directly in θ.
             # A pole-inclusive grid needs at least the two poles: `nlat == 1` makes
             # `h = π/0 = Inf` and `θ[1] = 0*Inf = NaN`, and since the generic
             # `nlat ≥ lmax+1` check passes for lmax=0 the whole config would come
@@ -1078,23 +1080,18 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
             nlat >= 2 || throw(ArgumentError("pole-inclusive grids need nlat ≥ 2 (got nlat=$nlat); " *
                                              "use grid_type=:regular for a single-latitude grid"))
             h = π / (nlat - 1)
+            w = _clenshaw_curtis_weights(nlat)
             for i in 0:(nlat-1)
                 θi = i * h
                 θ[i+1] = θi
                 x[i+1] = cos(θi)
-                w[i+1] = h * sin(θi)
             end
-            # Apply trapezoidal endpoint correction: first and last points get half-weight.
-            # At exact poles sin(θ)=0 so w is already 0, but for near-pole points and
-            # correctness of the quadrature rule, enforce the half-weight convention.
-            w[1] *= 0.5
-            w[nlat] *= 0.5
         end
     else
+        w = _fejer1_weights(nlat)
         for i in 0:(nlat-1)
             θi = (i + 0.5) * (π / nlat)
             θ[i+1] = θi
-            w[i+1] = (π / nlat) * sin(θi)
             x[i+1] = cos(θi)
         end
     end

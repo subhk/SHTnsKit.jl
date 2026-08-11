@@ -55,6 +55,15 @@ using SHTnsKit
         # Regular grid without poles
         cfg_nopole = create_regular_config(lmax, nlat; nlon=nlon, include_poles=false)
         @test cfg_nopole.nlat == nlat
+        @test cfg_nopole.grid_type == :regular
+        @test sum(cfg_nopole.w) ≈ 2.0
+
+        # The ordinary pole-inclusive grid is Clenshaw–Curtis, distinct from
+        # the north-pole-inclusive Driscoll–Healy compatibility grid above.
+        cfg_poles = create_regular_config(lmax, nlat; nlon=nlon, include_poles=true)
+        @test cfg_poles.grid_type == :regular_poles
+        @test cfg_poles.x[[1, end]] == [1.0, -1.0]
+        @test sum(cfg_poles.w) ≈ 2.0
     end
 
     @testset "Generic create_config" begin

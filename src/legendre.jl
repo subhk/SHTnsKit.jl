@@ -827,6 +827,78 @@ function gausslegendre(n::Int)
 end
 
 """
+    _fejer1_weights(n::Int) -> Vector{Float64}
+
+Return Fejér's first-rule weights for the `n` midpoint nodes
+`cos((j + 1/2)π/n)`, `j = 0:n-1`. The weights integrate with respect to
+`dx` on `[-1, 1]`, matching the latitude weights expected by the spherical
+harmonic analysis kernels.
+
+The cosine series is accumulated in `Float64`, as is the rest of the stored
+grid geometry in `SHTConfig`. With `n` nodes the rule has algebraic degree
+`n - 1` for even `n` and degree `n` for odd `n`.
+"""
+function _fejer1_weights(n::Int)
+    n > 0 || throw(ArgumentError("n must be positive"))
+    w = Vector{Float64}(undef, n)
+    n_inv = 1.0 / n
+    last_mode = fld(n, 2)
+
+    @inbounds for j in 0:(n - 1)
+        θj = (j + 0.5) * π * n_inv
+        series = 0.0
+        for k in 1:last_mode
+            series += cos(2k * θj) / (4k^2 - 1)
+        end
+        w[j + 1] = 2n_inv * (1 - 2series)
+    end
+    return w
+end
+
+"""
+    _clenshaw_curtis_weights(n::Int) -> Vector{Float64}
+
+Return Clenshaw–Curtis weights for the `n` pole-inclusive nodes
+`cos(jπ/(n-1))`, `j = 0:n-1`. The returned weights integrate with respect
+to `dx` on `[-1, 1]` and include the parity-dependent endpoint correction.
+With `n` nodes the rule has algebraic degree `n - 1` for even `n` and degree
+`n` for odd `n`.
+"""
+function _clenshaw_curtis_weights(n::Int)
+    n >= 2 || throw(ArgumentError("n must be at least 2"))
+    N = n - 1
+    w = Vector{Float64}(undef, n)
+
+    if iseven(N)
+        endpoint = 1.0 / (N^2 - 1)
+        w[1] = endpoint
+        w[end] = endpoint
+        @inbounds for j in 1:(N - 1)
+            θj = j * π / N
+            value = 1.0
+            for k in 1:(N ÷ 2 - 1)
+                value -= 2cos(2k * θj) / (4k^2 - 1)
+            end
+            value -= cos(N * θj) / (N^2 - 1)
+            w[j + 1] = 2value / N
+        end
+    else
+        endpoint = 1.0 / N^2
+        w[1] = endpoint
+        w[end] = endpoint
+        @inbounds for j in 1:(N - 1)
+            θj = j * π / N
+            value = 1.0
+            for k in 1:((N - 1) ÷ 2)
+                value -= 2cos(2k * θj) / (4k^2 - 1)
+            end
+            w[j + 1] = 2value / N
+        end
+    end
+    return w
+end
+
+"""
     thetaphi_from_nodes(nlat::Int, nlon::Int)
 
 Return `θ` and `φ` arrays where `θ ∈ [0, π]` (Gauss–Legendre nodes mapped) and

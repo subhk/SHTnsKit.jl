@@ -142,7 +142,18 @@ end
         # `synthesis`, so it must be ORTHONORMAL like them — not merely
         # self-consistent. A self-roundtrip test cannot tell the two apart:
         # plan∘plan closes under either convention, and only MIXING them breaks.
-        # These equality assertions are what would catch a revert.
+        # These assertions are what would catch a revert.
+        #
+        # They compare to a TOLERANCE, not bit-for-bit. The two paths reach the
+        # same φ transform through different FFTW plans — `synthesis` uses the
+        # shared cache (built UNALIGNED, since it reuses plans across arbitrary
+        # caller arrays) while `SHTPlan` plans its own stably-aligned buffers —
+        # so FFTW may pick different codelets and the results can differ in the
+        # last ulp. That is not a convention bug and varies by CPU and FFTW
+        # build: `==` passed on arm64 and failed on x86_64 CI at 2e-16.
+        # The tolerance below is ~4 orders above roundoff and ~10 orders below a
+        # normalization revert, which is an O(1) relative error (M[l,m] is 40-180%
+        # off for :schmidt/:fourpi), so a revert is still caught cleanly.
         lmax = 6
         for (nrm, cs) in ((:orthonormal, true), (:schmidt, true), (:fourpi, false))
             cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1,
@@ -154,12 +165,14 @@ end
             f_plan = zeros(cfg.nlat, cfg.nlon)
             synthesis!(plan, f_plan, alm)
             @test all(isfinite, f_plan)
-            # identical to the non-planned transform, not just close
-            @test f_plan == synthesis(cfg, alm; real_output=true)
+            # the non-planned transform to roundoff — same convention, not just
+            # self-consistent (see the note above on why this is not `==`)
+            @test isapprox(f_plan, synthesis(cfg, alm; real_output=true);
+                           rtol=1e-12, atol=1e-14)
 
             alm_back = zeros(ComplexF64, lmax + 1, lmax + 1)
             analysis!(plan, alm_back, f_plan)
-            @test alm_back == analysis(cfg, f_plan)
+            @test isapprox(alm_back, analysis(cfg, f_plan); rtol=1e-12, atol=1e-14)
             # and the plan's own roundtrip still recovers the input
             @test isapprox(alm_back, alm; rtol=1e-9, atol=1e-11)
         end

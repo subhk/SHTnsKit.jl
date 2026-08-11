@@ -335,13 +335,17 @@ end
         @test truncated_pencil isa PencilArray
         @test _collect_distributed_vector(truncated_pencil) ≈
               analysis_packed_l(cfg, vec(field), ltr_same_name) atol=3e-11 rtol=3e-11
-        local_active_count = count(PencilArrays.range_local(pencil(truncated_pencil))[1]) do packed_index
-            any(packed_index == LM_index(cfg.lmax, cfg.mres, l, m) + 1
-                for m in 0:cfg.mres:min(cfg.mmax, ltr_same_name)
-                for l in m:ltr_same_name)
-        end
-        @test extension._pencil_scalar_stats().analysis_packed_max_message_elements ==
-              MPI.Allreduce(local_active_count, max, adapter.comm)
+        spectral_local = PencilArrays.range_local(
+            create_spectral_pencil(cfg; comm=adapter.comm),
+        )
+        local_active_count = count((
+            (l + 1 in spectral_local[1]) && (m + 1 in spectral_local[2])
+            for m in 0:cfg.mres:min(cfg.mmax, ltr_same_name)
+            for l in m:ltr_same_name
+        ))
+        packed_analysis_stats = extension._pencil_scalar_stats()
+        @test packed_analysis_stats.analysis_packed_sent_elements == local_active_count
+        @test packed_analysis_stats.analysis_packed_max_message_elements <= local_active_count
         noisy_pencil = _place_distributed_vector(copy(packed), adapter.comm)
         noisy_globals = collect(Int, PencilArrays.range_local(pencil(noisy_pencil))[1])
         for (i, packed_index) in pairs(noisy_globals)
@@ -358,20 +362,50 @@ end
         @test low_field isa PencilArray
         @test vec(_collect_spatial(low_field, cfg)) ≈
               synthesis_packed_l(cfg, packed, ltr_same_name) atol=3e-11 rtol=3e-11
-        spectral_ranges = PencilArrays.range_local(
-            create_spectral_pencil(cfg; comm=adapter.comm),
-        )[2]
-        local_synthesis_active = sum((
-            ltr_same_name - m + 1 for m_index in spectral_ranges
-            for m in (m_index - 1,)
-            if m ≤ ltr_same_name && m % cfg.mres == 0
-        ); init=0)
-        @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements ==
-              MPI.Allreduce(local_synthesis_active, max, adapter.comm)
+        local_synthesis_active = count(noisy_globals) do packed_index
+            any(packed_index == LM_index(cfg.lmax, cfg.mres, l, m) + 1
+                for m in 0:cfg.mres:min(cfg.mmax, ltr_same_name)
+                for l in m:ltr_same_name)
+        end
+        packed_synthesis_stats = extension._pencil_scalar_stats()
+        @test packed_synthesis_stats.synthesis_packed_sent_elements ==
+              local_synthesis_active
+        @test packed_synthesis_stats.synthesis_packed_max_message_elements <=
+              local_synthesis_active
+
+        # Exercise the same packed owner maps with a genuinely two-dimensional
+        # spatial decomposition and both supported precisions.
+        packed_2d_pen = Pencil(
+            (cfg.nlat, cfg.nlon), (1, 2), adapter.comm,
+        )
+        packed_2d_ranges = PencilArrays.range_local(packed_2d_pen)
+        for T in (Float32, Float64)
+            tol = T === Float32 ? 3f-4 : 5e-11
+            spatial_2d = PencilArray{T}(undef, packed_2d_pen)
+            for (j, jglobal) in pairs(packed_2d_ranges[2]),
+                (i, iglobal) in pairs(packed_2d_ranges[1])
+                parent(spatial_2d)[i, j] = T(field[iglobal, jglobal])
+            end
+            packed_2d = analysis_packed_l(cfg, spatial_2d, ltr_same_name)
+            @test _collect_distributed_vector(packed_2d) ≈
+                  analysis_packed_l(cfg, T.(vec(field)), ltr_same_name) atol=tol rtol=tol
+            reconstructed_2d = synthesis_packed_l(
+                cfg, packed_2d, ltr_same_name; prototype_θφ=spatial_2d,
+            )
+            @test _collect_spatial(reconstructed_2d, cfg) ≈
+                  reshape(
+                      synthesis_packed_l(
+                          cfg, analysis_packed_l(cfg, T.(vec(field)), ltr_same_name),
+                          ltr_same_name,
+                      ),
+                      cfg.nlat, cfg.nlon,
+                  ) atol=tol rtol=tol
+        end
     end
 
     @testset "same-name complex packed degree limits" begin
         for T in (Float32, Float64)
+            tol = T === Float32 ? 4f-4 : 5e-11
             complex_cfg = create_gauss_config(
                 5, 8; nlon=14, norm=:schmidt,
                 real_norm=true, cs_phase=false,
@@ -407,17 +441,19 @@ end
                 complex_cfg, complex_spatial, ltr_complex,
             )
             @test analyzed isa PencilArray
-            @test _collect_distributed_vector(analyzed) ≈ truncated atol=4e-4 rtol=4e-4
-            starts = collect(Int, PencilArrays.range_local(pencil(analyzed))[1])
-            local_active = count(starts) do packed_index
-                any(packed_index == LM_cplx_index(
-                        complex_cfg.lmax, complex_cfg.mmax, l, m,
-                    ) + 1
-                    for l in 0:ltr_complex
-                    for m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax))
-            end
-            @test extension._pencil_scalar_stats().analysis_packed_max_message_elements ==
-                  MPI.Allreduce(local_active, max, adapter.comm)
+            @test _collect_distributed_vector(analyzed) ≈ truncated atol=tol rtol=tol
+            complex_spectral_local = PencilArrays.range_local(
+                create_spectral_pencil(complex_cfg; comm=adapter.comm),
+            )
+            local_active = count((
+                (l + 1 in complex_spectral_local[1]) &&
+                (abs(m) + 1 in complex_spectral_local[2])
+                for l in 0:ltr_complex
+                for m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax)
+            ))
+            complex_analysis_stats = extension._pencil_scalar_stats()
+            @test complex_analysis_stats.analysis_packed_sent_elements == local_active
+            @test complex_analysis_stats.analysis_packed_max_message_elements <= local_active
 
             noisy_pencil = _place_distributed_vector(noisy, adapter.comm)
             extension._reset_pencil_scalar_stats!()
@@ -427,18 +463,23 @@ end
             )
             @test reconstructed isa PencilArray
             @test _collect_spatial(reconstructed, complex_cfg) ≈
-                  synthesis_packed_cplx(complex_cfg, truncated) atol=4e-4 rtol=4e-4
-            spectral_orders = PencilArrays.range_local(
-                create_spectral_pencil(complex_cfg; comm=adapter.comm),
-            )[2]
-            local_unpack_active = sum((
-                (m == 0 ? 1 : 2) * (ltr_complex - m + 1)
-                for m_index in spectral_orders
-                for m in (m_index - 1,) if m ≤ ltr_complex
-            ); init=0)
-            @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements ==
-                  MPI.Allreduce(local_unpack_active, max, adapter.comm)
-            @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements <
+                  synthesis_packed_cplx(complex_cfg, truncated) atol=tol rtol=tol
+            noisy_complex_globals = collect(
+                Int, PencilArrays.range_local(pencil(noisy_pencil))[1],
+            )
+            local_unpack_active = count(noisy_complex_globals) do packed_index
+                any(packed_index == LM_cplx_index(
+                        complex_cfg.lmax, complex_cfg.mmax, l, m,
+                    ) + 1
+                    for l in 0:ltr_complex
+                    for m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax))
+            end
+            complex_synthesis_stats = extension._pencil_scalar_stats()
+            @test complex_synthesis_stats.synthesis_packed_sent_elements ==
+                  local_unpack_active
+            @test complex_synthesis_stats.synthesis_packed_max_message_elements <=
+                  local_unpack_active
+            @test complex_synthesis_stats.synthesis_packed_max_message_elements <
                   2nlm_cplx_calc(complex_cfg.lmax, complex_cfg.mmax, 1)
 
             # At ltr=0 the sole active entry is (l,m)=(0,0), so an exact
@@ -452,14 +493,18 @@ end
                 @test _collect_spatial(edge_reconstructed, complex_cfg) ≈
                       synthesis_packed_cplx_l(
                           complex_cfg, noisy, edge_ltr,
-                      ) atol=4e-4 rtol=4e-4
-                edge_local_payload = sum((
-                    (m == 0 ? 1 : 2) * (edge_ltr - m + 1)
-                    for m_index in spectral_orders
-                    for m in (m_index - 1,) if m ≤ edge_ltr
-                ); init=0)
-                @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements ==
-                      MPI.Allreduce(edge_local_payload, max, adapter.comm)
+                      ) atol=tol rtol=tol
+                edge_local_payload = count(noisy_complex_globals) do packed_index
+                    any(packed_index == LM_cplx_index(
+                            complex_cfg.lmax, complex_cfg.mmax, l, m,
+                        ) + 1
+                        for l in 0:edge_ltr
+                        for m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax))
+                end
+                edge_stats = extension._pencil_scalar_stats()
+                @test edge_stats.synthesis_packed_sent_elements == edge_local_payload
+                @test edge_stats.synthesis_packed_max_message_elements <=
+                      edge_local_payload
             end
 
             rank = MPI.Comm_rank(adapter.comm)
@@ -513,6 +558,7 @@ end
 
     @testset "same-name batch Pencil APIs" begin
         for T in (Float32, Float64), nfields in (1, 2, 5)
+            tol = T === Float32 ? 3f-4 : 5e-11
             coefficients_t = Complex{T}.(coefficients)
             field_t = T.(field)
             fields = PencilArray{T}(undef, pencil(spatial), nfields)
@@ -532,13 +578,13 @@ end
             end
             MPI.Allreduce!(analyzed_dense, +, adapter.comm)
             for k in 1:nfields
-                @test analyzed_dense[:, :, k] ≈ T(k) .* coefficients_t atol=3e-4 rtol=3e-4
+                @test analyzed_dense[:, :, k] ≈ T(k) .* coefficients_t atol=tol rtol=tol
             end
             analyzed_inplace = PencilArray{Complex{T}}(
                 undef, pencil(analyzed), nfields,
             )
             @test analysis_batch!(cfg, analyzed_inplace, fields) === analyzed_inplace
-            @test parent(analyzed_inplace) ≈ parent(analyzed) atol=3e-4 rtol=3e-4
+            @test parent(analyzed_inplace) ≈ parent(analyzed) atol=tol rtol=tol
             reconstructed = synthesis_batch(
                 cfg, analyzed; prototype_θφ=fields,
             )
@@ -547,7 +593,7 @@ end
             for k in 1:nfields
                 slice = PencilArray{T}(undef, pencil(spatial))
                 @views parent(slice) .= parent(reconstructed)[:, :, k]
-                @test _collect_spatial(slice, cfg) ≈ T(k) .* field_t atol=3e-4 rtol=3e-4
+                @test _collect_spatial(slice, cfg) ≈ T(k) .* field_t atol=tol rtol=tol
             end
             reconstructed_inplace = PencilArray{T}(
                 undef, pencil(fields), nfields,
@@ -557,7 +603,7 @@ end
                 prototype_θφ=fields,
             ) === reconstructed_inplace
             @test parent(reconstructed_inplace) ≈
-                  parent(reconstructed) atol=3e-4 rtol=3e-4
+                  parent(reconstructed) atol=tol rtol=tol
 
             complex_batch = synthesis_batch_cplx(
                 cfg, analyzed; prototype_θφ=fields,
@@ -568,7 +614,7 @@ end
                 slice = PencilArray{Complex{T}}(undef, pencil(spatial))
                 @views parent(slice) .= parent(complex_batch)[:, :, k]
                 @test _collect_spatial(slice, cfg) ≈
-                      complex_reference[:, :, k] atol=3e-4 rtol=3e-4
+                      complex_reference[:, :, k] atol=tol rtol=tol
             end
         end
     end
@@ -579,6 +625,68 @@ end
         planned = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
         dist_analysis!(plan, planned, spatial)
         @test planned ≈ coefficients atol=3e-11 rtol=3e-11
+
+        # Equal local lengths do not make different Pencil ownership layouts
+        # interchangeable. These 1D and 2D decompositions both own 16 spatial
+        # values per rank (and 4 spectral values), but their global ranges and
+        # process topologies differ.
+        layout_cfg = create_gauss_config(3, 8; nlon=8)
+        layout_1d = Pencil((layout_cfg.nlat, layout_cfg.nlon), (1,), adapter.comm)
+        layout_2d = Pencil((layout_cfg.nlat, layout_cfg.nlon), (1, 2), adapter.comm)
+        layout_field = PencilArray{Float64}(undef, layout_1d)
+        wrong_layout_field = PencilArray{Float64}(undef, layout_2d)
+        fill!(parent(layout_field), 0.25)
+        fill!(parent(wrong_layout_field), 0.25)
+        @test length(parent(layout_field)) == length(parent(wrong_layout_field))
+
+        layout_analysis_plan = extension.DistAnalysisPlan(layout_cfg, layout_field)
+        layout_dense = fill(ComplexF64(9, -2), layout_cfg.lmax + 1,
+                            layout_cfg.mmax + 1)
+        @test _all_ranks_catch(adapter.comm) do
+            analysis!(layout_analysis_plan, layout_dense, wrong_layout_field)
+        end
+        @test all(==(ComplexF64(9, -2)), layout_dense)
+
+        layout_spectral = analysis(layout_cfg, layout_field)
+        layout_synthesis_plan = extension.DistPlan(layout_cfg, layout_field)
+        wrong_layout_output = PencilArray{Float64}(undef, layout_2d)
+        fill!(parent(wrong_layout_output), 7.0)
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis!(layout_synthesis_plan, wrong_layout_output, layout_spectral)
+        end
+        @test all(==(7.0), parent(wrong_layout_output))
+
+        layout_fields = PencilArray{Float64}(undef, layout_1d, 2)
+        fill!(parent(layout_fields), 0.25)
+        wrong_spectral_pen = Pencil(
+            (layout_cfg.lmax + 1, layout_cfg.mmax + 1), (1, 2), adapter.comm,
+        )
+        wrong_batch_spectral = PencilArray{ComplexF64}(
+            undef, wrong_spectral_pen, 2,
+        )
+        fill!(parent(wrong_batch_spectral), ComplexF64(6, 1))
+        standard_batch_spectral = PencilArray{ComplexF64}(
+            undef, create_spectral_pencil(layout_cfg; comm=adapter.comm), 2,
+        )
+        fill!(parent(standard_batch_spectral), 0)
+        @test length(parent(wrong_batch_spectral)) ==
+              length(parent(standard_batch_spectral))
+        @test _all_ranks_catch(adapter.comm) do
+            analysis_batch!(layout_cfg, wrong_batch_spectral, layout_fields)
+        end
+        @test all(==(ComplexF64(6, 1)), parent(wrong_batch_spectral))
+
+        wrong_batch_spatial = PencilArray{Float64}(undef, layout_2d, 2)
+        fill!(parent(wrong_batch_spatial), 5.0)
+        @test length(parent(wrong_batch_spatial)) == length(parent(layout_fields))
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis_batch!(
+                layout_cfg, wrong_batch_spatial, standard_batch_spectral;
+                prototype_θφ=layout_fields,
+            )
+        end
+        @test all(==(5.0), parent(wrong_batch_spatial))
+        MPI.Barrier(adapter.comm)
         fill!(planned, 0)
         @test analysis!(plan, planned, spatial) === planned
         @test planned ≈ coefficients atol=3e-11 rtol=3e-11
@@ -604,9 +712,11 @@ end
         @test _all_ranks_catch(adapter.comm) do
             analysis_packed_l(cfg, spatial, overflowing_ltr)
         end
-
         axis_field = synthesis_axisym(cfg, coefficients[:, 1])
         axis_spatial = _place_distributed_vector(axis_field, adapter.comm)
+        @test _all_ranks_catch(adapter.comm) do
+            analysis_axisym_l(cfg, axis_spatial, overflowing_ltr)
+        end
         varying_axis_ltr = rank == 0 ? 3 : 2
         @test _all_ranks_catch(adapter.comm) do
             analysis_axisym_l(cfg, axis_spatial, varying_axis_ltr)

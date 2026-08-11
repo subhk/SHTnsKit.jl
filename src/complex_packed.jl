@@ -89,16 +89,7 @@ Synthesize complex spatial field from packed complex coefficients (LM_cplx order
 Returns an `nlat × nlon` complex array.
 """
 @inline function _complex_packed_lcap(cfg::SHTConfig, ltr::Integer)
-    lcap = try
-        Int(ltr)
-    catch error
-        error isa InexactError || rethrow()
-        throw(ArgumentError("ltr must be representable as Int"))
-    end
-    0 ≤ lcap ≤ cfg.lmax || throw(ArgumentError(
-        "ltr must satisfy 0 ≤ ltr ≤ lmax=$(cfg.lmax)",
-    ))
-    return lcap
+    return _validate_degree_limit(cfg, ltr)
 end
 
 function _synthesis_packed_cplx(cfg::SHTConfig,

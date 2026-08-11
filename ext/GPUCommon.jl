@@ -5,19 +5,41 @@ using SHTnsKit
 
 export laplacian_kernel!, legendre_table_kernel!, scalar_analysis_kernel!,
        scalar_synthesis_kernel!, coefficient_conversion_kernel!,
+       coefficient_batch_conversion_kernel!,
        real_pack_kernel!, real_unpack_kernel!,
        mode_analysis_kernel!, mode_synthesis_kernel!,
        scalar_batch_analysis_kernel!, scalar_batch_synthesis_kernel!,
        complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
        scalar_config_signature, scalar_host_tables,
        ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
-       scalar_cache_clear!, scalar_cache_size
+       scalar_cache_clear!, scalar_cache_size,
+       ScalarWorkspaceCache, scalar_workspace_use!,
+       scalar_workspace_clear!, scalar_workspace_size
 
 """One cached table set plus its mutable-configuration signature and LRU tick."""
 struct ScalarTableCacheEntry
     signature::UInt
     tick::UInt64
     value::Any
+end
+
+"""Batched form of coefficient conversion without broadcast temporaries."""
+@kernel function coefficient_batch_conversion_kernel!(output, input, scales,
+                                                        lmax, mmax, to_internal)
+    l_idx, m_idx, batch_idx = @index(Global, NTuple)
+    if l_idx <= lmax + 1 && m_idx <= mmax + 1 &&
+       batch_idx <= size(output, 3)
+        l = l_idx - 1
+        m = m_idx - 1
+        if l >= m
+            scale = scales[l_idx, m_idx]
+            output[l_idx, m_idx, batch_idx] = to_internal ?
+                scale * input[l_idx, m_idx, batch_idx] :
+                input[l_idx, m_idx, batch_idx] / scale
+        else
+            output[l_idx, m_idx, batch_idx] = zero(eltype(output))
+        end
+    end
 end
 
 """
@@ -101,6 +123,107 @@ function scalar_cache_clear!(cache::ScalarTableCache; device=nothing)
 end
 
 function scalar_cache_size(cache::ScalarTableCache; device=nothing)
+    return lock(cache.lock) do
+        device === nothing && return length(cache.entries)
+        return count(key -> key[1] == device, keys(cache.entries))
+    end
+end
+
+"""One weakly-owned, independently locked GPU transform workspace."""
+mutable struct ScalarWorkspaceCacheEntry
+    owner::WeakRef
+    signature::UInt
+    tick::UInt64
+    value::Any
+    lock::ReentrantLock
+end
+
+"""
+Bounded device workspace cache used by in-place scalar and batch transforms.
+
+Keys contain only `objectid(owner)`, never the owner itself. The accompanying
+`WeakRef` prevents a cached vendor buffer or FFT plan from keeping an SHTPlan
+or SHTConfig alive. Each entry has its own lock, so unrelated plans may execute
+concurrently while reuse of the same mutable FFT workspace is serialized.
+"""
+mutable struct ScalarWorkspaceCache
+    entries::Dict{Tuple{Any,UInt,DataType,Symbol,Tuple},ScalarWorkspaceCacheEntry}
+    tick::UInt64
+    max_per_device::Int
+    lock::ReentrantLock
+end
+
+function ScalarWorkspaceCache(max_per_device::Integer=8)
+    max_per_device > 0 || throw(ArgumentError("max_per_device must be positive"))
+    return ScalarWorkspaceCache(
+        Dict{Tuple{Any,UInt,DataType,Symbol,Tuple},ScalarWorkspaceCacheEntry}(),
+        0, Int(max_per_device), ReentrantLock(),
+    )
+end
+
+function _workspace_entry!(builder, cache::ScalarWorkspaceCache, device,
+                           owner, precision::DataType, kind::Symbol,
+                           shape::Tuple, signature::UInt)
+    key = (device, objectid(owner), precision, kind, shape)
+    return lock(cache.lock) do
+        # Drop dead weak owners eagerly; this also protects against object-id
+        # reuse selecting buffers belonging to a reclaimed plan/config.
+        for candidate in collect(keys(cache.entries))
+            cache.entries[candidate].owner.value === nothing &&
+                delete!(cache.entries, candidate)
+        end
+        entry = get(cache.entries, key, nothing)
+        if entry !== nothing && entry.owner.value === owner &&
+           entry.signature == signature
+            cache.tick += 1
+            entry.tick = cache.tick
+            return entry
+        end
+        entry === nothing || delete!(cache.entries, key)
+        device_keys = [
+            candidate for candidate in keys(cache.entries)
+            if candidate[1] == device
+        ]
+        if length(device_keys) >= cache.max_per_device
+            oldest = argmin(candidate -> cache.entries[candidate].tick, device_keys)
+            delete!(cache.entries, oldest)
+        end
+        value = builder()
+        cache.tick += 1
+        built = ScalarWorkspaceCacheEntry(
+            WeakRef(owner), signature, cache.tick, value, ReentrantLock(),
+        )
+        cache.entries[key] = built
+        return built
+    end
+end
+
+"""Run `f(workspace)` while holding the selected workspace's per-entry lock."""
+function scalar_workspace_use!(f, builder, cache::ScalarWorkspaceCache,
+                               device, owner, precision::DataType,
+                               kind::Symbol, shape::Tuple, signature::UInt)
+    entry = _workspace_entry!(
+        builder, cache, device, owner, precision, kind, shape, signature,
+    )
+    return lock(entry.lock) do
+        f(entry.value)
+    end
+end
+
+function scalar_workspace_clear!(cache::ScalarWorkspaceCache; device=nothing)
+    lock(cache.lock) do
+        if device === nothing
+            empty!(cache.entries)
+        else
+            for key in collect(keys(cache.entries))
+                key[1] == device && delete!(cache.entries, key)
+            end
+        end
+    end
+    return nothing
+end
+
+function scalar_workspace_size(cache::ScalarWorkspaceCache; device=nothing)
     return lock(cache.lock) do
         device === nothing && return length(cache.entries)
         return count(key -> key[1] == device, keys(cache.entries))

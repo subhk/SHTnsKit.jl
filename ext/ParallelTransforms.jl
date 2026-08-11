@@ -77,7 +77,9 @@ const _PENCIL_SCALAR_STATS = Dict{Symbol,Int}(
     :full_matrix_helper_calls => 0,
     :analysis_max_message_elements => 0,
     :analysis_packed_max_message_elements => 0,
+    :analysis_packed_sent_elements => 0,
     :synthesis_packed_max_message_elements => 0,
+    :synthesis_packed_sent_elements => 0,
     :synthesis_max_message_elements => 0,
 )
 
@@ -105,8 +107,12 @@ function _pencil_scalar_stats()
             analysis_max_message_elements=_PENCIL_SCALAR_STATS[:analysis_max_message_elements],
             analysis_packed_max_message_elements=
                 _PENCIL_SCALAR_STATS[:analysis_packed_max_message_elements],
+            analysis_packed_sent_elements=
+                _PENCIL_SCALAR_STATS[:analysis_packed_sent_elements],
             synthesis_packed_max_message_elements=
                 _PENCIL_SCALAR_STATS[:synthesis_packed_max_message_elements],
+            synthesis_packed_sent_elements=
+                _PENCIL_SCALAR_STATS[:synthesis_packed_sent_elements],
             synthesis_max_message_elements=_PENCIL_SCALAR_STATS[:synthesis_max_message_elements],
         )
     end
@@ -137,18 +143,56 @@ function _collective_validation_error(comm, local_flags::UInt32, operation::Symb
 end
 
 function _collective_truncation(comm, ltr::Integer, lmax::Int, operation::Symbol)
-    converted = try
-        Int(ltr)
-    catch
-        typemin(Int)
-    end
-    flags = converted == typemin(Int) || !(0 ≤ converted ≤ lmax) ?
+    converted, representable = SHTnsKit._degree_limit_candidate(ltr)
+    flags = !representable || !(0 ≤ converted ≤ lmax) ?
             UInt32(0x0100) : UInt32(0)
     minimum_ltr = MPI.Allreduce(converted, min, comm)
     maximum_ltr = MPI.Allreduce(converted, max, comm)
     minimum_ltr == maximum_ltr || (flags |= 0x0100)
     _collective_validation_error(comm, flags, operation)
     return converted
+end
+
+"""
+Collectively require two PencilArrays to have exactly the same local layout.
+
+Equal local element counts are insufficient: a linear `copyto!` between two
+different decompositions silently assigns values to the wrong global indices.
+This check deliberately compares the communicator, process topology,
+decomposed dimensions, and every locally owned global range before any
+transform communication begins.
+"""
+function _validate_identical_pencil_layout!(reference::PencilArray,
+                                            candidate::PencilArray,
+                                            operation::Symbol)
+    comm = communicator(reference)
+    flags = UInt32(0)
+    candidate_comm = communicator(candidate)
+    comm_compatible = try
+        MPI.Comm_size(candidate_comm) == MPI.Comm_size(comm) &&
+            MPI.Comm_compare(candidate_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+    catch
+        false
+    end
+    comm_compatible || (flags |= 0x0008)
+
+    reference_pen = pencil(reference)
+    candidate_pen = pencil(candidate)
+    size_global(reference) == size_global(candidate) || (flags |= 0x0001)
+    local_compatible = try
+        PencilArrays.decomposition(reference_pen) ==
+            PencilArrays.decomposition(candidate_pen) &&
+        size(PencilArrays.topology(reference_pen)) ==
+            size(PencilArrays.topology(candidate_pen)) &&
+        PencilArrays.range_local(reference_pen) ==
+            PencilArrays.range_local(candidate_pen) &&
+        size(parent(reference)) == size(parent(candidate))
+    catch
+        false
+    end
+    local_compatible || (flags |= 0x0002)
+    _collective_validation_error(comm, flags, operation)
+    return nothing
 end
 
 function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
@@ -749,8 +793,8 @@ function dist_analysis_pencil(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     local_m = collect(Int, globalindices(output, 2))
     local_first = isempty(local_m) ? 1 : first(local_m)
-    starts = Int.(MPI.Allgather(Int32(local_first), comm))
-    counts = Int.(MPI.Allgather(Int32(length(local_m)), comm))
+    starts = MPI.Allgather(local_first, comm)
+    counts = MPI.Allgather(length(local_m), comm)
     rank = MPI.Comm_rank(comm)
     for root in 0:(MPI.Comm_size(comm) - 1)
         count = counts[root + 1]
@@ -1058,6 +1102,9 @@ end
 
 function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
     cfg = plan.cfg
+    _validate_identical_pencil_layout!(
+        plan.prototype_θφ, fθφ, :dist_analysis_plan_input,
+    )
     if plan.fallback_standard
         # φ-distributed layout: needs the longitude Allgather; reuse the
         # allocating standard path (it warns about anti-scaling already).
@@ -1338,10 +1385,10 @@ function _spatial_owner_descriptors(prototype::PencilArray, comm)
     θ_first = isempty(θ) ? 1 : first(θ)
     φ_first = isempty(φ) ? 1 : first(φ)
     return (
-        θ_starts=Int.(MPI.Allgather(Int32(θ_first), comm)),
-        θ_counts=Int.(MPI.Allgather(Int32(length(θ)), comm)),
-        φ_starts=Int.(MPI.Allgather(Int32(φ_first), comm)),
-        φ_counts=Int.(MPI.Allgather(Int32(length(φ)), comm)),
+        θ_starts=MPI.Allgather(θ_first, comm),
+        θ_counts=MPI.Allgather(length(θ), comm),
+        φ_starts=MPI.Allgather(φ_first, comm),
+        φ_counts=MPI.Allgather(length(φ), comm),
     )
 end
 
@@ -1454,6 +1501,9 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
 end
 
 function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::PencilArray; real_output::Bool=true)
+    _validate_identical_pencil_layout!(
+        plan.prototype_θφ, fθφ_out, :dist_synthesis_plan_output,
+    )
     # Rejected up front, before any collective — the test is on local eltypes,
     # identical on every rank, so all ranks throw together instead of deadlocking.
     #
@@ -3052,10 +3102,10 @@ function gather_to_full_dense_2d(dsa::DistributedSpectralArray2D{T}) where T
     local_count = length(local_packed)
 
     # Gather counts from all ranks
-    all_counts = MPI.Allgather(Int32(local_count), comm)
+    all_counts = MPI.Allgather(local_count, comm)
 
     # Compute displacements
-    all_displs = cumsum([Int32(0); all_counts[1:end-1]])
+    all_displs = cumsum([0; all_counts[1:end-1]])
 
     # Gather all partial results
     total_size = sum(all_counts)

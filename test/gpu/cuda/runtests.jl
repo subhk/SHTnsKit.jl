@@ -27,6 +27,15 @@ synthesis_call(::CUDAScalarAdapter, cfg, coefficients, _prototype;
 synthesis_cplx_call(::CUDAScalarAdapter, cfg, coefficients, _prototype) =
     synthesis_cplx(cfg, coefficients)
 assert_resident(::CUDAScalarAdapter, value) = @test value isa CUDA.AnyCuArray
+function assert_warm_device_noalloc(::CUDAScalarAdapter, call)
+    call()
+    CUDA.synchronize()
+    @test CUDA.@allocated(begin
+        call()
+        CUDA.synchronize()
+    end) == 0
+    return nothing
+end
 
 struct SafeFallbackRedispatchError <: Exception end
 
@@ -48,9 +57,13 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension.GPUCommon, :scalar_analysis_kernel!)
     @test isdefined(extension.GPUCommon, :scalar_synthesis_kernel!)
     @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)
+    @test isdefined(extension.GPUCommon, :coefficient_batch_conversion_kernel!)
+    @test isdefined(extension.GPUCommon, :ScalarWorkspaceCache)
     @test isdefined(extension, :_cuda_scalar_analysis)
     @test isdefined(extension, :_cuda_scalar_synthesis)
     @test isdefined(extension, :_cuda_clear_scalar_cache!)
+    @test isdefined(extension, :_cuda_scalar_analysis_direct!)
+    @test isdefined(extension, :_cuda_batch_analysis_direct!)
     for (function_name, signature) in (
         (:analysis_packed, Tuple{SHTConfig,CuArray{Float32,1}}),
         (:synthesis_packed, Tuple{SHTConfig,CuArray{ComplexF32,1}}),
@@ -96,6 +109,22 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test extension.GPUCommon.scalar_cache_size(
         extension._CUDA_SCALAR_CACHE; device=cache_device,
     ) == 0
+    workspace_cache = extension.GPUCommon.ScalarWorkspaceCache(2)
+    workspace_owner = Ref(:owner)
+    builds = Ref(0)
+    builder = () -> (builds[] += 1; :workspace)
+    use_workspace = value -> value
+    @test extension.GPUCommon.scalar_workspace_use!(
+        use_workspace, builder, workspace_cache, :mock, workspace_owner,
+        Float32, :scalar, (1,), UInt(1),
+    ) === :workspace
+    @test extension.GPUCommon.scalar_workspace_use!(
+        use_workspace, builder, workspace_cache, :mock, workspace_owner,
+        Float32, :scalar, (1,), UInt(1),
+    ) === :workspace
+    @test builds[] == 1
+    extension.GPUCommon.scalar_workspace_clear!(workspace_cache; device=:mock)
+    @test extension.GPUCommon.scalar_workspace_size(workspace_cache) == 0
     @test which(
         synthesis_cplx, Tuple{SHTConfig,CuArray{ComplexF32,2}},
     ).module === extension
@@ -119,6 +148,14 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     )[1]
     @test !occursin(r"\bArray\s*\(", variant_pipeline)
     @test !occursin(r"\bcollect\s*\(", variant_pipeline)
+    @test occursin("ScalarWorkspaceCache(8)", source)
+    @test occursin("_cuda_batch_analysis_direct!", source)
+    @test occursin("_cuda_batch_synthesis_direct!", source)
+    @test occursin("CUFFT.plan_rfft", source)
+    @test !occursin(
+        r"result\s*=\s*_cuda_(?:scalar_analysis|scalar_synthesis|batch_analysis|batch_synthesis)\(",
+        source,
+    )
 
     @test which(on_device, Tuple{CUDA.AnyCuArray}).module === extension
     @test which(

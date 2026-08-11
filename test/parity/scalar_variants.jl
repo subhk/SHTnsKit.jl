@@ -135,6 +135,11 @@ function run_shared_scalar_variant_kernel_reference(common, backend)
 end
 
 """Run the hardware-only scalar variant matrix through one vendor adapter."""
+function assert_warm_device_noalloc(_adapter, call)
+    call()
+    return nothing
+end
+
 function run_gpu_scalar_variant_matrix(adapter)
     for T in (Float32, Float64)
         tolerance = T === Float32 ? 3f-4 : 4e-11
@@ -200,6 +205,39 @@ function run_gpu_scalar_variant_matrix(adapter)
             synthesis_output = similar(device_fields)
             @test analysis_batch!(cfg, analysis_output, device_fields) === analysis_output
             @test synthesis_batch!(cfg, synthesis_output, analyzed_batch) === synthesis_output
+            for use_rfft in (false, true)
+                nbins = use_rfft ? cfg.nlon ÷ 2 + 1 : cfg.nlon
+                fft_scratch = similar(
+                    analyzed_batch, Complex{T}, cfg.nlat, nbins, nfields,
+                )
+                analysis_call! = () -> analysis_batch!(
+                    cfg, analysis_output, device_fields; use_rfft, fft_batch=fft_scratch,
+                )
+                synthesis_call! = () -> synthesis_batch!(
+                    cfg, synthesis_output, analysis_output;
+                    use_rfft, fft_batch=fft_scratch,
+                )
+                @test analysis_call!() === analysis_output
+                @test synthesis_call!() === synthesis_output
+                assert_warm_device_noalloc(adapter, analysis_call!)
+                assert_warm_device_noalloc(adapter, synthesis_call!)
+                alias_storage = similar(
+                    analyzed_batch, Complex{T},
+                    max(length(analysis_output), length(fft_scratch)),
+                )
+                alias_output = reshape(
+                    @view(alias_storage[1:length(analysis_output)]),
+                    size(analysis_output),
+                )
+                alias_scratch = reshape(
+                    @view(alias_storage[1:length(fft_scratch)]),
+                    size(fft_scratch),
+                )
+                @test_throws ArgumentError analysis_batch!(
+                    cfg, alias_output, device_fields;
+                    use_rfft, fft_batch=alias_scratch,
+                )
+            end
         end
 
         complex_cfg = create_gauss_config(
@@ -257,9 +295,47 @@ function run_gpu_scalar_variant_matrix(adapter)
             @test analysis!(GPU(), plan, output_coefficients, device_field) ===
                   output_coefficients
             @test synthesis!(GPU(), plan, output_field, output_coefficients) === output_field
+            assert_warm_device_noalloc(
+                adapter,
+                () -> analysis!(plan, output_coefficients, device_field),
+            )
+            assert_warm_device_noalloc(
+                adapter,
+                () -> synthesis!(plan, output_field, output_coefficients),
+            )
             @test_throws ArgumentError analysis!(
                 CPU(), plan, output_coefficients, device_field,
             )
+        end
+
+        canonical_cfg = create_gauss_config(5, 8; nlon=14, mres=2)
+        canonical_dense = _variant_coefficients(canonical_cfg, T)
+        canonical_field = synthesis(canonical_cfg, canonical_dense)
+        canonical_device_field = place(
+            adapter, canonical_cfg, canonical_field, :spatial,
+        )
+        canonical_device_coefficients = place(
+            adapter, canonical_cfg, canonical_dense, :spectral,
+        )
+        for use_rfft in (false, true)
+            canonical_plan = SHTPlan(canonical_cfg; use_rfft)
+            assert_warm_device_noalloc(
+                adapter,
+                () -> analysis!(
+                    canonical_plan, canonical_device_coefficients,
+                    canonical_device_field,
+                ),
+            )
+            canonical_output = similar(canonical_device_field)
+            assert_warm_device_noalloc(
+                adapter,
+                () -> synthesis!(
+                    canonical_plan, canonical_output,
+                    canonical_device_coefficients,
+                ),
+            )
+            @test collect_result(adapter, canonical_output, canonical_cfg) ≈
+                  canonical_field atol=tolerance rtol=tolerance
         end
 
         alias_plan = SHTPlan(cfg)
@@ -729,6 +805,59 @@ end
         )
         @test_throws ArgumentError synthesis!(
             plan, field, VariantNonCPUArray(coefficients),
+        )
+    end
+
+    @testset "all Integer degree limits share overflow-safe validation" begin
+        cfg = create_gauss_config(5, 8; nlon=14, mres=2)
+        dense = _variant_coefficients(cfg, Float64)
+        packed = SHTnsKit.pack_lm(cfg, dense)
+        field = synthesis_packed(cfg, packed)
+        ltr = big(3)
+        @test analysis_packed_l(cfg, field, ltr) == analysis_packed_l(cfg, field, 3)
+        @test synthesis_packed_l(cfg, packed, ltr) == synthesis_packed_l(cfg, packed, 3)
+
+        axis = synthesis_axisym(cfg, dense[:, 1])
+        @test analysis_axisym_l(cfg, axis, ltr) == analysis_axisym_l(cfg, axis, 3)
+        @test synthesis_axisym_l(cfg, dense[:, 1], ltr) ==
+              synthesis_axisym_l(cfg, dense[:, 1], 3)
+
+        im = 1
+        physical_m = im * cfg.mres
+        mode_coefficients = dense[(physical_m + 1):4, physical_m + 1]
+        mode = synthesis_packed_ml(cfg, im, mode_coefficients, ltr)
+        @test analysis_packed_ml(cfg, im, mode, ltr) ==
+              analysis_packed_ml(cfg, im, mode, 3)
+        @test synthesis_packed_ml(cfg, im, mode_coefficients, ltr) ==
+              synthesis_packed_ml(cfg, im, mode_coefficients, 3)
+
+        overflow = big(typemax(Int)) + 1
+        @test_throws ArgumentError analysis_packed_l(cfg, field, overflow)
+        @test_throws ArgumentError analysis_axisym_l(cfg, axis, overflow)
+        @test_throws ArgumentError analysis_packed_ml(cfg, im, mode, overflow)
+    end
+
+    @testset "TODO(Task 9): vector/QST stored-order index uses im*mres" begin
+        cfg = create_gauss_config(6, 9; nlon=16, mres=2)
+        reference_cfg = create_gauss_config(6, 9; nlon=16, mres=1)
+        im = 2
+        physical_m = im * cfg.mres
+        ltr = cfg.lmax
+        coefficients = fill(ComplexF64(0.1, 0.03), ltr - physical_m + 1)
+        zeros_mode = zeros(ComplexF64, length(coefficients))
+        # Task 9 must make the vector and QST `_ml` APIs interpret `im` in the
+        # same stored-order sense as scalar `_ml`. These executable skips are
+        # removed when that task lands; Task 6 deliberately does not implement it.
+        @test_skip synthesis_sphtor_ml(
+            cfg, im, coefficients, zeros_mode, ltr,
+        ) == synthesis_sphtor_ml(
+            reference_cfg, physical_m, coefficients, zeros_mode, ltr,
+        )
+        @test_skip synthesis_qst_ml(
+            cfg, im, coefficients, coefficients, zeros_mode, ltr,
+        ) == synthesis_qst_ml(
+            reference_cfg, physical_m,
+            coefficients, coefficients, zeros_mode, ltr,
         )
     end
 end

@@ -622,14 +622,14 @@ function _gather_phi_rows(local_data::AbstractMatrix,
     gathered_data = try
         row_nprocs = MPI.Comm_size(row_comm)
 
-        all_nlats = MPI.Allgather(Int32(nlat_local), row_comm)
-        if !all(==(Int32(nlat_local)), all_nlats)
-            throw(ErrorException("_gather_phi_rows: θ_range mismatch within row subcomm (nlat_local = $(Int.(all_nlats))). Pencil topology is inconsistent."))
+        all_nlats = MPI.Allgather(nlat_local, row_comm)
+        if !all(==(nlat_local), all_nlats)
+            throw(ErrorException("_gather_phi_rows: θ_range mismatch within row subcomm (nlat_local = $all_nlats). Pencil topology is inconsistent."))
         end
 
-        all_nlons = MPI.Allgather(Int32(nlon_local), row_comm)
-        φ_displs = cumsum([Int32(0); all_nlons[1:end-1]])
-        sum(Int.(all_nlons)) == nlon || throw(ErrorException("_gather_phi_rows: row subcomm φ segments sum to $(sum(Int.(all_nlons))), expected nlon=$nlon."))
+        all_nlons = MPI.Allgather(nlon_local, row_comm)
+        φ_displs = cumsum([0; all_nlons[1:end-1]])
+        sum(all_nlons) == nlon || throw(ErrorException("_gather_phi_rows: row subcomm φ segments sum to $(sum(all_nlons)), expected nlon=$nlon."))
 
         T = eltype(local_data)
         send_buf = Vector{T}(undef, nlat_local * nlon_local)

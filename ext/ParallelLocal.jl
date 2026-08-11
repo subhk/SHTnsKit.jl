@@ -503,11 +503,29 @@ function _validate_packed_synthesis_prototype!(
     return nothing
 end
 
-function _rank_ranges(values::PencilArray, comm)
-    globals = collect(Int, globalindices(values, 1))
+function _rank_ranges(values::PencilArray, comm, dimension::Int=1)
+    globals = collect(Int, globalindices(values, dimension))
     first_index = isempty(globals) ? 1 : first(globals)
-    return Int.(MPI.Allgather(Int32(first_index), comm)),
-           Int.(MPI.Allgather(Int32(length(globals)), comm))
+    return MPI.Allgather(first_index, comm), MPI.Allgather(length(globals), comm)
+end
+
+@inline _owns_index(first_index::Int, count::Int, index::Int) =
+    count > 0 && first_index <= index < first_index + count
+
+function _exchange_owner_values(send_chunks::Vector{Vector{T}}, comm) where {T}
+    nranks = MPI.Comm_size(comm)
+    length(send_chunks) == nranks || throw(ArgumentError("one send chunk per rank required"))
+    send_counts = Cint[length(chunk) for chunk in send_chunks]
+    recv_counts = Vector{Cint}(undef, nranks)
+    MPI.Alltoall!(
+        MPI.UBuffer(send_counts, 1), MPI.UBuffer(recv_counts, 1), comm,
+    )
+    send = reduce(vcat, send_chunks; init=T[])
+    receive = Vector{T}(undef, sum(recv_counts))
+    MPI.Alltoallv!(
+        MPI.VBuffer(send, send_counts), MPI.VBuffer(receive, recv_counts), comm,
+    )
+    return receive, Int.(recv_counts), Int.(send_counts)
 end
 
 @inline function _packed_lm_pairs(cfg::SHTnsKit.SHTConfig, lcap::Int,
@@ -527,29 +545,37 @@ function _pack_spectral_pencil(cfg::SHTnsKit.SHTConfig, spectral::PencilArray,
     comm = communicator(spectral)
     output = _distributed_vector(eltype(spectral), cfg.nlm, comm)
     starts, counts = _rank_ranges(output, comm)
-    lglobals = collect(Int, globalindices(spectral, 1))
-    mglobals = collect(Int, globalindices(spectral, 2))
-    rank = MPI.Comm_rank(comm)
-    for root in 0:(MPI.Comm_size(comm) - 1)
-        entries = _packed_lm_pairs(cfg, lcap, starts[root + 1], counts[root + 1])
-        send = zeros(eltype(spectral), length(entries))
-        @inbounds for (k, (_, l, m)) in pairs(entries)
-            i = findfirst(==(l + 1), lglobals)
-            j = findfirst(==(m + 1), mglobals)
-            (i === nothing || j === nothing) ||
-                (send[k] = parent(spectral)[i, j])
-        end
-        receive = similar(send)
-        _record_pencil_scalar_stat!(
-            :analysis_packed_max_message_elements, length(send); maximum=true,
-        )
-        MPI.Reduce!(send, receive, +, root, comm)
-        if rank == root
-            @inbounds for (k, (packed_index, _, _)) in pairs(entries)
-                parent(output)[packed_index - starts[root + 1] + 1, 1] = receive[k]
-            end
+    lstarts, lcounts = _rank_ranges(spectral, comm, 1)
+    mstarts, mcounts = _rank_ranges(spectral, comm, 2)
+    rank = MPI.Comm_rank(comm) + 1
+    chunks = [eltype(spectral)[] for _ in 1:MPI.Comm_size(comm)]
+    @inbounds for destination in eachindex(chunks)
+        for (_, l, m) in _packed_lm_pairs(
+                cfg, lcap, starts[destination], counts[destination])
+            _owns_index(lstarts[rank], lcounts[rank], l + 1) || continue
+            _owns_index(mstarts[rank], mcounts[rank], m + 1) || continue
+            push!(chunks[destination], parent(spectral)[
+                l + 2 - lstarts[rank], m + 2 - mstarts[rank],
+            ])
         end
     end
+    receive, recv_counts, send_counts = _exchange_owner_values(chunks, comm)
+    _record_pencil_scalar_stat!(
+        :analysis_packed_max_message_elements, maximum(send_counts; init=0);
+        maximum=true,
+    )
+    _record_pencil_scalar_stat!(:analysis_packed_sent_elements, sum(send_counts))
+    offset = 0
+    @inbounds for source in eachindex(recv_counts)
+        for (packed_index, l, m) in _packed_lm_pairs(
+                cfg, lcap, starts[rank], counts[rank])
+            _owns_index(lstarts[source], lcounts[source], l + 1) || continue
+            _owns_index(mstarts[source], mcounts[source], m + 1) || continue
+            offset += 1
+            parent(output)[packed_index - starts[rank] + 1, 1] = receive[offset]
+        end
+    end
+    offset == length(receive) || error("packed analysis owner-map mismatch")
     return output
 end
 
@@ -560,38 +586,40 @@ function _unpack_spectral_pencil(cfg::SHTnsKit.SHTConfig, packed::PencilArray,
         undef, SHTnsKit.create_spectral_pencil(cfg; comm),
     )
     fill!(parent(spectral), zero(eltype(spectral)))
-    mglobals = collect(Int, globalindices(spectral, 2))
-    mfirst = isempty(mglobals) ? 1 : first(mglobals)
-    mstarts = Int.(MPI.Allgather(Int32(mfirst), comm))
-    mcounts = Int.(MPI.Allgather(Int32(length(mglobals)), comm))
-    packed_globals = collect(Int, globalindices(packed, 1))
-    packed_first = isempty(packed_globals) ? 1 : first(packed_globals)
-    packed_last = isempty(packed_globals) ? 0 : last(packed_globals)
-    rank = MPI.Comm_rank(comm)
-    for root in 0:(MPI.Comm_size(comm) - 1)
-        first_m_index = mstarts[root + 1]
-        last_m_index = first_m_index + mcounts[root + 1] - 1
-        entries = Tuple{Int,Int,Int}[]
-        @inbounds for m in 0:cfg.mres:min(cfg.mmax, lcap), l in m:lcap
-            first_m_index ≤ m + 1 ≤ last_m_index || continue
-            push!(entries, (SHTnsKit.LM_index(cfg.lmax, cfg.mres, l, m) + 1, l, m))
-        end
-        send = zeros(eltype(packed), length(entries))
-        @inbounds for (k, (packed_index, _, _)) in pairs(entries)
-            packed_first ≤ packed_index ≤ packed_last || continue
-            send[k] = parent(packed)[packed_index - packed_first + 1, 1]
-        end
-        receive = similar(send)
-        _record_pencil_scalar_stat!(
-            :synthesis_packed_max_message_elements, length(send); maximum=true,
-        )
-        MPI.Reduce!(send, receive, +, root, comm)
-        if rank == root
-            @inbounds for (k, (_, l, m)) in pairs(entries)
-                parent(spectral)[l + 1, m + 1 - first_m_index + 1] = receive[k]
-            end
+    lstarts, lcounts = _rank_ranges(spectral, comm, 1)
+    mstarts, mcounts = _rank_ranges(spectral, comm, 2)
+    pstarts, pcounts = _rank_ranges(packed, comm, 1)
+    rank = MPI.Comm_rank(comm) + 1
+    chunks = [eltype(packed)[] for _ in 1:MPI.Comm_size(comm)]
+    @inbounds for destination in eachindex(chunks)
+        for (packed_index, l, m) in _packed_lm_pairs(
+                cfg, lcap, pstarts[rank], pcounts[rank])
+            _owns_index(lstarts[destination], lcounts[destination], l + 1) || continue
+            _owns_index(mstarts[destination], mcounts[destination], m + 1) || continue
+            push!(chunks[destination], parent(packed)[
+                packed_index - pstarts[rank] + 1, 1,
+            ])
         end
     end
+    receive, recv_counts, send_counts = _exchange_owner_values(chunks, comm)
+    _record_pencil_scalar_stat!(
+        :synthesis_packed_max_message_elements, maximum(send_counts; init=0);
+        maximum=true,
+    )
+    _record_pencil_scalar_stat!(:synthesis_packed_sent_elements, sum(send_counts))
+    offset = 0
+    @inbounds for source in eachindex(recv_counts)
+        for (_, l, m) in _packed_lm_pairs(
+                cfg, lcap, pstarts[source], pcounts[source])
+            _owns_index(lstarts[rank], lcounts[rank], l + 1) || continue
+            _owns_index(mstarts[rank], mcounts[rank], m + 1) || continue
+            offset += 1
+            parent(spectral)[
+                l + 2 - lstarts[rank], m + 2 - mstarts[rank],
+            ] = receive[offset]
+        end
+    end
+    offset == length(receive) || error("packed synthesis owner-map mismatch")
     return spectral
 end
 
@@ -669,33 +697,38 @@ function _pack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
     expected = SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     output = _distributed_vector(eltype(Aplus), expected, comm)
     starts, counts = _rank_ranges(output, comm)
-    lglobals = collect(Int, globalindices(Aplus, 1))
-    mglobals = collect(Int, globalindices(Aplus, 2))
-    rank = MPI.Comm_rank(comm)
-    for root in 0:(MPI.Comm_size(comm) - 1)
-        entries = _complex_packed_entries(
-            cfg, starts[root + 1], counts[root + 1], lcap,
-        )
-        send = zeros(eltype(Aplus), length(entries))
-        @inbounds for (k, (_, l, m)) in pairs(entries)
-            i = findfirst(==(l + 1), lglobals)
-            j = findfirst(==(abs(m) + 1), mglobals)
-            if i !== nothing && j !== nothing
-                send[k] = m < 0 ? conj(parent(Aminus)[i, j]) :
-                                  parent(Aplus)[i, j]
-            end
-        end
-        receive = similar(send)
-        _record_pencil_scalar_stat!(
-            :analysis_packed_max_message_elements, length(send); maximum=true,
-        )
-        MPI.Reduce!(send, receive, +, root, comm)
-        if rank == root
-            @inbounds for (k, (packed_index, _, _)) in pairs(entries)
-                parent(output)[packed_index - starts[root + 1] + 1, 1] = receive[k]
-            end
+    lstarts, lcounts = _rank_ranges(Aplus, comm, 1)
+    mstarts, mcounts = _rank_ranges(Aplus, comm, 2)
+    rank = MPI.Comm_rank(comm) + 1
+    chunks = [eltype(Aplus)[] for _ in 1:MPI.Comm_size(comm)]
+    @inbounds for destination in eachindex(chunks)
+        for (_, l, m) in _complex_packed_entries(
+                cfg, starts[destination], counts[destination], lcap)
+            _owns_index(lstarts[rank], lcounts[rank], l + 1) || continue
+            _owns_index(mstarts[rank], mcounts[rank], abs(m) + 1) || continue
+            i = l + 2 - lstarts[rank]
+            j = abs(m) + 2 - mstarts[rank]
+            push!(chunks[destination], m < 0 ? conj(parent(Aminus)[i, j]) :
+                                               parent(Aplus)[i, j])
         end
     end
+    receive, recv_counts, send_counts = _exchange_owner_values(chunks, comm)
+    _record_pencil_scalar_stat!(
+        :analysis_packed_max_message_elements, maximum(send_counts; init=0);
+        maximum=true,
+    )
+    _record_pencil_scalar_stat!(:analysis_packed_sent_elements, sum(send_counts))
+    offset = 0
+    @inbounds for source in eachindex(recv_counts)
+        for (packed_index, l, m) in _complex_packed_entries(
+                cfg, starts[rank], counts[rank], lcap)
+            _owns_index(lstarts[source], lcounts[source], l + 1) || continue
+            _owns_index(mstarts[source], mcounts[source], abs(m) + 1) || continue
+            offset += 1
+            parent(output)[packed_index - starts[rank] + 1, 1] = receive[offset]
+        end
+    end
+    offset == length(receive) || error("complex packed analysis owner-map mismatch")
     return output
 end
 
@@ -743,59 +776,45 @@ function _unpack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
     Aminus = PencilArray{eltype(packed)}(undef, spectral_pen)
     fill!(parent(Aplus), zero(eltype(Aplus)))
     fill!(parent(Aminus), zero(eltype(Aminus)))
-    mglobals = collect(Int, globalindices(Aplus, 2))
-    mfirst = isempty(mglobals) ? 1 : first(mglobals)
-    mstarts = Int.(MPI.Allgather(Int32(mfirst), comm))
-    mcounts = Int.(MPI.Allgather(Int32(length(mglobals)), comm))
-    packed_globals = collect(Int, globalindices(packed, 1))
-    packed_first = isempty(packed_globals) ? 1 : first(packed_globals)
-    packed_last = isempty(packed_globals) ? 0 : last(packed_globals)
-    rank = MPI.Comm_rank(comm)
-    for root in 0:(MPI.Comm_size(comm) - 1)
-        first_m_index = mstarts[root + 1]
-        last_m_index = first_m_index + mcounts[root + 1] - 1
-        entries = Tuple{Int,Int,Int}[]
-        @inbounds for m in 0:min(cfg.mmax, lcap), l in m:lcap
-            first_m_index ≤ m + 1 ≤ last_m_index || continue
-            push!(entries, (l, m,
-                SHTnsKit.LM_cplx_index(cfg.lmax, cfg.mmax, l, m) + 1))
+    lstarts, lcounts = _rank_ranges(Aplus, comm, 1)
+    mstarts, mcounts = _rank_ranges(Aplus, comm, 2)
+    pstarts, pcounts = _rank_ranges(packed, comm, 1)
+    rank = MPI.Comm_rank(comm) + 1
+    chunks = [eltype(packed)[] for _ in 1:MPI.Comm_size(comm)]
+    @inbounds for destination in eachindex(chunks)
+        for (packed_index, l, signed_m) in _complex_packed_entries(
+                cfg, pstarts[rank], pcounts[rank], lcap)
+            m = abs(signed_m)
+            _owns_index(lstarts[destination], lcounts[destination], l + 1) || continue
+            _owns_index(mstarts[destination], mcounts[destination], m + 1) || continue
+            value = parent(packed)[packed_index - pstarts[rank] + 1, 1]
+            push!(chunks[destination], signed_m < 0 ? conj(value) : value)
         end
-        negative_count = count(entry -> entry[2] > 0, entries)
-        send = zeros(eltype(packed), length(entries) + negative_count)
-        negative_slot = length(entries)
-        @inbounds for (k, (l, m, positive_index)) in pairs(entries)
-            if packed_first ≤ positive_index ≤ packed_last
-                send[k] = parent(packed)[positive_index - packed_first + 1, 1]
-            end
-            if m > 0
-                negative_slot += 1
-                negative_index = SHTnsKit.LM_cplx_index(
-                    cfg.lmax, cfg.mmax, l, -m,
-                ) + 1
-                if packed_first ≤ negative_index ≤ packed_last
-                    send[negative_slot] = conj(
-                        parent(packed)[negative_index - packed_first + 1, 1],
-                    )
-                end
-            end
-        end
-        receive = similar(send)
-        _record_pencil_scalar_stat!(
-            :synthesis_packed_max_message_elements, length(send); maximum=true,
-        )
-        MPI.Reduce!(send, receive, +, root, comm)
-        if rank == root
-            negative_slot = length(entries)
-            @inbounds for (k, (l, m, _)) in pairs(entries)
-                local_m = m + 1 - first_m_index + 1
-                parent(Aplus)[l + 1, local_m] = receive[k]
-                if m > 0
-                    negative_slot += 1
-                    parent(Aminus)[l + 1, local_m] = receive[negative_slot]
-                end
+    end
+    receive, recv_counts, send_counts = _exchange_owner_values(chunks, comm)
+    _record_pencil_scalar_stat!(
+        :synthesis_packed_max_message_elements, maximum(send_counts; init=0);
+        maximum=true,
+    )
+    _record_pencil_scalar_stat!(:synthesis_packed_sent_elements, sum(send_counts))
+    offset = 0
+    @inbounds for source in eachindex(recv_counts)
+        for (_, l, signed_m) in _complex_packed_entries(
+                cfg, pstarts[source], pcounts[source], lcap)
+            m = abs(signed_m)
+            _owns_index(lstarts[rank], lcounts[rank], l + 1) || continue
+            _owns_index(mstarts[rank], mcounts[rank], m + 1) || continue
+            offset += 1
+            i = l + 2 - lstarts[rank]
+            j = m + 2 - mstarts[rank]
+            if signed_m < 0
+                parent(Aminus)[i, j] = receive[offset]
+            else
+                parent(Aplus)[i, j] = receive[offset]
             end
         end
     end
+    offset == length(receive) || error("complex packed synthesis owner-map mismatch")
     return Aplus, Aminus
 end
 
@@ -950,7 +969,7 @@ SHTnsKit.analysis_axisym(cfg::SHTnsKit.SHTConfig, field::PencilArray) =
     _analysis_mode_pencil(cfg, 0, field, cfg.lmax; axisymmetric=true)
 
 function SHTnsKit.analysis_axisym_l(cfg::SHTnsKit.SHTConfig,
-                                    field::PencilArray, ltr::Int)
+                                    field::PencilArray, ltr::Integer)
     comm = communicator(field)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :analysis_axisym_l)
     return _analysis_mode_pencil(cfg, 0, field, lcap; axisymmetric=true)
@@ -964,7 +983,7 @@ function SHTnsKit.synthesis_axisym(cfg::SHTnsKit.SHTConfig,
 end
 
 function SHTnsKit.synthesis_axisym_l(cfg::SHTnsKit.SHTConfig,
-                                     coefficients::PencilArray, ltr::Int)
+                                     coefficients::PencilArray, ltr::Integer)
     comm = communicator(coefficients)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_axisym_l)
     return _synthesis_mode_pencil(
@@ -973,14 +992,14 @@ function SHTnsKit.synthesis_axisym_l(cfg::SHTnsKit.SHTConfig,
 end
 
 function SHTnsKit.analysis_packed_ml(cfg::SHTnsKit.SHTConfig, im::Int,
-                                     field::PencilArray, ltr::Int)
+                                     field::PencilArray, ltr::Integer)
     comm = communicator(field)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :analysis_packed_ml)
     return _analysis_mode_pencil(cfg, im, field, lcap)
 end
 
 function SHTnsKit.synthesis_packed_ml(cfg::SHTnsKit.SHTConfig, im::Int,
-                                      coefficients::PencilArray, ltr::Int)
+                                      coefficients::PencilArray, ltr::Integer)
     comm = communicator(coefficients)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_packed_ml)
     return _synthesis_mode_pencil(cfg, im, coefficients, lcap)
@@ -1048,6 +1067,12 @@ function SHTnsKit.analysis_batch!(cfg::SHTnsKit.SHTConfig,
         cfg, output, (cfg.lmax + 1, cfg.mmax + 1), :analysis_batch_output;
         require_complex=true, peer=fields,
     )
+    expected = PencilArray{TO}(
+        undef, SHTnsKit.create_spectral_pencil(cfg; comm), size_global(fields)[3],
+    )
+    _validate_identical_pencil_layout!(
+        expected, output, :analysis_batch_output_layout,
+    )
     MPI.Allreduce(fft_batch === nothing ? 0 : 1, +, comm) == 0 ||
         throw(ArgumentError(
         "distributed analysis_batch! owns its per-call Fourier scratch",
@@ -1109,6 +1134,9 @@ function SHTnsKit.synthesis_batch!(cfg::SHTnsKit.SHTConfig,
     _validate_batch_pencil!(
         cfg, output, (cfg.nlat, cfg.nlon), :synthesis_batch_output;
         peer=coefficients,
+    )
+    _validate_identical_pencil_layout!(
+        prototype_θφ, output, :synthesis_batch_output_layout,
     )
     MPI.Allreduce(fft_batch === nothing ? 0 : 1, +, comm) == 0 ||
         throw(ArgumentError(

@@ -26,8 +26,8 @@ FUNCTION CATEGORIES
    *_l_axisym variants            : Degree-limited versions
 
 3. Mode-Limited (single m) Transforms:
-   analysis_packed_ml(cfg, m, Vr_m, ltr)  : Single-mode analysis
-   synthesis_packed_ml(cfg, m, Ql, ltr)    : Single-mode synthesis
+   analysis_packed_ml(cfg, im, Vr_m, ltr) : Single stored-order analysis
+   synthesis_packed_ml(cfg, im, Ql, ltr)  : Single stored-order synthesis
 
 4. Degree-Limited Transforms:
    analysis_packed_l(cfg, Vr, ltr)  : Analysis with l ≤ ltr
@@ -151,17 +151,18 @@ vector has length `cfg.nlm`; coefficients with `l > ltr` are set to zero.
 """
 function analysis_packed_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Integer)
     length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
-    lcap = min(Int(ltr), cfg.lmax)
-    lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
+    lcap = Int(ltr)
+    0 ≤ lcap ≤ cfg.lmax || throw(ArgumentError("ltr must satisfy 0 ≤ ltr ≤ lmax=$(cfg.lmax)"))
     f = reshape(Vr, cfg.nlat, cfg.nlon)
-    alm_mat = analysis(cfg, f)
-    Qlm = zeros(eltype(alm_mat), cfg.nlm)
-    @inbounds for m in 0:cfg.mmax
-        (m % cfg.mres == 0) || continue
-        m > lcap && continue
+    CT = complex(float(eltype(Vr)))
+    fourier = fft_phi!(Matrix{CT}(undef, cfg.nlat, cfg.nlon), f)
+    Qlm = zeros(CT, cfg.nlm)
+    @inbounds for im in 0:(min(cfg.mmax, lcap) ÷ cfg.mres)
+        m = im * cfg.mres
+        mode = analysis_packed_ml(cfg, im, @view(fourier[:, m + 1]), lcap)
         for l in m:lcap
             lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
-            Qlm[lm] = alm_mat[l+1, m+1]
+            Qlm[lm] = mode[l - m + 1]
         end
     end
     return Qlm
@@ -175,8 +176,8 @@ degrees are ignored.
 """
 function synthesis_packed_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Integer)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
-    lcap = min(Int(ltr), cfg.lmax)
-    lcap ≥ 0 || throw(ArgumentError("ltr must be ≥ 0"))
+    lcap = Int(ltr)
+    0 ≤ lcap ≤ cfg.lmax || throw(ArgumentError("ltr must satisfy 0 ≤ ltr ≤ lmax=$(cfg.lmax)"))
     alm_mat = zeros(eltype(Qlm), cfg.lmax+1, cfg.mmax+1)
     # Ignore packed coefficients above lcap without mutating the caller's
     # source vector; this is the spectral low-pass behavior of `_l` variants.
@@ -188,7 +189,7 @@ function synthesis_packed_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr:
             alm_mat[l+1, m+1] = Qlm[lm]
         end
     end
-    f = synthesis(cfg, alm_mat; real_output=true)
+    f = _synthesis_l(cfg, alm_mat, lcap, Val(true))
     return vec(f)
 end
 
@@ -232,7 +233,7 @@ Axisymmetric degree-limited transform up to degree ltr.
 function analysis_axisym_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
     nlat = cfg.nlat
     length(Vr) == nlat || throw(DimensionMismatch("Vr length must be nlat=$(nlat)"))
-    ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
+    0 ≤ ltr ≤ cfg.lmax || throw(ArgumentError("ltr must satisfy 0 ≤ ltr ≤ lmax=$(cfg.lmax)"))
     
     CT = complex(float(eltype(Vr)))  # AD/Float32-safe output eltype
     Ql = Vector{CT}(undef, ltr + 1)
@@ -267,7 +268,7 @@ Axisymmetric degree-limited synthesis using degrees up to ltr.
 function synthesis_axisym_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     ltr_qlm = length(Qlm) - 1  # Convert length to max degree
-    ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
+    0 ≤ ltr ≤ cfg.lmax || throw(ArgumentError("ltr must satisfy 0 ≤ ltr ≤ lmax=$(cfg.lmax)"))
     ltr <= ltr_qlm || throw(ArgumentError("ltr must be <= length(Qlm)-1=$(ltr_qlm)"))
     
     Qlm_used = view(Qlm, 1:(ltr + 1))
@@ -293,21 +294,23 @@ function synthesis_axisym_l(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, ltr:
 end
 
 """
-    analysis_packed_ml(cfg, im, Vr_m, ltr) -> Vector{ComplexF64}
+    analysis_packed_ml(cfg, im, Vr_m, ltr) -> Vector{<:Complex}
 
-Transform spatial field for specific azimuthal mode m to spherical harmonic coefficients.
-`im` is the m-index (0-based), `Vr_m` contains complex spatial values for that mode.
+Transform spatial field for one stored azimuthal order to spherical harmonic
+coefficients. `im` is the zero-based stored-order index, so the physical order
+is `m = im * cfg.mres`. `Vr_m` contains complex spatial values for that mode.
 Returns coefficients Q_l for degrees l = m..ltr.
 """
 function analysis_packed_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     length(Vr_m) == nlat || throw(DimensionMismatch("Vr_m length must be nlat=$(nlat)"))
     im >= 0 || throw(ArgumentError("im must be >= 0"))
-    im <= cfg.mmax || throw(ArgumentError("im must be <= mmax=$(cfg.mmax)"))
+    im <= cfg.mmax ÷ cfg.mres || throw(ArgumentError("im must be <= mmax/mres=$(cfg.mmax ÷ cfg.mres)"))
+    m = im * cfg.mres
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
-    ltr >= im || throw(ArgumentError("ltr must be >= im=$(im)"))
+    ltr >= m || throw(ArgumentError("ltr must be >= im*mres=$(m)"))
 
-    num_l = ltr - im + 1
+    num_l = ltr - m + 1
     CT = complex(float(real(eltype(Vr_m))))  # AD/Float32-safe output eltype
     Ql = Vector{CT}(undef, num_l)
     fill!(Ql, zero(CT))
@@ -318,40 +321,44 @@ function analysis_packed_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Comp
 
     for i in 1:nlat
         x = xv[i]
-        Plm_norm_row!(P, x, ltr, im)  # P̄ already orthonormal-normalized
+        Plm_norm_row!(P, x, ltr, m)  # P̄ already orthonormal-normalized
 
         weighted_Vr = Vr_m[i] * wv[i]
-        @inbounds for l in im:ltr
-            Ql[l-im+1] += weighted_Vr * P[l+1]
+        @inbounds for l in m:ltr
+            Ql[l-m+1] += weighted_Vr * P[l+1]
         end
     end
 
     # Apply phi scaling to match full transform normalization
     Ql .*= scaleφ
-    return _convert_mode_norm!(Ql, Ql, cfg, im, ltr; to_internal=false)
+    return _convert_mode_norm!(Ql, Ql, cfg, m, ltr; to_internal=false)
 end
 
 """
-    synthesis_packed_ml(cfg, im, Ql, ltr) -> Vector{ComplexF64}
+    synthesis_packed_ml(cfg, im, Ql, ltr) -> Vector{<:Complex}
 
 Transform spherical harmonic coefficients for specific mode m to spatial field.
-`im` is the m-index, `Ql` contains coefficients for degrees l = im..ltr.
+`im` is the zero-based stored-order index (`m = im * cfg.mres`); `Ql`
+contains coefficients for degrees l = m..ltr.
 Returns complex spatial values for that azimuthal mode.
 """
 function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, ltr::Int)
     nlat = cfg.nlat
     im >= 0 || throw(ArgumentError("im must be >= 0"))
-    im <= cfg.mmax || throw(ArgumentError("im must be <= mmax=$(cfg.mmax)"))
+    im <= cfg.mmax ÷ cfg.mres || throw(ArgumentError("im must be <= mmax/mres=$(cfg.mmax ÷ cfg.mres)"))
+    m = im * cfg.mres
     ltr <= cfg.lmax || throw(ArgumentError("ltr must be <= lmax=$(cfg.lmax)"))
-    ltr >= im || throw(ArgumentError("ltr must be >= im=$(im)"))
+    ltr >= m || throw(ArgumentError("ltr must be >= im*mres=$(m)"))
 
-    expected_len = ltr - im + 1
+    expected_len = ltr - m + 1
     length(Ql) == expected_len || throw(DimensionMismatch("Ql length must be $(expected_len)"))
 
     Ql_int = _uses_canonical_convention(cfg) ? Ql :
-             _convert_mode_norm!(similar(Ql), Ql, cfg, im, ltr; to_internal=true)
-    # Output eltype follows the input so AD types propagate.
-    CT = promote_type(eltype(Ql_int), ComplexF64)
+             _convert_mode_norm!(similar(Ql), Ql, cfg, m, ltr; to_internal=true)
+    # Output precision follows the input; promoting with `ComplexF64` widened
+    # every Float32 fixed-order synthesis even though the transform tables can
+    # be converted at assignment without changing the public precision.
+    CT = complex(float(real(eltype(Ql_int))))
     Vr_m = Vector{CT}(undef, nlat)
     P = Vector{Float64}(undef, ltr + 1)
     inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization
@@ -359,16 +366,64 @@ function synthesis_packed_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Compl
 
     for i in 1:nlat
         x = xv[i]
-        Plm_norm_row!(P, x, ltr, im)  # P̄ already orthonormal-normalized
+        Plm_norm_row!(P, x, ltr, m)  # P̄ already orthonormal-normalized
 
         val = zero(CT)
-        @inbounds for l in im:ltr
-            val += Ql_int[l-im+1] * P[l+1]
+        @inbounds for l in m:ltr
+            val += Ql_int[l-m+1] * P[l+1]
         end
         Vr_m[i] = val * inv_scaleφ
     end
 
     return Vr_m
+end
+
+# Typed CPU entry points mirror the full-grid `analysis(CPU(), ...)` and
+# `synthesis(CPU(), ...)` API while preserving the original inferred methods.
+function analysis_packed(::CPU, cfg::SHTConfig, field::AbstractVector{<:Real})
+    _require_cpu_storage(:analysis_packed, field)
+    return analysis_packed(cfg, field)
+end
+function synthesis_packed(::CPU, cfg::SHTConfig, coefficients::AbstractVector{<:Complex})
+    _require_cpu_storage(:synthesis_packed, coefficients)
+    return synthesis_packed(cfg, coefficients)
+end
+function analysis_packed_l(::CPU, cfg::SHTConfig, field::AbstractVector{<:Real}, ltr::Integer)
+    _require_cpu_storage(:analysis_packed_l, field)
+    return analysis_packed_l(cfg, field, ltr)
+end
+function synthesis_packed_l(::CPU, cfg::SHTConfig,
+                            coefficients::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:synthesis_packed_l, coefficients)
+    return synthesis_packed_l(cfg, coefficients, ltr)
+end
+function analysis_axisym(::CPU, cfg::SHTConfig, field::AbstractVector{<:Real})
+    _require_cpu_storage(:analysis_axisym, field)
+    return analysis_axisym(cfg, field)
+end
+function synthesis_axisym(::CPU, cfg::SHTConfig, coefficients::AbstractVector{<:Complex})
+    _require_cpu_storage(:synthesis_axisym, coefficients)
+    return synthesis_axisym(cfg, coefficients)
+end
+function analysis_axisym_l(::CPU, cfg::SHTConfig,
+                           field::AbstractVector{<:Real}, ltr::Int)
+    _require_cpu_storage(:analysis_axisym_l, field)
+    return analysis_axisym_l(cfg, field, ltr)
+end
+function synthesis_axisym_l(::CPU, cfg::SHTConfig,
+                            coefficients::AbstractVector{<:Complex}, ltr::Int)
+    _require_cpu_storage(:synthesis_axisym_l, coefficients)
+    return synthesis_axisym_l(cfg, coefficients, ltr)
+end
+function analysis_packed_ml(::CPU, cfg::SHTConfig, im::Int,
+                            mode::AbstractVector{<:Complex}, ltr::Int)
+    _require_cpu_storage(:analysis_packed_ml, mode)
+    return analysis_packed_ml(cfg, im, mode, ltr)
+end
+function synthesis_packed_ml(::CPU, cfg::SHTConfig, im::Int,
+                             coefficients::AbstractVector{<:Complex}, ltr::Int)
+    _require_cpu_storage(:synthesis_packed_ml, coefficients)
+    return synthesis_packed_ml(cfg, im, coefficients, ltr)
 end
 
 """

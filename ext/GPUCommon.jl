@@ -5,6 +5,10 @@ using SHTnsKit
 
 export laplacian_kernel!, legendre_table_kernel!, scalar_analysis_kernel!,
        scalar_synthesis_kernel!, coefficient_conversion_kernel!,
+       real_pack_kernel!, real_unpack_kernel!,
+       mode_analysis_kernel!, mode_synthesis_kernel!,
+       scalar_batch_analysis_kernel!, scalar_batch_synthesis_kernel!,
+       complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
        scalar_config_signature, scalar_host_tables,
        ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
        scalar_cache_clear!, scalar_cache_size
@@ -167,12 +171,12 @@ end
 
 """Latitude integration after the vendor FFT; output is canonical."""
 @kernel function scalar_analysis_kernel!(canonical, fourier, Plm, weights,
-                                          cphi, lmax, mmax, mres)
+                                          cphi, lmax, mmax, mres, lcap)
     l_idx, m_idx = @index(Global, NTuple)
     if l_idx <= lmax + 1 && m_idx <= mmax + 1
         l = l_idx - 1
         m = m_idx - 1
-        if l >= m && m % mres == 0
+        if l <= lcap && l >= m && m % mres == 0
             value = zero(eltype(canonical))
             @inbounds for i in 1:length(weights)
                 value += weights[i] * Plm[i, l_idx, m_idx] * fourier[i, m_idx]
@@ -221,6 +225,150 @@ end
                 end
             end
         end
+    end
+end
+
+"""Pack a dense non-negative-order spectrum, optionally truncating in degree."""
+@kernel function real_pack_kernel!(packed, dense, lmax, mmax, mres, lcap)
+    l_idx, im_idx = @index(Global, NTuple)
+    if l_idx <= lmax + 1 && im_idx <= mmax ÷ mres + 1
+        l = l_idx - 1
+        im = im_idx - 1
+        m = im * mres
+        if m <= mmax && l >= m
+            base = (im * (2lmax + 2 - (im + 1) * mres)) >>> 1
+            packed[base + l + 1] = l <= lcap ? dense[l_idx, m + 1] : zero(eltype(packed))
+        end
+    end
+end
+
+"""Expand SHTns LM storage to a dense matrix with an explicit degree cap."""
+@kernel function real_unpack_kernel!(dense, packed, lmax, mmax, mres, lcap)
+    l_idx, m_idx = @index(Global, NTuple)
+    if l_idx <= lmax + 1 && m_idx <= mmax + 1
+        l = l_idx - 1
+        m = m_idx - 1
+        if l <= lcap && l >= m && m % mres == 0
+            im = m ÷ mres
+            base = (im * (2lmax + 2 - (im + 1) * mres)) >>> 1
+            dense[l_idx, m_idx] = packed[base + l + 1]
+        else
+            dense[l_idx, m_idx] = zero(eltype(dense))
+        end
+    end
+end
+
+"""Analyze one physical Fourier order over an explicit degree interval."""
+@kernel function mode_analysis_kernel!(output, mode, Plm, weights, scale,
+                                       physical_m, lcap)
+    q_idx = @index(Global)
+    l = physical_m + q_idx - 1
+    if l <= lcap
+        value = zero(eltype(output))
+        @inbounds for i in 1:length(weights)
+            value += weights[i] * Plm[i, l + 1, physical_m + 1] * mode[i]
+        end
+        output[q_idx] = scale * value
+    end
+end
+
+"""Synthesize one physical Fourier order over an explicit degree interval."""
+@kernel function mode_synthesis_kernel!(mode, coefficients, Plm, scale,
+                                        physical_m, lcap)
+    i = @index(Global)
+    if i <= size(Plm, 1)
+        value = zero(eltype(mode))
+        @inbounds for l in physical_m:lcap
+            value += Plm[i, l + 1, physical_m + 1] *
+                     coefficients[l - physical_m + 1]
+        end
+        mode[i] = scale * value
+    end
+end
+
+"""Latitude integration for independent scalar fields in the trailing axis."""
+@kernel function scalar_batch_analysis_kernel!(canonical, fourier, Plm, weights,
+                                                cphi, lmax, mmax, mres)
+    l_idx, m_idx, batch_idx = @index(Global, NTuple)
+    if l_idx <= lmax + 1 && m_idx <= mmax + 1 &&
+       batch_idx <= size(canonical, 3)
+        l = l_idx - 1
+        m = m_idx - 1
+        if l >= m && m % mres == 0
+            value = zero(eltype(canonical))
+            @inbounds for i in 1:length(weights)
+                value += weights[i] * Plm[i, l_idx, m_idx] *
+                         fourier[i, m_idx, batch_idx]
+            end
+            canonical[l_idx, m_idx, batch_idx] = cphi * value
+        else
+            canonical[l_idx, m_idx, batch_idx] = zero(eltype(canonical))
+        end
+    end
+end
+
+"""Legendre synthesis for independent scalar fields in the trailing axis."""
+@kernel function scalar_batch_synthesis_kernel!(fourier, canonical, Plm, inv_scale,
+                                                 nlon, lmax, mmax, mres,
+                                                 real_output)
+    i, m_idx, batch_idx = @index(Global, NTuple)
+    if i <= size(fourier, 1) && m_idx <= mmax + 1 &&
+       batch_idx <= size(fourier, 3)
+        m = m_idx - 1
+        if m % mres == 0
+            value = zero(eltype(fourier))
+            @inbounds for l in m:lmax
+                value += Plm[i, l + 1, m_idx] * canonical[l + 1, m_idx, batch_idx]
+            end
+            bin = inv_scale * value
+            fourier[i, m_idx, batch_idx] = bin
+            if real_output && m > 0
+                negative_idx = nlon - m + 1
+                if negative_idx != m_idx
+                    fourier[i, negative_idx, batch_idx] = conj(bin)
+                end
+            end
+        end
+    end
+end
+
+@inline function _lm_cplx_device_index(l, m, mmax)
+    return l <= mmax ? l * (l + 1) + m : mmax * (2l - mmax) + l + m
+end
+
+"""Analyze both Fourier signs directly into SHTns LM_cplx storage."""
+@kernel function complex_packed_analysis_kernel!(packed, fourier, Plm, weights,
+                                                 scales, cphi, nlon, lmax, mmax)
+    l_idx, signed_idx = @index(Global, NTuple)
+    m = signed_idx - mmax - 1
+    am = abs(m)
+    l = l_idx - 1
+    if l <= lmax && am <= mmax && l >= am
+        column = m >= 0 ? m + 1 : nlon + m + 1
+        value = zero(eltype(packed))
+        @inbounds for i in 1:length(weights)
+            value += weights[i] * Plm[i, l_idx, am + 1] * fourier[i, column]
+        end
+        packed[_lm_cplx_device_index(l, m, mmax) + 1] =
+            cphi * value / scales[l_idx, am + 1]
+    end
+end
+
+"""Synthesize both Fourier signs directly from SHTns LM_cplx storage."""
+@kernel function complex_packed_synthesis_kernel!(fourier, packed, Plm, scales,
+                                                  inv_scale, nlon, lmax, mmax)
+    i, signed_idx = @index(Global, NTuple)
+    m = signed_idx - mmax - 1
+    am = abs(m)
+    if i <= size(fourier, 1) && am <= mmax
+        value = zero(eltype(fourier))
+        @inbounds for l in am:lmax
+            coefficient = packed[_lm_cplx_device_index(l, m, mmax) + 1] *
+                          scales[l + 1, am + 1]
+            value += Plm[i, l + 1, am + 1] * coefficient
+        end
+        column = m >= 0 ? m + 1 : nlon + m + 1
+        fourier[i, column] = inv_scale * value
     end
 end
 

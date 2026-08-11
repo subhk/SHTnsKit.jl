@@ -12,6 +12,10 @@ include("GPUCommon.jl")
 using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
                   scalar_analysis_kernel!, scalar_synthesis_kernel!,
                   coefficient_conversion_kernel!, scalar_config_signature,
+                  real_pack_kernel!, real_unpack_kernel!,
+                  mode_analysis_kernel!, mode_synthesis_kernel!,
+                  scalar_batch_analysis_kernel!, scalar_batch_synthesis_kernel!,
+                  complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
                   scalar_host_tables, ScalarTableCache, scalar_cache_lookup,
                   scalar_cache_insert!, scalar_cache_clear!, scalar_cache_size
 
@@ -24,6 +28,14 @@ import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_s
 
 # Import device routing functions to extend.
 import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
+                 analysis_packed, synthesis_packed,
+                 analysis_packed_l, synthesis_packed_l,
+                 analysis_axisym, synthesis_axisym,
+                 analysis_axisym_l, synthesis_axisym_l,
+                 analysis_packed_ml, synthesis_packed_ml,
+                 analysis_packed_cplx, synthesis_packed_cplx,
+                 analysis_batch, analysis_batch!,
+                 synthesis_batch, synthesis_batch!, synthesis_batch_cplx,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
@@ -109,7 +121,11 @@ function _gpu_adapter_clear_cache!(::CUDAAdapter)
 end
 
 function _cuda_scalar_analysis(cfg::SHTConfig, field::CUDA.AnyCuArray;
-                               use_rfft::Bool=false, fft_scratch=nothing)
+                               use_rfft::Bool=false, fft_scratch=nothing,
+                               lcap::Int=cfg.lmax)
+    0 ≤ lcap ≤ cfg.lmax || throw(ArgumentError(
+        "lcap must satisfy 0 ≤ lcap ≤ lmax=$(cfg.lmax)",
+    ))
     size(field) == (cfg.nlat, cfg.nlon) || throw(DimensionMismatch(
         "field must have size ($(cfg.nlat), $(cfg.nlon)), got $(size(field))",
     ))
@@ -131,8 +147,8 @@ function _cuda_scalar_analysis(cfg::SHTConfig, field::CUDA.AnyCuArray;
     canonical = CUDA.zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
     analyze! = scalar_analysis_kernel!(backend)
     analyze!(canonical, fourier, tables.Plm, tables.weights, RT(cfg.cphi),
-             cfg.lmax, cfg.mmax, cfg.mres;
-             ndrange=(cfg.lmax + 1, cfg.mmax + 1))
+             cfg.lmax, cfg.mmax, cfg.mres, lcap;
+             ndrange=(lcap + 1, min(cfg.mmax, lcap) + 1))
 
     configured = similar(canonical)
     convert! = coefficient_conversion_kernel!(backend)
@@ -144,7 +160,10 @@ end
 
 function _cuda_scalar_synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray;
                                 real_output::Bool=true, use_rfft::Bool=false,
-                                fft_scratch=nothing)
+                                fft_scratch=nothing, lcap::Int=cfg.lmax)
+    0 ≤ lcap ≤ cfg.lmax || throw(ArgumentError(
+        "lcap must satisfy 0 ≤ lcap ≤ lmax=$(cfg.lmax)",
+    ))
     size(coefficients) == (cfg.lmax + 1, cfg.mmax + 1) || throw(DimensionMismatch(
         "coefficients must have size ($(cfg.lmax + 1), $(cfg.mmax + 1)), got $(size(coefficients))",
     ))
@@ -172,8 +191,8 @@ function _cuda_scalar_synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray;
     fourier = CUDA.zeros(CT, cfg.nlat, cfg.nlon)
     synthesize! = scalar_synthesis_kernel!(backend)
     synthesize!(fourier, canonical, tables.Plm, RT(SHTnsKit.phi_inv_scale(cfg)),
-                cfg.nlon, cfg.lmax, cfg.mmax, cfg.mres, real_output;
-                ndrange=(cfg.nlat, cfg.mmax + 1))
+                cfg.nlon, lcap, min(cfg.mmax, lcap), cfg.mres, real_output;
+                ndrange=(cfg.nlat, min(cfg.mmax, lcap) + 1))
     CUDA.synchronize()
     gpu_ifft!(fourier, 2)
     return real_output ? real.(fourier) : fourier
@@ -195,6 +214,357 @@ synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}; kwargs...) where {
     synthesis(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
 synthesis_cplx(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}) where {T} =
     synthesis_cplx(SHTnsKit.GPU(), cfg, coefficients)
+
+@inline function _cuda_lcap(cfg::SHTConfig, ltr::Integer)
+    lcap = Int(ltr)
+    0 ≤ lcap ≤ cfg.lmax || throw(ArgumentError(
+        "ltr must satisfy 0 ≤ ltr ≤ lmax=$(cfg.lmax)",
+    ))
+    return lcap
+end
+
+function _cuda_pack_lm(cfg::SHTConfig, dense::CUDA.AnyCuArray, lcap::Int)
+    packed = CUDA.zeros(eltype(dense), cfg.nlm)
+    kernel! = real_pack_kernel!(CUDABackend())
+    kernel!(packed, dense, cfg.lmax, cfg.mmax, cfg.mres, lcap;
+            ndrange=(cfg.lmax + 1, cfg.mmax ÷ cfg.mres + 1))
+    CUDA.synchronize()
+    return packed
+end
+
+function _cuda_unpack_lm(cfg::SHTConfig, packed::CUDA.AnyCuArray, lcap::Int)
+    length(packed) == cfg.nlm || throw(DimensionMismatch(
+        "Qlm must have length $(cfg.nlm)",
+    ))
+    dense = CUDA.zeros(eltype(packed), cfg.lmax + 1, cfg.mmax + 1)
+    kernel! = real_unpack_kernel!(CUDABackend())
+    kernel!(dense, packed, cfg.lmax, cfg.mmax, cfg.mres, lcap;
+            ndrange=size(dense))
+    CUDA.synchronize()
+    return dense
+end
+
+function analysis_packed(::SHTnsKit.GPU, cfg::SHTConfig,
+                         field::CUDA.AnyCuArray{T,1}) where {T<:Real}
+    _require_cuda(:analysis_packed, SHTnsKit.GPU())
+    length(field) == cfg.nspat || throw(DimensionMismatch(
+        "field must have length $(cfg.nspat)",
+    ))
+    return _cuda_pack_lm(
+        cfg, _cuda_scalar_analysis(cfg, reshape(field, cfg.nlat, cfg.nlon)), cfg.lmax,
+    )
+end
+analysis_packed(cfg::SHTConfig, field::CUDA.AnyCuArray{T,1}) where {T<:Real} =
+    analysis_packed(SHTnsKit.GPU(), cfg, field)
+
+function synthesis_packed(::SHTnsKit.GPU, cfg::SHTConfig,
+                          coefficients::CUDA.AnyCuArray{T,1}) where {T<:Complex}
+    _require_cuda(:synthesis_packed, SHTnsKit.GPU())
+    return vec(_cuda_scalar_synthesis(
+        cfg, _cuda_unpack_lm(cfg, coefficients, cfg.lmax); real_output=true,
+    ))
+end
+synthesis_packed(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,1}) where {T<:Complex} =
+    synthesis_packed(SHTnsKit.GPU(), cfg, coefficients)
+
+function analysis_packed_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                           field::CUDA.AnyCuArray{T,1}, ltr::Integer) where {T<:Real}
+    lcap = _cuda_lcap(cfg, ltr)
+    length(field) == cfg.nspat || throw(DimensionMismatch(
+        "field must have length $(cfg.nspat)",
+    ))
+    return _cuda_pack_lm(
+        cfg, _cuda_scalar_analysis(
+            cfg, reshape(field, cfg.nlat, cfg.nlon); lcap,
+        ), lcap,
+    )
+end
+analysis_packed_l(cfg::SHTConfig, field::CUDA.AnyCuArray{T,1}, ltr::Integer) where {T<:Real} =
+    analysis_packed_l(SHTnsKit.GPU(), cfg, field, ltr)
+
+function synthesis_packed_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                            coefficients::CUDA.AnyCuArray{T,1},
+                            ltr::Integer) where {T<:Complex}
+    lcap = _cuda_lcap(cfg, ltr)
+    return vec(_cuda_scalar_synthesis(
+        cfg, _cuda_unpack_lm(cfg, coefficients, lcap);
+        real_output=true, lcap,
+    ))
+end
+synthesis_packed_l(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,1},
+                   ltr::Integer) where {T<:Complex} =
+    synthesis_packed_l(SHTnsKit.GPU(), cfg, coefficients, ltr)
+
+function _cuda_mode_analysis(cfg::SHTConfig, physical_m::Int,
+                             mode::CUDA.AnyCuArray, lcap::Int, scale)
+    RT = typeof(float(real(zero(eltype(mode)))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    canonical = CUDA.zeros(CT, lcap - physical_m + 1)
+    kernel! = mode_analysis_kernel!(CUDABackend())
+    kernel!(canonical, mode, tables.Plm, tables.weights, RT(scale), physical_m, lcap;
+            ndrange=length(canonical))
+    configured = canonical ./ @view(tables.scales[(physical_m + 1):(lcap + 1), physical_m + 1])
+    CUDA.synchronize()
+    return configured
+end
+
+function _cuda_mode_synthesis(cfg::SHTConfig, physical_m::Int,
+                              coefficients::CUDA.AnyCuArray, lcap::Int, scale)
+    RT = typeof(float(real(zero(eltype(coefficients)))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    canonical = CT.(coefficients) .*
+        @view(tables.scales[(physical_m + 1):(lcap + 1), physical_m + 1])
+    mode = CUDA.zeros(CT, cfg.nlat)
+    kernel! = mode_synthesis_kernel!(CUDABackend())
+    kernel!(mode, canonical, tables.Plm, RT(scale), physical_m, lcap;
+            ndrange=cfg.nlat)
+    CUDA.synchronize()
+    return mode
+end
+
+function analysis_axisym(::SHTnsKit.GPU, cfg::SHTConfig,
+                         field::CUDA.AnyCuArray{T,1}) where {T<:Real}
+    length(field) == cfg.nlat || throw(DimensionMismatch(
+        "field must have length nlat=$(cfg.nlat)",
+    ))
+    return _cuda_mode_analysis(cfg, 0, field, cfg.lmax, cfg.cphi * cfg.nlon)
+end
+analysis_axisym(cfg::SHTConfig, field::CUDA.AnyCuArray{T,1}) where {T<:Real} =
+    analysis_axisym(SHTnsKit.GPU(), cfg, field)
+
+function synthesis_axisym(::SHTnsKit.GPU, cfg::SHTConfig,
+                          coefficients::CUDA.AnyCuArray{T,1}) where {T<:Complex}
+    length(coefficients) == cfg.lmax + 1 || throw(DimensionMismatch(
+        "coefficients must have length lmax+1=$(cfg.lmax + 1)",
+    ))
+    return real.(_cuda_mode_synthesis(cfg, 0, coefficients, cfg.lmax, 1))
+end
+synthesis_axisym(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,1}) where {T<:Complex} =
+    synthesis_axisym(SHTnsKit.GPU(), cfg, coefficients)
+
+function analysis_axisym_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                           field::CUDA.AnyCuArray{T,1}, ltr::Int) where {T<:Real}
+    lcap = _cuda_lcap(cfg, ltr)
+    length(field) == cfg.nlat || throw(DimensionMismatch(
+        "field must have length nlat=$(cfg.nlat)",
+    ))
+    return _cuda_mode_analysis(cfg, 0, field, lcap, cfg.cphi * cfg.nlon)
+end
+analysis_axisym_l(cfg::SHTConfig, field::CUDA.AnyCuArray{T,1}, ltr::Int) where {T<:Real} =
+    analysis_axisym_l(SHTnsKit.GPU(), cfg, field, ltr)
+
+function synthesis_axisym_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                            coefficients::CUDA.AnyCuArray{T,1}, ltr::Int) where {T<:Complex}
+    lcap = _cuda_lcap(cfg, ltr)
+    length(coefficients) >= lcap + 1 || throw(DimensionMismatch(
+        "coefficients must contain degrees 0:ltr",
+    ))
+    return real.(_cuda_mode_synthesis(
+        cfg, 0, @view(coefficients[1:(lcap + 1)]), lcap, 1,
+    ))
+end
+synthesis_axisym_l(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,1},
+                   ltr::Int) where {T<:Complex} =
+    synthesis_axisym_l(SHTnsKit.GPU(), cfg, coefficients, ltr)
+
+function _cuda_fixed_order(cfg::SHTConfig, im::Int, ltr::Int)
+    im >= 0 || throw(ArgumentError("im must be >= 0"))
+    im <= cfg.mmax ÷ cfg.mres || throw(ArgumentError(
+        "im must be <= mmax/mres=$(cfg.mmax ÷ cfg.mres)",
+    ))
+    lcap = _cuda_lcap(cfg, ltr)
+    physical_m = im * cfg.mres
+    lcap >= physical_m || throw(ArgumentError(
+        "ltr must be >= im*mres=$(physical_m)",
+    ))
+    return physical_m, lcap
+end
+
+function analysis_packed_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Int,
+                            mode::CUDA.AnyCuArray{T,1}, ltr::Int) where {T<:Complex}
+    physical_m, lcap = _cuda_fixed_order(cfg, im, ltr)
+    length(mode) == cfg.nlat || throw(DimensionMismatch(
+        "mode must have length nlat=$(cfg.nlat)",
+    ))
+    return _cuda_mode_analysis(cfg, physical_m, mode, lcap, cfg.cphi)
+end
+analysis_packed_ml(cfg::SHTConfig, im::Int, mode::CUDA.AnyCuArray{T,1},
+                   ltr::Int) where {T<:Complex} =
+    analysis_packed_ml(SHTnsKit.GPU(), cfg, im, mode, ltr)
+
+function synthesis_packed_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Int,
+                             coefficients::CUDA.AnyCuArray{T,1},
+                             ltr::Int) where {T<:Complex}
+    physical_m, lcap = _cuda_fixed_order(cfg, im, ltr)
+    length(coefficients) == lcap - physical_m + 1 || throw(DimensionMismatch(
+        "coefficients have the wrong fixed-order length",
+    ))
+    return _cuda_mode_synthesis(
+        cfg, physical_m, coefficients, lcap, SHTnsKit.phi_inv_scale(cfg),
+    )
+end
+synthesis_packed_ml(cfg::SHTConfig, im::Int,
+                    coefficients::CUDA.AnyCuArray{T,1}, ltr::Int) where {T<:Complex} =
+    synthesis_packed_ml(SHTnsKit.GPU(), cfg, im, coefficients, ltr)
+
+function analysis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                              field::CUDA.AnyCuArray{T,2}) where {T<:Complex}
+    cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
+    size(field) == (cfg.nlat, cfg.nlon) || throw(DimensionMismatch(
+        "field must have size ($(cfg.nlat), $(cfg.nlon))",
+    ))
+    RT = typeof(float(real(zero(T))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    fourier = CT.(field)
+    gpu_fft!(fourier, 2)
+    packed = CUDA.zeros(CT, SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1))
+    kernel! = complex_packed_analysis_kernel!(CUDABackend())
+    kernel!(packed, fourier, tables.Plm, tables.weights, tables.scales,
+            RT(cfg.cphi), cfg.nlon, cfg.lmax, cfg.mmax;
+            ndrange=(cfg.lmax + 1, 2cfg.mmax + 1))
+    CUDA.synchronize()
+    return packed
+end
+analysis_packed_cplx(cfg::SHTConfig, field::CUDA.AnyCuArray{T,2}) where {T<:Complex} =
+    analysis_packed_cplx(SHTnsKit.GPU(), cfg, field)
+
+function synthesis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                               coefficients::CUDA.AnyCuArray{T,1}) where {T<:Complex}
+    cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
+    expected = SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
+    length(coefficients) == expected || throw(DimensionMismatch(
+        "coefficients must have length $expected",
+    ))
+    RT = typeof(float(real(zero(T))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    fourier = CUDA.zeros(CT, cfg.nlat, cfg.nlon)
+    kernel! = complex_packed_synthesis_kernel!(CUDABackend())
+    kernel!(fourier, coefficients, tables.Plm, tables.scales,
+            RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, cfg.lmax, cfg.mmax;
+            ndrange=(cfg.nlat, 2cfg.mmax + 1))
+    CUDA.synchronize()
+    gpu_ifft!(fourier, 2)
+    return fourier
+end
+synthesis_packed_cplx(cfg::SHTConfig,
+                      coefficients::CUDA.AnyCuArray{T,1}) where {T<:Complex} =
+    synthesis_packed_cplx(SHTnsKit.GPU(), cfg, coefficients)
+
+function _cuda_batch_analysis(cfg::SHTConfig, fields::CUDA.AnyCuArray;
+                              use_rfft::Bool=false, fft_batch=nothing)
+    fft_batch === nothing || throw(ArgumentError(
+        "CUDA scalar batches do not accept caller-provided fft_batch scratch",
+    ))
+    size(fields, 1) == cfg.nlat && size(fields, 2) == cfg.nlon ||
+        throw(DimensionMismatch("fields must start with (nlat, nlon)"))
+    use_rfft && !(eltype(fields) <: Real) && throw(ArgumentError(
+        "use_rfft=true requires real-valued fields",
+    ))
+    RT = typeof(float(real(zero(eltype(fields)))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    fourier = CT.(fields)
+    gpu_fft!(fourier, 2)
+    canonical = CUDA.zeros(CT, cfg.lmax + 1, cfg.mmax + 1, size(fields, 3))
+    kernel! = scalar_batch_analysis_kernel!(CUDABackend())
+    kernel!(canonical, fourier, tables.Plm, tables.weights, RT(cfg.cphi),
+            cfg.lmax, cfg.mmax, cfg.mres; ndrange=size(canonical))
+    configured = canonical ./ reshape(
+        tables.scales, cfg.lmax + 1, cfg.mmax + 1, 1,
+    )
+    CUDA.synchronize()
+    return configured
+end
+
+function analysis_batch(::SHTnsKit.GPU, cfg::SHTConfig,
+                        fields::CUDA.AnyCuArray{T,3}; use_rfft::Bool=false) where {T<:Real}
+    return _cuda_batch_analysis(cfg, fields; use_rfft)
+end
+analysis_batch(cfg::SHTConfig, fields::CUDA.AnyCuArray{T,3}; kwargs...) where {T<:Real} =
+    analysis_batch(SHTnsKit.GPU(), cfg, fields; kwargs...)
+
+function analysis_batch!(::SHTnsKit.GPU, cfg::SHTConfig,
+                         output::CUDA.AnyCuArray{T,3},
+                         fields::CUDA.AnyCuArray{R,3}; kwargs...) where {T<:Complex,R<:Real}
+    size(output) == (cfg.lmax + 1, cfg.mmax + 1, size(fields, 3)) ||
+        throw(DimensionMismatch("output batch shape mismatch"))
+    result = _cuda_batch_analysis(cfg, fields; kwargs...)
+    copyto!(output, result)
+    return output
+end
+analysis_batch!(cfg::SHTConfig, output::CUDA.AnyCuArray{T,3},
+                fields::CUDA.AnyCuArray{R,3}; kwargs...) where {T<:Complex,R<:Real} =
+    analysis_batch!(SHTnsKit.GPU(), cfg, output, fields; kwargs...)
+
+function _cuda_batch_synthesis(cfg::SHTConfig,
+                               coefficients::CUDA.AnyCuArray;
+                               real_output::Bool=true, use_rfft::Bool=false,
+                               fft_batch=nothing)
+    fft_batch === nothing || throw(ArgumentError(
+        "CUDA scalar batches do not accept caller-provided fft_batch scratch",
+    ))
+    size(coefficients, 1) == cfg.lmax + 1 &&
+        size(coefficients, 2) == cfg.mmax + 1 ||
+        throw(DimensionMismatch("coefficient batch has the wrong spectral shape"))
+    use_rfft && !real_output && throw(ArgumentError("use_rfft=true implies real_output"))
+    RT = typeof(float(real(zero(eltype(coefficients)))))
+    CT = Complex{RT}
+    tables = _cuda_scalar_tables(cfg, RT)
+    canonical = CT.(coefficients) .* reshape(
+        tables.scales, cfg.lmax + 1, cfg.mmax + 1, 1,
+    )
+    fourier = CUDA.zeros(CT, cfg.nlat, cfg.nlon, size(coefficients, 3))
+    kernel! = scalar_batch_synthesis_kernel!(CUDABackend())
+    kernel!(fourier, canonical, tables.Plm, RT(SHTnsKit.phi_inv_scale(cfg)),
+            cfg.nlon, cfg.lmax, cfg.mmax, cfg.mres, real_output;
+            ndrange=(cfg.nlat, cfg.mmax + 1, size(coefficients, 3)))
+    CUDA.synchronize()
+    gpu_ifft!(fourier, 2)
+    return real_output ? real.(fourier) : fourier
+end
+
+function synthesis_batch(::SHTnsKit.GPU, cfg::SHTConfig,
+                         coefficients::CUDA.AnyCuArray{T,3};
+                         real_output::Bool=true, use_rfft::Bool=false) where {T<:Complex}
+    return _cuda_batch_synthesis(cfg, coefficients; real_output, use_rfft)
+end
+synthesis_batch(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,3}; kwargs...) where {T<:Complex} =
+    synthesis_batch(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
+synthesis_batch_cplx(cfg::SHTConfig,
+                     coefficients::CUDA.AnyCuArray{T,3}) where {T<:Complex} =
+    _cuda_batch_synthesis(cfg, coefficients; real_output=false)
+synthesis_batch_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                     coefficients::CUDA.AnyCuArray{T,3}) where {T<:Complex} =
+    _cuda_batch_synthesis(cfg, coefficients; real_output=false)
+
+function synthesis_batch!(::SHTnsKit.GPU, cfg::SHTConfig,
+                          output::CUDA.AnyCuArray{T,3},
+                          coefficients::CUDA.AnyCuArray{R,3}; kwargs...) where {T,R<:Complex}
+    size(output) == (cfg.nlat, cfg.nlon, size(coefficients, 3)) ||
+        throw(DimensionMismatch("output batch shape mismatch"))
+    result = _cuda_batch_synthesis(cfg, coefficients; kwargs...)
+    copyto!(output, result)
+    return output
+end
+function synthesis_batch!(::SHTnsKit.GPU, cfg::SHTConfig,
+                          output::CUDA.AnyCuArray{T,3},
+                          coefficients::CUDA.AnyCuArray{R,3}; kwargs...) where {T<:Real,R<:Complex}
+    size(output) == (cfg.nlat, cfg.nlon, size(coefficients, 3)) ||
+        throw(DimensionMismatch("output batch shape mismatch"))
+    result = _cuda_batch_synthesis(cfg, coefficients; kwargs...)
+    copyto!(output, result)
+    return output
+end
+synthesis_batch!(cfg::SHTConfig, output::CUDA.AnyCuArray{T,3},
+                 coefficients::CUDA.AnyCuArray{R,3}; kwargs...) where {T,R<:Complex} =
+    synthesis_batch!(SHTnsKit.GPU(), cfg, output, coefficients; kwargs...)
+synthesis_batch!(cfg::SHTConfig, output::CUDA.AnyCuArray{T,3},
+                 coefficients::CUDA.AnyCuArray{R,3}; kwargs...) where {T<:Real,R<:Complex} =
+    synthesis_batch!(SHTnsKit.GPU(), cfg, output, coefficients; kwargs...)
 
 """
     _to_gpu_impl(arr::AbstractArray)

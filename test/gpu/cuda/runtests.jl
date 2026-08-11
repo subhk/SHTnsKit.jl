@@ -6,6 +6,7 @@ using GPUArraysCore
 using KernelAbstractions
 
 include("../../parity/scalar_full.jl")
+include("../../parity/scalar_variants.jl")
 
 struct CUDAScalarAdapter <: ScalarParityAdapter end
 function place(::CUDAScalarAdapter, ::SHTConfig, value, ::Symbol)
@@ -50,6 +51,27 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension, :_cuda_scalar_analysis)
     @test isdefined(extension, :_cuda_scalar_synthesis)
     @test isdefined(extension, :_cuda_clear_scalar_cache!)
+    for (function_name, signature) in (
+        (:analysis_packed, Tuple{SHTConfig,CuArray{Float32,1}}),
+        (:synthesis_packed, Tuple{SHTConfig,CuArray{ComplexF32,1}}),
+        (:analysis_packed_l, Tuple{SHTConfig,CuArray{Float32,1},Int}),
+        (:synthesis_packed_l, Tuple{SHTConfig,CuArray{ComplexF32,1},Int}),
+        (:analysis_axisym, Tuple{SHTConfig,CuArray{Float32,1}}),
+        (:synthesis_axisym, Tuple{SHTConfig,CuArray{ComplexF32,1}}),
+        (:analysis_axisym_l, Tuple{SHTConfig,CuArray{Float32,1},Int}),
+        (:synthesis_axisym_l, Tuple{SHTConfig,CuArray{ComplexF32,1},Int}),
+        (:analysis_packed_ml, Tuple{SHTConfig,Int,CuArray{ComplexF32,1},Int}),
+        (:synthesis_packed_ml, Tuple{SHTConfig,Int,CuArray{ComplexF32,1},Int}),
+        (:analysis_packed_cplx, Tuple{SHTConfig,CuArray{ComplexF32,2}}),
+        (:synthesis_packed_cplx, Tuple{SHTConfig,CuArray{ComplexF32,1}}),
+        (:analysis_batch, Tuple{SHTConfig,CuArray{Float32,3}}),
+        (:analysis_batch!, Tuple{SHTConfig,CuArray{ComplexF32,3},CuArray{Float32,3}}),
+        (:synthesis_batch, Tuple{SHTConfig,CuArray{ComplexF32,3}}),
+        (:synthesis_batch!, Tuple{SHTConfig,CuArray{Float32,3},CuArray{ComplexF32,3}}),
+        (:synthesis_batch_cplx, Tuple{SHTConfig,CuArray{ComplexF32,3}}),
+    )
+        @test which(getproperty(SHTnsKit, function_name), signature).module === extension
+    end
     @test which(gpu_clear_cache!, Tuple{SHTnsKit.GPU}).module === SHTnsKit
     @test hasmethod(
         SHTnsKit._gpu_adapter_clear_cache!, Tuple{typeof(extension.CUDA_ADAPTER)},
@@ -69,6 +91,7 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         synthesis_cplx, Tuple{SHTnsKit.GPU,SHTConfig,CuArray{ComplexF32,2}},
     ).module === SHTnsKit
     run_shared_scalar_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
+    run_shared_scalar_variant_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitGPUExt.jl"), String)
     ordinary_pipeline = split(
         split(source, "function _cuda_scalar_analysis"; limit=2)[2],
@@ -78,6 +101,12 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test !occursin(r"\bcollect\s*\(", ordinary_pipeline)
     @test occursin("use_rfft=true requires a real-valued input", ordinary_pipeline)
     @test occursin("use_rfft=true implies real_output", ordinary_pipeline)
+    variant_pipeline = split(
+        split(source, "@inline function _cuda_lcap"; limit=2)[2],
+        "\"\"\"\n    _to_gpu_impl"; limit=2,
+    )[1]
+    @test !occursin(r"\bArray\s*\(", variant_pipeline)
+    @test !occursin(r"\bcollect\s*\(", variant_pipeline)
 
     @test which(on_device, Tuple{CUDA.AnyCuArray}).module === extension
     @test which(
@@ -217,6 +246,67 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         @test gpu_synthesis(cfg, legacy_coefficients) isa Matrix
 
         CUDA.allowscalar(false)
+        variant_cfg = create_gauss_config(
+            5, 8; nlon=14, mres=2, norm=:schmidt,
+            real_norm=true, cs_phase=false,
+        )
+        variant_dense = _variant_coefficients(variant_cfg, Float32)
+        variant_packed = SHTnsKit.pack_lm(variant_cfg, variant_dense)
+        variant_field = synthesis_packed(variant_cfg, variant_packed)
+        device_field = CuArray(variant_field)
+        device_packed = CuArray(variant_packed)
+        @test analysis_packed(variant_cfg, device_field) isa CUDA.AnyCuArray
+        @test Array(analysis_packed(SHTnsKit.GPU(), variant_cfg, device_field)) ≈
+              variant_packed atol=2f-4 rtol=2f-4
+        @test Array(synthesis_packed(variant_cfg, device_packed)) ≈
+              variant_field atol=2f-4 rtol=2f-4
+        ltr = 3
+        @test Array(analysis_packed_l(variant_cfg, device_field, ltr)) ≈
+              analysis_packed_l(variant_cfg, variant_field, ltr) atol=2f-4 rtol=2f-4
+        @test Array(synthesis_packed_l(variant_cfg, device_packed, ltr)) ≈
+              synthesis_packed_l(variant_cfg, variant_packed, ltr) atol=2f-4 rtol=2f-4
+
+        axis_coefficients = ComplexF32.(variant_dense[:, 1])
+        axis_field = synthesis_axisym(variant_cfg, axis_coefficients)
+        @test Array(analysis_axisym(variant_cfg, CuArray(axis_field))) ≈
+              axis_coefficients atol=2f-4 rtol=2f-4
+        @test Array(synthesis_axisym(variant_cfg, CuArray(axis_coefficients))) ≈
+              axis_field atol=2f-4 rtol=2f-4
+
+        im, physical_m = 2, 4
+        mode_coefficients = ComplexF32.(variant_dense[(physical_m + 1):end, physical_m + 1])
+        mode = synthesis_packed_ml(variant_cfg, im, mode_coefficients, variant_cfg.lmax)
+        @test Array(analysis_packed_ml(
+            variant_cfg, im, CuArray(mode), variant_cfg.lmax,
+        )) ≈ mode_coefficients atol=2f-4 rtol=2f-4
+        @test Array(synthesis_packed_ml(
+            variant_cfg, im, CuArray(mode_coefficients), variant_cfg.lmax,
+        )) ≈ mode atol=2f-4 rtol=2f-4
+
+        batch_fields = repeat(
+            reshape(Float32.(reshape(variant_field, variant_cfg.nlat, variant_cfg.nlon)),
+                    variant_cfg.nlat, variant_cfg.nlon, 1), 1, 1, 2,
+        )
+        device_batch = CuArray(batch_fields)
+        batch_coefficients = analysis_batch(variant_cfg, device_batch)
+        @test batch_coefficients isa CUDA.AnyCuArray
+        @test Array(batch_coefficients) ≈ analysis_batch(variant_cfg, batch_fields) atol=2f-4 rtol=2f-4
+        @test Array(synthesis_batch(variant_cfg, batch_coefficients)) ≈
+              batch_fields atol=2f-4 rtol=2f-4
+        analysis_output = similar(batch_coefficients)
+        @test analysis_batch!(variant_cfg, analysis_output, device_batch) === analysis_output
+        synthesis_output = similar(device_batch)
+        @test synthesis_batch!(variant_cfg, synthesis_output, batch_coefficients) === synthesis_output
+
+        complex_cfg = create_gauss_config(3, 6; nlon=10)
+        complex_coefficients = zeros(ComplexF32, nlm_cplx_calc(3, 3, 1))
+        complex_coefficients[LM_cplx_index(3, 3, 2, -1) + 1] = 0.2f0 - 0.1f0im
+        complex_field = synthesis_packed_cplx(complex_cfg, complex_coefficients)
+        device_complex = CuArray(complex_coefficients)
+        @test Array(synthesis_packed_cplx(complex_cfg, device_complex)) ≈
+              complex_field atol=2f-4 rtol=2f-4
+        @test Array(analysis_packed_cplx(complex_cfg, CuArray(complex_field))) ≈
+              complex_coefficients atol=2f-4 rtol=2f-4
         run_scalar_full_parity(
             CUDAScalarAdapter();
             grid_kinds=_SCALAR_GRID_KINDS,

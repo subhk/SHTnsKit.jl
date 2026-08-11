@@ -328,7 +328,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # Use precomputed tables - most efficient path
         # plm_tables[m+1][l+1, i] = P̄_l^m(x_i) (already orthonormal-normalized; no Nlm multiply needed)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
@@ -345,7 +345,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
         # Compute Legendre polynomials on the fly
         # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -375,6 +375,12 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
     return _externalize_coefficients!(alm_batch, cfg)
 end
 
+function analysis_batch(::CPU, cfg::SHTConfig,
+                        fields::AbstractArray{<:Real,3}; kwargs...)
+    _require_cpu_storage(:analysis_batch, fields)
+    return analysis_batch(cfg, fields; kwargs...)
+end
+
 """
     analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
                     fields::AbstractArray{<:Real,3})
@@ -394,14 +400,14 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     size(alm_out, 2) == mmax + 1 || throw(DimensionMismatch("alm second dim must be mmax+1=$(mmax+1)"))
     size(alm_out, 3) == nfields || throw(DimensionMismatch("alm third dim must match nfields=$nfields"))
 
-    fill!(alm_out, zero(eltype(alm_out)))
-
     # Reuse caller-provided scratch if given, else allocate.
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
     if fft_batch === nothing
         Fφ_batch = Array{complex(float(eltype(fields))),3}(undef, nlat, nbins, nfields)
     else
         size(fft_batch) == (nlat, nbins, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, $(nbins), nfields)"))
+        (Base.mightalias(fft_batch, fields) || Base.mightalias(fft_batch, alm_out)) &&
+            throw(ArgumentError("fft_batch must not alias fields or alm_out"))
         Fφ_batch = fft_batch
     end
 
@@ -411,6 +417,9 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     else
         _batch_fft_phi!(Fφ_batch, fields)
     end
+    # The complete input is now represented in independent Fourier scratch, so
+    # mutating an output view that overlaps the spatial input is safe.
+    fill!(alm_out, zero(eltype(alm_out)))
 
     scaleφ = cfg.cphi
     # Hoist cfg field reads to locals: cfg is mutable, so reads inside the m/l loops below aren't auto-hoisted.
@@ -418,7 +427,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # plm_tables[m+1][l+1, i] = P̄_l^m(x_i) (already orthonormal-normalized; no Nlm multiply needed)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             for k in 1:nfields
@@ -434,7 +443,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     else
         # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -462,6 +471,16 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     return _externalize_coefficients!(alm_out, cfg)
 end
 
+function analysis_batch!(::CPU, cfg::SHTConfig, output::AbstractArray{<:Complex,3},
+                         fields::AbstractArray{<:Real,3};
+                         fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing,
+                         use_rfft::Bool=false)
+    _require_cpu_storage(:analysis_batch!, output)
+    _require_cpu_storage(:analysis_batch!, fields)
+    fft_batch === nothing || _require_cpu_storage(:analysis_batch!, fft_batch)
+    return analysis_batch!(cfg, output, fields; fft_batch, use_rfft)
+end
+
 """
     synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3};
                     real_output::Bool=true) -> Array
@@ -483,6 +502,12 @@ Base.@constprop :aggressive function synthesis_batch(cfg::SHTConfig, alm_batch::
     return _synthesis_batch(cfg, alm_batch, Val(real_output), Val(use_rfft))
 end
 
+function synthesis_batch(::CPU, cfg::SHTConfig,
+                         coefficients::AbstractArray{<:Complex,3}; kwargs...)
+    _require_cpu_storage(:synthesis_batch, coefficients)
+    return synthesis_batch(cfg, coefficients; kwargs...)
+end
+
 """
     synthesis_batch_cplx(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3}) -> Array{ComplexF64,3}
 
@@ -492,6 +517,12 @@ type for inference-sensitive callers.
 """
 function synthesis_batch_cplx(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3})
     return _synthesis_batch(cfg, alm_batch, Val(false), Val(false))
+end
+
+function synthesis_batch_cplx(::CPU, cfg::SHTConfig,
+                              coefficients::AbstractArray{<:Complex,3})
+    _require_cpu_storage(:synthesis_batch_cplx, coefficients)
+    return synthesis_batch_cplx(cfg, coefficients)
 end
 
 function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
@@ -521,7 +552,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # plm_tables[m+1][l+1, i] = P̄_l^m(x_i) (already orthonormal-normalized; no Nlm multiply needed)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
@@ -538,7 +569,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
     else
         # Use maxthreadid() to handle all possible thread IDs
         thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -561,7 +592,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
     # Enforce Hermitian symmetry for real output (complex path only; rfft buffer is half-spectrum)
     if real_output && !use_rfft
         @inbounds for k in 1:nfields
-            for m in 1:mmax
+            for m in cfg.mres:cfg.mres:mmax
                 col = m + 1
                 conj_index = nlon - m + 1
                 for i in 1:nlat
@@ -627,6 +658,8 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
         Fφ_batch = Array{CT,3}(undef, nlat, nbins, nfields)
     else
         size(fft_batch) == (nlat, nbins, nfields) || throw(DimensionMismatch("fft_batch size must be (nlat, $(nbins), nfields)"))
+        (Base.mightalias(fft_batch, alm_batch) || Base.mightalias(fft_batch, f_out)) &&
+            throw(ArgumentError("fft_batch must not alias alm_batch or f_out"))
         Fφ_batch = fft_batch
     end
     fill!(Fφ_batch, zero(eltype(Fφ_batch)))
@@ -634,7 +667,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
 
     if cfg.use_plm_tables && length(cfg.plm_tables) == mmax + 1
         # plm_tables[m+1][l+1, i] = P̄_l^m(x_i) (already orthonormal-normalized; no Nlm multiply needed)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             tbl = cfg.plm_tables[m+1]
             @inbounds for k in 1:nfields
@@ -651,7 +684,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     else
         # Use maxthreadid() to handle all possible thread IDs with static scheduling
         thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             P = thread_local_P[Threads.threadid()]
 
@@ -674,7 +707,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     # Enforce Hermitian symmetry for real output (complex path only; rfft buffer is half-spectrum)
     if real_output && !use_rfft
         @inbounds for k in 1:nfields
-            for m in 1:mmax
+            for m in cfg.mres:cfg.mres:mmax
                 col = m + 1
                 conj_index = nlon - m + 1
                 for i in 1:nlat
@@ -690,6 +723,19 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
 
     # Perform inverse FFT and copy to output
     return _batch_ifft_phi_to_output!(f_out, Fφ_batch, real_output)
+end
+
+function synthesis_batch!(::CPU, cfg::SHTConfig, output::AbstractArray,
+                          coefficients::AbstractArray{<:Complex,3};
+                          real_output::Bool=true,
+                          fft_batch::Union{Nothing,AbstractArray{<:Complex,3}}=nothing,
+                          use_rfft::Bool=false)
+    _require_cpu_storage(:synthesis_batch!, output)
+    _require_cpu_storage(:synthesis_batch!, coefficients)
+    fft_batch === nothing || _require_cpu_storage(:synthesis_batch!, fft_batch)
+    return synthesis_batch!(
+        cfg, output, coefficients; real_output, fft_batch, use_rfft,
+    )
 end
 
 # ============================================================================

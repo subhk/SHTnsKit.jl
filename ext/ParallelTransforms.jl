@@ -76,6 +76,8 @@ const _PENCIL_SCALAR_STATS_LOCK = ReentrantLock()
 const _PENCIL_SCALAR_STATS = Dict{Symbol,Int}(
     :full_matrix_helper_calls => 0,
     :analysis_max_message_elements => 0,
+    :analysis_packed_max_message_elements => 0,
+    :synthesis_packed_max_message_elements => 0,
     :synthesis_max_message_elements => 0,
 )
 
@@ -101,6 +103,10 @@ function _pencil_scalar_stats()
         (
             full_matrix_helper_calls=_PENCIL_SCALAR_STATS[:full_matrix_helper_calls],
             analysis_max_message_elements=_PENCIL_SCALAR_STATS[:analysis_max_message_elements],
+            analysis_packed_max_message_elements=
+                _PENCIL_SCALAR_STATS[:analysis_packed_max_message_elements],
+            synthesis_packed_max_message_elements=
+                _PENCIL_SCALAR_STATS[:synthesis_packed_max_message_elements],
             synthesis_max_message_elements=_PENCIL_SCALAR_STATS[:synthesis_max_message_elements],
         )
     end
@@ -124,7 +130,25 @@ function _collective_validation_error(comm, local_flags::UInt32, operation::Symb
     flags & 0x0020 != 0 && push!(descriptions, "use_rfft=true implies real_output")
     flags & 0x0040 != 0 && push!(descriptions, "use_rfft=true requires mmax ≤ nlon÷2")
     flags & 0x0080 != 0 && push!(descriptions, "Aminus requires real_output=false")
+    flags & 0x0100 != 0 && push!(descriptions, "invalid or rank-varying degree truncation")
+    flags & 0x0200 != 0 && push!(descriptions, "LM_cplx requires mres == 1 on every rank")
+    flags & 0x0400 != 0 && push!(descriptions, "real-valued input required")
     throw(ArgumentError("$operation collective validation failed: $(join(descriptions, ", "))"))
+end
+
+function _collective_truncation(comm, ltr::Integer, lmax::Int, operation::Symbol)
+    converted = try
+        Int(ltr)
+    catch
+        typemin(Int)
+    end
+    flags = converted == typemin(Int) || !(0 ≤ converted ≤ lmax) ?
+            UInt32(0x0100) : UInt32(0)
+    minimum_ltr = MPI.Allreduce(converted, min, comm)
+    maximum_ltr = MPI.Allreduce(converted, max, comm)
+    minimum_ltr == maximum_ltr || (flags |= 0x0100)
+    _collective_validation_error(comm, flags, operation)
+    return converted
 end
 
 function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
@@ -671,14 +695,14 @@ end
 
 function _analysis_owned_block!(block::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConfig,
                                 Fθm::AbstractMatrix{CT}, θ_globals,
-                                first_m_index::Int) where {CT<:Complex}
+                                m_indices::AbstractVector{Int},
+                                lcap::Int=cfg.lmax) where {CT<:Complex}
     fill!(block, zero(CT))
     P = Vector{Float64}(undef, cfg.lmax + 1)
     RT = typeof(real(zero(CT)))
     cphi = RT(cfg.cphi)
     use_tbl = cfg.use_plm_tables && !isempty(cfg.NP_tables)
-    @inbounds for local_m in axes(block, 2)
-        m_index = first_m_index + local_m - 1
+    @inbounds for (local_m, m_index) in pairs(m_indices)
         m = m_index - 1
         (0 <= m <= cfg.mmax && m % cfg.mres == 0) || continue
         for (ii, iglob) in pairs(θ_globals)
@@ -686,17 +710,17 @@ function _analysis_owned_block!(block::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConf
             wi = RT(cfg.w[iglob])
             if use_tbl
                 table = cfg.NP_tables[m_index]
-                @simd for l in m:cfg.lmax
+                @simd for l in m:lcap
                     block[l + 1, local_m] += wi * RT(table[l + 1, iglob]) * Fi
                 end
             else
-                SHTnsKit.Plm_norm_row!(P, cfg.x[iglob], cfg.lmax, m)
-                @simd for l in m:cfg.lmax
+                SHTnsKit.Plm_norm_row!(P, cfg.x[iglob], lcap, m)
+                @simd for l in m:lcap
                     block[l + 1, local_m] += wi * RT(P[l + 1]) * Fi
                 end
             end
         end
-        @simd for l in m:cfg.lmax
+        @simd for l in m:lcap
             block[l + 1, local_m] *= cphi
         end
     end
@@ -708,8 +732,10 @@ Pencil-native ordinary scalar analysis. Each reduction targets only one rank's
 owned m-columns; no rank allocates or receives the global spectral matrix.
 """
 function dist_analysis_pencil(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
-                              use_rfft::Bool=false)
+                              use_rfft::Bool=false, ltr::Integer=cfg.lmax)
     comm = communicator(fθφ)
+    _validate_cfg_replicated(cfg, comm)
+    lcap = _collective_truncation(comm, ltr, cfg.lmax, :analysis)
     _validate_scalar_pencil!(
         cfg, fθφ, (cfg.nlat, cfg.nlon), :analysis;
         comm, use_rfft, require_real_input=true,
@@ -728,8 +754,13 @@ function dist_analysis_pencil(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     rank = MPI.Comm_rank(comm)
     for root in 0:(MPI.Comm_size(comm) - 1)
         count = counts[root + 1]
-        send = zeros(CT, cfg.lmax + 1, count)
-        _analysis_owned_block!(send, cfg, Fθm, θ_globals, starts[root + 1])
+        first_m_index = starts[root + 1]
+        active_m_indices = Int[
+            m_index for m_index in first_m_index:(first_m_index + count - 1)
+            if (m_index - 1) <= lcap && (m_index - 1) % cfg.mres == 0
+        ]
+        send = zeros(CT, lcap + 1, length(active_m_indices))
+        _analysis_owned_block!(send, cfg, Fθm, θ_globals, active_m_indices, lcap)
         φ_is_local_all || _keep_one_phi_partner!(φ_globals, send)
         receive = zeros(CT, size(send))
         _record_pencil_scalar_stat!(
@@ -739,15 +770,14 @@ function dist_analysis_pencil(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
         if rank == root
             destination = parent(output)
             l_globals = collect(Int, globalindices(output, 1))
-            @inbounds for j in axes(destination, 2), (i, l_index) in pairs(l_globals)
-                m_index = starts[root + 1] + j - 1
+            @inbounds for (receive_j, m_index) in pairs(active_m_indices),
+                          (i, l_index) in pairs(l_globals)
+                j = m_index - first_m_index + 1
                 l = l_index - 1
                 m = m_index - 1
-                if l >= m && m % cfg.mres == 0
+                if l <= lcap && l >= m
                     scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
-                    destination[i, j] = receive[l_index, j] / scale
-                else
-                    destination[i, j] = zero(CT)
+                    destination[i, j] = receive[l_index, receive_j] / scale
                 end
             end
         end
@@ -1060,10 +1090,12 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
               length(cfg.plm_tables) == mmax + 1 && size(cfg.plm_tables[1], 2) == cfg.nlat
     if use_tbl
         _analysis_loop_with_tables!(plan.Alm_work, cfg.plm_tables, plan.Fθm,
-                                    plan.weights_cache, plan.θ_globals, lmax, mmax)
+                                    plan.weights_cache, plan.θ_globals, lmax, mmax,
+                                    cfg.mres)
     else
         _analysis_loop_no_tables!(plan.Alm_work, plan.P, plan.Fθm, plan.weights_cache,
-                                  plan.x_cache, plan.θ_globals, lmax, mmax)
+                                  plan.x_cache, plan.θ_globals, lmax, mmax,
+                                  cfg.mres)
     end
 
     # Sum partial θ contributions over the cached θ-column subcomm
@@ -1073,13 +1105,14 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
 
     # φ scaling (Nlm already baked into the normalized Legendre rows)
     cphi = cfg.cphi
-    @inbounds for m in 0:mmax
+    @inbounds for m in 0:cfg.mres:mmax
         @simd ivdep for l in m:lmax
             plan.Alm_work[l+1, m+1] *= cphi
         end
     end
 
     copyto!(Alm_out, plan.Alm_work)
+    SHTnsKit._externalize_coefficients!(Alm_out, cfg)
     return Alm_out
 end
 
@@ -1235,7 +1268,8 @@ end
 
 function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConfig,
                                  Alm::PencilArray, θ_first::Int,
-                                 real_output::Bool, use_rfft::Bool) where {CT<:Complex}
+                                 real_output::Bool, use_rfft::Bool;
+                                 Aminus=nothing) where {CT<:Complex}
     fill!(Fθm, zero(CT))
     coefficients = parent(Alm)
     l_globals = collect(Int, globalindices(Alm, 1))
@@ -1250,6 +1284,7 @@ function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConf
         for local_θ in axes(Fθm, 1)
             iglob = θ_first + local_θ - 1
             radial = zero(CT)
+            radial_minus = zero(CT)
             if use_tbl
                 table = cfg.NP_tables[m_index]
                 for (local_l, l_index) in pairs(l_globals)
@@ -1257,6 +1292,10 @@ function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConf
                     if l >= m
                         scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
                         radial += RT(table[l_index, iglob]) * scale * coefficients[local_l, local_m]
+                        if Aminus !== nothing && m > 0
+                            radial_minus += RT(table[l_index, iglob]) * scale *
+                                            parent(Aminus)[local_l, local_m]
+                        end
                     end
                 end
             else
@@ -1266,6 +1305,10 @@ function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConf
                     if l >= m
                         scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
                         radial += RT(P[l_index]) * scale * coefficients[local_l, local_m]
+                        if Aminus !== nothing && m > 0
+                            radial_minus += RT(P[l_index]) * scale *
+                                            parent(Aminus)[local_l, local_m]
+                        end
                     end
                 end
             end
@@ -1274,6 +1317,9 @@ function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConf
             if real_output && !use_rfft && m > 0
                 negative_index = cfg.nlon - m + 1
                 negative_index != m_index && (Fθm[local_θ, negative_index] = conj(bin))
+            elseif Aminus !== nothing && m > 0
+                Fθm[local_θ, cfg.nlon - m + 1] =
+                    conj(inv_scale * radial_minus)
             end
         end
     end
@@ -1301,13 +1347,27 @@ the other owners of that slab.
 """
 function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
                                  prototype_θφ::PencilArray,
-                                 real_output::Bool=true, use_rfft::Bool=false)
+                                 real_output::Bool=true, use_rfft::Bool=false,
+                                 Aminus=nothing)
     comm = communicator(prototype_θφ)
     _validate_scalar_pencil!(
         cfg, Alm, (cfg.lmax + 1, cfg.mmax + 1), :synthesis;
         comm, peer=prototype_θφ, require_full_first_dim=true,
         use_rfft, real_output, require_complex_input=true,
     )
+    minus_count = MPI.Allreduce(Aminus === nothing ? 0 : 1, +, comm)
+    flags = UInt32(0)
+    minus_count in (0, MPI.Comm_size(comm)) || (flags |= 0x0080)
+    minus_count > 0 && real_output && (flags |= 0x0080)
+    minus_count > 0 && use_rfft && (flags |= 0x0080)
+    _collective_validation_error(comm, flags, :synthesis)
+    if minus_count > 0
+        _validate_scalar_pencil!(
+            cfg, Aminus, (cfg.lmax + 1, cfg.mmax + 1), :synthesis_minus;
+            comm, peer=Alm, require_full_first_dim=true,
+            require_complex_input=true,
+        )
+    end
     _validate_scalar_pencil!(
         cfg, prototype_θφ, (cfg.nlat, cfg.nlon), :synthesis_prototype;
         comm, peer=Alm,
@@ -1340,7 +1400,9 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
         θ_first = descriptors.θ_starts[root + 1]
         θ_count = descriptors.θ_counts[root + 1]
         send = zeros(CT, θ_count, nbins)
-        _synthesis_owned_modes!(send, cfg, Alm, θ_first, real_output, use_rfft)
+        _synthesis_owned_modes!(
+            send, cfg, Alm, θ_first, real_output, use_rfft; Aminus,
+        )
         receive = zeros(CT, size(send))
         _record_pencil_scalar_stat!(
             :synthesis_max_message_elements, length(send); maximum=true,

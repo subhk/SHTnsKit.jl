@@ -2,6 +2,7 @@ using Test
 using SHTnsKit
 
 include("scalar_full.jl")
+include("scalar_variants.jl")
 
 run_scalar_full_parity(CPUScalarAdapter())
 @testset "scalar mres adjoint parity" begin

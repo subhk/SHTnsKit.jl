@@ -369,7 +369,7 @@ function run_shared_scalar_kernel_reference(common, backend)
     canonical = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
     event = common.scalar_analysis_kernel!(backend)(
         canonical, fourier, Plm, weights, T(cfg.cphi), cfg.lmax, cfg.mmax,
-        cfg.mres; ndrange=size(canonical),
+        cfg.mres, cfg.lmax; ndrange=size(canonical),
     )
     event === nothing || wait(event)
     @test all(iszero, canonical[:, 2])

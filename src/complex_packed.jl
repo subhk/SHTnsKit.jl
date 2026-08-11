@@ -185,6 +185,16 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     return _externalize_coefficients!(alm, cfg)
 end
 
+function analysis_packed_cplx(::CPU, cfg::SHTConfig, field::AbstractMatrix{<:Complex})
+    _require_cpu_storage(:analysis_packed_cplx, field)
+    return analysis_packed_cplx(cfg, field)
+end
+function synthesis_packed_cplx(::CPU, cfg::SHTConfig,
+                               coefficients::AbstractVector{<:Complex})
+    _require_cpu_storage(:synthesis_packed_cplx, coefficients)
+    return synthesis_packed_cplx(cfg, coefficients)
+end
+
 """
     synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real) -> ComplexF64
 

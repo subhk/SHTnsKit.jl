@@ -1116,6 +1116,12 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
     return Alm_out
 end
 
+function SHTnsKit.analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix,
+                            fθφ::PencilArray;
+                            use_tables=plan.cfg.use_plm_tables)
+    return SHTnsKit.dist_analysis!(plan, Alm_out, fθφ; use_tables)
+end
+
 """
 Optional `Aminus` (internal): coefficients for the NEGATIVE-m half of a genuinely
 complex field, in the same `(lmax+1, mmax+1)` layout as `Alm`, with column `m+1`
@@ -1470,6 +1476,11 @@ function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::P
     f = SHTnsKit.dist_synthesis(plan.cfg, Alm; prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
     copyto!(fθφ_out, f)
     return fθφ_out
+end
+
+function SHTnsKit.synthesis!(plan::DistPlan, fθφ_out::PencilArray,
+                             Alm::PencilArray; real_output::Bool=true)
+    return SHTnsKit.dist_synthesis!(plan, fθφ_out, Alm; real_output)
 end
 
 ## Vector/QST distributed implementations

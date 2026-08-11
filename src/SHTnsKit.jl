@@ -207,7 +207,8 @@ export analysis_axisym, synthesis_axisym, analysis_axisym_l, synthesis_axisym_l
 
 # ===== INDEXING AND COMPLEX NUMBER UTILITIES =====
 export nlm_calc, nlm_cplx_calc, LM_index, LiM_index, build_li_mi, im_from_lm, LM_cplx_index, LM_cplx
-export analysis_packed_cplx, synthesis_packed_cplx, synthesis_point_cplx  # Complex number transforms
+export analysis_packed_cplx, synthesis_packed_cplx                        # Complex number transforms
+export analysis_packed_cplx_l, synthesis_packed_cplx_l, synthesis_point_cplx
 export fft_phi_backend
 
 # ===== BUFFER HELPERS =====

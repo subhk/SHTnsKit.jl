@@ -50,6 +50,8 @@ assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArr
         (:synthesis_packed_ml, Tuple{SHTConfig,Int,ROCArray{ComplexF32,1},Int}),
         (:analysis_packed_cplx, Tuple{SHTConfig,ROCArray{ComplexF32,2}}),
         (:synthesis_packed_cplx, Tuple{SHTConfig,ROCArray{ComplexF32,1}}),
+        (:analysis_packed_cplx_l, Tuple{SHTConfig,ROCArray{ComplexF32,2},Int}),
+        (:synthesis_packed_cplx_l, Tuple{SHTConfig,ROCArray{ComplexF32,1},Int}),
         (:analysis_batch, Tuple{SHTConfig,ROCArray{Float32,3}}),
         (:analysis_batch!, Tuple{SHTConfig,ROCArray{ComplexF32,3},ROCArray{Float32,3}}),
         (:synthesis_batch, Tuple{SHTConfig,ROCArray{ComplexF32,3}}),
@@ -58,6 +60,16 @@ assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArr
     )
         @test which(getproperty(SHTnsKit, function_name), signature).module === extension
     end
+    @test which(
+        analysis!, Tuple{SHTPlan,ROCArray{ComplexF32,2},ROCArray{Float32,2}},
+    ).module === extension
+    @test which(
+        synthesis!, Tuple{SHTPlan,ROCArray{Float32,2},ROCArray{ComplexF32,2}},
+    ).module === extension
+    @test which(
+        analysis!,
+        Tuple{SHTnsKit.GPU,SHTPlan,ROCArray{ComplexF32,2},ROCArray{Float32,2}},
+    ).module === extension
     @test which(gpu_clear_cache!, Tuple{SHTnsKit.GPU}).module === SHTnsKit
     @test hasmethod(
         SHTnsKit._gpu_adapter_clear_cache!, Tuple{typeof(extension.AMDGPU_ADAPTER)},
@@ -200,6 +212,7 @@ assert_resident(::AMDGPUScalarAdapter, value) = @test value isa AMDGPU.AnyROCArr
               complex_field atol=2f-4 rtol=2f-4
         @test Array(analysis_packed_cplx(complex_cfg, ROCArray(complex_field))) ≈
               complex_coefficients atol=2f-4 rtol=2f-4
+        run_gpu_scalar_variant_matrix(AMDGPUScalarAdapter())
         run_scalar_full_parity(
             AMDGPUScalarAdapter();
             grid_kinds=_SCALAR_GRID_KINDS,

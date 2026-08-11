@@ -408,6 +408,8 @@ end
 In-place forward scalar SHT writing coefficients into `alm_out`.
 """
 function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
+    _require_cpu_storage(:analysis!, alm_out)
+    _require_cpu_storage(:analysis!, f)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f,1)==nlat || throw(DimensionMismatch("f first dim must be nlat"))
@@ -458,6 +460,8 @@ In-place inverse scalar SHT writing spatial field into `f_out`.
 Streams m→k directly without building a (θ×m) intermediate.
 """
 function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true)
+    _require_cpu_storage(:synthesis!, f_out)
+    _require_cpu_storage(:synthesis!, alm)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
 
@@ -518,4 +522,18 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         end
     end
     return f_out
+end
+
+function analysis!(::CPU, plan::SHTPlan, alm_out::AbstractMatrix,
+                   f::AbstractMatrix)
+    _require_cpu_storage(:analysis!, alm_out)
+    _require_cpu_storage(:analysis!, f)
+    return analysis!(plan, alm_out, f)
+end
+
+function synthesis!(::CPU, plan::SHTPlan, f_out::AbstractMatrix,
+                    alm::AbstractMatrix; real_output::Bool=true)
+    _require_cpu_storage(:synthesis!, f_out)
+    _require_cpu_storage(:synthesis!, alm)
+    return synthesis!(plan, f_out, alm; real_output)
 end

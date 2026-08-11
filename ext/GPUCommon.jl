@@ -338,12 +338,13 @@ end
 
 """Analyze both Fourier signs directly into SHTns LM_cplx storage."""
 @kernel function complex_packed_analysis_kernel!(packed, fourier, Plm, weights,
-                                                 scales, cphi, nlon, lmax, mmax)
+                                                 scales, cphi, nlon, lcap,
+                                                 mmax, mcap)
     l_idx, signed_idx = @index(Global, NTuple)
-    m = signed_idx - mmax - 1
+    m = signed_idx - mcap - 1
     am = abs(m)
     l = l_idx - 1
-    if l <= lmax && am <= mmax && l >= am
+    if l <= lcap && am <= mcap && l >= am
         column = m >= 0 ? m + 1 : nlon + m + 1
         value = zero(eltype(packed))
         @inbounds for i in 1:length(weights)
@@ -356,13 +357,14 @@ end
 
 """Synthesize both Fourier signs directly from SHTns LM_cplx storage."""
 @kernel function complex_packed_synthesis_kernel!(fourier, packed, Plm, scales,
-                                                  inv_scale, nlon, lmax, mmax)
+                                                  inv_scale, nlon, lcap,
+                                                  mmax, mcap)
     i, signed_idx = @index(Global, NTuple)
-    m = signed_idx - mmax - 1
+    m = signed_idx - mcap - 1
     am = abs(m)
-    if i <= size(fourier, 1) && am <= mmax
+    if i <= size(fourier, 1) && am <= mcap
         value = zero(eltype(fourier))
-        @inbounds for l in am:lmax
+        @inbounds for l in am:lcap
             coefficient = packed[_lm_cplx_device_index(l, m, mmax) + 1] *
                           scales[l + 1, am + 1]
             value += Plm[i, l + 1, am + 1] * coefficient

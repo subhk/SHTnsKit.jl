@@ -39,6 +39,7 @@ const TRANSFORM_ENTRYPOINTS = (
     :analysis_packed_l, :synthesis_packed_l,
     :analysis_packed_ml, :synthesis_packed_ml,
     :analysis_packed_cplx, :synthesis_packed_cplx,
+    :analysis_packed_cplx_l, :synthesis_packed_cplx_l,
     :analysis_axisym, :synthesis_axisym,
     :analysis_axisym_l, :synthesis_axisym_l,
     :synthesis_point, :synthesis_point_cplx,

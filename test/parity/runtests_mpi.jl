@@ -370,6 +370,84 @@ end
               MPI.Allreduce(local_synthesis_active, max, adapter.comm)
     end
 
+    @testset "same-name complex packed degree limits" begin
+        for T in (Float32, Float64)
+            complex_cfg = create_gauss_config(
+                5, 8; nlon=14, norm=:schmidt,
+                real_norm=true, cs_phase=false,
+            )
+            complex_coefficients = zeros(
+                Complex{T},
+                nlm_cplx_calc(complex_cfg.lmax, complex_cfg.mmax, 1),
+            )
+            for l in 0:complex_cfg.lmax,
+                m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax)
+                complex_coefficients[
+                    LM_cplx_index(complex_cfg.lmax, complex_cfg.mmax, l, m) + 1
+                ] = Complex{T}(T(0.03 * (l + 1) - 0.01m), T(0.02m - 0.01l))
+            end
+            complex_field = synthesis_packed_cplx(complex_cfg, complex_coefficients)
+            complex_spatial = place(
+                adapter, complex_cfg, complex_field, :spatial,
+            )
+            ltr_complex = 3
+            truncated = copy(complex_coefficients)
+            noisy = copy(complex_coefficients)
+            for l in (ltr_complex + 1):complex_cfg.lmax,
+                m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax)
+                index = LM_cplx_index(
+                    complex_cfg.lmax, complex_cfg.mmax, l, m,
+                ) + 1
+                truncated[index] = 0
+                noisy[index] = Complex{T}(T(90 + l), T(-70 + m))
+            end
+
+            extension._reset_pencil_scalar_stats!()
+            analyzed = analysis_packed_cplx_l(
+                complex_cfg, complex_spatial, ltr_complex,
+            )
+            @test analyzed isa PencilArray
+            @test _collect_distributed_vector(analyzed) ≈ truncated atol=4e-4 rtol=4e-4
+            starts = collect(Int, PencilArrays.range_local(pencil(analyzed))[1])
+            local_active = count(starts) do packed_index
+                any(packed_index == LM_cplx_index(
+                        complex_cfg.lmax, complex_cfg.mmax, l, m,
+                    ) + 1
+                    for l in 0:ltr_complex
+                    for m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax))
+            end
+            @test extension._pencil_scalar_stats().analysis_packed_max_message_elements ==
+                  MPI.Allreduce(local_active, max, adapter.comm)
+
+            noisy_pencil = _place_distributed_vector(noisy, adapter.comm)
+            extension._reset_pencil_scalar_stats!()
+            reconstructed = synthesis_packed_cplx_l(
+                complex_cfg, noisy_pencil, ltr_complex;
+                prototype_θφ=complex_spatial,
+            )
+            @test reconstructed isa PencilArray
+            @test _collect_spatial(reconstructed, complex_cfg) ≈
+                  synthesis_packed_cplx(complex_cfg, truncated) atol=4e-4 rtol=4e-4
+            spectral_orders = PencilArrays.range_local(
+                create_spectral_pencil(complex_cfg; comm=adapter.comm),
+            )[2]
+            local_unpack_active = 2sum((
+                ltr_complex - m + 1 for m_index in spectral_orders
+                for m in (m_index - 1,) if m ≤ ltr_complex
+            ); init=0)
+            @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements ==
+                  MPI.Allreduce(local_unpack_active, max, adapter.comm)
+            @test extension._pencil_scalar_stats().synthesis_packed_max_message_elements <
+                  2nlm_cplx_calc(complex_cfg.lmax, complex_cfg.mmax, 1)
+
+            rank = MPI.Comm_rank(adapter.comm)
+            varying_ltr = rank == 0 ? ltr_complex : ltr_complex - 1
+            @test _all_ranks_catch(adapter.comm) do
+                analysis_packed_cplx_l(complex_cfg, complex_spatial, varying_ltr)
+            end
+        end
+    end
+
     @testset "same-name axisymmetric and fixed-order Pencil APIs" begin
         axis_coefficients = ComplexF32[0.2, -0.1, 0.05, 0.03, -0.02, 0.01]
         axis_field = synthesis_axisym(cfg, axis_coefficients)
@@ -479,6 +557,15 @@ end
         planned = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
         dist_analysis!(plan, planned, spatial)
         @test planned ≈ coefficients atol=3e-11 rtol=3e-11
+        fill!(planned, 0)
+        @test analysis!(plan, planned, spatial) === planned
+        @test planned ≈ coefficients atol=3e-11 rtol=3e-11
+
+        spectral = analysis(cfg, spatial)
+        synthesis_plan = extension.DistPlan(cfg, spatial)
+        planned_spatial = similar(spatial)
+        @test synthesis!(synthesis_plan, planned_spatial, spectral) === planned_spatial
+        @test _collect_spatial(planned_spatial, cfg) ≈ field atol=3e-11 rtol=3e-11
         for m in 0:cfg.mmax
             m % cfg.mres == 0 && continue
             @test iszero(maximum(abs, @view planned[:, m + 1]))
@@ -517,6 +604,99 @@ end
         @test _all_ranks_catch(adapter.comm) do
             analysis_batch(cfg, varying_fields)
         end
+
+
+        empty_fields = PencilArray{Float64}(undef, pencil(spatial), 0)
+        @test _all_ranks_catch(adapter.comm) do
+            analysis_batch(cfg, empty_fields)
+        end
+        empty_coefficients = PencilArray{ComplexF64}(
+            undef, create_spectral_pencil(cfg; comm=adapter.comm), 0,
+        )
+        empty_analysis_output = similar(empty_coefficients)
+        empty_synthesis_output = PencilArray{Float64}(
+            undef, pencil(spatial), 0,
+        )
+        @test _all_ranks_catch(adapter.comm) do
+            analysis_batch!(cfg, empty_analysis_output, empty_fields)
+        end
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis_batch(
+                cfg, empty_coefficients; prototype_θφ=empty_fields,
+            )
+        end
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis_batch_cplx(
+                cfg, empty_coefficients; prototype_θφ=empty_fields,
+            )
+        end
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis_batch!(
+                cfg, empty_synthesis_output, empty_coefficients;
+                prototype_θφ=empty_fields,
+            )
+        end
+
+        malformed_pen = Pencil(
+            (cfg.nlat + 1, cfg.nlon), (1,), adapter.comm,
+        )
+        malformed_real = PencilArray{Float64}(undef, malformed_pen)
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis_packed(
+                cfg, _place_distributed_vector(packed, adapter.comm);
+                prototype_θφ=malformed_real,
+            )
+        end
+        MPI.Barrier(adapter.comm)
+        malformed_stats = extension._pencil_scalar_stats()
+        @test malformed_stats.synthesis_packed_max_message_elements == 0
+        @test malformed_stats.synthesis_max_message_elements == 0
+
+        complex_cfg = create_gauss_config(4, 7; nlon=12)
+        complex_coefficients = zeros(
+            ComplexF32,
+            nlm_cplx_calc(complex_cfg.lmax, complex_cfg.mmax, 1),
+        )
+        complex_coefficients[
+            LM_cplx_index(complex_cfg.lmax, complex_cfg.mmax, 2, -1) + 1
+        ] = 0.2f0 - 0.1f0im
+        distributed_complex = _place_distributed_vector(
+            complex_coefficients, adapter.comm,
+        )
+        malformed_complex_pen = Pencil(
+            (complex_cfg.nlat + 1, complex_cfg.nlon), (1,), adapter.comm,
+        )
+        malformed_complex = PencilArray{ComplexF32}(
+            undef, malformed_complex_pen,
+        )
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis_packed_cplx(
+                complex_cfg, distributed_complex;
+                prototype_θφ=malformed_complex,
+            )
+        end
+        MPI.Barrier(adapter.comm)
+        malformed_complex_stats = extension._pencil_scalar_stats()
+        @test malformed_complex_stats.synthesis_packed_max_message_elements == 0
+        @test malformed_complex_stats.synthesis_max_message_elements == 0
+
+        wrong_complex_prototype = PencilArray{Float32}(
+            undef,
+            create_spatial_pencil(complex_cfg; comm=adapter.comm),
+        )
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis_packed_cplx(
+                complex_cfg, distributed_complex;
+                prototype_θφ=wrong_complex_prototype,
+            )
+        end
+        MPI.Barrier(adapter.comm)
+        wrong_type_stats = extension._pencil_scalar_stats()
+        @test wrong_type_stats.synthesis_packed_max_message_elements == 0
+        @test wrong_type_stats.synthesis_max_message_elements == 0
     end
 
     @test dist_analysis_packed(cfg, spatial) ≈ packed atol=3e-11 rtol=3e-11

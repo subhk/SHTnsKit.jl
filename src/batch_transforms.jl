@@ -304,6 +304,7 @@ function analysis_batch(cfg::SHTConfig, fields::AbstractArray{<:Real,3}; use_rff
     nlat, nlon, nfields = size(fields)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
+    nfields > 0 || throw(ArgumentError("analysis_batch requires at least one field"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     CT = complex(float(eltype(fields)))  # preserve Float32/Float64 instead of forcing ComplexF64
@@ -394,6 +395,7 @@ function analysis_batch!(cfg::SHTConfig, alm_out::AbstractArray{<:Complex,3},
     nlat, nlon, nfields = size(fields)
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
+    nfields > 0 || throw(ArgumentError("analysis_batch! requires at least one field"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_out, 1) == lmax + 1 || throw(DimensionMismatch("alm first dim must be lmax+1=$(lmax+1)"))
@@ -530,6 +532,9 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    size(alm_batch, 3) > 0 || throw(ArgumentError(
+        "synthesis_batch requires at least one coefficient field",
+    ))
     scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
 
     nfields = size(alm_batch, 3)
@@ -636,6 +641,9 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    size(alm_batch, 3) > 0 || throw(ArgumentError(
+        "synthesis_batch! requires at least one coefficient field",
+    ))
     scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
 
     nfields = size(alm_batch, 3)

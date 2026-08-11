@@ -482,6 +482,27 @@ function _distributed_vector(::Type{T}, n::Int, comm) where {T}
     return result
 end
 
+function _validate_packed_synthesis_prototype!(
+        cfg::SHTnsKit.SHTConfig, prototype::PencilArray,
+        coefficients::PencilArray, operation::Symbol;
+        complex_output::Bool)
+    comm = communicator(coefficients)
+    _validate_scalar_pencil!(
+        cfg, prototype, (cfg.nlat, cfg.nlon), operation;
+        comm, peer=coefficients, require_complex_input=complex_output,
+    )
+    flags = UInt32(0)
+    decomposition = PencilArrays.decomposition(pencil(prototype))
+    decomposition in ((1,), (2,), (1, 2)) || (flags |= 0x0002)
+    prototype_code = _scalar_precision_code(eltype(prototype))
+    coefficient_code = _scalar_precision_code(eltype(coefficients))
+    expected_prototype_code = complex_output ? coefficient_code : coefficient_code - 1
+    prototype_code == expected_prototype_code || (flags |= 0x0004)
+    complex_output || eltype(prototype) <: Real || (flags |= 0x0400)
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
 function _rank_ranges(values::PencilArray, comm)
     globals = collect(Int, globalindices(values, 1))
     first_index = isempty(globals) ? 1 : first(globals)
@@ -609,6 +630,10 @@ function SHTnsKit.synthesis_packed_l(cfg::SHTnsKit.SHTConfig,
         cfg, coefficients, cfg.nlm, :synthesis_packed_l;
         require_complex=true, peer=prototype_θφ,
     )
+    _validate_packed_synthesis_prototype!(
+        cfg, prototype_θφ, coefficients, :synthesis_packed_l;
+        complex_output=false,
+    )
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_packed_l)
     spectral = _unpack_spectral_pencil(cfg, coefficients, lcap)
     local_result = SHTnsKit.dist_synthesis(
@@ -620,10 +645,11 @@ function SHTnsKit.synthesis_packed_l(cfg::SHTnsKit.SHTConfig,
 end
 
 function _complex_packed_entries(cfg::SHTnsKit.SHTConfig,
-                                 first_index::Int, count::Int)
+                                 first_index::Int, count::Int,
+                                 lcap::Int=cfg.lmax)
     last_index = first_index + count - 1
     entries = Tuple{Int,Int,Int}[]
-    @inbounds for l in 0:cfg.lmax
+    @inbounds for l in 0:lcap
         for m in -min(l, cfg.mmax):min(l, cfg.mmax)
             packed_index = SHTnsKit.LM_cplx_index(
                 cfg.lmax, cfg.mmax, l, m,
@@ -637,7 +663,8 @@ end
 
 function _pack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
                                         Aplus::PencilArray,
-                                        Aminus::PencilArray)
+                                        Aminus::PencilArray,
+                                        lcap::Int=cfg.lmax)
     comm = communicator(Aplus)
     expected = SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     output = _distributed_vector(eltype(Aplus), expected, comm)
@@ -647,7 +674,7 @@ function _pack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
     rank = MPI.Comm_rank(comm)
     for root in 0:(MPI.Comm_size(comm) - 1)
         entries = _complex_packed_entries(
-            cfg, starts[root + 1], counts[root + 1],
+            cfg, starts[root + 1], counts[root + 1], lcap,
         )
         send = zeros(eltype(Aplus), length(entries))
         @inbounds for (k, (_, l, m)) in pairs(entries)
@@ -674,14 +701,23 @@ end
 
 function SHTnsKit.analysis_packed_cplx(cfg::SHTnsKit.SHTConfig,
                                        field::PencilArray)
+    return SHTnsKit.analysis_packed_cplx_l(cfg, field, cfg.lmax)
+end
+
+function SHTnsKit.analysis_packed_cplx_l(cfg::SHTnsKit.SHTConfig,
+                                         field::PencilArray,
+                                         ltr::Integer)
     comm = communicator(field)
     _validate_cfg_replicated(cfg, comm)
     _collective_validation_error(
         comm, cfg.mres == 1 ? UInt32(0) : UInt32(0x0200),
-        :analysis_packed_cplx,
+        :analysis_packed_cplx_l,
+    )
+    lcap = _collective_truncation(
+        comm, ltr, cfg.lmax, :analysis_packed_cplx_l,
     )
     _validate_scalar_pencil!(
-        cfg, field, (cfg.nlat, cfg.nlon), :analysis_packed_cplx;
+        cfg, field, (cfg.nlat, cfg.nlon), :analysis_packed_cplx_l;
         comm, require_complex_input=true,
     )
     RT = real(eltype(field))
@@ -689,17 +725,18 @@ function SHTnsKit.analysis_packed_cplx(cfg::SHTnsKit.SHTConfig,
     imag_field = PencilArray{RT}(undef, pencil(field))
     parent(real_field) .= real.(parent(field))
     parent(imag_field) .= imag.(parent(field))
-    analyzed_real = dist_analysis_pencil(cfg, real_field)
-    analyzed_imag = dist_analysis_pencil(cfg, imag_field)
+    analyzed_real = dist_analysis_pencil(cfg, real_field; ltr=lcap)
+    analyzed_imag = dist_analysis_pencil(cfg, imag_field; ltr=lcap)
     Aplus = similar(analyzed_real)
     Aminus = similar(analyzed_real)
     parent(Aplus) .= parent(analyzed_real) .+ im .* parent(analyzed_imag)
     parent(Aminus) .= parent(analyzed_real) .- im .* parent(analyzed_imag)
-    return _pack_complex_spectral_pencils(cfg, Aplus, Aminus)
+    return _pack_complex_spectral_pencils(cfg, Aplus, Aminus, lcap)
 end
 
 function _unpack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
-                                          packed::PencilArray)
+                                          packed::PencilArray,
+                                          lcap::Int=cfg.lmax)
     comm = communicator(packed)
     spectral_pen = SHTnsKit.create_spectral_pencil(cfg; comm)
     Aplus = PencilArray{eltype(packed)}(undef, spectral_pen)
@@ -718,7 +755,7 @@ function _unpack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
         first_m_index = mstarts[root + 1]
         last_m_index = first_m_index + mcounts[root + 1] - 1
         entries = Tuple{Int,Int,Int}[]
-        @inbounds for m in 0:cfg.mmax, l in m:cfg.lmax
+        @inbounds for m in 0:min(cfg.mmax, lcap), l in m:lcap
             first_m_index ≤ m + 1 ≤ last_m_index || continue
             push!(entries, (l, m,
                 SHTnsKit.LM_cplx_index(cfg.lmax, cfg.mmax, l, m) + 1))
@@ -759,18 +796,36 @@ end
 function SHTnsKit.synthesis_packed_cplx(cfg::SHTnsKit.SHTConfig,
                                         coefficients::PencilArray;
                                         prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_packed_cplx_l(
+        cfg, coefficients, cfg.lmax; prototype_θφ,
+    )
+end
+
+function SHTnsKit.synthesis_packed_cplx_l(cfg::SHTnsKit.SHTConfig,
+                                          coefficients::PencilArray,
+                                          ltr::Integer;
+                                          prototype_θφ::PencilArray)
     comm = communicator(coefficients)
     _validate_cfg_replicated(cfg, comm)
     _collective_validation_error(
         comm, cfg.mres == 1 ? UInt32(0) : UInt32(0x0200),
-        :synthesis_packed_cplx,
+        :synthesis_packed_cplx_l,
     )
     expected = SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     _validate_variant_vector!(
-        cfg, coefficients, expected, :synthesis_packed_cplx;
+        cfg, coefficients, expected, :synthesis_packed_cplx_l;
         require_complex=true, peer=prototype_θφ,
     )
-    Aplus, Aminus = _unpack_complex_spectral_pencils(cfg, coefficients)
+    _validate_packed_synthesis_prototype!(
+        cfg, prototype_θφ, coefficients, :synthesis_packed_cplx_l;
+        complex_output=true,
+    )
+    lcap = _collective_truncation(
+        comm, ltr, cfg.lmax, :synthesis_packed_cplx_l,
+    )
+    Aplus, Aminus = _unpack_complex_spectral_pencils(
+        cfg, coefficients, lcap,
+    )
     local_result = SHTnsKit.dist_synthesis(
         cfg, Aplus; prototype_θφ, real_output=false, Aminus,
     )

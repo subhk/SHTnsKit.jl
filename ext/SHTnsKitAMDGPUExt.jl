@@ -25,8 +25,10 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  analysis_axisym_l, synthesis_axisym_l,
                  analysis_packed_ml, synthesis_packed_ml,
                  analysis_packed_cplx, synthesis_packed_cplx,
+                 analysis_packed_cplx_l, synthesis_packed_cplx_l,
                  analysis_batch, analysis_batch!,
                  synthesis_batch, synthesis_batch!, synthesis_batch_cplx,
+                 analysis!, synthesis!,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
@@ -208,7 +210,12 @@ synthesis_cplx(cfg::SHTConfig, coefficients::AMDGPU.AnyROCArray{T,2}) where {T} 
     synthesis_cplx(SHTnsKit.GPU(), cfg, coefficients)
 
 @inline function _amdgpu_lcap(cfg::SHTConfig, ltr::Integer)
-    lcap = Int(ltr)
+    lcap = try
+        Int(ltr)
+    catch error
+        error isa InexactError || rethrow()
+        throw(ArgumentError("ltr must be representable as Int"))
+    end
     0 ≤ lcap ≤ cfg.lmax || throw(ArgumentError(
         "ltr must satisfy 0 ≤ ltr ≤ lmax=$(cfg.lmax)",
     ))
@@ -408,8 +415,9 @@ synthesis_packed_ml(cfg::SHTConfig, im::Int,
                     ltr::Int) where {T<:Complex} =
     synthesis_packed_ml(SHTnsKit.GPU(), cfg, im, coefficients, ltr)
 
-function analysis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
-                              field::AMDGPU.AnyROCArray{T,2}) where {T<:Complex}
+function _amdgpu_analysis_packed_cplx(cfg::SHTConfig,
+                                      field::AMDGPU.AnyROCArray{T,2},
+                                      lcap::Int) where {T<:Complex}
     cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
     size(field) == (cfg.nlat, cfg.nlon) || throw(DimensionMismatch(
         "field must have size ($(cfg.nlat), $(cfg.nlon))",
@@ -420,19 +428,37 @@ function analysis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
     fourier = CT.(field)
     FFTW.fft!(fourier, 2)
     packed = AMDGPU.zeros(CT, SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1))
+    mcap = min(cfg.mmax, lcap)
     kernel! = complex_packed_analysis_kernel!(ROCBackend())
     kernel!(packed, fourier, tables.Plm, tables.weights, tables.scales,
-            RT(cfg.cphi), cfg.nlon, cfg.lmax, cfg.mmax;
-            ndrange=(cfg.lmax + 1, 2cfg.mmax + 1))
+            RT(cfg.cphi), cfg.nlon, lcap, cfg.mmax, mcap;
+            ndrange=(lcap + 1, 2mcap + 1))
     AMDGPU.synchronize()
     return packed
+end
+function analysis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                              field::AMDGPU.AnyROCArray{T,2}) where {T<:Complex}
+    return _amdgpu_analysis_packed_cplx(cfg, field, cfg.lmax)
 end
 analysis_packed_cplx(cfg::SHTConfig,
                      field::AMDGPU.AnyROCArray{T,2}) where {T<:Complex} =
     analysis_packed_cplx(SHTnsKit.GPU(), cfg, field)
 
-function synthesis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
-                               coefficients::AMDGPU.AnyROCArray{T,1}) where {T<:Complex}
+function analysis_packed_cplx_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                                field::AMDGPU.AnyROCArray{T,2},
+                                ltr::Integer) where {T<:Complex}
+    return _amdgpu_analysis_packed_cplx(
+        cfg, field, _amdgpu_lcap(cfg, ltr),
+    )
+end
+analysis_packed_cplx_l(cfg::SHTConfig,
+                       field::AMDGPU.AnyROCArray{T,2},
+                       ltr::Integer) where {T<:Complex} =
+    analysis_packed_cplx_l(SHTnsKit.GPU(), cfg, field, ltr)
+
+function _amdgpu_synthesis_packed_cplx(cfg::SHTConfig,
+                                       coefficients::AMDGPU.AnyROCArray{T,1},
+                                       lcap::Int) where {T<:Complex}
     cfg.mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
     expected = SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     length(coefficients) == expected || throw(DimensionMismatch(
@@ -442,17 +468,34 @@ function synthesis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
     CT = Complex{RT}
     tables = _amdgpu_scalar_tables(cfg, RT)
     fourier = AMDGPU.zeros(CT, cfg.nlat, cfg.nlon)
+    mcap = min(cfg.mmax, lcap)
     kernel! = complex_packed_synthesis_kernel!(ROCBackend())
     kernel!(fourier, coefficients, tables.Plm, tables.scales,
-            RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, cfg.lmax, cfg.mmax;
-            ndrange=(cfg.nlat, 2cfg.mmax + 1))
+            RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, lcap, cfg.mmax, mcap;
+            ndrange=(cfg.nlat, 2mcap + 1))
     AMDGPU.synchronize()
     FFTW.ifft!(fourier, 2)
     return fourier
 end
+function synthesis_packed_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                               coefficients::AMDGPU.AnyROCArray{T,1}) where {T<:Complex}
+    return _amdgpu_synthesis_packed_cplx(cfg, coefficients, cfg.lmax)
+end
 synthesis_packed_cplx(cfg::SHTConfig,
                       coefficients::AMDGPU.AnyROCArray{T,1}) where {T<:Complex} =
     synthesis_packed_cplx(SHTnsKit.GPU(), cfg, coefficients)
+
+function synthesis_packed_cplx_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                                 coefficients::AMDGPU.AnyROCArray{T,1},
+                                 ltr::Integer) where {T<:Complex}
+    return _amdgpu_synthesis_packed_cplx(
+        cfg, coefficients, _amdgpu_lcap(cfg, ltr),
+    )
+end
+synthesis_packed_cplx_l(cfg::SHTConfig,
+                        coefficients::AMDGPU.AnyROCArray{T,1},
+                        ltr::Integer) where {T<:Complex} =
+    synthesis_packed_cplx_l(SHTnsKit.GPU(), cfg, coefficients, ltr)
 
 function _amdgpu_batch_analysis(cfg::SHTConfig, fields::AMDGPU.AnyROCArray;
                                 use_rfft::Bool=false, fft_batch=nothing)
@@ -461,6 +504,9 @@ function _amdgpu_batch_analysis(cfg::SHTConfig, fields::AMDGPU.AnyROCArray;
     ))
     size(fields, 1) == cfg.nlat && size(fields, 2) == cfg.nlon ||
         throw(DimensionMismatch("fields must start with (nlat, nlon)"))
+    size(fields, 3) > 0 || throw(ArgumentError(
+        "analysis_batch requires at least one field",
+    ))
     use_rfft && !(eltype(fields) <: Real) && throw(ArgumentError(
         "use_rfft=true requires real-valued fields",
     ))
@@ -509,6 +555,9 @@ function _amdgpu_batch_synthesis(cfg::SHTConfig,
     size(coefficients, 1) == cfg.lmax + 1 &&
         size(coefficients, 2) == cfg.mmax + 1 ||
         throw(DimensionMismatch("coefficient batch has the wrong spectral shape"))
+    size(coefficients, 3) > 0 || throw(ArgumentError(
+        "synthesis_batch requires at least one coefficient field",
+    ))
     use_rfft && !real_output && throw(ArgumentError("use_rfft=true implies real_output"))
     RT = typeof(float(real(zero(eltype(coefficients)))))
     CT = Complex{RT}
@@ -561,6 +610,41 @@ end
 synthesis_batch!(cfg::SHTConfig, output::AMDGPU.AnyROCArray{T,3},
                  coefficients::AMDGPU.AnyROCArray{R,3}; kwargs...) where {T,R<:Complex} =
     synthesis_batch!(SHTnsKit.GPU(), cfg, output, coefficients; kwargs...)
+
+function analysis!(::SHTnsKit.GPU, plan::SHTPlan,
+                   output::AMDGPU.AnyROCArray{T,2},
+                   field::AMDGPU.AnyROCArray{R,2}) where {T<:Complex,R<:Number}
+    size(output) == (plan.cfg.lmax + 1, plan.cfg.mmax + 1) ||
+        throw(DimensionMismatch("plan analysis output shape mismatch"))
+    result = _amdgpu_scalar_analysis(
+        plan.cfg, field; use_rfft=plan.use_rfft,
+    )
+    copyto!(output, result)
+    return output
+end
+analysis!(plan::SHTPlan, output::AMDGPU.AnyROCArray{T,2},
+          field::AMDGPU.AnyROCArray{R,2}) where {T<:Complex,R<:Number} =
+    analysis!(SHTnsKit.GPU(), plan, output, field)
+
+function synthesis!(::SHTnsKit.GPU, plan::SHTPlan,
+                    output::AMDGPU.AnyROCArray{T,2},
+                    coefficients::AMDGPU.AnyROCArray{R,2};
+                    real_output::Bool=true) where {T<:Number,R<:Complex}
+    size(output) == (plan.cfg.nlat, plan.cfg.nlon) ||
+        throw(DimensionMismatch("plan synthesis output shape mismatch"))
+    !real_output && T <: Real && throw(ArgumentError(
+        "real plan output storage requires real_output=true",
+    ))
+    result = _amdgpu_scalar_synthesis(
+        plan.cfg, coefficients; real_output, use_rfft=plan.use_rfft,
+    )
+    copyto!(output, result)
+    return output
+end
+synthesis!(plan::SHTPlan, output::AMDGPU.AnyROCArray{T,2},
+           coefficients::AMDGPU.AnyROCArray{R,2};
+           real_output::Bool=true) where {T<:Number,R<:Complex} =
+    synthesis!(SHTnsKit.GPU(), plan, output, coefficients; real_output)
 synthesis_batch!(cfg::SHTConfig, output::AMDGPU.AnyROCArray{T,3},
                  coefficients::AMDGPU.AnyROCArray{R,3}; kwargs...) where {T<:Real,R<:Complex} =
     synthesis_batch!(SHTnsKit.GPU(), cfg, output, coefficients; kwargs...)

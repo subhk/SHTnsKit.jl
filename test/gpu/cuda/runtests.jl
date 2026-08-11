@@ -64,6 +64,8 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         (:synthesis_packed_ml, Tuple{SHTConfig,Int,CuArray{ComplexF32,1},Int}),
         (:analysis_packed_cplx, Tuple{SHTConfig,CuArray{ComplexF32,2}}),
         (:synthesis_packed_cplx, Tuple{SHTConfig,CuArray{ComplexF32,1}}),
+        (:analysis_packed_cplx_l, Tuple{SHTConfig,CuArray{ComplexF32,2},Int}),
+        (:synthesis_packed_cplx_l, Tuple{SHTConfig,CuArray{ComplexF32,1},Int}),
         (:analysis_batch, Tuple{SHTConfig,CuArray{Float32,3}}),
         (:analysis_batch!, Tuple{SHTConfig,CuArray{ComplexF32,3},CuArray{Float32,3}}),
         (:synthesis_batch, Tuple{SHTConfig,CuArray{ComplexF32,3}}),
@@ -72,6 +74,16 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     )
         @test which(getproperty(SHTnsKit, function_name), signature).module === extension
     end
+    @test which(
+        analysis!, Tuple{SHTPlan,CuArray{ComplexF32,2},CuArray{Float32,2}},
+    ).module === extension
+    @test which(
+        synthesis!, Tuple{SHTPlan,CuArray{Float32,2},CuArray{ComplexF32,2}},
+    ).module === extension
+    @test which(
+        analysis!,
+        Tuple{SHTnsKit.GPU,SHTPlan,CuArray{ComplexF32,2},CuArray{Float32,2}},
+    ).module === extension
     @test which(gpu_clear_cache!, Tuple{SHTnsKit.GPU}).module === SHTnsKit
     @test hasmethod(
         SHTnsKit._gpu_adapter_clear_cache!, Tuple{typeof(extension.CUDA_ADAPTER)},
@@ -307,6 +319,7 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
               complex_field atol=2f-4 rtol=2f-4
         @test Array(analysis_packed_cplx(complex_cfg, CuArray(complex_field))) ≈
               complex_coefficients atol=2f-4 rtol=2f-4
+        run_gpu_scalar_variant_matrix(CUDAScalarAdapter())
         run_scalar_full_parity(
             CUDAScalarAdapter();
             grid_kinds=_SCALAR_GRID_KINDS,

@@ -56,6 +56,15 @@ end
         a = @allocated SHTnsKit.dist_analysis!(plan, Alm_out, f_pa)
         rank == 0 && println("dist_analysis! (use_rfft=$use_rfft): $a B/call")
         @test a < 8192
+
+        # The ordinary same-name API is the public plan surface for Pencil
+        # input and must retain the established warmed allocation contract.
+        SHTnsKit.analysis!(plan, Alm_out, f_pa)
+        a_same_name = @allocated SHTnsKit.analysis!(plan, Alm_out, f_pa)
+        rank == 0 && println(
+            "analysis! distributed (use_rfft=$use_rfft): $a_same_name B/call",
+        )
+        @test a_same_name < 8192
     end
 end
 

@@ -111,23 +111,203 @@ function run_shared_scalar_variant_kernel_reference(common, backend)
     event === nothing || wait(event)
     complex_coefficients = zeros(ComplexF32, nlm_cplx_calc(3, 3, 1))
     complex_coefficients[LM_cplx_index(3, 3, 2, -1) + 1] = 0.2f0 - 0.1f0im
-    complex_coefficients[LM_cplx_index(3, 3, 3, 2) + 1] = -0.08f0 + 0.04f0im
+    complex_coefficients[LM_cplx_index(3, 3, 3, 2) + 1] = 90f0 - 70f0im
+    complex_lcap = 2
+    complex_mcap = min(complex_cfg.mmax, complex_lcap)
     complex_bins = zeros(ComplexF32, complex_cfg.nlat, complex_cfg.nlon)
     event = common.complex_packed_synthesis_kernel!(backend)(
         complex_bins, complex_coefficients, cPlm, cscales,
         Float32(SHTnsKit.phi_inv_scale(complex_cfg)), complex_cfg.nlon,
-        complex_cfg.lmax, complex_cfg.mmax;
-        ndrange=(complex_cfg.nlat, 2complex_cfg.mmax + 1),
+        complex_lcap, complex_cfg.mmax, complex_mcap;
+        ndrange=(complex_cfg.nlat, 2complex_mcap + 1),
     )
     event === nothing || wait(event)
-    complex_back = similar(complex_coefficients)
+    complex_back = zeros(ComplexF32, length(complex_coefficients))
     event = common.complex_packed_analysis_kernel!(backend)(
         complex_back, complex_bins, cPlm, cw, cscales, Float32(complex_cfg.cphi),
-        complex_cfg.nlon, complex_cfg.lmax, complex_cfg.mmax;
-        ndrange=(complex_cfg.lmax + 1, 2complex_cfg.mmax + 1),
+        complex_cfg.nlon, complex_lcap, complex_cfg.mmax, complex_mcap;
+        ndrange=(complex_lcap + 1, 2complex_mcap + 1),
     )
     event === nothing || wait(event)
+    complex_coefficients[LM_cplx_index(3, 3, 3, 2) + 1] = 0
     @test complex_back ≈ complex_coefficients atol=2f-5 rtol=2f-5
+    return nothing
+end
+
+"""Run the hardware-only scalar variant matrix through one vendor adapter."""
+function run_gpu_scalar_variant_matrix(adapter)
+    for T in (Float32, Float64)
+        tolerance = T === Float32 ? 3f-4 : 4e-11
+        cfg = create_gauss_config(
+            5, 8; nlon=14, mres=2, norm=:schmidt,
+            real_norm=true, cs_phase=false,
+        )
+        dense = _variant_coefficients(cfg, T)
+        packed = SHTnsKit.pack_lm(cfg, dense)
+        field = reshape(synthesis_packed(cfg, packed), cfg.nlat, cfg.nlon)
+        device_field = place(adapter, cfg, field, :spatial)
+        device_packed = place(adapter, cfg, packed, :spectral)
+
+        ltr = 3
+        packed_l = analysis_packed_l(cfg, vec(device_field), ltr)
+        synthesized_l = synthesis_packed_l(cfg, device_packed, ltr)
+        assert_resident(adapter, packed_l)
+        assert_resident(adapter, synthesized_l)
+        @test collect_result(adapter, packed_l, cfg) ≈
+              analysis_packed_l(cfg, vec(field), ltr) atol=tolerance rtol=tolerance
+        @test collect_result(adapter, synthesized_l, cfg) ≈
+              synthesis_packed_l(cfg, packed, ltr) atol=tolerance rtol=tolerance
+
+        for im in 0:(cfg.mmax ÷ cfg.mres)
+            physical_m = im * cfg.mres
+            mode_coefficients = Complex{T}.(
+                dense[(physical_m + 1):end, physical_m + 1],
+            )
+            mode = synthesis_packed_ml(cfg, im, mode_coefficients, cfg.lmax)
+            device_mode = place(adapter, cfg, mode, :spatial)
+            device_mode_coefficients = place(
+                adapter, cfg, mode_coefficients, :spectral,
+            )
+            analyzed_mode = analysis_packed_ml(
+                cfg, im, device_mode, cfg.lmax,
+            )
+            synthesized_mode = synthesis_packed_ml(
+                cfg, im, device_mode_coefficients, cfg.lmax,
+            )
+            assert_resident(adapter, analyzed_mode)
+            assert_resident(adapter, synthesized_mode)
+            @test collect_result(adapter, analyzed_mode, cfg) ≈
+                  mode_coefficients atol=tolerance rtol=tolerance
+            @test collect_result(adapter, synthesized_mode, cfg) ≈
+                  mode atol=tolerance rtol=tolerance
+        end
+
+        for nfields in (1, 2, 5)
+            fields = repeat(reshape(field, cfg.nlat, cfg.nlon, 1), 1, 1, nfields)
+            for k in 1:nfields
+                @views fields[:, :, k] .*= T(k)
+            end
+            device_fields = place(adapter, cfg, fields, :spatial)
+            analyzed_batch = analysis_batch(cfg, device_fields)
+            assert_resident(adapter, analyzed_batch)
+            @test collect_result(adapter, analyzed_batch, cfg) ≈
+                  analysis_batch(cfg, fields) atol=tolerance rtol=tolerance
+            synthesized_batch = synthesis_batch(cfg, analyzed_batch)
+            assert_resident(adapter, synthesized_batch)
+            @test collect_result(adapter, synthesized_batch, cfg) ≈
+                  fields atol=tolerance rtol=tolerance
+            analysis_output = similar(analyzed_batch)
+            synthesis_output = similar(device_fields)
+            @test analysis_batch!(cfg, analysis_output, device_fields) === analysis_output
+            @test synthesis_batch!(cfg, synthesis_output, analyzed_batch) === synthesis_output
+        end
+
+        complex_cfg = create_gauss_config(
+            5, 8; nlon=14, norm=:schmidt,
+            real_norm=true, cs_phase=false,
+        )
+        complex_coefficients = zeros(
+            Complex{T},
+            nlm_cplx_calc(complex_cfg.lmax, complex_cfg.mmax, 1),
+        )
+        for l in 0:complex_cfg.lmax,
+            m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax)
+            complex_coefficients[
+                LM_cplx_index(complex_cfg.lmax, complex_cfg.mmax, l, m) + 1
+            ] = Complex{T}(T(0.03 * (l + 1) - 0.01m), T(0.02m - 0.01l))
+        end
+        complex_field = synthesis_packed_cplx(complex_cfg, complex_coefficients)
+        device_complex_field = place(
+            adapter, complex_cfg, complex_field, :spatial,
+        )
+        device_complex_coefficients = place(
+            adapter, complex_cfg, complex_coefficients, :spectral,
+        )
+        complex_ltr = 3
+        complex_analysis = analysis_packed_cplx_l(
+            complex_cfg, device_complex_field, complex_ltr,
+        )
+        complex_synthesis = synthesis_packed_cplx_l(
+            complex_cfg, device_complex_coefficients, complex_ltr,
+        )
+        assert_resident(adapter, complex_analysis)
+        assert_resident(adapter, complex_synthesis)
+        @test collect_result(adapter, complex_analysis, complex_cfg) ≈
+              analysis_packed_cplx_l(
+                  complex_cfg, complex_field, complex_ltr,
+              ) atol=tolerance rtol=tolerance
+        @test collect_result(adapter, complex_synthesis, complex_cfg) ≈
+              synthesis_packed_cplx_l(
+                  complex_cfg, complex_coefficients, complex_ltr,
+              ) atol=tolerance rtol=tolerance
+
+        for use_rfft in (false, true)
+            plan = SHTPlan(cfg; use_rfft)
+            output_coefficients = similar(
+                place(adapter, cfg, dense, :spectral),
+            )
+            output_field = similar(device_field)
+            @test analysis!(plan, output_coefficients, device_field) === output_coefficients
+            @test collect_result(adapter, output_coefficients, cfg) ≈
+                  dense atol=tolerance rtol=tolerance
+            @test synthesis!(plan, output_field, output_coefficients) === output_field
+            @test collect_result(adapter, output_field, cfg) ≈
+                  field atol=tolerance rtol=tolerance
+            fill!(output_coefficients, 0)
+            @test analysis!(GPU(), plan, output_coefficients, device_field) ===
+                  output_coefficients
+            @test synthesis!(GPU(), plan, output_field, output_coefficients) === output_field
+            @test_throws ArgumentError analysis!(
+                CPU(), plan, output_coefficients, device_field,
+            )
+        end
+
+        alias_plan = SHTPlan(cfg)
+        alias_length = max(length(field), length(dense))
+        alias_storage = place(
+            adapter, cfg, zeros(Complex{T}, alias_length), :spatial,
+        )
+        alias_field = reshape(@view(alias_storage[1:length(field)]), size(field))
+        copyto!(alias_field, complex.(field))
+        alias_coefficients = reshape(
+            @view(alias_storage[1:length(dense)]), size(dense),
+        )
+        @test analysis!(alias_plan, alias_coefficients, alias_field) === alias_coefficients
+        @test collect_result(adapter, alias_coefficients, cfg) ≈
+              dense atol=tolerance rtol=tolerance
+        @test synthesis!(
+            alias_plan, alias_field, alias_coefficients; real_output=false,
+        ) === alias_field
+
+        empty_fields = similar(device_field, T, cfg.nlat, cfg.nlon, 0)
+        empty_coefficients = similar(
+            device_packed, Complex{T}, cfg.lmax + 1, cfg.mmax + 1, 0,
+        )
+        empty_analysis_output = similar(empty_coefficients)
+        empty_real_output = similar(
+            device_field, T, cfg.nlat, cfg.nlon, 0,
+        )
+        @test_throws ArgumentError analysis_batch(cfg, empty_fields)
+        @test_throws ArgumentError analysis_batch!(
+            cfg, empty_analysis_output, empty_fields,
+        )
+        @test_throws ArgumentError synthesis_batch(cfg, empty_coefficients)
+        @test_throws ArgumentError synthesis_batch_cplx(cfg, empty_coefficients)
+        @test_throws ArgumentError synthesis_batch!(
+            cfg, empty_real_output, empty_coefficients,
+        )
+        @test_throws ArgumentError analysis_packed_cplx_l(
+            complex_cfg, device_complex_field, -1,
+        )
+        @test_throws ArgumentError synthesis_packed_cplx_l(
+            complex_cfg, device_complex_coefficients, complex_cfg.lmax + 1,
+        )
+        invalid_im = cfg.mmax ÷ cfg.mres + 1
+        @test_throws ArgumentError analysis_packed_ml(
+            cfg, invalid_im, place(adapter, cfg, zeros(Complex{T}, cfg.nlat), :spatial),
+            cfg.lmax,
+        )
+    end
     return nothing
 end
 
@@ -176,6 +356,28 @@ end
                 cfg, zeros(ComplexF64, cfg.lmax + 1), ltr,
             )
         end
+
+        complex_cfg = create_gauss_config(5, 8; nlon=14)
+        complex_field = zeros(ComplexF64, complex_cfg.nlat, complex_cfg.nlon)
+        complex_packed = zeros(
+            ComplexF64,
+            nlm_cplx_calc(complex_cfg.lmax, complex_cfg.mmax, 1),
+        )
+        for ltr in (-1, complex_cfg.lmax + 1)
+            @test_throws ArgumentError analysis_packed_cplx_l(
+                complex_cfg, complex_field, ltr,
+            )
+            @test_throws ArgumentError synthesis_packed_cplx_l(
+                complex_cfg, complex_packed, ltr,
+            )
+        end
+        overflowing_ltr = big(typemax(Int)) + 1
+        @test_throws ArgumentError analysis_packed_cplx_l(
+            complex_cfg, complex_field, overflowing_ltr,
+        )
+        @test_throws ArgumentError synthesis_packed_cplx_l(
+            complex_cfg, complex_packed, overflowing_ltr,
+        )
 
         invalid_im = cfg.mmax ÷ cfg.mres + 1
         @test_throws ArgumentError analysis_packed_ml(
@@ -262,6 +464,10 @@ end
         cfield = synthesis_packed_cplx(cfg, cpacked)
         @test synthesis_packed_cplx(SHTnsKit.CPU(), cfg, cpacked) ≈ cfield
         @test analysis_packed_cplx(SHTnsKit.CPU(), cfg, cfield) ≈ cpacked atol=2e-11 rtol=2e-11
+        @test synthesis_packed_cplx_l(SHTnsKit.CPU(), cfg, cpacked, 2) ≈
+              synthesis_packed_cplx_l(cfg, cpacked, 2)
+        @test analysis_packed_cplx_l(SHTnsKit.CPU(), cfg, cfield, 2) ≈
+              analysis_packed_cplx_l(cfg, cfield, 2)
 
         @test_throws ArgumentError analysis_packed(
             SHTnsKit.CPU(), cfg, VariantNonCPUArray(field),
@@ -271,6 +477,12 @@ end
         )
         @test_throws ArgumentError analysis_packed_cplx(
             SHTnsKit.CPU(), cfg, VariantNonCPUArray(cfield),
+        )
+        @test_throws ArgumentError analysis_packed_cplx_l(
+            SHTnsKit.CPU(), cfg, VariantNonCPUArray(cfield), 2,
+        )
+        @test_throws ArgumentError synthesis_packed_cplx_l(
+            SHTnsKit.CPU(), cfg, VariantNonCPUArray(cpacked), 2,
         )
         @test_throws ArgumentError analysis_batch(
             SHTnsKit.CPU(), cfg, VariantNonCPUArray(batch_field),
@@ -322,6 +534,46 @@ end
         @test eltype(complex_field) === ComplexF32
         @test eltype(analysis_packed_cplx(cfg, complex_field)) === ComplexF32
         @test analysis_packed_cplx(cfg, complex_field) ≈ cpacked atol=3f-5 rtol=3f-5
+    end
+
+    @testset "complex packed degree limits preserve LM_cplx layout" begin
+        for T in (Float32, Float64), norm in (:orthonormal, :schmidt)
+            cfg = create_gauss_config(
+                5, 8; nlon=14, norm,
+                real_norm=norm === :schmidt, cs_phase=norm !== :schmidt,
+            )
+            packed = zeros(Complex{T}, nlm_cplx_calc(cfg.lmax, cfg.mmax, 1))
+            for l in 0:cfg.lmax, m in -min(l, cfg.mmax):min(l, cfg.mmax)
+                packed[LM_cplx_index(cfg.lmax, cfg.mmax, l, m) + 1] = Complex{T}(
+                    T(0.03 * (l + 1) - 0.01m), T(-0.02l + 0.015m),
+                )
+            end
+            ltr = 3
+            truncated = copy(packed)
+            noisy = copy(packed)
+            for l in (ltr + 1):cfg.lmax, m in -min(l, cfg.mmax):min(l, cfg.mmax)
+                idx = LM_cplx_index(cfg.lmax, cfg.mmax, l, m) + 1
+                truncated[idx] = 0
+                noisy[idx] = Complex{T}(T(100 + l), T(-80 + m))
+            end
+
+            field = synthesis_packed_cplx_l(cfg, noisy, ltr)
+            tol = T === Float32 ? 4f-5 : 3e-11
+            @test eltype(field) === Complex{T}
+            @test field ≈ synthesis_packed_cplx(cfg, truncated) atol=tol rtol=tol
+            analyzed = analysis_packed_cplx_l(cfg, field, ltr)
+            @test eltype(analyzed) === Complex{T}
+            @test analyzed ≈ truncated atol=tol rtol=tol
+            for l in (ltr + 1):cfg.lmax, m in -min(l, cfg.mmax):min(l, cfg.mmax)
+                @test iszero(analyzed[LM_cplx_index(cfg.lmax, cfg.mmax, l, m) + 1])
+            end
+        end
+
+        mres_cfg = create_gauss_config(4, 7; nlon=12, mres=2)
+        mres_field = zeros(ComplexF64, mres_cfg.nlat, mres_cfg.nlon)
+        mres_packed = zeros(ComplexF64, nlm_cplx_calc(4, 4, 1))
+        @test_throws ArgumentError analysis_packed_cplx_l(mres_cfg, mres_field, 3)
+        @test_throws ArgumentError synthesis_packed_cplx_l(mres_cfg, mres_packed, 3)
     end
 
     @testset "plan and scalar batches preserve boundary semantics" begin
@@ -429,5 +681,54 @@ end
         planned_field = similar(reference_field)
         synthesis!(plan, planned_field, invalid_order_coefficients)
         @test planned_field ≈ reference_field atol=2e-12 rtol=2e-12
+    end
+
+
+    @testset "empty scalar batches are rejected before mutation" begin
+        cfg = create_gauss_config(3, 6; nlon=10)
+        empty_fields = zeros(Float64, cfg.nlat, cfg.nlon, 0)
+        empty_coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1, 0)
+        empty_analysis_output = similar(empty_coefficients)
+        empty_synthesis_output = zeros(Float64, cfg.nlat, cfg.nlon, 0)
+
+        @test_throws ArgumentError analysis_batch(cfg, empty_fields)
+        @test_throws ArgumentError analysis_batch!(cfg, empty_analysis_output, empty_fields)
+        @test_throws ArgumentError synthesis_batch(cfg, empty_coefficients)
+        @test_throws ArgumentError synthesis_batch_cplx(cfg, empty_coefficients)
+        @test_throws ArgumentError synthesis_batch!(
+            cfg, empty_synthesis_output, empty_coefficients,
+        )
+        @test_throws ArgumentError analysis_batch(SHTnsKit.CPU(), cfg, empty_fields)
+        @test_throws ArgumentError synthesis_batch(
+            SHTnsKit.CPU(), cfg, empty_coefficients,
+        )
+    end
+
+    @testset "host SHTPlan enforces CPU storage markers" begin
+        cfg = create_gauss_config(3, 6; nlon=10)
+        plan = SHTPlan(cfg)
+        field = zeros(Float64, cfg.nlat, cfg.nlon)
+        coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+
+        @test analysis!(SHTnsKit.CPU(), plan, coefficients, field) === coefficients
+        @test synthesis!(SHTnsKit.CPU(), plan, field, coefficients) === field
+        @test_throws ArgumentError analysis!(
+            SHTnsKit.CPU(), plan, coefficients, VariantNonCPUArray(field),
+        )
+        @test_throws ArgumentError analysis!(
+            SHTnsKit.CPU(), plan, VariantNonCPUArray(coefficients), field,
+        )
+        @test_throws ArgumentError synthesis!(
+            SHTnsKit.CPU(), plan, field, VariantNonCPUArray(coefficients),
+        )
+        @test_throws ArgumentError synthesis!(
+            SHTnsKit.CPU(), plan, VariantNonCPUArray(field), coefficients,
+        )
+        @test_throws ArgumentError analysis!(
+            plan, coefficients, VariantNonCPUArray(field),
+        )
+        @test_throws ArgumentError synthesis!(
+            plan, field, VariantNonCPUArray(coefficients),
+        )
     end
 end

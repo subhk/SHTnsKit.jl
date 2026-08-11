@@ -118,6 +118,7 @@ end
     ).module === SHTnsKit
     run_shared_scalar_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_shared_scalar_variant_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
+    run_scalar_workspace_cache_reference(extension.GPUCommon)
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitAMDGPUExt.jl"), String)
     ordinary_pipeline = split(
         split(source, "function _amdgpu_scalar_analysis"; limit=2)[2],

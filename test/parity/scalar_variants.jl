@@ -134,6 +134,85 @@ function run_shared_scalar_variant_kernel_reference(common, backend)
     return nothing
 end
 
+Base.@noinline function _seed_weak_workspace_owner(common, cache)
+    owner = Ref(:temporary_owner)
+    common.scalar_workspace_use!(
+        identity, () -> :temporary_workspace, cache, :weak_device, owner,
+        Float32, :scalar, (1,), UInt(1),
+    )
+    return WeakRef(owner)
+end
+
+"""Exercise the shared bounded/weak/serialized workspace-cache contract."""
+function run_scalar_workspace_cache_reference(common)
+    @testset "shared scalar workspace cache lifecycle" begin
+        cache = common.ScalarWorkspaceCache(2)
+        owners = [Ref(index) for index in 1:4]
+        builds = zeros(Int, 4)
+        function use_owner(index, device)
+            builder = () -> begin
+                builds[index] += 1
+                index
+            end
+            return common.scalar_workspace_use!(
+                identity, builder, cache, device, owners[index],
+                Float32, :scalar, (1,), UInt(1),
+            )
+        end
+
+        @test use_owner(1, :device_a) == 1
+        @test use_owner(2, :device_a) == 2
+        @test use_owner(4, :device_b) == 4
+        @test use_owner(1, :device_a) == 1 # refresh owner 1's LRU tick
+        @test use_owner(3, :device_a) == 3 # evicts owner 2 on device A only
+        @test common.scalar_workspace_size(cache; device=:device_a) == 2
+        @test common.scalar_workspace_size(cache; device=:device_b) == 1
+        @test use_owner(2, :device_a) == 2
+        @test builds[2] == 2
+        @test builds[4] == 1
+
+        weak_cache = common.ScalarWorkspaceCache(2)
+        weak_owner = _seed_weak_workspace_owner(common, weak_cache)
+        GC.gc(true)
+        GC.gc(true)
+        @test weak_owner.value === nothing
+        live_owner = Ref(:live_owner)
+        common.scalar_workspace_use!(
+            identity, () -> :live_workspace, weak_cache, :weak_device,
+            live_owner, Float32, :scalar, (1,), UInt(1),
+        )
+        @test common.scalar_workspace_size(weak_cache; device=:weak_device) == 1
+
+        serialized_cache = common.ScalarWorkspaceCache(2)
+        serialized_owner = Ref(:serialized_owner)
+        common.scalar_workspace_use!(
+            identity, () -> :serialized_workspace, serialized_cache,
+            :thread_device, serialized_owner, Float64, :scalar, (2,), UInt(1),
+        )
+        counter_lock = ReentrantLock()
+        active = Ref(0)
+        maximum_active = Ref(0)
+        callback = function (workspace)
+            lock(counter_lock) do
+                active[] += 1
+                maximum_active[] = max(maximum_active[], active[])
+            end
+            sleep(0.01)
+            lock(counter_lock) do
+                active[] -= 1
+            end
+            return workspace
+        end
+        tasks = [Threads.@spawn common.scalar_workspace_use!(
+            callback, () -> :should_not_rebuild, serialized_cache,
+            :thread_device, serialized_owner, Float64, :scalar, (2,), UInt(1),
+        ) for _ in 1:4]
+        @test all(fetch(task) === :serialized_workspace for task in tasks)
+        @test maximum_active[] == 1
+    end
+    return nothing
+end
+
 """Run the hardware-only scalar variant matrix through one vendor adapter."""
 function assert_warm_device_noalloc(_adapter, call)
     call()
@@ -219,6 +298,11 @@ function run_gpu_scalar_variant_matrix(adapter)
                 )
                 @test analysis_call!() === analysis_output
                 @test synthesis_call!() === synthesis_output
+                host_analysis = analysis_batch(cfg, fields; use_rfft)
+                @test collect_result(adapter, analysis_output, cfg) ≈
+                      host_analysis atol=tolerance rtol=tolerance
+                @test collect_result(adapter, synthesis_output, cfg) ≈
+                      synthesis_batch(cfg, host_analysis; use_rfft) atol=tolerance rtol=tolerance
                 assert_warm_device_noalloc(adapter, analysis_call!)
                 assert_warm_device_noalloc(adapter, synthesis_call!)
                 alias_storage = similar(
@@ -472,6 +556,7 @@ end
 
     @testset "packed and truncated storage matches dense transforms" begin
         for T in (Float32, Float64), norm in (:orthonormal, :schmidt)
+            tolerance = T === Float32 ? 2f-4 : 5e-11
             cfg = create_gauss_config(
                 5, 8; nlon=14, mres=2, norm,
                 real_norm=norm === :schmidt, cs_phase=norm !== :schmidt,
@@ -482,7 +567,7 @@ end
             flat = synthesis_packed(cfg, packed)
             @test eltype(flat) === T
             @test reshape(flat, cfg.nlat, cfg.nlon) ≈ synthesis(cfg, dense)
-            @test analysis_packed(cfg, flat) ≈ packed atol=10eps(T) rtol=2e-4
+            @test analysis_packed(cfg, flat) ≈ packed atol=tolerance rtol=tolerance
 
             ltr = 3
             truncated_dense = copy(dense)
@@ -499,9 +584,9 @@ end
                 end
             end
             low_field = synthesis_packed_l(cfg, high_noise, ltr)
-            @test low_field ≈ synthesis_packed(cfg, truncated_packed) atol=10eps(T) rtol=2e-5
+            @test low_field ≈ synthesis_packed(cfg, truncated_packed) atol=tolerance rtol=tolerance
             analyzed = analysis_packed_l(cfg, low_field, ltr)
-            @test analyzed ≈ truncated_packed atol=30eps(T) rtol=2e-4
+            @test analyzed ≈ truncated_packed atol=tolerance rtol=tolerance
             for m in 0:cfg.mmax
                 m % cfg.mres == 0 || continue
                 for l in max(m, ltr + 1):cfg.lmax
@@ -654,6 +739,7 @@ end
 
     @testset "plan and scalar batches preserve boundary semantics" begin
         for T in (Float32, Float64), nfields in (1, 2, 5)
+            tolerance = T === Float32 ? 2f-4 : 5e-11
             cfg = create_gauss_config(
                 4, 7; nlon=12, norm=:schmidt, real_norm=true, cs_phase=false,
             )
@@ -667,20 +753,20 @@ end
             @test eltype(batch) === Complex{T}
             @test size(batch) == (cfg.lmax + 1, cfg.mmax + 1, nfields)
             for k in 1:nfields
-                @test batch[:, :, k] ≈ T(k) .* coefficients atol=30eps(T) rtol=2e-4
+                @test batch[:, :, k] ≈ T(k) .* coefficients atol=tolerance rtol=tolerance
             end
             reconstructed = synthesis_batch(cfg, batch)
             @test eltype(reconstructed) === T
-            @test reconstructed ≈ fields atol=30eps(T) rtol=2e-4
+            @test reconstructed ≈ fields atol=tolerance rtol=tolerance
 
             analysis_out = similar(batch)
             analysis_scratch = zeros(Complex{T}, cfg.nlat, cfg.nlon, nfields)
             analysis_batch!(cfg, analysis_out, fields; fft_batch=analysis_scratch)
-            @test analysis_out ≈ batch atol=30eps(T) rtol=2e-4
+            @test analysis_out ≈ batch atol=tolerance rtol=tolerance
             synthesis_out = similar(fields)
             synthesis_scratch = similar(analysis_scratch)
             synthesis_batch!(cfg, synthesis_out, batch; fft_batch=synthesis_scratch)
-            @test synthesis_out ≈ fields atol=30eps(T) rtol=2e-4
+            @test synthesis_out ≈ fields atol=tolerance rtol=tolerance
         end
 
         cfg = create_gauss_config(
@@ -695,6 +781,15 @@ end
         recovered = similar(coefficients)
         analysis!(plan, recovered, planned)
         @test recovered ≈ coefficients atol=2e-11 rtol=2e-11
+
+        real_analysis_output = fill(9.0, cfg.lmax + 1, cfg.mmax + 1)
+        @test_throws ArgumentError analysis!(plan, real_analysis_output, planned)
+        @test all(==(9.0), real_analysis_output)
+        real_complex_output = fill(8.0, cfg.nlat, cfg.nlon)
+        @test_throws ArgumentError synthesis!(
+            plan, real_complex_output, coefficients; real_output=false,
+        )
+        @test all(==(8.0), real_complex_output)
 
         # Legal shared-parent views must be read completely before overlapping
         # output is mutated.
@@ -723,6 +818,11 @@ end
             cfg, zeros(size(batch_fields)), shared_coefficients;
             fft_batch=shared_batch,
         )
+        real_batch_output = fill(7.0, size(batch_fields))
+        @test_throws ArgumentError synthesis_batch!(
+            cfg, real_batch_output, batch_coefficients; real_output=false,
+        )
+        @test all(==(7.0), real_batch_output)
 
         shared_coefficients .= batch_coefficients
         independent_scratch = similar(shared_batch)

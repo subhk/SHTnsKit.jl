@@ -450,11 +450,16 @@ function _validate_variant_vector!(cfg::SHTnsKit.SHTConfig, values::PencilArray,
                                    expected_length::Int, operation::Symbol;
                                    require_real::Bool=false,
                                    require_complex::Bool=false,
+                                   allow_longer::Bool=false,
                                    peer=nothing)
     comm = communicator(values)
     _validate_cfg_replicated(cfg, comm)
     flags = UInt32(0)
-    size_global(values) == (expected_length, 1) || (flags |= 0x0001)
+    global_size = size_global(values)
+    valid_length = allow_longer ?
+        (length(global_size) == 2 && global_size[1] >= expected_length &&
+         global_size[2] == 1) : global_size == (expected_length, 1)
+    valid_length || (flags |= 0x0001)
     ranges = PencilArrays.range_local(pencil(values))
     size(parent(values)) == (length(ranges[1]), length(ranges[2])) ||
         (flags |= 0x0002)
@@ -515,10 +520,16 @@ end
 function _exchange_owner_values(send_chunks::Vector{Vector{T}}, comm) where {T}
     nranks = MPI.Comm_size(comm)
     length(send_chunks) == nranks || throw(ArgumentError("one send chunk per rank required"))
-    send_counts = Cint[length(chunk) for chunk in send_chunks]
+    send_counts = _checked_owner_exchange_counts(
+        [length(chunk) for chunk in send_chunks], comm,
+        :packed_owner_exchange_send,
+    )
     recv_counts = Vector{Cint}(undef, nranks)
     MPI.Alltoall!(
         MPI.UBuffer(send_counts, 1), MPI.UBuffer(recv_counts, 1), comm,
+    )
+    _checked_owner_exchange_counts(
+        Int.(recv_counts), comm, :packed_owner_exchange_receive,
     )
     send = reduce(vcat, send_chunks; init=T[])
     receive = Vector{T}(undef, sum(recv_counts))
@@ -526,6 +537,24 @@ function _exchange_owner_values(send_chunks::Vector{Vector{T}}, comm) where {T}
         MPI.VBuffer(send, send_counts), MPI.VBuffer(receive, recv_counts), comm,
     )
     return receive, Int.(recv_counts), Int.(send_counts)
+end
+
+function _checked_owner_exchange_counts(counts::AbstractVector{<:Integer},
+                                        comm, operation::Symbol)
+    limit = Int(typemax(Cint))
+    valid = length(counts) == MPI.Comm_size(comm)
+    total = 0
+    for count in counts
+        if count < 0 || count > limit || total > limit - min(Int(count), limit)
+            valid = false
+            break
+        end
+        total += Int(count)
+    end
+    _collective_validation_error(
+        comm, valid ? UInt32(0) : UInt32(0x0001), operation,
+    )
+    return Cint.(counts)
 end
 
 @inline function _packed_lm_pairs(cfg::SHTnsKit.SHTConfig, lcap::Int,
@@ -930,7 +959,7 @@ function _synthesis_mode_pencil(cfg::SHTnsKit.SHTConfig, im::Int,
     _validate_variant_vector!(
         cfg, coefficients, expected,
         axisymmetric ? :synthesis_axisym_l : :synthesis_packed_ml;
-        require_complex=true,
+        require_complex=true, allow_longer=axisymmetric,
     )
 
     CT = eltype(coefficients)
@@ -949,6 +978,7 @@ function _synthesis_mode_pencil(cfg::SHTnsKit.SHTConfig, im::Int,
             SHTnsKit.Plm_norm_row!(P, cfg.x[θindex], ltr, m)
             for (i, qindex) in pairs(qglobals)
                 l = axisymmetric ? qindex - 1 : m + qindex - 1
+                l <= ltr || continue
                 scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
                 send[k] += RT(P[l + 1]) * scale * parent(coefficients)[i, 1]
             end
@@ -1008,11 +1038,19 @@ end
 function _validate_batch_pencil!(cfg::SHTnsKit.SHTConfig, values::PencilArray,
                                  expected_spatial::Tuple{Int,Int},
                                  operation::Symbol; require_real::Bool=false,
-                                 require_complex::Bool=false, peer=nothing)
-    comm = communicator(values)
+                                 require_complex::Bool=false, peer=nothing,
+                                 comm=communicator(values))
     _validate_cfg_replicated(cfg, comm)
     globals = size_global(values)
     flags = UInt32(0)
+    values_comm = communicator(values)
+    values_compatible = try
+        MPI.Comm_size(values_comm) == MPI.Comm_size(comm) &&
+            MPI.Comm_compare(values_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+    catch
+        false
+    end
+    values_compatible || (flags |= 0x0008)
     length(globals) == 3 || (flags |= 0x0001)
     length(globals) == 3 && globals[1:2] != expected_spatial && (flags |= 0x0001)
     length(globals) == 3 && globals[3] < 1 && (flags |= 0x0001)
@@ -1061,17 +1099,18 @@ function SHTnsKit.analysis_batch!(cfg::SHTnsKit.SHTConfig,
                                   output::PencilArray{TO,3},
                                   fields::PencilArray{TI,3};
                                   use_rfft::Bool=false, fft_batch=nothing) where
-                                  {TO<:Complex,TI<:Real}
+                                  {TO,TI<:Real}
     comm = communicator(fields)
     _validate_batch_pencil!(
         cfg, output, (cfg.lmax + 1, cfg.mmax + 1), :analysis_batch_output;
-        require_complex=true, peer=fields,
+        require_complex=true, peer=fields, comm,
     )
-    expected = PencilArray{TO}(
-        undef, SHTnsKit.create_spectral_pencil(cfg; comm), size_global(fields)[3],
-    )
-    _validate_identical_pencil_layout!(
-        expected, output, :analysis_batch_output_layout,
+    nfields = size_global(fields)[3]
+    expected_pen = SHTnsKit.create_spectral_pencil(cfg; comm)
+    _validate_pencil_layout_description!(
+        expected_pen, (cfg.lmax + 1, cfg.mmax + 1, nfields),
+        (PencilArrays.size_local(expected_pen)..., nfields), output,
+        :analysis_batch_output_layout; comm,
     )
     MPI.Allreduce(fft_batch === nothing ? 0 : 1, +, comm) == 0 ||
         throw(ArgumentError(
@@ -1091,9 +1130,13 @@ function SHTnsKit.synthesis_batch(cfg::SHTnsKit.SHTConfig,
         cfg, coefficients, (cfg.lmax + 1, cfg.mmax + 1), :synthesis_batch;
         require_complex=true, peer=prototype_θφ,
     )
+    comm = communicator(coefficients)
+    _validate_collective_scalar_options!(
+        comm, use_rfft, real_output, :synthesis_batch_options,
+    )
     prototype_fields = _validate_batch_pencil!(
         cfg, prototype_θφ, (cfg.nlat, cfg.nlon), :synthesis_batch_prototype;
-        peer=coefficients,
+        peer=coefficients, comm,
     )
     prototype_fields == nfields || throw(DimensionMismatch(
         "prototype batch size must match the coefficient batch",
@@ -1133,10 +1176,25 @@ function SHTnsKit.synthesis_batch!(cfg::SHTnsKit.SHTConfig,
     comm = communicator(coefficients)
     _validate_batch_pencil!(
         cfg, output, (cfg.nlat, cfg.nlon), :synthesis_batch_output;
-        peer=coefficients,
+        peer=coefficients, comm,
+    )
+    _validate_batch_pencil!(
+        cfg, prototype_θφ, (cfg.nlat, cfg.nlon), :synthesis_batch_prototype;
+        peer=coefficients, comm,
+    )
+    _validate_collective_scalar_options!(
+        comm, use_rfft, real_output, :synthesis_batch_options,
+    )
+    output_code = _scalar_precision_code(eltype(output))
+    coefficient_code = _scalar_precision_code(eltype(coefficients))
+    expected_output_code = real_output ? coefficient_code - 1 : coefficient_code
+    _collective_validation_error(
+        comm,
+        output_code == expected_output_code ? UInt32(0) : UInt32(0x0004),
+        :synthesis_batch_output_type,
     )
     _validate_identical_pencil_layout!(
-        prototype_θφ, output, :synthesis_batch_output_layout,
+        prototype_θφ, output, :synthesis_batch_output_layout; comm,
     )
     MPI.Allreduce(fft_batch === nothing ? 0 : 1, +, comm) == 0 ||
         throw(ArgumentError(

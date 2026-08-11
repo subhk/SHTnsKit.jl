@@ -12,8 +12,15 @@ results otherwise).
 """
 function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
     MPI.Comm_size(comm) > 1 || return
-    sig = hash((cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon,
-                cfg.norm, cfg.cs_phase, cfg.robert_form))
+    sig = hash((
+        cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon, cfg.nlm,
+        cfg.norm, cfg.cs_phase, cfg.real_norm, cfg.robert_form,
+        cfg.grid_type, cfg.phi_scale, cfg.south_pole_first,
+        cfg.cphi, cfg.use_plm_tables,
+        hash(cfg.θ), hash(cfg.φ), hash(cfg.x), hash(cfg.w), hash(cfg.st),
+        hash(cfg.Nlm), hash(cfg.norm_scale_matrix),
+        hash(cfg.plm_tables), hash(cfg.NP_tables),
+    ))
     root_sig = MPI.bcast(sig, 0, comm)
     # Decide the throw COLLECTIVELY: a lone throw on the mismatched rank(s) would
     # leave the matching ranks (incl. rank 0, which always matches) proceeding into

@@ -652,6 +652,9 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     size(f_out, 1) == nlat || throw(DimensionMismatch("f_out first dim must be nlat=$nlat"))
     size(f_out, 2) == nlon || throw(DimensionMismatch("f_out second dim must be nlon=$nlon"))
     size(f_out, 3) == nfields || throw(DimensionMismatch("f_out third dim must be nfields=$nfields"))
+    !real_output && eltype(f_out) <: Real && throw(ArgumentError(
+        "synthesis_batch! with real_output=false requires complex output storage",
+    ))
 
     if use_rfft
         real_output || throw(ArgumentError("use_rfft=true implies real_output"))

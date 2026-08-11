@@ -162,11 +162,21 @@ This check deliberately compares the communicator, process topology,
 decomposed dimensions, and every locally owned global range before any
 transform communication begins.
 """
-function _validate_identical_pencil_layout!(reference::PencilArray,
-                                            candidate::PencilArray,
-                                            operation::Symbol)
-    comm = communicator(reference)
+function _validate_pencil_layout_description!(reference_pen,
+                                              reference_global::Tuple,
+                                              reference_local::Tuple,
+                                              candidate::PencilArray,
+                                              operation::Symbol;
+                                              comm=PencilArrays.get_comm(reference_pen))
     flags = UInt32(0)
+    reference_comm = PencilArrays.get_comm(reference_pen)
+    reference_compatible = try
+        MPI.Comm_size(reference_comm) == MPI.Comm_size(comm) &&
+            MPI.Comm_compare(reference_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+    catch
+        false
+    end
+    reference_compatible || (flags |= 0x0008)
     candidate_comm = communicator(candidate)
     comm_compatible = try
         MPI.Comm_size(candidate_comm) == MPI.Comm_size(comm) &&
@@ -176,9 +186,8 @@ function _validate_identical_pencil_layout!(reference::PencilArray,
     end
     comm_compatible || (flags |= 0x0008)
 
-    reference_pen = pencil(reference)
     candidate_pen = pencil(candidate)
-    size_global(reference) == size_global(candidate) || (flags |= 0x0001)
+    reference_global == size_global(candidate) || (flags |= 0x0001)
     local_compatible = try
         PencilArrays.decomposition(reference_pen) ==
             PencilArrays.decomposition(candidate_pen) &&
@@ -186,11 +195,81 @@ function _validate_identical_pencil_layout!(reference::PencilArray,
             size(PencilArrays.topology(candidate_pen)) &&
         PencilArrays.range_local(reference_pen) ==
             PencilArrays.range_local(candidate_pen) &&
-        size(parent(reference)) == size(parent(candidate))
+        reference_local == size(parent(candidate))
     catch
         false
     end
     local_compatible || (flags |= 0x0002)
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
+function _validate_identical_pencil_layout!(reference::PencilArray,
+                                            candidate::PencilArray,
+                                            operation::Symbol;
+                                            comm=communicator(reference))
+    return _validate_pencil_layout_description!(
+        pencil(reference), size_global(reference), size(parent(reference)),
+        candidate, operation; comm,
+    )
+end
+
+function _validate_collective_scalar_options!(comm, use_rfft::Bool,
+                                              real_output::Bool,
+                                              operation::Symbol)
+    flags = UInt32(0)
+    rfft_code = Int(use_rfft)
+    real_code = Int(real_output)
+    MPI.Allreduce(rfft_code, min, comm) == MPI.Allreduce(rfft_code, max, comm) ||
+        (flags |= 0x0010)
+    MPI.Allreduce(real_code, min, comm) == MPI.Allreduce(real_code, max, comm) ||
+        (flags |= 0x0020)
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
+@inline function _plan_output_type_code(::Type{T}) where {T}
+    T === Float32 && return 1
+    T === Float64 && return 2
+    T === ComplexF32 && return 3
+    T === ComplexF64 && return 4
+    return 0
+end
+
+function _validate_dense_plan_output!(plan::DistAnalysisPlan,
+                                      output::AbstractMatrix,
+                                      operation::Symbol)
+    comm = communicator(plan.prototype_θφ)
+    _validate_collective_scalar_options!(comm, plan.use_rfft, true, operation)
+    expected = (plan.cfg.lmax + 1, plan.cfg.mmax + 1)
+    flags = UInt32(0)
+    size(output) == expected || (flags |= 0x0001)
+    eltype(output) === eltype(plan.Alm_work) || (flags |= 0x0004)
+    type_code = _plan_output_type_code(eltype(output))
+    type_code == 0 && (flags |= 0x0004)
+    MPI.Allreduce(type_code, min, comm) == MPI.Allreduce(type_code, max, comm) ||
+        (flags |= 0x0004)
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
+function _validate_synthesis_plan_output!(plan::DistPlan,
+                                          output::PencilArray,
+                                          coefficients::PencilArray,
+                                          real_output::Bool,
+                                          operation::Symbol)
+    comm = communicator(plan.prototype_θφ)
+    _validate_collective_scalar_options!(
+        comm, plan.use_rfft, real_output, operation,
+    )
+    coefficient_type = eltype(coefficients)
+    expected_type = real_output ? typeof(real(zero(coefficient_type))) :
+                                  coefficient_type
+    flags = eltype(output) === expected_type ? UInt32(0) : UInt32(0x0004)
+    type_code = _plan_output_type_code(eltype(output))
+    type_code == 0 && (flags |= 0x0004)
+    MPI.Allreduce(type_code, min, comm) == MPI.Allreduce(type_code, max, comm) ||
+        (flags |= 0x0004)
     _collective_validation_error(comm, flags, operation)
     return nothing
 end
@@ -203,7 +282,18 @@ function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
                                   use_rfft::Bool=false, real_output::Bool=true,
                                   require_real_input::Bool=false,
                                   require_complex_input::Bool=false)
+    _validate_collective_scalar_options!(
+        comm, use_rfft, real_output, operation,
+    )
     flags = UInt32(0)
+    array_comm = communicator(array)
+    array_compatible = try
+        MPI.Comm_size(array_comm) == MPI.Comm_size(comm) &&
+            MPI.Comm_compare(array_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+    catch
+        false
+    end
+    array_compatible || (flags |= 0x0008)
     size_global(array) == expected || (flags |= 0x0001)
     ranges = PencilArrays.range_local(pencil(array))
     local_size = size(parent(array))
@@ -220,8 +310,12 @@ function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
     min_code == max_code || (flags |= 0x0004)
     if peer !== nothing
         peer_comm = communicator(peer)
-        compatible = MPI.Comm_size(peer_comm) == MPI.Comm_size(comm) &&
-                     MPI.Comm_compare(peer_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+        compatible = try
+            MPI.Comm_size(peer_comm) == MPI.Comm_size(comm) &&
+                MPI.Comm_compare(peer_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+        catch
+            false
+        end
         compatible || (flags |= 0x0008)
     end
     use_rfft && require_real_input && !(eltype(array) <: Real) && (flags |= 0x0010)
@@ -1105,6 +1199,7 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
     _validate_identical_pencil_layout!(
         plan.prototype_θφ, fθφ, :dist_analysis_plan_input,
     )
+    _validate_dense_plan_output!(plan, Alm_out, :dist_analysis_plan_output)
     if plan.fallback_standard
         # φ-distributed layout: needs the longitude Allgather; reuse the
         # allocating standard path (it warns about anti-scaling already).
@@ -1118,9 +1213,6 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
         throw(DimensionMismatch("fθφ local θ extent $(size(local_data, 1)) does not match plan ($(length(plan.θ_globals))); build the plan from a prototype with the same Pencil"))
     size(local_data, 2) == cfg.nlon ||
         throw(DimensionMismatch("fθφ local φ extent $(size(local_data, 2)) does not match cfg.nlon=$(cfg.nlon)"))
-    size(Alm_out) == (lmax + 1, mmax + 1) ||
-        throw(DimensionMismatch("Alm_out must be ($(lmax+1), $(mmax+1))"))
-
     # FFT along φ into the plan-owned buffer via the cached-plan helpers
     # (avoids both the per-call buffer and FFTW re-planning).
     if plan.use_rfft
@@ -1402,7 +1494,9 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
                                  prototype_θφ::PencilArray,
                                  real_output::Bool=true, use_rfft::Bool=false,
                                  Aminus=nothing)
-    comm = communicator(prototype_θφ)
+    # Coefficients are the trusted input. Inspect candidate prototype metadata
+    # locally, while every validation collective stays on this communicator.
+    comm = communicator(Alm)
     _validate_scalar_pencil!(
         cfg, Alm, (cfg.lmax + 1, cfg.mmax + 1), :synthesis;
         comm, peer=prototype_θφ, require_full_first_dim=true,
@@ -1504,6 +1598,9 @@ function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::P
     _validate_identical_pencil_layout!(
         plan.prototype_θφ, fθφ_out, :dist_synthesis_plan_output,
     )
+    _validate_synthesis_plan_output!(
+        plan, fθφ_out, Alm, real_output, :dist_synthesis_plan_output_type,
+    )
     # Rejected up front, before any collective — the test is on local eltypes,
     # identical on every rank, so all ranks throw together instead of deadlocking.
     #
@@ -1516,13 +1613,6 @@ function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::P
     # real field by 1.31, against a field magnitude of 2.96. So a caller who used
     # to pass `real_output=false` with a real output array wanted the real field,
     # and today that is spelled `real_output=true` — hence the message below.
-    if !real_output && eltype(fθφ_out) <: Real
-        throw(ArgumentError("dist_synthesis! with real_output=false needs a complex output " *
-                            "PencilArray; got eltype=$(eltype(fθφ_out)). If you are porting code " *
-                            "that used this combination before v1.2.18: it used to return the REAL " *
-                            "field wrapped as complex, so pass real_output=true to keep that result. " *
-                            "Pass a complex output PencilArray to get the true complex synthesis."))
-    end
     f = SHTnsKit.dist_synthesis(plan.cfg, Alm; prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
     copyto!(fθφ_out, f)
     return fθφ_out

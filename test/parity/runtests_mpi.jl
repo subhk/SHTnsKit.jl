@@ -386,9 +386,15 @@ end
                 (i, iglobal) in pairs(packed_2d_ranges[1])
                 parent(spatial_2d)[i, j] = T(field[iglobal, jglobal])
             end
+            extension._reset_pencil_scalar_stats!()
             packed_2d = analysis_packed_l(cfg, spatial_2d, ltr_same_name)
             @test _collect_distributed_vector(packed_2d) ≈
                   analysis_packed_l(cfg, T.(vec(field)), ltr_same_name) atol=tol rtol=tol
+            stats_2d_analysis = extension._pencil_scalar_stats()
+            @test stats_2d_analysis.analysis_packed_sent_elements == local_active_count
+            @test stats_2d_analysis.analysis_packed_max_message_elements <=
+                  local_active_count
+            extension._reset_pencil_scalar_stats!()
             reconstructed_2d = synthesis_packed_l(
                 cfg, packed_2d, ltr_same_name; prototype_θφ=spatial_2d,
             )
@@ -400,6 +406,18 @@ end
                       ),
                       cfg.nlat, cfg.nlon,
                   ) atol=tol rtol=tol
+            packed_2d_globals = collect(
+                Int, PencilArrays.range_local(pencil(packed_2d))[1],
+            )
+            local_packed_2d = count(packed_2d_globals) do packed_index
+                any(packed_index == LM_index(cfg.lmax, cfg.mres, l, m) + 1
+                    for m in 0:cfg.mres:min(cfg.mmax, ltr_same_name)
+                    for l in m:ltr_same_name)
+            end
+            stats_2d_synthesis = extension._pencil_scalar_stats()
+            @test stats_2d_synthesis.synthesis_packed_sent_elements == local_packed_2d
+            @test stats_2d_synthesis.synthesis_packed_max_message_elements <=
+                  local_packed_2d
         end
     end
 
@@ -507,6 +525,46 @@ end
                       edge_local_payload
             end
 
+            complex_2d_pen = Pencil(
+                (complex_cfg.nlat, complex_cfg.nlon), (1, 2), adapter.comm,
+            )
+            complex_2d = PencilArray{Complex{T}}(undef, complex_2d_pen)
+            complex_2d_ranges = PencilArrays.range_local(complex_2d_pen)
+            for (j, jglobal) in pairs(complex_2d_ranges[2]),
+                (i, iglobal) in pairs(complex_2d_ranges[1])
+                parent(complex_2d)[i, j] = complex_field[iglobal, jglobal]
+            end
+            extension._reset_pencil_scalar_stats!()
+            analyzed_2d = analysis_packed_cplx_l(
+                complex_cfg, complex_2d, ltr_complex,
+            )
+            @test _collect_distributed_vector(analyzed_2d) ≈ truncated atol=tol rtol=tol
+            complex_2d_analysis_stats = extension._pencil_scalar_stats()
+            @test complex_2d_analysis_stats.analysis_packed_sent_elements == local_active
+            @test complex_2d_analysis_stats.analysis_packed_max_message_elements <=
+                  local_active
+            analyzed_2d_globals = collect(
+                Int, PencilArrays.range_local(pencil(analyzed_2d))[1],
+            )
+            local_complex_2d_unpack = count(analyzed_2d_globals) do packed_index
+                any(packed_index == LM_cplx_index(
+                        complex_cfg.lmax, complex_cfg.mmax, l, m,
+                    ) + 1
+                    for l in 0:ltr_complex
+                    for m in -min(l, complex_cfg.mmax):min(l, complex_cfg.mmax))
+            end
+            extension._reset_pencil_scalar_stats!()
+            reconstructed_2d = synthesis_packed_cplx_l(
+                complex_cfg, analyzed_2d, ltr_complex; prototype_θφ=complex_2d,
+            )
+            @test _collect_spatial(reconstructed_2d, complex_cfg) ≈
+                  synthesis_packed_cplx(complex_cfg, truncated) atol=tol rtol=tol
+            complex_2d_synthesis_stats = extension._pencil_scalar_stats()
+            @test complex_2d_synthesis_stats.synthesis_packed_sent_elements ==
+                  local_complex_2d_unpack
+            @test complex_2d_synthesis_stats.synthesis_packed_max_message_elements <=
+                  local_complex_2d_unpack
+
             rank = MPI.Comm_rank(adapter.comm)
             varying_ltr = rank == 0 ? ltr_complex : ltr_complex - 1
             @test _all_ranks_catch(adapter.comm) do
@@ -531,6 +589,17 @@ end
         @test _collect_distributed_vector(axis_l) ≈ axis_coefficients[1:4] atol=3f-5 rtol=3f-5
         axis_low = synthesis_axisym_l(cfg, axis_l, 3)
         @test _collect_distributed_vector(axis_low) ≈
+              synthesis_axisym_l(cfg, axis_coefficients, 3) atol=3f-5 rtol=3f-5
+        noisy_axis_full = copy(axis_analyzed)
+        noisy_axis_globals = collect(
+            Int, PencilArrays.range_local(pencil(noisy_axis_full))[1],
+        )
+        for (local_index, global_index) in pairs(noisy_axis_globals)
+            global_index > 4 || continue
+            parent(noisy_axis_full)[local_index, 1] = ComplexF32(90, -40)
+        end
+        axis_full_prefix = synthesis_axisym_l(cfg, noisy_axis_full, 3)
+        @test _collect_distributed_vector(axis_full_prefix) ≈
               synthesis_axisym_l(cfg, axis_coefficients, 3) atol=3f-5 rtol=3f-5
 
         for im in 0:(cfg.mmax ÷ cfg.mres)
@@ -621,6 +690,7 @@ end
 
     @testset "distributed variant plans and collective validation" begin
         extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+        rank = MPI.Comm_rank(adapter.comm)
         plan = extension.DistAnalysisPlan(cfg, spatial)
         planned = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
         dist_analysis!(plan, planned, spatial)
@@ -647,6 +717,26 @@ end
         end
         @test all(==(ComplexF64(9, -2)), layout_dense)
 
+        # Dense plan outputs are replicated, so rank-varying element types must
+        # be rejected collectively before fallback/FFT/reduction work. A local
+        # check would let the valid rank enter transform collectives alone.
+        wrong_analysis_type = rank == 0 ?
+            fill(ComplexF64(12), layout_cfg.lmax + 1, layout_cfg.mmax + 1) :
+            fill(Float64(12), layout_cfg.lmax + 1, layout_cfg.mmax + 1)
+        @test _all_ranks_catch(adapter.comm) do
+            analysis!(layout_analysis_plan, wrong_analysis_type, layout_field)
+        end
+        @test all(==(eltype(wrong_analysis_type)(12)), wrong_analysis_type)
+        MPI.Barrier(adapter.comm)
+        wrong_analysis_shape = rank == 0 ?
+            fill(ComplexF64(14), layout_cfg.lmax + 1, layout_cfg.mmax + 1) :
+            fill(ComplexF64(14), layout_cfg.lmax + 2, layout_cfg.mmax + 1)
+        @test _all_ranks_catch(adapter.comm) do
+            analysis!(layout_analysis_plan, wrong_analysis_shape, layout_field)
+        end
+        @test all(==(ComplexF64(14)), wrong_analysis_shape)
+        MPI.Barrier(adapter.comm)
+
         layout_spectral = analysis(layout_cfg, layout_field)
         layout_synthesis_plan = extension.DistPlan(layout_cfg, layout_field)
         wrong_layout_output = PencilArray{Float64}(undef, layout_2d)
@@ -655,6 +745,102 @@ end
             synthesis!(layout_synthesis_plan, wrong_layout_output, layout_spectral)
         end
         @test all(==(7.0), parent(wrong_layout_output))
+
+        wrong_synthesis_type = if rank == 0
+            output = PencilArray{Float64}(undef, layout_1d)
+            fill!(parent(output), 13)
+            output
+        else
+            output = PencilArray{ComplexF64}(undef, layout_1d)
+            fill!(parent(output), 13)
+            output
+        end
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis!(layout_synthesis_plan, wrong_synthesis_type, layout_spectral)
+        end
+        @test all(==(eltype(wrong_synthesis_type)(13)), parent(wrong_synthesis_type))
+        MPI.Barrier(adapter.comm)
+        alternate_wrong_shape = PencilArray{Float64}(
+            undef,
+            Pencil((layout_cfg.nlat + 1, layout_cfg.nlon), (1,), adapter.comm),
+        )
+        correct_shape_output = PencilArray{Float64}(undef, layout_1d)
+        wrong_synthesis_shape = rank == 0 ? correct_shape_output :
+                                                    alternate_wrong_shape
+        fill!(parent(wrong_synthesis_shape), 15)
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis!(layout_synthesis_plan, wrong_synthesis_shape, layout_spectral)
+        end
+        @test all(==(15.0), parent(wrong_synthesis_shape))
+        MPI.Barrier(adapter.comm)
+
+        @test _all_ranks_catch(adapter.comm) do
+            analysis(layout_cfg, layout_field; use_rfft=rank == 0)
+        end
+        MPI.Barrier(adapter.comm)
+        varying_analysis_plan = extension.DistAnalysisPlan(
+            layout_cfg, layout_field; use_rfft=rank == 0,
+        )
+        fill!(layout_dense, ComplexF64(18, -1))
+        @test _all_ranks_catch(adapter.comm) do
+            analysis!(varying_analysis_plan, layout_dense, layout_field)
+        end
+        @test all(==(ComplexF64(18, -1)), layout_dense)
+        MPI.Barrier(adapter.comm)
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis(
+                layout_cfg, layout_spectral; prototype_θφ=layout_field,
+                real_output=rank == 0,
+            )
+        end
+        MPI.Barrier(adapter.comm)
+        varying_synthesis_plan = extension.DistPlan(
+            layout_cfg, layout_field; use_rfft=rank == 0,
+        )
+        fill!(parent(correct_shape_output), 19)
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis!(
+                varying_synthesis_plan, correct_shape_output, layout_spectral,
+            )
+        end
+        @test all(==(19.0), parent(correct_shape_output))
+        MPI.Barrier(adapter.comm)
+
+        divergent_cfg = deepcopy(layout_cfg)
+        if rank == 0
+            divergent_cfg.cphi *= 1.25
+            divergent_cfg.x[1] += 0.125
+        end
+        @test _all_ranks_catch(adapter.comm) do
+            extension._validate_cfg_replicated(divergent_cfg, adapter.comm)
+        end
+        MPI.Barrier(adapter.comm)
+        divergent_packed_size = deepcopy(layout_cfg)
+        rank == 0 && (divergent_packed_size.nlm += 1)
+        @test _all_ranks_catch(adapter.comm) do
+            extension._validate_cfg_replicated(
+                divergent_packed_size, adapter.comm,
+            )
+        end
+        MPI.Barrier(adapter.comm)
+
+        oversized_counts = zeros(Int, MPI.Comm_size(adapter.comm))
+        rank == 0 && (oversized_counts[1] = Int(typemax(Cint)) + 1)
+        @test _all_ranks_catch(adapter.comm) do
+            extension._checked_owner_exchange_counts(
+                oversized_counts, adapter.comm, :test_oversized_counts,
+            )
+        end
+        cumulative_counts = fill(
+            Int(typemax(Cint)) ÷ MPI.Comm_size(adapter.comm) + 1,
+            MPI.Comm_size(adapter.comm),
+        )
+        @test _all_ranks_catch(adapter.comm) do
+            extension._checked_owner_exchange_counts(
+                cumulative_counts, adapter.comm, :test_cumulative_counts,
+            )
+        end
+        MPI.Barrier(adapter.comm)
 
         layout_fields = PencilArray{Float64}(undef, layout_1d, 2)
         fill!(parent(layout_fields), 0.25)
@@ -675,6 +861,43 @@ end
             analysis_batch!(layout_cfg, wrong_batch_spectral, layout_fields)
         end
         @test all(==(ComplexF64(6, 1)), parent(wrong_batch_spectral))
+
+        rank_varying_batch_output = if rank == 0
+            output = PencilArray{ComplexF64}(
+                undef, create_spectral_pencil(layout_cfg; comm=adapter.comm), 2,
+            )
+            fill!(parent(output), 16)
+            output
+        else
+            output = PencilArray{Float64}(
+                undef, create_spectral_pencil(layout_cfg; comm=adapter.comm), 2,
+            )
+            fill!(parent(output), 16)
+            output
+        end
+        @test _all_ranks_catch(adapter.comm) do
+            analysis_batch!(layout_cfg, rank_varying_batch_output, layout_fields)
+        end
+        @test all(
+            ==(eltype(rank_varying_batch_output)(16)),
+            parent(rank_varying_batch_output),
+        )
+        MPI.Barrier(adapter.comm)
+
+        subgroup = MPI.Comm_split(adapter.comm, rank % 2, rank)
+        subgroup_output = PencilArray{ComplexF64}(
+            undef,
+            Pencil(
+                (layout_cfg.lmax + 1, layout_cfg.mmax + 1), (2,), subgroup,
+            ),
+            2,
+        )
+        fill!(parent(subgroup_output), 17)
+        @test _all_ranks_catch(adapter.comm) do
+            analysis_batch!(layout_cfg, subgroup_output, layout_fields)
+        end
+        @test all(==(ComplexF64(17)), parent(subgroup_output))
+        MPI.Barrier(adapter.comm)
 
         wrong_batch_spatial = PencilArray{Float64}(undef, layout_2d, 2)
         fill!(parent(wrong_batch_spatial), 5.0)
@@ -707,7 +930,6 @@ end
             analysis_packed(cfg, complex_spatial)
         end
 
-        rank = MPI.Comm_rank(adapter.comm)
         overflowing_ltr = rank == 0 ? big(typemax(Int)) + 1 : big(3)
         @test _all_ranks_catch(adapter.comm) do
             analysis_packed_l(cfg, spatial, overflowing_ltr)

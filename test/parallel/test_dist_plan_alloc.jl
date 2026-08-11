@@ -206,4 +206,31 @@ end
     @test maximum(abs.(Alm_out .- a_ref)) < 1e-10
 end
 
+@testset "batch layout validation is metadata-only" begin
+    # Keep the candidate large enough that allocating a duplicate expected
+    # PencilArray would be unambiguously visible in the allocation count.
+    cfg = create_gauss_config(16, 24; nlon=48)
+    nfields = 512
+    expected_pen = create_spectral_pencil(cfg; comm)
+    output = PencilArray{ComplexF64}(undef, expected_pen, nfields)
+    expected_global = (cfg.lmax + 1, cfg.mmax + 1, nfields)
+    expected_local = (PencilArrays.size_local(expected_pen)..., nfields)
+
+    ParExt._validate_pencil_layout_description!(
+        expected_pen, expected_global, expected_local, output,
+        :batch_allocation_probe; comm,
+    )
+    allocated = @allocated ParExt._validate_pencil_layout_description!(
+        expected_pen, expected_global, expected_local, output,
+        :batch_allocation_probe; comm,
+    )
+    candidate_bytes = sizeof(eltype(output)) * length(parent(output))
+    rank == 0 && println(
+        "metadata-only batch validation: $allocated B " *
+        "(candidate payload $candidate_bytes B)",
+    )
+    @test allocated < 65_536
+    @test allocated * 8 < candidate_bytes
+end
+
 rank == 0 && println("test_dist_plan_alloc: all testsets done on $(MPI.Comm_size(comm)) rank(s)")

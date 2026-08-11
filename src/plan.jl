@@ -416,6 +416,9 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
     size(f,2)==nlon || throw(DimensionMismatch("f second dim must be nlon"))
     size(alm_out,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm_out,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
+    eltype(alm_out) <: Complex || throw(ArgumentError(
+        "analysis! requires complex coefficient output storage",
+    ))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
@@ -469,6 +472,9 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     size(f_out,2)==nlon || throw(DimensionMismatch("f_out second dim must be nlon"))
     size(alm,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
+    !real_output && eltype(f_out) <: Real && throw(ArgumentError(
+        "synthesis! with real_output=false requires complex output storage",
+    ))
 
     scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
 

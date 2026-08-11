@@ -190,8 +190,8 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
         irfft_plan = nothing
     end
 
-    # Convention conversion is a public-boundary operation.  Canonical plans
-    # remain allocation-free; non-canonical synthesis uses a typed temporary.
+    # Convention conversion is fused into synthesis accumulation, so planned
+    # transforms remain allocation-free for every configured convention.
     return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, Pb, G, Fθk, Fθk_r, real_scratch,
                    fft_plan, ifft_plan, rfft_plan, irfft_plan, use_rfft)
 end
@@ -306,8 +306,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
     
-    Slm_int = _internal_coefficients(Slm, cfg)
-    Tlm_int = _internal_coefficients(Tlm, cfg)
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     
     # Two sibling passes: build Vt's Fourier buffer then Vp's, each with its
     # own m-loop formula. rfft path writes to the half-spectrum buffer and uses
@@ -334,7 +333,8 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
                 @inbounds for l in max(1,m):lmax
                     dθY = plan.dPdtheta[l+1]       # already orthonormal-normalized
                     Y_over_sθ = plan.P_over_sinth[l+1]
-                    Sl = Slm_int[l+1, col]; Tl = Tlm_int[l+1, col]
+                    Sl = _canonical_coefficient(Slm, scale_matrix, l, col)
+                    Tl = _canonical_coefficient(Tlm, scale_matrix, l, col)
                     if pass == 1
                         # Vθ = ∂S/∂θ - (im/sinθ) * T
                         g += dθY * Sl - 1.0im * m * Y_over_sθ * Tl
@@ -463,7 +463,7 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     size(alm,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
 
-    alm_int = _internal_coefficients(alm, cfg)
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
 
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
@@ -477,7 +477,8 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         for m in 0:mmax
             col = m + 1
             @inbounds for i in 1:nlat
-                plan.Fθk_r[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(cfg, alm_int, plan.P, i, col, m, lmax)
+                plan.Fθk_r[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(
+                    cfg, alm, plan.P, i, col, m, lmax, scale_matrix)
             end
         end
         # No Hermitian fill — irfft reconstructs implicitly.
@@ -492,7 +493,8 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     for m in 0:mmax
         col = m + 1
         @inbounds for i in 1:nlat
-            plan.Fθk[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(cfg, alm_int, plan.P, i, col, m, lmax)
+            plan.Fθk[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(
+                cfg, alm, plan.P, i, col, m, lmax, scale_matrix)
         end
         if real_output && m > 0
             conj_index = nlon - m + 1

@@ -149,6 +149,25 @@ end
 @inline _uses_canonical_convention(cfg) =
     cfg.norm === :orthonormal && !cfg.real_norm && cfg.cs_phase
 
+@inline _coefficient_scale_matrix_to_canonical(cfg) =
+    _uses_canonical_convention(cfg) ? nothing : _ensure_norm_scale_matrix!(cfg)
+
+@inline function _canonical_coefficient(src, ::Nothing, l::Int, col::Int)
+    @inbounds return src[l + 1, col]
+end
+
+@inline function _canonical_coefficient(src, M::AbstractMatrix, l::Int, col::Int)
+    @inbounds return M[l + 1, col] * src[l + 1, col]
+end
+
+@inline function _canonical_coefficient(src, ::Nothing, l::Int, col::Int, k::Int)
+    @inbounds return src[l + 1, col, k]
+end
+
+@inline function _canonical_coefficient(src, M::AbstractMatrix, l::Int, col::Int, k::Int)
+    @inbounds return M[l + 1, col] * src[l + 1, col, k]
+end
+
 """
     cs_phase_factor(m::Int, cs_from::Bool, cs_to::Bool) -> Float64
 

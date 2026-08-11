@@ -44,20 +44,22 @@ end
 # ============================================================================
 
 """Scalar synthesis kernel using Nlm-fused tables (`NP[l+1, i] = Nlm * P_l^m`)."""
-@inline function _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, lmax)
+@inline function _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, lmax,
+                                          scale_matrix=nothing)
     acc = zero(eltype(alm))
     @inbounds for l in m:lmax
-        acc += NP[l+1, i] * alm[l+1, col]
+        acc += NP[l+1, i] * _canonical_coefficient(alm, scale_matrix, l, col)
     end
     return acc
 end
 
 """Scalar synthesis kernel computing Legendre polynomials on the fly. Returns accumulated value."""
-@inline function _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax)
+@inline function _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, lmax,
+                                              scale_matrix=nothing)
     Plm_norm_row!(P, cfg.x[i], lmax, m)   # P now holds orthonormal P̄ (= Nlm·rawP)
     acc = zero(eltype(alm))
     @inbounds for l in m:lmax
-        acc += P[l+1] * alm[l+1, col]
+        acc += P[l+1] * _canonical_coefficient(alm, scale_matrix, l, col)
     end
     return acc
 end

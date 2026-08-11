@@ -117,6 +117,37 @@ using SHTnsKit
         @test isapprox(fields_cplx, fields_kw; rtol=0, atol=0)
     end
 
+    @testset "Noncanonical batch in-place conversion does not allocate a copy" begin
+        lmax = 32
+        nlat = lmax + 2
+        nlon = 2lmax + 1
+        nfields = 2
+        canonical = create_gauss_config(lmax, nlat; nlon)
+        configured = create_gauss_config(lmax, nlat; nlon, norm=:schmidt,
+                                         real_norm=true, cs_phase=false)
+        rng = MersenneTwister(76)
+        alm = randn(rng, ComplexF64, lmax + 1, lmax + 1, nfields)
+        fields = zeros(Float64, nlat, nlon, nfields)
+        fft_batch = zeros(ComplexF64, nlat, nlon, nfields)
+        rfft_batch = zeros(ComplexF64, nlat, nlon ÷ 2 + 1, nfields)
+
+        for cfg in (canonical, configured)
+            synthesis_batch!(cfg, fields, alm; fft_batch)
+            synthesis_batch!(cfg, fields, alm; fft_batch=rfft_batch, use_rfft=true)
+        end
+        GC.gc()
+
+        canonical_alloc = @allocated synthesis_batch!(canonical, fields, alm; fft_batch)
+        configured_alloc = @allocated synthesis_batch!(configured, fields, alm; fft_batch)
+        @test configured_alloc <= canonical_alloc + 512
+
+        canonical_ralloc = @allocated synthesis_batch!(canonical, fields, alm;
+                                                       fft_batch=rfft_batch, use_rfft=true)
+        configured_ralloc = @allocated synthesis_batch!(configured, fields, alm;
+                                                        fft_batch=rfft_batch, use_rfft=true)
+        @test configured_ralloc <= canonical_ralloc + 512
+    end
+
     @testset "Batch size configuration" begin
         lmax = 6
         nlat = lmax + 2

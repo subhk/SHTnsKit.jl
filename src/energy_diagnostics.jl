@@ -73,8 +73,10 @@ Key assumptions:
 # the symmetric m<0 modes in energy calculations.
 # Inline weight: avoids allocating a vector on every energy/gradient call.
 @inline _wm(m::Integer, real_field::Bool) = (real_field && m > 0) ? 2.0 : 1.0
-@inline _convention_metric(cfg, l::Integer, m::Integer) =
-    abs2(coefficient_scale_to_canonical(cfg, Int(l), Int(m)))
+@inline _diagnostic_scale_matrix(cfg) = _coefficient_scale_matrix_to_canonical(cfg)
+@inline _convention_metric(::Nothing, l::Integer, m::Integer) = 1.0
+@inline _convention_metric(M::AbstractMatrix, l::Integer, m::Integer) =
+    @inbounds abs2(M[Int(l) + 1, Int(m) + 1])
 
 """
     energy_scalar(cfg, alm; real_field=true) -> Float64
@@ -89,10 +91,11 @@ spherical harmonic transforms (Parseval's identity).
 """
 function energy_scalar(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     # Type-stable accumulator (stays inferrable for Float32 / ForwardDiff.Dual inputs).
     E = zero(promote_type(Float64, real(float(eltype(alm)))))
     @inbounds for m in 0:mmax, l in m:lmax
-        E += _wm(m, real_field) * _convention_metric(cfg, l, m) * abs2(alm[l+1, m+1])
+        E += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * abs2(alm[l+1, m+1])
     end
     return 0.5 * E
 end
@@ -107,10 +110,11 @@ KE = (1/2) ∫ |V|² dΩ = (1/2) Σ [l(l+1)|S_lm|² + l(l+1)|T_lm|²]
 """
 function energy_vector(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     E = zero(promote_type(Float64, real(float(eltype(Slm))), real(float(eltype(Tlm)))))
     @inbounds for m in 0:mmax, l in max(1,m):lmax  # Vector fields start at l=1
         ll1 = l * (l + 1)
-        E += _wm(m, real_field) * _convention_metric(cfg, l, m) * ll1 *
+        E += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1 *
              (abs2(Slm[l+1, m+1]) + abs2(Tlm[l+1, m+1]))
     end
     return 0.5 * E
@@ -157,10 +161,11 @@ Returns ∂E/∂a_lm for use in optimization problems.
 """
 function grad_energy_scalar_alm(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     # Use zeros to ensure l < m positions are properly initialized to zero
     grad = zeros(eltype(alm), size(alm))
     for m in 0:mmax, l in m:lmax
-        grad[l+1, m+1] = _wm(m, real_field) * _convention_metric(cfg, l, m) *
+        grad[l+1, m+1] = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) *
                          conj(alm[l+1, m+1])
     end
     return grad
@@ -173,11 +178,12 @@ Compute energy from packed spectral coefficients (1D vector format).
 """
 function energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     E = zero(promote_type(Float64, real(float(eltype(Qlm)))))
     @inbounds for k in eachindex(Qlm)
         m = cfg.mi[k]
         l = cfg.li[k]
-        E += _wm(m, real_field) * _convention_metric(cfg, l, m) * abs2(Qlm[k])
+        E += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * abs2(Qlm[k])
     end
     return 0.5 * E
 end
@@ -189,11 +195,12 @@ Compute energy gradient for packed coefficients format.
 """
 function grad_energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}; real_field::Bool=true)
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     grad = similar(Qlm)
     @inbounds for k in eachindex(Qlm)
         m = cfg.mi[k]
         l = cfg.li[k]
-        grad[k] = _wm(m, real_field) * _convention_metric(cfg, l, m) * conj(Qlm[k])
+        grad[k] = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * conj(Qlm[k])
     end
     return grad
 end
@@ -205,13 +212,14 @@ Compute gradients of vector field kinetic energy with respect to S and T coeffic
 """
 function grad_energy_vector_Slm_Tlm(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_field::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     grad_S, grad_T = allocate_spectral_pair(Slm, Tlm)
     fill!(grad_S, zero(eltype(grad_S)))
     fill!(grad_T, zero(eltype(grad_T)))
 
     for m in 0:mmax, l in max(1,m):lmax
         ll1 = l * (l + 1)
-        w = _wm(m, real_field) * _convention_metric(cfg, l, m) * ll1
+        w = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1
         grad_S[l+1, m+1] = w * conj(Slm[l+1, m+1])
         grad_T[l+1, m+1] = w * conj(Tlm[l+1, m+1])
     end
@@ -266,12 +274,13 @@ function energy_vector_packed(cfg::SHTConfig, Spacked::AbstractVector{<:Complex}
 
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     E = zero(promote_type(Float64, real(float(eltype(Spacked))), real(float(eltype(Tpacked)))))
     @inbounds for k in eachindex(Spacked)
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1
             ll1 = l * (l + 1)
-            E += _wm(m, real_field) * _convention_metric(cfg, l, m) * ll1 *
+            E += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1 *
                  (abs2(Spacked[k]) + abs2(Tpacked[k]))
         end
     end
@@ -290,6 +299,7 @@ function grad_energy_vector_packed(cfg::SHTConfig,
     
     length(Spacked) == cfg.nlm || throw(DimensionMismatch("Spacked length must be nlm=$(cfg.nlm)"))
     length(Tpacked) == cfg.nlm || throw(DimensionMismatch("Tpacked length must be nlm=$(cfg.nlm)"))
+    scale_matrix = _diagnostic_scale_matrix(cfg)
     grad_S = similar(Spacked)
     grad_T = similar(Tpacked)
     fill!(grad_S, zero(eltype(grad_S)))
@@ -297,7 +307,7 @@ function grad_energy_vector_packed(cfg::SHTConfig,
     @inbounds for k in eachindex(Spacked)
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1
-            w = _wm(m, real_field) * _convention_metric(cfg, l, m) * (l * (l + 1))
+            w = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * (l * (l + 1))
             grad_S[k] = w * conj(Spacked[k])
             grad_T[k] = w * conj(Tpacked[k])
         end

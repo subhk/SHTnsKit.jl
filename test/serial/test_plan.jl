@@ -137,9 +137,35 @@ end
         @test_throws DimensionMismatch synthesis_sphtor!(plan, Vt, zeros(cfg.nlat, 1), S, T)
     end
 
+    @testset "Noncanonical in-place synthesis stays allocation-free" begin
+        lmax = 32
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2lmax + 1,
+                                  norm=:schmidt, real_norm=true, cs_phase=false)
+        plan = SHTPlan(cfg)
+        plan_r = SHTPlan(cfg; use_rfft=true)
+        rng = MersenneTwister(219)
+        alm = _rand_real_alm(rng, lmax, lmax)
+        Slm = _rand_real_alm(rng, lmax, lmax); Slm[1, 1] = 0
+        Tlm = _rand_real_alm(rng, lmax, lmax); Tlm[1, 1] = 0
+        f = zeros(cfg.nlat, cfg.nlon)
+        Vt = similar(f); Vp = similar(f)
+        fft_scratch = zeros(ComplexF64, cfg.nlat, cfg.nlon)
+
+        synthesis!(plan, f, alm)
+        synthesis!(plan_r, f, alm)
+        synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)
+        synthesis!(cfg, f, alm; fft_scratch)
+        GC.gc()
+
+        @test @allocated(synthesis!(plan, f, alm)) <= 128
+        @test @allocated(synthesis!(plan_r, f, alm)) <= 128
+        @test @allocated(synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)) <= 128
+        @test @allocated(synthesis!(cfg, f, alm; fft_scratch)) <= 128
+    end
+
     @testset "Planned scalar matches the non-planned path exactly" begin
         # `SHTPlan`'s scalar path is a drop-in accelerator for `analysis`/
-        # `synthesis`, so it must be ORTHONORMAL like them — not merely
+        # `synthesis`, so it must use the same configured convention — not merely
         # self-consistent. A self-roundtrip test cannot tell the two apart:
         # plan∘plan closes under either convention, and only MIXING them breaks.
         # These assertions are what would catch a revert.

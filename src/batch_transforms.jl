@@ -499,7 +499,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
-    alm_int = _internal_coefficients(alm_batch, cfg)
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
 
     nfields = size(alm_batch, 3)
     nlat, nlon = cfg.nlat, cfg.nlon
@@ -513,7 +513,7 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
 
     # Allocate FFT scratch buffer (eltype-derived from alm_batch, matching
     # analysis_batch, so Float32 / ForwardDiff.Dual coefficients aren't upcast)
-    CT = complex(float(eltype(alm_int)))
+    CT = complex(float(eltype(alm_batch)))
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
     Fφ_batch = Array{CT,3}(undef, nlat, nbins, nfields)
     fill!(Fφ_batch, zero(CT))
@@ -528,7 +528,8 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
                 for i in 1:nlat
                     acc = zero(CT)
                     for l in m:lmax
-                        acc += tbl[l+1, i] * alm_int[l+1, col, k]
+                        acc += tbl[l+1, i] * _canonical_coefficient(
+                            alm_batch, scale_matrix, l, col, k)
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end
@@ -548,7 +549,8 @@ function _synthesis_batch(cfg::SHTConfig, alm_batch::AbstractArray{<:Complex,3},
                 @inbounds for k in 1:nfields
                     acc = zero(CT)
                     for l in m:lmax
-                        acc += P[l+1] * alm_int[l+1, col, k]
+                        acc += P[l+1] * _canonical_coefficient(
+                            alm_batch, scale_matrix, l, col, k)
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end
@@ -603,7 +605,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm_batch, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm_batch, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
-    alm_int = _internal_coefficients(alm_batch, cfg)
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
 
     nfields = size(alm_batch, 3)
     nlat, nlon = cfg.nlat, cfg.nlon
@@ -619,7 +621,7 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
     end
 
     # Reuse caller-provided scratch if given, else allocate (eltype-derived).
-    CT = complex(float(eltype(alm_int)))
+    CT = complex(float(eltype(alm_batch)))
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
     if fft_batch === nothing
         Fφ_batch = Array{CT,3}(undef, nlat, nbins, nfields)
@@ -639,7 +641,8 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                 for i in 1:nlat
                     acc = zero(CT)
                     for l in m:lmax
-                        acc += tbl[l+1, i] * alm_int[l+1, col, k]
+                        acc += tbl[l+1, i] * _canonical_coefficient(
+                            alm_batch, scale_matrix, l, col, k)
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end
@@ -659,7 +662,8 @@ function synthesis_batch!(cfg::SHTConfig, f_out::AbstractArray,
                 @inbounds for k in 1:nfields
                     acc = zero(CT)
                     for l in m:lmax
-                        acc += P[l+1] * alm_int[l+1, col, k]
+                        acc += P[l+1] * _canonical_coefficient(
+                            alm_batch, scale_matrix, l, col, k)
                     end
                     Fφ_batch[i, col, k] = inv_scaleφ * acc
                 end

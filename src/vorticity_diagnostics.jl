@@ -211,7 +211,7 @@ function grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_target:
     
     for m in 0:mmax, l in max(1,m):lmax
         L2 = l * (l + 1)  # Note: negative sign from ζ = -l(l+1)T
-        gT[l+1, m+1] = -L2 * gζlm[l+1, m+1]
+        gT[l+1, m+1] = -L2 * _convention_metric(cfg, l, m) * gζlm[l+1, m+1]
     end
     return gT
 end
@@ -236,7 +236,7 @@ function loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_tar
     
     for m in 0:mmax, l in max(1,m):lmax
         L2 = l * (l + 1)
-        gT[l+1, m+1] = -L2 * gζlm[l+1, m+1]
+        gT[l+1, m+1] = -L2 * _convention_metric(cfg, l, m) * gζlm[l+1, m+1]
     end
     
     return loss, gT

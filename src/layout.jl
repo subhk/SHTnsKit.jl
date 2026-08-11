@@ -252,3 +252,74 @@ function im_from_lm(lm::Int, lmax::Int, mres::Int)
     end
 end
 
+
+# ==============================================================================
+# Packed ↔ dense (l,m) conversion
+# ==============================================================================
+#
+# The mapping between the packed LM-order vector and the dense (l+1, m+1) matrix
+# is needed in several places: the serial `analysis_packed`/`synthesis_packed`,
+# their distributed twins in ext/ParallelLocal.jl, and the packed rrules in
+# ext/SHTnsKitAdvancedADExt.jl. It used to be open-coded at each of those sites,
+# which cost the `m % mres == 0` guard three separate bug fixes — `LM_index`
+# throws on any order that is not a multiple of `mres`, so a loop over the full
+# `0:mmax` range dies on the first such order. Everything routes through the two
+# functions below now, so the guard exists once.
+
+"""
+    unpack_lm!(A::AbstractMatrix, cfg, Qlm::AbstractVector) -> A
+
+Scatter the packed LM-order coefficient vector `Qlm` into the dense
+`(lmax+1, mmax+1)` matrix `A`. Orders with `m % cfg.mres != 0` are absent from
+the packed layout and are left untouched in `A` (pass a zeroed `A`, or use
+[`unpack_lm`](@ref), if those entries must be zero).
+"""
+function unpack_lm!(A::AbstractMatrix, cfg, Qlm::AbstractVector)
+    lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
+    size(A, 1) == lmax + 1 || throw(DimensionMismatch("A must have $(lmax+1) rows"))
+    size(A, 2) == mmax + 1 || throw(DimensionMismatch("A must have $(mmax+1) columns"))
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
+    @inbounds for m in 0:mmax
+        (m % mres == 0) || continue
+        for l in m:lmax
+            A[l+1, m+1] = Qlm[LM_index(lmax, mres, l, m) + 1]
+        end
+    end
+    return A
+end
+
+"""
+    unpack_lm(cfg, Qlm::AbstractVector) -> Matrix
+
+Allocating form of [`unpack_lm!`](@ref); entries with no packed counterpart are
+zero. Element type follows `Qlm`.
+"""
+unpack_lm(cfg, Qlm::AbstractVector) =
+    unpack_lm!(zeros(eltype(Qlm), cfg.lmax + 1, cfg.mmax + 1), cfg, Qlm)
+
+"""
+    pack_lm!(Qlm::AbstractVector, cfg, A::AbstractMatrix) -> Qlm
+
+Gather the dense `(lmax+1, mmax+1)` matrix `A` into the packed LM-order vector
+`Qlm`, skipping orders with `m % cfg.mres != 0`. Inverse of [`unpack_lm!`](@ref).
+"""
+function pack_lm!(Qlm::AbstractVector, cfg, A::AbstractMatrix)
+    lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
+    size(A, 1) == lmax + 1 || throw(DimensionMismatch("A must have $(lmax+1) rows"))
+    size(A, 2) == mmax + 1 || throw(DimensionMismatch("A must have $(mmax+1) columns"))
+    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
+    @inbounds for m in 0:mmax
+        (m % mres == 0) || continue
+        for l in m:lmax
+            Qlm[LM_index(lmax, mres, l, m) + 1] = A[l+1, m+1]
+        end
+    end
+    return Qlm
+end
+
+"""
+    pack_lm(cfg, A::AbstractMatrix) -> Vector
+
+Allocating form of [`pack_lm!`](@ref). Element type follows `A`.
+"""
+pack_lm(cfg, A::AbstractMatrix) = pack_lm!(zeros(eltype(A), cfg.nlm), cfg, A)

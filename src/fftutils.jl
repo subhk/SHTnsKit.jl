@@ -108,14 +108,24 @@ function _cached_local_fft_plan(kind::Symbol, A::AbstractMatrix, nlon::Int=0)
     try
         plan = get(_LOCAL_FFT_PLAN_CACHE, key, nothing)
         if plan === nothing
+            # UNALIGNED is required, not an optimization choice. The cache key
+            # covers eltype/size/strides but NOT the base pointer's alignment, so
+            # a plan built for one array gets reused for another that FFTW may
+            # consider differently aligned. Without UNALIGNED that reuse throws
+            # `ArgumentError`, which the callers catch and answer by falling back
+            # to the pure-Julia O(nlat·nlon²) DFT — an order-of-magnitude
+            # slowdown with no error surfaced. Forfeiting the aligned SIMD
+            # codelets is much cheaper than forfeiting the FFT. The batch helpers
+            # in batch_transforms.jl pass the same flag for the same reason.
+            flags = FFTW.ESTIMATE | FFTW.UNALIGNED
             plan = if kind === :fft
-                plan_fft!(A, 2; flags=FFTW.ESTIMATE)
+                plan_fft!(A, 2; flags)
             elseif kind === :ifft
-                plan_ifft!(A, 2; flags=FFTW.ESTIMATE)
+                plan_ifft!(A, 2; flags)
             elseif kind === :rfft
-                plan_rfft(A, 2; flags=FFTW.ESTIMATE)
+                plan_rfft(A, 2; flags)
             elseif kind === :irfft
-                plan_irfft(A, nlon, 2; flags=FFTW.ESTIMATE)
+                plan_irfft(A, nlon, 2; flags)
             else
                 throw(ArgumentError("unknown FFT plan kind: $kind"))
             end

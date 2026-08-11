@@ -186,14 +186,25 @@ function shtns_set_grid(cfg::SHTConfig, flags::Integer, eps::Real, nlat::Integer
             x[i+1] = cos(θ[i+1])
         end
     elseif grid_type == 5  # reg_poles, include poles
+        # Needs both poles: nlat==1 gives π/0 = Inf and θ[1] = 0*Inf = NaN, and
+        # `_min_nlat_for_grid` clamps only to lmax+1, which is 1 for lmax=0 — so
+        # the config would come back all-NaN and every transform would silently
+        # return NaN. Same guard as the `create_regular_config` builder.
+        nlat >= 2 || throw(ArgumentError("SHT_REGULAR_POLES needs nlat ≥ 2 (got nlat=$nlat)"))
         for i in 0:(nlat-1)
             θ[i+1] = i * (π / (nlat-1))
             w[i+1] = (π / (nlat-1)) * sin(θ[i+1])
             x[i+1] = cos(θ[i+1])
         end
     else
-        # default to gauss
+        # default to gauss — including the reverse! pair. Omitting it left an
+        # unrecognized grid code with south-to-north latitudes while the config
+        # still reported `is_south_pole_first == false` and `grid_type == :gauss`,
+        # i.e. a silently mirrored grid returned as success. `_grid_symbol` funnels
+        # every unknown code here, so nothing else catches a bad flag.
         x, w = gausslegendre(nlat)
+        reverse!(x)
+        reverse!(w)
         θ = acos.(x)
     end
     # Note: south_pole_first will be applied after updating cfg
@@ -551,6 +562,12 @@ function save_config(cfg::SHTConfig, filename::String)
         println(io, "nlat = $(cfg.nlat)")
         println(io, "nlon = $(cfg.nlon)")
         println(io, "grid_type = $(cfg.grid_type)")
+        # `grid_type` alone does not round-trip: `:driscoll_healy` is
+        # `create_regular_config(...; include_poles=true, use_dh_weights=true)`,
+        # and without recording that flag `load_config` rebuilt it as a plain
+        # `:regular` midpoint grid — different θ nodes AND different quadrature
+        # weights, silently (analysis→synthesis error 8.7e-16 → ~3e-3).
+        println(io, "use_dh_weights = $(cfg.grid_type === :driscoll_healy)")
 
         # Write normalization options
         println(io, "norm = $(cfg.norm)")
@@ -600,7 +617,7 @@ function load_config(filename::String)
                 # Parse value based on expected type
                 if key in ("lmax", "mmax", "mres", "nlat", "nlon", "nlat_padded", "howmany", "spec_dist")
                     params[key] = parse(Int, val)
-                elseif key in ("cs_phase", "real_norm", "robert_form", "south_pole_first", "allow_padding", "on_the_fly", "use_plm_tables")
+                elseif key in ("cs_phase", "real_norm", "robert_form", "south_pole_first", "allow_padding", "on_the_fly", "use_plm_tables", "use_dh_weights")
                     params[key] = parse(Bool, val)
                 elseif key in ("grid_type", "norm")
                     params[key] = Symbol(val)
@@ -621,7 +638,12 @@ function load_config(filename::String)
             robert_form=get(params, "robert_form", false)
         )
     else
-        include_poles = grid_type == :regular_poles
+        # `:driscoll_healy` is also a pole-inclusive grid, and it needs its
+        # `use_dh_weights` flag back or it silently degrades to `:regular`.
+        # Fall back to deriving the flag from grid_type for files written before
+        # `use_dh_weights` was recorded.
+        use_dh_weights = get(params, "use_dh_weights", grid_type == :driscoll_healy)
+        include_poles = grid_type == :regular_poles || grid_type == :driscoll_healy
         cfg = create_regular_config(
             params["lmax"], params["nlat"];
             mmax=params["mmax"], mres=params["mres"], nlon=params["nlon"],
@@ -629,7 +651,8 @@ function load_config(filename::String)
             cs_phase=get(params, "cs_phase", true),
             real_norm=get(params, "real_norm", false),
             robert_form=get(params, "robert_form", false),
-            include_poles=include_poles
+            include_poles=include_poles,
+            use_dh_weights=use_dh_weights
         )
     end
 

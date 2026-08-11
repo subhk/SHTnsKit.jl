@@ -62,6 +62,88 @@ DEBUGGING CHECKLIST
 ================================================================================
 =#
 
+# ===== PER-PENCIL TOPOLOGY PREDICATES =====
+#
+# `φ_is_local_all` and `θ_is_distributed` decide which branch a transform takes,
+# and the branches enter different collectives, so both must be REDUCED rather
+# than evaluated per rank — see the long comments at each use site. But they are
+# also fixed properties of the decomposition: for a given pencil and
+# communicator the answer never changes. Recomputing them in the body of every
+# transform turned the recommended θ-only pencil from one collective per
+# `dist_analysis` call into three, which is a latency-bound slowdown and an extra
+# serialization point at scale. `DistAnalysisPlan`/`DistSphtorPlan` already
+# compute them once at construction (ParallelPlans.jl); this gives the
+# non-planned path the same treatment.
+#
+# Two properties make this safe:
+#
+#  1. ONE collective, not two. `φ_is_local_all` is stored inverted so both
+#     predicates are OR-reductions and share a single `Allreduce` on a bitmask.
+#     Even a cache miss is cheaper than the code it replaces.
+#
+#  2. Rank-symmetric hit/miss. The cache is keyed on the pencil OBJECT and the
+#     communicator, so every rank misses on the first use of a given pencil and
+#     hits on every later use — the same pattern on all ranks, which is exactly
+#     the condition a collective needs. Do NOT re-key this on anything a rank
+#     could compute differently from its peers (local sizes, ownership, rank id):
+#     if one rank hits while another misses, the missing rank enters the
+#     `Allreduce` alone and the job hangs.
+#
+# `Pencil` is an immutable struct, so it cannot key a `WeakKeyDict` (that needs a
+# finalizer, hence a mutable key). Entries are therefore strong and are bounded
+# by `_PENCIL_TOPOLOGY_MAX` instead, so code that rebuilds a pencil per shell or
+# timestep cannot grow this without limit. The eviction is a full `empty!` keyed
+# on a size the ranks all reach at the same call — deliberately NOT an LRU or
+# per-entry policy, so that the hit/miss pattern stays identical on every rank.
+const _PENCIL_TOPOLOGY_CACHE = IdDict{Any,IdDict{Any,Tuple{Bool,Bool}}}()
+const _PENCIL_TOPOLOGY_LOCK = ReentrantLock()
+const _PENCIL_TOPOLOGY_MAX = 256
+
+"""
+    _pencil_topology(key_arr, comm, nθ_local, nφ_local, nlat, nlon) -> (φ_is_local_all, θ_is_distributed)
+
+Reduced topology predicates for `key_arr`'s pencil over `comm`, computed once per
+`(pencil, comm)` pair with a single `Allreduce` and cached thereafter.
+
+Every rank must call this at the same point in its program, exactly as it must
+for the `Allreduce` this replaces.
+"""
+function _pencil_topology(key_arr, comm, nθ_local::Int, nφ_local::Int, nlat::Int, nlon::Int)
+    key = pencil(key_arr)
+    # Look up without holding the lock across the collective below.
+    lock(_PENCIL_TOPOLOGY_LOCK)
+    try
+        inner = get(_PENCIL_TOPOLOGY_CACHE, key, nothing)
+        if inner !== nothing
+            hit = get(inner, comm, nothing)
+            hit === nothing || return hit
+        end
+    finally
+        unlock(_PENCIL_TOPOLOGY_LOCK)
+    end
+
+    # Both predicates as OR-reductions in one bitmask: bit 0 = "some rank does NOT
+    # own the full φ range", bit 1 = "some rank owns fewer than all latitudes".
+    flags = UInt8(0)
+    nφ_local == nlon || (flags |= 0x01)
+    nθ_local < nlat && (flags |= 0x02)
+    allflags = MPI.Allreduce(flags, |, comm)
+    val = ((allflags & 0x01) == 0, (allflags & 0x02) != 0)
+
+    lock(_PENCIL_TOPOLOGY_LOCK)
+    try
+        # Bounded, and evicted wholesale so every rank drops the same entries at
+        # the same call — a partial eviction could leave one rank hitting while
+        # another misses, and the miss would enter the `Allreduce` alone.
+        length(_PENCIL_TOPOLOGY_CACHE) >= _PENCIL_TOPOLOGY_MAX && empty!(_PENCIL_TOPOLOGY_CACHE)
+        inner = get!(() -> IdDict{Any,Tuple{Bool,Bool}}(), _PENCIL_TOPOLOGY_CACHE, key)
+        inner[comm] = val
+    finally
+        unlock(_PENCIL_TOPOLOGY_LOCK)
+    end
+    return val
+end
+
 # ===== ENHANCED PACKED STORAGE SYSTEM =====
 # Reduces memory usage by ~50% for large spectral arrays by storing only l≥m coefficients
 # This is optional - dense storage (full lmax×mmax matrix) is the default
@@ -516,7 +598,9 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     # fixed elsewhere in this file, and it hangs the same way. Reduced here,
     # above the branch, so every rank executes the collective unconditionally
     # (`use_rfft_effective` is itself uniform: a keyword plus a shared eltype).
-    φ_is_local_all = MPI.Allreduce(nlon_local == nlon, &, comm)
+    # `θ_is_distributed` is reduced in the SAME collective and reused below.
+    φ_is_local_all, θ_is_distributed =
+        _pencil_topology(fθφ, comm, nθ_local, nlon_local, nlat, nlon)
 
     if use_rfft_effective
         nbins = nlon ÷ 2 + 1
@@ -647,10 +731,10 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     # IMPORTANT: Only reduce if θ is actually distributed!
     # - If θ is distributed: each rank has different θ points → need Allreduce
     # - If only φ is distributed: all ranks have same θ points after gather → skip reduction
-    # Reduced, not per-rank: `nθ_local < nlat` is not uniform when a pencil has
+    # `θ_is_distributed` was reduced above alongside `φ_is_local_all` — reduced,
+    # not per-rank, because `nθ_local < nlat` is not uniform when a pencil has
     # more θ partitions than rows (nlat=1 on ≥2 θ-ranks), and the lone owner would
     # then skip the block while the empty ranks enter the collective alone and hang.
-    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, comm)
 
     if θ_is_distributed
         # φ-partners that hold the same θ-slab carry identical post-gather
@@ -792,10 +876,26 @@ function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::Penci
 end
 
 
-function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+"""
+Optional `Aminus` (internal): coefficients for the NEGATIVE-m half of a genuinely
+complex field, in the same `(lmax+1, mmax+1)` layout as `Alm`, with column `m+1`
+holding `conj(a_{l,-m})` and column 1 unused.
+
+When given, the negative-m φ-FFT bins are filled from `Aminus` in the SAME θ/m
+traversal that fills the positive bins, reusing the one Legendre row per (m, θ).
+`dist_synthesis_packed_cplx` used to get this by calling `dist_synthesis` twice
+and adding `zp + conj(zn)`, which doubled the Legendre work, the inverse FFT and
+(on a φ-distributed pencil) the communication. Requires `real_output=false` and
+the complex bin layout — an rfft buffer has no negative-m slots.
+"""
+function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false, Aminus::Union{Nothing,AbstractMatrix}=nothing)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
     nlat = cfg.nlat
+    if Aminus !== nothing
+        real_output && throw(ArgumentError("dist_synthesis with Aminus requires real_output=false"))
+        size(Aminus) == size(Alm) || throw(DimensionMismatch("Aminus must match Alm's shape"))
+    end
 
     # Contract: Alm must be replicated identically on every rank. Sample-hash a
     # bounded prefix + a small tail slice instead of the full matrix so the check
@@ -806,7 +906,12 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
         k = min(n, 128)
         probe_head = n == 0 ? UInt64(0) : hash(view(Alm, 1:k))
         probe_tail = n <= k ? UInt64(0) : hash(view(Alm, (n - k + 1):n))
-        local_sig = hash((size(Alm, 1), size(Alm, 2), probe_head, probe_tail))
+        # `Aminus` must be replicated too — it feeds the same collective-free
+        # local traversal, so a rank-varying copy would silently produce a
+        # different field per rank.
+        probe_minus = Aminus === nothing ? UInt64(0) :
+                      hash((hash(view(Aminus, 1:k)), n <= k ? UInt64(0) : hash(view(Aminus, (n - k + 1):n))))
+        local_sig = hash((size(Alm, 1), size(Alm, 2), probe_head, probe_tail, probe_minus))
         rank0_sig = MPI.bcast(local_sig, 0, comm)
         if local_sig != rank0_sig
             throw(ArgumentError("dist_synthesis requires Alm replicated across ranks (signature mismatch on rank $(MPI.Comm_rank(comm)))."))
@@ -843,6 +948,11 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
         # Compute synthesized values for each local θ
         for (ii, iglob) in enumerate(θ_globals)
             # Get normalized Legendre polynomials (P̄ = Nlm·P) at this latitude
+            # `gm` accumulates the negative-m half from `Aminus` on the SAME
+            # Legendre row — P̄_l^{|m|} depends only on |m|, so the -m bin costs
+            # one extra multiply-add per l instead of a whole second traversal.
+            gm = 0.0 + 0.0im
+            want_minus = Aminus !== nothing && mval > 0
             if cfg.use_plm_tables && !isempty(cfg.NP_tables)
                 # NP_tables[col][l+1, iglob] = P̄_l^m already; no extra Nlm multiply
                 tbl = cfg.NP_tables[col]
@@ -850,22 +960,37 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
                 @inbounds @simd for l in mval:lmax
                     g += tbl[l+1, iglob] * Alm[l+1, col]
                 end
+                if want_minus
+                    @inbounds @simd for l in mval:lmax
+                        gm += tbl[l+1, iglob] * Aminus[l+1, col]
+                    end
+                end
             else
                 SHTnsKit.Plm_norm_row!(P, xv[iglob], lmax, mval)
                 g = 0.0 + 0.0im
                 @inbounds @simd for l in mval:lmax
                     g += P[l+1] * Alm[l+1, col]
                 end
+                if want_minus
+                    @inbounds @simd for l in mval:lmax
+                        gm += P[l+1] * Aminus[l+1, col]
+                    end
+                end
             end
 
             # Store in Fourier coefficient array
             Fθm[ii, mval + 1] = inv_scaleφ * g
 
-            # For real output (complex path only), mirror onto negative-m bin.
+            # Negative-m bin. Two distinct sources:
+            #  - real output: Hermitian mirror of the +m bin.
+            #  - complex output with `Aminus`: the independent -m coefficients,
+            #    conjugated, matching the `zp + conj(zn)` the two-pass form built.
             # rfft buffer has no slot for negative m — irfft reconstructs implicitly.
             if real_output && !use_rfft_effective && mval > 0
                 conj_index = nlon - mval + 1
                 Fθm[ii, conj_index] = conj(Fθm[ii, mval + 1])
+            elseif want_minus
+                Fθm[ii, nlon - mval + 1] = conj(inv_scaleφ * gm)
             end
         end
     end
@@ -921,14 +1046,24 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray; prot
 end
 
 function SHTnsKit.dist_synthesis!(plan::DistPlan, fθφ_out::PencilArray, Alm::PencilArray; real_output::Bool=true)
-    # `dist_synthesis` now returns a genuinely complex field for real_output=false
-    # (it used to hand back a real buffer re-wrapped as complex), so a real output
-    # array can no longer absorb it. Reject up front, before any collective, as
-    # the sphtor twin does — the check is on local eltypes, identical on every
-    # rank, so all ranks throw together instead of deadlocking.
+    # Rejected up front, before any collective — the test is on local eltypes,
+    # identical on every rank, so all ranks throw together instead of deadlocking.
+    #
+    # This combination cannot be silently accepted, and no "is the imaginary part
+    # negligible?" check can rescue it. `real_output=false` no longer means "the
+    # real field, typed complex" (which is what the old code returned, by wrapping
+    # a real buffer); it now sums only the m ≥ 0 half WITHOUT the Hermitian mirror,
+    # which is a genuinely different function. Measured on a typical config: the
+    # complex-path result has |imag| up to 1.34 and its REAL part differs from the
+    # real field by 1.31, against a field magnitude of 2.96. So a caller who used
+    # to pass `real_output=false` with a real output array wanted the real field,
+    # and today that is spelled `real_output=true` — hence the message below.
     if !real_output && eltype(fθφ_out) <: Real
         throw(ArgumentError("dist_synthesis! with real_output=false needs a complex output " *
-                            "PencilArray; got eltype=$(eltype(fθφ_out))"))
+                            "PencilArray; got eltype=$(eltype(fθφ_out)). If you are porting code " *
+                            "that used this combination before v1.2.18: it used to return the REAL " *
+                            "field wrapped as complex, so pass real_output=true to keep that result. " *
+                            "Pass a complex output PencilArray to get the true complex synthesis."))
     end
     f = SHTnsKit.dist_synthesis(plan.cfg, Alm; prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
     copyto!(fθφ_out, f)
@@ -960,8 +1095,10 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     end
     # φ-locality must be agreed by ALL ranks (see `dist_analysis_standard`): a
     # per-rank test lets the sole owner of a short φ dimension take the local
-    # branch while empty ranks enter the collective alone.
-    φ_is_local_all = MPI.Allreduce(nlon_local == nlon, &, comm)
+    # branch while empty ranks enter the collective alone. `θ_is_distributed` is
+    # reduced in the SAME collective and reused below.
+    φ_is_local_all, θ_is_distributed =
+        _pencil_topology(Vtθφ, comm, nθ_local, nlon_local, nlat, nlon)
 
     nbins = use_rfft_effective ? (nlon ÷ 2 + 1) : nlon
     Ftθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
@@ -1040,10 +1177,10 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
 
     # Only reduce if θ is actually distributed across processes
     # When φ is distributed but θ is not, all ranks compute identical results after gathering φ
-    # Reduced, not per-rank: `nθ_local < nlat` is not uniform when a pencil has
+    # `θ_is_distributed` was reduced above alongside `φ_is_local_all` — reduced,
+    # not per-rank, because `nθ_local < nlat` is not uniform when a pencil has
     # more θ partitions than rows (nlat=1 on ≥2 θ-ranks), and the lone owner would
     # then skip the block while the empty ranks enter the collective alone and hang.
-    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, comm)
 
     if θ_is_distributed
         # Same dedup-then-reduce as the scalar dist_analysis_standard path (see
@@ -1321,15 +1458,18 @@ end
 
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
                                          Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
-    # A complex field cannot be written into real output arrays. Reject that
-    # combination up front, BEFORE any collective: previously the scratch path
-    # silently stored only the real part, and routing it to the allocating path
-    # instead turns the silent truncation into an `InexactError` from `copyto!`
-    # part-way through a collective region. The check is on local eltypes, which
-    # every rank agrees on, so all ranks throw together and nothing deadlocks.
+    # A complex field cannot be written into real output arrays. Rejected up front,
+    # BEFORE any collective; the test is on local eltypes, which every rank agrees
+    # on, so all ranks throw together and nothing deadlocks. See the twin in
+    # `dist_synthesis!` for why no imaginary-part tolerance can accept this
+    # instead: `real_output=false` computes a different function now, not the same
+    # field in a wider type, so the porting fix is `real_output=true`.
     if !real_output && (eltype(Vtθφ_out) <: Real || eltype(Vpθφ_out) <: Real)
         throw(ArgumentError("dist_synthesis_sphtor! with real_output=false needs complex output " *
-                            "PencilArrays; got eltype(Vt)=$(eltype(Vtθφ_out)), eltype(Vp)=$(eltype(Vpθφ_out))"))
+                            "PencilArrays; got eltype(Vt)=$(eltype(Vtθφ_out)), eltype(Vp)=$(eltype(Vpθφ_out)). " *
+                            "If you are porting code that used this combination before v1.2.18: it used " *
+                            "to return the REAL field wrapped as complex, so pass real_output=true to keep " *
+                            "that result. Pass complex output PencilArrays to get the true complex synthesis."))
     end
 
     # The scratch spatial buffers are `Matrix{Float64}` (see `_SphtorScratch`), so
@@ -1906,8 +2046,10 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # reachable with the explicit MPITopology the empty-partition cases need) the
     # single owner sees `1 < 1 == false` and skips the block while the empty
     # ranks see `0 < 1 == true` and enter the full-comm Allreduce alone — which
-    # never completes. One extra small collective buys a matched one below.
-    θ_is_distributed = MPI.Allreduce(nθ_local < cfg.nlat, |, comm)
+    # never completes. Cached per (pencil, comm), so the collective is paid once
+    # for this decomposition rather than on every call.
+    _, θ_is_distributed =
+        _pencil_topology(fθφ, comm, nθ_local, size(parent(fθφ), 2), cfg.nlat, cfg.nlon)
     if θ_is_distributed
         # A 2D (θ×φ) spatial pencil must sum each θ-slab once, not once per
         # φ-partner: `_gather_and_fft_phi` hands every partner the FULL longitude
@@ -2690,7 +2832,9 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     # Check if θ is distributed. Reduced, not per-rank: see the same guard in
     # `dist_analysis_distributed` — an unmatched full-comm Allreduce hangs.
-    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, comm)
+    # Cached per (pencil, comm); the collective is paid once per decomposition.
+    _, θ_is_distributed =
+        _pencil_topology(fθφ, comm, nθ_local, size(parent(fθφ), 2), nlat, nlon)
 
     if θ_is_distributed
         # Same reasoning as `dist_analysis_distributed`: every φ-partner of a
@@ -3112,8 +3256,11 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # Reduced, not per-rank: `nθ_local < nlat` is not uniform when a pencil has
     # more θ partitions than rows (nlat=1 on ≥2 θ-ranks), and the lone owner would
     # then skip the block while the empty ranks enter the collective alone and hang. Reduced over `l_comm`,
-    # which is the communicator the guarded Allreduce below actually uses.
-    θ_is_distributed = MPI.Allreduce(nθ_local < nlat, |, l_comm)
+    # which is the communicator the guarded Allreduce below actually uses — the
+    # cache is keyed on (pencil, comm) precisely so this l_comm answer never
+    # aliases the full-comm one for the same pencil.
+    _, θ_is_distributed =
+        _pencil_topology(fθφ, l_comm, nθ_local, size(parent(fθφ), 2), nlat, nlon)
 
     if θ_is_distributed
         # Use packed communication to avoid sending zeros in triangular region

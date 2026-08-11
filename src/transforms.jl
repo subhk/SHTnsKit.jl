@@ -102,7 +102,17 @@ function analysis_axisym(cfg::SHTConfig, Vr::AbstractVector{<:Real})
         end
     end
 
-    return Ql  # No phi scaling needed for single-mode transform (proper inverse of synthesis_axisym)
+    # φ quadrature factor. The full `analysis` applies `cfg.cphi` to an FFT output
+    # whose bin 0 already carries an implicit `nlon` from the DFT sum; an
+    # axisymmetric profile is constant in φ, so the whole `cphi*nlon = 2π` must be
+    # applied explicitly here. Without it this is NOT the inverse of
+    # `synthesis_axisym` (which matches `synthesis` exactly) and disagrees with
+    # the m=0 column of `analysis` by 1/2π.
+    scaleφ = cfg.cphi * cfg.nlon
+    @inbounds for l in 0:lmax
+        Ql[l+1] *= scaleφ
+    end
+    return Ql
 end
 
 """
@@ -114,17 +124,9 @@ function analysis_packed(cfg::SHTConfig, Vr::AbstractVector{<:Real})
     length(Vr) == cfg.nspat || throw(DimensionMismatch("Vr must have length $(cfg.nspat)"))
     f = reshape(Vr, cfg.nlat, cfg.nlon)
     alm_mat = analysis(cfg, f)
-    Qlm = Vector{eltype(alm_mat)}(undef, cfg.nlm)
     # Dense matrix output is converted back to SHTns-compatible packed LM
     # order, skipping unsupported m values when mres > 1.
-    @inbounds for m in 0:cfg.mmax
-        (m % cfg.mres == 0) || continue
-        for l in m:cfg.lmax
-            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
-            Qlm[lm] = alm_mat[l+1, m+1]
-        end
-    end
-    return Qlm
+    return pack_lm(cfg, alm_mat)
 end
 
 """
@@ -134,16 +136,9 @@ Packed scalar synthesis from Qlm (LM order) to flattened real grid (length nlat*
 """
 function synthesis_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex})
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm must have length $(cfg.nlm)"))
-    alm_mat = zeros(eltype(Qlm), cfg.lmax+1, cfg.mmax+1)
     # Packed LM order stores only valid (l,m) pairs. Expand to dense
     # (l+1,m+1) so the core synthesis kernel can be reused.
-    @inbounds for m in 0:cfg.mmax
-        (m % cfg.mres == 0) || continue
-        for l in m:cfg.lmax
-            lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
-            alm_mat[l+1, m+1] = Qlm[lm]
-        end
-    end
+    alm_mat = unpack_lm(cfg, Qlm)
     f = synthesis(cfg, alm_mat; real_output=true)
     return vec(f)
 end
@@ -254,7 +249,12 @@ function analysis_axisym_l(cfg::SHTConfig, Vr::AbstractVector{<:Real}, ltr::Int)
         end
     end
 
-    return Ql  # No phi scaling needed for single-mode transform (proper inverse of synthesis_axisym_l)
+    # Same φ quadrature factor as `analysis_axisym` — see the comment there.
+    scaleφ = cfg.cphi * cfg.nlon
+    @inbounds for l in eachindex(Ql)
+        Ql[l] *= scaleφ
+    end
+    return Ql
 end
 
 """

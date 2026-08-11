@@ -1076,6 +1076,13 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
         else
             # Use trapezoidal rule with both poles
             # Poles (θ=0 and θ=π) get half-weight per the trapezoidal rule
+            # A pole-inclusive grid needs at least the two poles: `nlat == 1` makes
+            # `h = π/0 = Inf` and `θ[1] = 0*Inf = NaN`, and since the generic
+            # `nlat ≥ lmax+1` check passes for lmax=0 the whole config would come
+            # back all-NaN and every later transform would return NaN with no
+            # exception. Fail here instead, where the cause is visible.
+            nlat >= 2 || throw(ArgumentError("pole-inclusive grids need nlat ≥ 2 (got nlat=$nlat); " *
+                                             "use grid_type=:regular for a single-latitude grid"))
             h = π / (nlat - 1)
             for i in 0:(nlat-1)
                 θi = i * h
@@ -1226,43 +1233,23 @@ function prepare_plm_tables!(cfg::SHTConfig)
         end
     end
     
-    # Pre-fuse Nlm so scalar and sphtor kernels can read a single product per
-    # element on both the P and dP/dx tables.
-    # zeros (not undef): the l<m lower triangle is never written below but is
-    # kept deterministic so any full-column read can't pick up garbage.
-    NP_tables = [zeros(Float64, lmax + 1, nlat) for _ in 0:mmax]
-    NdP_tables = [zeros(Float64, lmax + 1, nlat) for _ in 0:mmax]
-    Nlm = cfg.Nlm  # hoist field read out of the m/i/l loops (cfg is mutable, so the compiler can't lift it)
-
-    # NP: build from the bounded normalized recurrence P̄ = Nlm·rawP so that
-    # no intermediate unnormalized values are formed — avoids overflow at lmax ≥ 151.
-    g = Vector{Float64}(undef, lmax + 1)
-    for m in 0:mmax
-        NP = NP_tables[m+1]
-        for i in 1:nlat
-            Plm_norm_row!(g, cfg.x[i], lmax, m)
-            @inbounds for l in m:lmax
-                NP[l+1, i] = g[l+1]   # P̄ already equals Nlm·rawP; do NOT multiply by Nlm again
-            end
-        end
-    end
-
-    # NdP: build from the bounded normalized θ-derivative so no overflow at high lmax.
-    # NdP[l+1, i] = -(dP̄_l^m/dθ) / sinθ_i, matching the table kernel's usage:
-    #   dtheta_Y = -s_theta * NdP[l+1, i]  →  -sinθ * (-(dP̄/dθ)/sinθ) = dP̄/dθ  ✓
-    # Gauss nodes never hit poles, so s_i > 0 for all i.
-    dg = Vector{Float64}(undef, lmax + 1)   # θ-derivative scratch (reuse P-norm scratch g from above)
-    for m in 0:mmax
-        NdP = NdP_tables[m+1]
-        for i in 1:nlat
-            s_i = sqrt(max(0.0, 1.0 - cfg.x[i]^2))
-            inv_s = s_i == 0 ? 0.0 : 1.0 / s_i  # pole guard: avoid 0/0→NaN (see header note)
-            Plm_norm_and_dPdtheta_row!(g, dg, cfg.x[i], lmax, m)
-            @inbounds for l in m:lmax
-                NdP[l+1, i] = -dg[l+1] * inv_s
-            end
-        end
-    end
+    # The "pre-fused Nlm" NP/NdP tables are, by construction, the tables already
+    # built above: `Plm_norm_row!` returns P̄ = Nlm·rawP, which is exactly what
+    # `tbl` holds, and the NdP convention -(dP̄/dθ)/sinθ is exactly what `dtbl`
+    # holds. Rebuilding them from the same recurrences produced bit-for-bit
+    # identical arrays at double the build time and double the resident memory,
+    # while `estimate_table_memory` (which counts (mmax+1)*2 tables) reported
+    # half the true figure — so a job sized by the estimator allocated twice its
+    # budget and was OOM-killed. Alias instead.
+    #
+    # INVARIANT: these four must stay value-identical. If the NP or NdP
+    # convention ever diverges from the plm/dplm one, build them separately again
+    # rather than aliasing — and fix `estimate_table_memory` to match.
+    #
+    # Deliberately NOT copies: these are build-once, read-only caches (nothing
+    # mutates a table after `prepare_plm_tables!` returns).
+    NP_tables = tables
+    NdP_tables = dtables
 
     # Enable table usage and store in configuration
     cfg.plm_tables = tables

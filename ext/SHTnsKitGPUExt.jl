@@ -596,8 +596,7 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_ou
     Qlm = Array(coeffs)
     # NO conversion: the kernels emit orthonormal P̄ output and CPU `analysis` is
     # orthonormal-only, so returning the raw coefficients is what "matching CPU
-    # analysis" now means. (The sphtor GPU path still converts because its CPU
-    # twin `analysis_sphtor` still does.)
+    # analysis" means. The GPU sphtor path does the same, as does its CPU twin.
     return Qlm
 end
 
@@ -623,8 +622,8 @@ function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=
     size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
 
     # NO conversion: the kernel expects orthonormal input and CPU `synthesis` is
-    # orthonormal-only, so the coefficients pass straight through. (The sphtor GPU
-    # path still converts — its CPU twin `synthesis_sphtor` still does.)
+    # orthonormal-only, so the coefficients pass straight through. The GPU sphtor
+    # path does the same, as does its CPU twin.
     coeffs_int = coeffs
 
     # Transfer coefficients to GPU

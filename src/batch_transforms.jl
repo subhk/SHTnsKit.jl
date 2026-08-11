@@ -90,7 +90,7 @@ Efficient processing of multiple fields simultaneously. Batch transforms reduce
 overhead by sharing precomputed Legendre polynomials and FFT plans across
 multiple fields, improving cache utilization and reducing function call overhead.
 
-This mirrors the `shtns_set_many` functionality from the SHTns C library.
+The plan stores reusable FFT buffers for a fixed batch shape.
 """
 
 @inline _batch_fft_fallback_error(e) = e isa MethodError || e isa ArgumentError || e isa InexactError

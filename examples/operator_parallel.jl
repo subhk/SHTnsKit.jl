@@ -41,7 +41,7 @@ function main()
     pθ, pφ = _procgrid(nprocs)
     topo = Pencil((nlat, nlon), (pθ, pφ), comm)
 
-    # Create distributed spatial field using PencilArrays v0.19+ API
+    # Create distributed spatial field using PencilArrays v0.19 API
     local_dims = PencilArrays.size_local(topo)
     fθφ = PencilArray(topo, zeros(Float64, local_dims...))
 

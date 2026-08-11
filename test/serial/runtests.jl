@@ -13,6 +13,7 @@ using Test
     include("test_fft_utils.jl")
     include("test_buffer_utils.jl")
     include("test_device_utils.jl")
+    include("test_cleanup_contract.jl")
     include("test_loop_utils.jl")
     include("test_spectral_diagnostics.jl")
     include("test_edge_cases.jl")
@@ -35,7 +36,6 @@ using Test
     include("test_turbo.jl")
     include("test_complex_packed.jl")
     include("test_local.jl")
-    include("test_api_compat.jl")
     include("test_kernels.jl")
     include("test_plan.jl")
     include("test_sphtor_extended.jl")
@@ -47,5 +47,4 @@ using Test
     include("test_batch_qst.jl")
     include("test_config_copy.jl")
     include("test_plm_tables.jl")
-    include("test_flags.jl")
 end

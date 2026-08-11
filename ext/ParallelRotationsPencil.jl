@@ -109,8 +109,8 @@ function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
                                                beta::Real,
                                                R_pencil::PencilArray)
     # Materialize concrete-typed inputs here and run the row loop behind a
-    # function barrier: the globalindices compat wrapper is type-unstable, and
-    # letting it poison the loop costs ~1 MB/call in boxing.
+    # function barrier: keep the concrete index vectors out of the row loop to
+    # avoid boxing and unnecessary per-call allocations.
     comm = communicator(Alm_pencil)
     gl_l = collect(Int, globalindices(Alm_pencil, 1))
     gl_m = collect(Int, globalindices(Alm_pencil, 2))

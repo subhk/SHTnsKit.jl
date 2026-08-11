@@ -6,7 +6,6 @@ using PencilFFTs
 using SHTnsKit
 using Printf
 using PencilArrays: PencilArray
-import SHTnsKitParallelExt
 
 const DEFAULT_OPTS = (
     lmax = 63,
@@ -151,17 +150,7 @@ function proc_grid(p::Integer)
     return best
 end
 
-paalloc(topo; eltype=Float64) = begin
-    try
-        return PencilArrays.zeros(topo; eltype=eltype)
-    catch
-        try
-            return PencilArrays.zeros(topo)
-        catch
-            return SHTnsKitParallelExt.allocate(topo; eltype=eltype)
-        end
-    end
-end
+paalloc(topo; eltype=Float64) = PencilArray{eltype}(undef, topo)
 
 function build_linear_cache(cfg::SHTConfig, dt::Float64, ν::Float64, radius::Float64)
     lmax, mmax = cfg.lmax, cfg.mmax

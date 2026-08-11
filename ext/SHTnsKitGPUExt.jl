@@ -9,18 +9,14 @@ using CUDA
 using CUDA.CUFFT
 
 # Import functions from SHTnsKit to extend them
-import SHTnsKit: get_device, set_device!,
-                 gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
+import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
                  gpu_analysis_sphtor, gpu_synthesis_sphtor,
                  gpu_apply_laplacian!,
                  gpu_memory_info, check_gpu_memory, gpu_clear_cache!,
-                 estimate_memory_usage, get_available_gpus, set_gpu_device,
-                 create_multi_gpu_config, multi_gpu_analysis, multi_gpu_synthesis,
-                 multi_gpu_analysis_streaming, multi_gpu_synthesis_streaming, estimate_streaming_chunks
+                 estimate_memory_usage, get_available_gpus, set_gpu_device
 
 # Import device utilities functions to override
-import SHTnsKit: _to_gpu, on_device, _get_device_details, _ensure_cuda_initialized,
-                 _notify_cuda_loaded!
+import SHTnsKit: on_device, _notify_cuda_loaded!
 
 # ============================================================================
 # CUDA Backend Integration with device_utils.jl
@@ -34,11 +30,11 @@ function __init__()
 end
 
 """
-    _to_gpu(arr::AbstractArray)
+    _to_gpu_impl(arr::AbstractArray)
 
 Transfer array to CUDA GPU. Overrides the stub in device_utils.jl.
 """
-function _to_gpu(arr::AbstractArray)
+function _to_gpu_impl(arr::AbstractArray)
     if !CUDA.functional()
         error("CUDA is not functional")
     end
@@ -46,78 +42,17 @@ function _to_gpu(arr::AbstractArray)
 end
 
 # Avoid double conversion
-_to_gpu(arr::CuArray) = arr
+_to_gpu_impl(arr::CuArray) = arr
 
 """
-    on_device(arr::CuArray) -> Symbol
+    on_device(arr::CuArray) -> ComputeDevice
 
-Returns :gpu for CUDA arrays.
+Returns `GPU()` for CUDA arrays.
 """
-on_device(::CuArray) = :gpu
+on_device(::CuArray) = SHTnsKit.GPU()
 
-"""
-    _get_device_details(::Val{:gpu})
-
-Get detailed GPU device information.
-"""
-function _get_device_details(::Val{:gpu})
-    if !CUDA.functional()
-        return (device_type = :gpu, available = false)
-    end
-
-    dev = CUDA.device()
-    return (
-        device_type = :gpu,
-        gpu_backend = :cuda,
-        available = true,
-        device_id = Int(dev),
-        device_name = CUDA.name(dev),
-        compute_capability = CUDA.capability(dev),
-        total_memory = CUDA.totalmem(dev),
-        free_memory = CUDA.available_memory(),
-        num_devices = CUDA.ndevices()
-    )
-end
-
-"""
-    _ensure_cuda_initialized()
-
-Ensure CUDA is properly initialized.
-"""
-function _ensure_cuda_initialized()
-    if !CUDA.functional()
-        error("CUDA is not available")
-    end
-    # Trigger lazy initialization
-    CUDA.device()
-    return nothing
-end
-
-# ============================================================================
-# Legacy Device Management (for backward compatibility)
-# ============================================================================
-"""
-    SHTDevice
-
-Enum representing supported compute devices for SHTnsKit operations.
-"""
-@enum SHTDevice begin
-    CPU_DEVICE
-    CUDA_DEVICE
-end
-
-"""
-    get_device()
-
-Returns CUDA_DEVICE if CUDA is functional, otherwise CPU_DEVICE.
-"""
-function get_device()
-    if CUDA.functional()
-        return CUDA_DEVICE
-    else
-        return CPU_DEVICE
-    end
-end
+@inline _is_cpu_device(::SHTnsKit.CPU) = true
+@inline _is_cpu_device(::SHTnsKit.GPU) = false
 
 """
     get_available_gpus()
@@ -128,7 +63,7 @@ function get_available_gpus()
     gpus = []
     if CUDA.functional()
         for i = 0:(CUDA.ndevices()-1)
-            push!(gpus, (device=:cuda, id=i, name=CUDA.name(CUDA.CuDevice(i))))
+            push!(gpus, (device=SHTnsKit.GPU(), id=i, name=CUDA.name(CUDA.CuDevice(i))))
         end
     end
     return gpus
@@ -147,143 +82,7 @@ function set_gpu_device(device_id::Int)
     return false
 end
 
-# Legacy overload for compatibility
-function set_gpu_device(device_type::Symbol, device_id::Int)
-    if device_type == :cuda
-        return set_gpu_device(device_id)
-    end
-    return false
-end
-
-"""
-    MultiGPUConfig
-
-Configuration for multi-GPU spherical harmonic transforms.
-"""
-struct MultiGPUConfig
-    base_config::Any  # SHTConfig
-    gpu_devices::Vector{NamedTuple}
-    distribution_strategy::Symbol  # :latitude, :longitude, :spectral
-    primary_gpu::Int
-end
-
-"""
-    create_multi_gpu_config(lmax, nlat; nlon=nothing, strategy=:latitude, gpu_ids=nothing)
-
-Create a multi-GPU configuration for spherical harmonic transforms.
-"""
-function create_multi_gpu_config(lmax::Int, nlat::Int;
-                                 nlon::Union{Int,Nothing}=nothing,
-                                 strategy::Symbol=:latitude,
-                                 gpu_ids::Union{Vector{Int},Nothing}=nothing)
-
-    available_gpus = get_available_gpus()
-    if isempty(available_gpus)
-        error("No CUDA GPUs available for multi-GPU configuration")
-    end
-
-    # Select GPUs to use
-    selected_gpus = if gpu_ids === nothing
-        available_gpus  # Use all available
-    else
-        [gpu for gpu in available_gpus if gpu.id in gpu_ids]
-    end
-
-    if isempty(selected_gpus)
-        error("No valid GPUs found with specified IDs")
-    end
-
-    # Create base configuration
-    base_cfg = SHTnsKit.create_gauss_config(lmax, nlat; nlon=nlon)
-
-    # Validate distribution strategy
-    if strategy ∉ [:latitude, :longitude, :spectral]
-        error("Invalid distribution strategy: $strategy. Must be :latitude, :longitude, or :spectral")
-    end
-
-    # Enable P2P for CUDA GPUs if multiple devices
-    if length(selected_gpus) >= 2
-        try
-            enable_gpu_p2p_access(selected_gpus)
-        catch e
-            @warn "Failed to enable P2P access: $e"
-        end
-    end
-
-    return MultiGPUConfig(base_cfg, selected_gpus, strategy, selected_gpus[1].id)
-end
-
-"""
-    enable_gpu_p2p_access(gpus::Vector)
-
-Enable peer-to-peer access between all CUDA GPUs if possible.
-"""
-function enable_gpu_p2p_access(gpus::Vector)
-    if !CUDA.functional() || length(gpus) < 2
-        return false
-    end
-
-    enabled_pairs = 0
-    total_pairs = 0
-
-    for i in 1:length(gpus), j in 1:length(gpus)
-        if i != j
-            total_pairs += 1
-            try
-                src_device = CUDA.CuDevice(gpus[i].id)
-                dest_device = CUDA.CuDevice(gpus[j].id)
-
-                if CUDA.can_access_peer(src_device, dest_device)
-                    CUDA.device!(gpus[i].id)
-                    CUDA.enable_peer_access(dest_device)
-                    enabled_pairs += 1
-                end
-            catch
-                # P2P not available for this pair
-            end
-        end
-    end
-
-    if enabled_pairs > 0
-        @info "Enabled P2P access for $enabled_pairs/$total_pairs GPU pairs"
-        return true
-    else
-        @info "No P2P access available between GPUs"
-        return false
-    end
-end
-
-"""
-    set_device!(device::SHTDevice)
-
-Set the active compute device for SHTnsKit operations.
-"""
-function set_device!(device::SHTDevice)
-    if device == CUDA_DEVICE
-        if !CUDA.functional()
-            error("CUDA not available. Install and load CUDA.jl first.")
-        end
-        CUDA.device!(CUDA.device())
-    end
-    # CPU_DEVICE doesn't require setup
-    nothing
-end
-
-"""
-    to_device(array, device::SHTDevice)
-
-Transfer array to the specified device.
-"""
-function to_device(array::AbstractArray, device::SHTDevice)
-    if device == CUDA_DEVICE
-        if !CUDA.functional()
-            error("CUDA not available")
-        end
-        return CuArray(array)
-    else
-        return Array(array)  # Transfer to CPU
-    end
-end
+set_gpu_device(::SHTnsKit.GPU, device_id::Int) = set_gpu_device(device_id)
 
 # ============================================================================
 # cuFFT-based FFT operations with pre-planned transforms
@@ -295,8 +94,8 @@ end
 Pre-planned cuFFT operations for efficient repeated transforms.
 """
 struct CuFFTPlan
-    forward_plan::CUFFT.cCuFFTPlan
-    inverse_plan::CUFFT.cCuFFTPlan
+    forward_plan::CUFFT.CuFFTPlan
+    inverse_plan::CUFFT.CuFFTPlan
     buffer::CuArray{ComplexF64, 2}
     nlat::Int
     nlon::Int
@@ -518,7 +317,7 @@ end
 end
 
 """
-    gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
+    gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device())
 
 GPU-accelerated spherical harmonic analysis transform using cuFFT.
 
@@ -528,11 +327,9 @@ Implements: a_lm = ∫∫ f(θ,φ) Y_l^m*(θ,φ) sin(θ) dθ dφ
 
 Fully parallelized: all (l,m) coefficients computed in a single kernel launch.
 
-Note: `real_output` parameter is kept for API compatibility but spherical harmonic
-coefficients are always complex. The parameter has no effect on the output type.
 """
-function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
-    if device == CPU_DEVICE
+function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device())
+    if _is_cpu_device(device)
         return SHTnsKit.analysis(cfg, spatial_data)
     end
 
@@ -612,7 +409,7 @@ Implements: f(θ,φ) = Σ_l Σ_m a_lm Y_l^m(θ,φ)
 Fully parallelized: all (θ,m) Fourier modes computed in a single kernel launch.
 """
 function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
-    if device == CPU_DEVICE
+    if _is_cpu_device(device)
         return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
     end
 
@@ -745,7 +542,7 @@ Where F_θ, F_φ are Fourier modes of Vθ, Vφ and w_i are quadrature weights.
 All computation stays on GPU for maximum performance.
 """
 function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
-    if device == CPU_DEVICE
+    if _is_cpu_device(device)
         return SHTnsKit.analysis_sphtor(cfg, vθ, vφ)
     end
 
@@ -895,7 +692,7 @@ Uses the spectral formula:
 Where ∂Y_l^m/∂θ = -sinθ * N_lm * dP_l^m/dx (x = cosθ)
 """
 function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
-    if device == CPU_DEVICE
+    if _is_cpu_device(device)
         return SHTnsKit.synthesis_sphtor(cfg, sph_coeffs, tor_coeffs; real_output=real_output)
     end
 
@@ -1046,7 +843,7 @@ end
 GPU-accelerated Laplacian operator in spectral space.
 """
 function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=get_device())
-    if device == CPU_DEVICE
+    if _is_cpu_device(device)
         return SHTnsKit.apply_laplacian!(cfg, coeffs)
     end
 
@@ -1073,13 +870,12 @@ end
 # ============================================================================
 
 """
-    gpu_memory_info(; device=nothing)
+    gpu_memory_info()
 
-Get CUDA memory information. The `device` argument is accepted for API compatibility
-but currently only returns info for the active CUDA device.
+Get memory information for the active CUDA device.
 Returns a named tuple with `free` and `total` fields (in bytes).
 """
-function gpu_memory_info(; device=nothing)
+function gpu_memory_info()
     if CUDA.functional()
         mem = CUDA.MemoryInfo()
         return (free=mem.free_bytes, total=mem.total_bytes)
@@ -1088,17 +884,14 @@ function gpu_memory_info(; device=nothing)
     end
 end
 
-# Overload to accept positional device argument for compatibility
-gpu_memory_info(device) = gpu_memory_info(; device=device)
-
 """
-    check_gpu_memory(required_bytes::Int; device=nothing)
+    check_gpu_memory(required_bytes::Int)
 
 Check if sufficient GPU memory is available.
 """
-function check_gpu_memory(required_bytes::Int; device=nothing)
+function check_gpu_memory(required_bytes::Int)
     try
-        mem_info = gpu_memory_info(; device=device)
+        mem_info = gpu_memory_info()
         if mem_info.free < required_bytes
             @warn "Insufficient memory: need $(required_bytes÷(1024^3)) GB, have $(mem_info.free÷(1024^3)) GB available"
             return false
@@ -1111,11 +904,11 @@ function check_gpu_memory(required_bytes::Int; device=nothing)
 end
 
 """
-    gpu_clear_cache!(; device=nothing)
+    gpu_clear_cache!()
 
-Clear CUDA memory cache. The `device` argument is accepted for API compatibility.
+Clear the active CUDA device's memory cache.
 """
-function gpu_clear_cache!(; device=nothing)
+function gpu_clear_cache!()
     if CUDA.functional()
         try
             CUDA.reclaim()
@@ -1126,9 +919,6 @@ function gpu_clear_cache!(; device=nothing)
     end
     return nothing
 end
-
-# Overload to accept positional device argument for compatibility
-gpu_clear_cache!(device) = gpu_clear_cache!(; device=device)
 
 """
     estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
@@ -1152,12 +942,12 @@ function estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
 end
 
 """
-    gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
+    gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device())
 
 Memory-safe GPU analysis with automatic fallback to CPU.
 """
-function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
-    if device == CPU_DEVICE
+function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device())
+    if _is_cpu_device(device)
         return SHTnsKit.analysis(cfg, spatial_data)
     end
 
@@ -1168,7 +958,7 @@ function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), re
     end
 
     try
-        return gpu_analysis(cfg, spatial_data; device=device, real_output=real_output)
+        return gpu_analysis(cfg, spatial_data; device=device)
     catch e
         if isa(e, CUDA.OutOfGPUMemoryError) || contains(string(e), "memory")
             @warn "GPU out of memory, falling back to CPU: $e"
@@ -1185,7 +975,7 @@ end
 Memory-safe GPU synthesis with automatic fallback to CPU.
 """
 function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
-    if device == CPU_DEVICE
+    if _is_cpu_device(device)
         return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
     end
 
@@ -1207,242 +997,7 @@ function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_ou
     end
 end
 
-# ============================================================================
-# Helper functions for multi-GPU configs
-# ============================================================================
-
-"""
-    create_latitude_subset_config(base_cfg, lat_indices, gpu_device::Symbol)
-
-Create a temporary SHTConfig for a subset of latitude points.
-Properly subsets plm_tables and dplm_tables if they exist.
-"""
-function create_latitude_subset_config(base_cfg, lat_indices, gpu_device::Symbol)
-    chunk_nlat = length(lat_indices)
-
-    # Subset plm_tables if they exist: tables are [m+1][l+1, lat_idx]
-    subset_plm_tables = if base_cfg.use_plm_tables && !isempty(base_cfg.plm_tables)
-        [tbl[:, lat_indices] for tbl in base_cfg.plm_tables]
-    else
-        Matrix{Float64}[]
-    end
-
-    subset_dplm_tables = if base_cfg.use_plm_tables && !isempty(base_cfg.dplm_tables)
-        [tbl[:, lat_indices] for tbl in base_cfg.dplm_tables]
-    else
-        Matrix{Float64}[]
-    end
-
-    return SHTnsKit.SHTConfig(
-        lmax=base_cfg.lmax, mmax=base_cfg.mmax, mres=base_cfg.mres,
-        nlat=chunk_nlat, nlon=base_cfg.nlon, grid_type=base_cfg.grid_type,
-        θ=base_cfg.θ[lat_indices], φ=base_cfg.φ,
-        x=base_cfg.x[lat_indices], w=base_cfg.w[lat_indices],
-        Nlm=base_cfg.Nlm, cphi=base_cfg.cphi,
-        nlm=base_cfg.nlm, li=base_cfg.li, mi=base_cfg.mi,
-        nspat=chunk_nlat * base_cfg.nlon,
-        st=base_cfg.st[lat_indices],
-        norm=base_cfg.norm, cs_phase=base_cfg.cs_phase,
-        real_norm=base_cfg.real_norm, robert_form=base_cfg.robert_form,
-        phi_scale=base_cfg.phi_scale,
-        use_plm_tables=base_cfg.use_plm_tables,
-        plm_tables=subset_plm_tables,
-        dplm_tables=subset_dplm_tables,
-        compute_device=gpu_device,
-        device_preference=[gpu_device]
-    )
-end
-
-# ============================================================================
-# Multi-GPU functions
-# ============================================================================
-
-"""
-    multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_output=true)
-
-Perform spherical harmonic analysis using multiple GPUs.
-"""
-function multi_gpu_analysis(mgpu_config::MultiGPUConfig, spatial_data; real_output=true)
-    cfg = mgpu_config.base_config
-    ngpus = length(mgpu_config.gpu_devices)
-
-    if mgpu_config.distribution_strategy != :latitude
-        error("Multi-GPU analysis currently only supports :latitude distribution strategy")
-    end
-
-    # Split by latitude bands
-    lat_per_gpu = div(cfg.nlat, ngpus)
-    lat_remainder = cfg.nlat % ngpus
-
-    final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-
-    lat_start = 1
-    for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-        lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
-        lat_end = lat_start + lat_count - 1
-        lat_indices = lat_start:lat_end
-
-        set_gpu_device(gpu.id)
-
-        temp_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
-        chunk_data = spatial_data[lat_indices, :]
-        chunk_coeffs = gpu_analysis(temp_cfg, chunk_data; real_output=false)
-
-        final_coeffs .+= chunk_coeffs
-        lat_start = lat_end + 1
-    end
-
-    # Spectral coefficients are always complex (even for real-valued fields),
-    # so real_output is accepted for API compatibility but has no effect.
-    return final_coeffs
-end
-
-"""
-    multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=true)
-
-Perform spherical harmonic synthesis using multiple GPUs.
-"""
-function multi_gpu_synthesis(mgpu_config::MultiGPUConfig, coeffs; real_output=true)
-    cfg = mgpu_config.base_config
-    ngpus = length(mgpu_config.gpu_devices)
-
-    if mgpu_config.distribution_strategy != :latitude
-        error("Multi-GPU synthesis currently only supports :latitude distribution strategy")
-    end
-
-    lat_per_gpu = div(cfg.nlat, ngpus)
-    lat_remainder = cfg.nlat % ngpus
-
-    final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
-
-    lat_start = 1
-    for (i, gpu) in enumerate(mgpu_config.gpu_devices)
-        lat_count = lat_per_gpu + (i <= lat_remainder ? 1 : 0)
-        lat_end = lat_start + lat_count - 1
-        lat_indices = lat_start:lat_end
-
-        set_gpu_device(gpu.id)
-
-        temp_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
-        chunk_result = gpu_synthesis(temp_cfg, coeffs; real_output=real_output)
-
-        final_result[lat_indices, :] = chunk_result
-        lat_start = lat_end + 1
-    end
-
-    return final_result
-end
-
-"""
-    estimate_streaming_chunks(mgpu_config::MultiGPUConfig, data_size, max_memory_per_gpu=4*1024^3)
-
-Estimate optimal chunk sizes for memory streaming.
-"""
-function estimate_streaming_chunks(mgpu_config::MultiGPUConfig, data_size, max_memory_per_gpu=4*1024^3)
-    element_size = 16  # ComplexF64
-    total_memory_needed = prod(data_size) * element_size * 3.0  # 3x overhead
-
-    ngpus = length(mgpu_config.gpu_devices)
-    memory_per_gpu = total_memory_needed / ngpus
-
-    if memory_per_gpu <= max_memory_per_gpu
-        return 1
-    else
-        return ceil(Int, memory_per_gpu / max_memory_per_gpu)
-    end
-end
-
-"""
-    multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data; max_memory_per_gpu=4*1024^3, real_output=true)
-
-Multi-GPU analysis with memory streaming for large problems.
-"""
-function multi_gpu_analysis_streaming(mgpu_config::MultiGPUConfig, spatial_data;
-                                     max_memory_per_gpu=4*1024^3, real_output=true)
-    chunks_needed = estimate_streaming_chunks(mgpu_config, size(spatial_data), max_memory_per_gpu)
-
-    if chunks_needed == 1
-        return multi_gpu_analysis(mgpu_config, spatial_data; real_output=real_output)
-    end
-
-    @info "Using memory streaming with $chunks_needed chunks per GPU"
-
-    cfg = mgpu_config.base_config
-    lat_chunk_size = div(cfg.nlat, chunks_needed)
-    lat_remainder = cfg.nlat % chunks_needed
-
-    final_coeffs = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-
-    lat_start = 1
-    for chunk_idx in 1:chunks_needed
-        chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
-        lat_end = lat_start + chunk_lat_size - 1
-        lat_indices = lat_start:lat_end
-
-        chunk_data = spatial_data[lat_indices, :]
-        chunk_base_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
-        chunk_mgpu_config = MultiGPUConfig(chunk_base_cfg, mgpu_config.gpu_devices, :latitude, mgpu_config.primary_gpu)
-
-        chunk_coeffs = multi_gpu_analysis(chunk_mgpu_config, chunk_data; real_output=false)
-        final_coeffs .+= chunk_coeffs
-
-        lat_start = lat_end + 1
-        gpu_clear_cache!()
-    end
-
-    # Spectral coefficients are always complex (even for real-valued fields),
-    # so real_output is accepted for API compatibility but has no effect.
-    return final_coeffs
-end
-
-"""
-    multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs; max_memory_per_gpu=4*1024^3, real_output=true)
-
-Multi-GPU synthesis with memory streaming for large problems.
-"""
-function multi_gpu_synthesis_streaming(mgpu_config::MultiGPUConfig, coeffs;
-                                      max_memory_per_gpu=4*1024^3, real_output=true)
-    cfg = mgpu_config.base_config
-    chunks_needed = estimate_streaming_chunks(mgpu_config, (cfg.nlat, cfg.nlon), max_memory_per_gpu)
-
-    if chunks_needed == 1
-        return multi_gpu_synthesis(mgpu_config, coeffs; real_output=real_output)
-    end
-
-    @info "Using memory streaming with $chunks_needed chunks per GPU"
-
-    lat_chunk_size = div(cfg.nlat, chunks_needed)
-    lat_remainder = cfg.nlat % chunks_needed
-
-    final_result = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
-
-    lat_start = 1
-    for chunk_idx in 1:chunks_needed
-        chunk_lat_size = lat_chunk_size + (chunk_idx <= lat_remainder ? 1 : 0)
-        lat_end = lat_start + chunk_lat_size - 1
-        lat_indices = lat_start:lat_end
-
-        chunk_base_cfg = create_latitude_subset_config(cfg, lat_indices, :cuda)
-        chunk_mgpu_config = MultiGPUConfig(chunk_base_cfg, mgpu_config.gpu_devices, :latitude, mgpu_config.primary_gpu)
-
-        chunk_result = multi_gpu_synthesis(chunk_mgpu_config, coeffs; real_output=real_output)
-        final_result[lat_indices, :] = chunk_result
-
-        lat_start = lat_end + 1
-        gpu_clear_cache!()
-    end
-
-    return final_result
-end
-
-# ============================================================================
-# Local exports (types defined in this extension)
-# ============================================================================
-
-# These types are defined in this extension and need to be exported
-# The GPU functions are already exported by SHTnsKit.jl and we extend them via import
-export SHTDevice, CPU_DEVICE, CUDA_DEVICE
+# Types defined by this extension.
 export CuFFTPlan, create_cufft_plan, gpu_fft!, gpu_ifft!
-export MultiGPUConfig
 
 end # module SHTnsKitGPUExt

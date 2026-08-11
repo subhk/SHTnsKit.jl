@@ -51,17 +51,13 @@ struct DistAnalysisPlan
     reduce_comm::MPI.Comm
 end
 
-function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false, use_packed_storage::Bool=true, with_spatial_scratch::Bool=false)
+function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
     # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
     # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
     _validate_cfg_replicated(cfg, comm)
-    # Keep the keywords for API compatibility; the planned path always uses
-    # dense coefficient storage.
-    _ = use_packed_storage
-    _ = with_spatial_scratch
     θ_globals = collect(Int, globalindices(prototype_θφ, 1))
     nθ_local = length(θ_globals)
     nlon_local = size(parent(prototype_θφ), 2)

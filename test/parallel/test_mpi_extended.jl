@@ -432,10 +432,10 @@ function test_yrotate_allgatherm_vs_truncgatherm(cfg, pen)
     return global_err
 end
 
-# ======================= ANALYSIS STRATEGY VARIANTS =======================
+# ======================= PLANNED ANALYSIS =======================
 
-function test_analysis_strategy_variants(cfg, pen)
-    root_println("  Testing dist_analysis_standard / _cache_blocked / _fused_cache_blocked ...")
+function test_planned_analysis(cfg, pen)
+    root_println("  Testing planned and canonical distributed analysis ...")
     alm = _make_random_alm(cfg, 2000)
     f_full = SHTnsKit.synthesis(cfg, alm; real_output=true)
 
@@ -451,15 +451,16 @@ function test_analysis_strategy_variants(cfg, pen)
     # Reference via public dist_analysis
     A_ref = SHTnsKit.dist_analysis(cfg, f_pa)
 
-    # Each internal strategy should produce identical results
+    # The maintained internal implementation and the planned public path should
+    # produce the same replicated coefficient matrix.
     A_std = ParExt.dist_analysis_standard(cfg, f_pa)
-    A_cb  = ParExt.dist_analysis_cache_blocked(cfg, f_pa)
-    A_fcb = ParExt.dist_analysis_fused_cache_blocked(cfg, f_pa)
+    plan = ParExt.DistAnalysisPlan(cfg, f_pa)
+    A_plan = similar(A_ref)
+    SHTnsKit.dist_analysis!(plan, A_plan, f_pa)
 
     if rank == 0
         @test isapprox(A_std, A_ref; rtol=1e-12, atol=1e-14)
-        @test isapprox(A_cb,  A_ref; rtol=1e-12, atol=1e-14)
-        @test isapprox(A_fcb, A_ref; rtol=1e-12, atol=1e-14)
+        @test isapprox(A_plan, A_ref; rtol=1e-12, atol=1e-14)
     end
     return true
 end
@@ -543,7 +544,7 @@ function run_extended_tests(lmax::Int, nlat::Int, nlon::Int)
         ("dist_analysis_qst! in-place", () -> test_dist_analysis_synthesis_qst_inplace(cfg, pen)),
         ("dist_scalar_laplacian!",      () -> test_dist_scalar_laplacian_inplace(cfg, pen)),
         ("Y-rotate gather variants",    () -> test_yrotate_allgatherm_vs_truncgatherm(cfg, pen)),
-        ("Analysis strategy variants",  () -> test_analysis_strategy_variants(cfg, pen)),
+        ("Planned analysis",           () -> test_planned_analysis(cfg, pen)),
     ]
 
     for (name, f) in specs

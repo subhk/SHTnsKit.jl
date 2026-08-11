@@ -126,6 +126,7 @@ using Base.Threads  # For multi-threading support
 phi_inv_scale(nlon::Integer) = (get(ENV, "SHTNSKIT_PHI_SCALE", "dft") == "quad" ? nlon/(2π) : Float64(nlon))
 
 # Include all module source files
+include("devices.jl")                        # Typed CPU()/GPU() device markers
 include("loop.jl")                           # Unified CPU/GPU loop abstraction
 include("fftutils.jl")                      # FFT utility functions and helpers
 include("layout.jl")                        # Data layout and memory organization
@@ -165,7 +166,6 @@ include("local.jl")                           # Local (thread-local) operations
 include("energy_diagnostics.jl")              # Energy calculations and gradients
 include("spectral_diagnostics.jl")            # Spectral analysis and spectrum functions
 include("vorticity_diagnostics.jl")           # Vorticity and enstrophy calculations
-include("api_compat.jl")                      # API compatibility layer
 include("batch_transforms.jl")                # Batch (multi-field) transforms
 include("parallel_dense.jl")                  # Parallel dense matrix operations
 include("device_utils.jl")                    # GPU device utilities and management
@@ -180,8 +180,6 @@ export set_allow_padding!, disable_padding!, is_padding_enabled       # Memory p
 export get_nlat_padded, get_spat_dist, compute_optimal_padding        # Padding queries
 export allocate_padded_spatial, allocate_padded_spatial_batch         # Padded array allocation
 export copy_to_padded!, copy_from_padded!, estimate_padding_overhead  # Padding utilities
-export create_gauss_config_gpu, set_config_device!, get_config_device, is_gpu_config  # GPU device management
-export select_compute_device, device_transfer_arrays                  # Device utilities
 
 # ===== BASIC TRANSFORMS =====
 # The `*_cplx` helpers are intentionally separate from `real_output=false`
@@ -262,31 +260,20 @@ export CI, δ, inside                                                 # Cartesia
 export spectral_range, spatial_range, latitude_range, mode_range     # SHT-specific loop ranges
 export local_range, local_size                                       # PencilArray-aware range helpers
 
-# ===== BACKEND/DEVICE MANAGEMENT =====
-# Transparent CPU/GPU backend switching (from device_utils.jl)
-export SHTBackend, CPU, GPU                               # Backend enum
-export available_backends, current_backend, set_backend!  # Backend management
-export use_gpu, with_backend, reset_backend!              # Backend utilities
-export select_compute_device                              # Device selection
-export to_device, on_device, device_transfer_arrays       # Array transfers
-export dispatch_to_backend, @dispatch_backend             # Dispatch helpers
-export device_info, ensure_backend_initialized            # Device info
+# ===== DEVICE MANAGEMENT =====
+export ComputeDevice, CPU, GPU
+export get_device, set_device!, to_device, on_device
 
 # ===== EXTENSION-PROVIDED FUNCTIONS =====
 # These functions are implemented in Julia package extensions and only available when
 # the corresponding packages are loaded
 
 # GPU Computing functions (SHTnsKitGPUExt extension)
-export SHTDevice, CPU_DEVICE, CUDA_DEVICE  # Legacy device management (deprecated)
-export get_device, set_device!                            # Device utilities
 export gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe  # GPU transforms
 export gpu_analysis_sphtor, gpu_synthesis_sphtor         # GPU vector transforms
 export gpu_apply_laplacian!                              # GPU operators
 export gpu_memory_info, check_gpu_memory, gpu_clear_cache!, estimate_memory_usage  # Memory management
-export MultiGPUConfig, create_multi_gpu_config           # Multi-GPU configuration
-export get_available_gpus, set_gpu_device                # Multi-GPU device management
-export multi_gpu_analysis, multi_gpu_synthesis           # Multi-GPU transforms
-export multi_gpu_analysis_streaming, multi_gpu_synthesis_streaming, estimate_streaming_chunks  # Memory streaming
+export get_available_gpus, set_gpu_device                # CUDA device management
 
 # Optional LoopVectorization-powered helpers (SHTnsKitLoopVecExt extension)
 export analysis_turbo, synthesis_turbo                    # Vectorized transforms
@@ -397,28 +384,19 @@ suggest_pencil_grid
 
 # GPU extension fallbacks
 const _GPU_NOT_LOADED_MSG = "GPU extension not loaded. Install and load CUDA.jl with GPUArrays and KernelAbstractions"
-get_device() = error(_GPU_NOT_LOADED_MSG)
-set_device!(::Any) = error(_GPU_NOT_LOADED_MSG)
-to_device(::Any, ::Any) = error(_GPU_NOT_LOADED_MSG)
-gpu_analysis(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_synthesis(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_analysis_safe(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_synthesis_safe(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_analysis_sphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_synthesis_sphtor(::SHTConfig, ::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-gpu_apply_laplacian!(::SHTConfig, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_analysis(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_synthesis(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_analysis_safe(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_synthesis_safe(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_analysis_sphtor(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_synthesis_sphtor(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
+gpu_apply_laplacian!(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_memory_info(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 check_gpu_memory(::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_clear_cache!(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 estimate_memory_usage(::SHTConfig, ::Any) = error(_GPU_NOT_LOADED_MSG)
-get_available_gpus() = error(_GPU_NOT_LOADED_MSG)
+get_available_gpus(args...) = error(_GPU_NOT_LOADED_MSG)
 set_gpu_device(::Any) = error(_GPU_NOT_LOADED_MSG)
-create_multi_gpu_config(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-multi_gpu_analysis(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-multi_gpu_synthesis(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-multi_gpu_analysis_streaming(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-multi_gpu_synthesis_streaming(::Any, ::Any; kwargs...) = error(_GPU_NOT_LOADED_MSG)
-estimate_streaming_chunks(::Any, ::Any) = error(_GPU_NOT_LOADED_MSG)
 
 # Default fallbacks if extensions are not loaded (use broad signatures to avoid overwriting)
 zgrad_scalar_energy(::SHTConfig, ::Any) = error("Zygote extension not loaded")
@@ -494,44 +472,5 @@ analysis_turbo(::Any, ::Any) = error("LoopVectorization extension not loaded")  
 synthesis_turbo(::Any, ::Any; real_output::Bool=true) = error("LoopVectorization extension not loaded")  # Vectorized synthesis
 turbo_apply_laplacian!(::Any, ::Any) = error("LoopVectorization extension not loaded")            # Vectorized Laplacian
 benchmark_turbo_vs_simd(::Any; kwargs...) = error("LoopVectorization extension not loaded")      # Performance comparison
-
-# ===== LOW-LEVEL SHTNS LIBRARY INTERFACE =====
-# Direct bindings to the underlying SHTns C library functions
-
-# Grid type flags
-export SHT_GAUSS, SHT_AUTO, SHT_REGULAR, SHT_REG_FAST, SHT_QUICK_INIT, SHT_REGULAR_POLES, SHT_GAUSS_FLY
-export SHT_REG_DCT                                                        # DCT-based regular grid
-
-# Data layout flags
-export SHT_NATIVE_LAYOUT, SHT_THETA_CONTIGUOUS, SHT_PHI_CONTIGUOUS        # Data layout control
-
-# Option flags
-export SHT_NO_CS_PHASE, SHT_REAL_NORM, SHT_SCALAR_ONLY                    # Normalization options
-export SHT_SOUTH_POLE_FIRST, SHT_ALLOW_PADDING                            # Grid ordering and padding
-export SHT_LOAD_SAVE_CFG, SHT_ALLOW_GPU                                   # Config caching and GPU
-export SHT_ROBERT_FORM, SHT_FP32                                          # Transform options
-
-# Library information
-export shtns_verbose, shtns_print_version, shtns_get_build_info
-
-# Initialization and configuration
-export shtns_init, shtns_create, shtns_set_grid, shtns_set_grid_auto, shtns_create_with_grid
-export shtns_use_threads, shtns_reset, shtns_destroy, shtns_unset_grid, shtns_robert_form
-
-# Spherical harmonic values and weights
-export sh00_1, sh10_ct, sh11_st, shlm_e1, shtns_gauss_wts
-
-# Debugging and Legendre functions
-export shtns_print_cfg, legendre_sphPlm_array, legendre_sphPlm_deriv_array
-
-# Memory management
-export shtns_malloc, shtns_free, shtns_set_many
-
-# Helper macros (grid coordinate utilities)
-export PHI_DEG, PHI_RAD, THETA_DEG, THETA_RAD                             # Coordinate conversions
-export NSPAT_ALLOC, NLM_ALLOC                                             # Allocation size helpers
-
-# Configuration persistence
-export save_config, load_config                                           # Config save/load
 
 end # module SHTnsKit

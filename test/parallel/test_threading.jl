@@ -13,7 +13,7 @@ using SHTnsKit
 
 @isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
-function _rand_real_alm(rng, lmax, mmax)
+function _thread_rand_real_alm(rng, lmax, mmax)
     alm = randn(rng, ComplexF64, lmax + 1, mmax + 1)
     alm[:, 1] .= real.(alm[:, 1])
     for m in 0:mmax, l in 0:(m - 1)
@@ -34,7 +34,7 @@ end
 
         ntasks = 16
         rngs = [MersenneTwister(1000 + k) for k in 1:ntasks]
-        alms = [_rand_real_alm(rngs[k], lmax, lmax) for k in 1:ntasks]
+        alms = [_thread_rand_real_alm(rngs[k], lmax, lmax) for k in 1:ntasks]
         outs = [zeros(cfg.nlat, cfg.nlon) for _ in 1:ntasks]
 
         @threads :static for k in 1:ntasks
@@ -152,8 +152,8 @@ end
 
         ntasks = 8
         rng = MersenneTwister(1500)
-        Ss = [_rand_real_alm(rng, lmax, lmax) for _ in 1:ntasks]
-        Ts = [_rand_real_alm(rng, lmax, lmax) for _ in 1:ntasks]
+        Ss = [_thread_rand_real_alm(rng, lmax, lmax) for _ in 1:ntasks]
+        Ts = [_thread_rand_real_alm(rng, lmax, lmax) for _ in 1:ntasks]
         for k in 1:ntasks
             Ss[k][1, 1] = 0; Ts[k][1, 1] = 0
         end

@@ -185,10 +185,6 @@ mutable struct SHTConfig
     phi_scale::Symbol
     on_the_fly::Bool
 
-    # GPU computing
-    compute_device::Symbol
-    device_preference::Vector{Symbol}
-
     # Batch transform configuration
     howmany::Int
     spec_dist::Int
@@ -214,7 +210,6 @@ end
               norm, cs_phase, real_norm, robert_form,
               nlm, li, mi, nspat,
               grid_type=:gauss, phi_scale=:auto, on_the_fly=false,
-              compute_device=:cpu, device_preference=[:cpu],
               use_plm_tables=false, plm_tables=[], dplm_tables=[],
               NP_tables=[], NdP_tables=[], norm_scale_matrix=Matrix{Float64}(undef,0,0),
               _otf_scratch_P=[], _otf_scratch_dP=[], _otf_scratch_Ps=[], _otf_scratch_Pb=[], _m_order=[],
@@ -235,8 +230,6 @@ function SHTConfig(;
     grid_type::Symbol = :gauss,
     phi_scale::Symbol = :auto,
     on_the_fly::Bool = false,
-    compute_device::Symbol = :cpu,
-    device_preference::AbstractVector{Symbol} = [:cpu],
     use_plm_tables::Bool = false,
     plm_tables::AbstractVector = Matrix{Float64}[],
     dplm_tables::AbstractVector = Matrix{Float64}[],
@@ -264,12 +257,11 @@ function SHTConfig(;
                           norm=norm, cs_phase=cs_phase,
                           real_norm=real_norm, robert_form=robert_form,
                           scale_matrix=Ref(convert(Matrix{Float64}, norm_scale_matrix)))
-    tables = SHTTables(;
-        enabled=use_plm_tables,
-        plm=convert(Vector{Matrix{Float64}}, collect(plm_tables)),
-        dplm=convert(Vector{Matrix{Float64}}, collect(dplm_tables)),
-        NP=convert(Vector{Matrix{Float64}}, collect(NP_tables)),
-        NdP=convert(Vector{Matrix{Float64}}, collect(NdP_tables)))
+    plm = convert(Vector{Matrix{Float64}}, collect(plm_tables))
+    dplm = convert(Vector{Matrix{Float64}}, collect(dplm_tables))
+    NP = NP_tables === plm_tables ? plm : convert(Vector{Matrix{Float64}}, collect(NP_tables))
+    NdP = NdP_tables === dplm_tables ? dplm : convert(Vector{Matrix{Float64}}, collect(NdP_tables))
+    tables = SHTTables(; enabled=use_plm_tables, plm, dplm, NP, NdP)
     scratch = SHTScratch(;
         otf_P=convert(Vector{Vector{Float64}}, collect(_otf_scratch_P)),
         otf_dP=convert(Vector{Vector{Float64}}, collect(_otf_scratch_dP)),
@@ -279,7 +271,6 @@ function SHTConfig(;
     return SHTConfig(Int(lmax), Int(mmax), Int(mres), Int(nlat), Int(nlon), grid_type,
                      Int(nlm), collect(Int, li), collect(Int, mi), Int(nspat),
                      phi_scale, on_the_fly,
-                     compute_device, collect(Symbol, device_preference),
                      Int(howmany), Int(spec_dist), south_pole_first,
                      allow_padding, Int(nlat_padded), Int(spat_dist),
                      grid, norm_group, tables, scratch)
@@ -511,7 +502,7 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
 
     # Build the computational grid using Gauss-Legendre quadrature
     θ, φ, x, w = thetaphi_from_nodes(nlat, nlon)
-    reverse!(θ); reverse!(x); reverse!(w)  # Reverse to north-pole-first ordering (consistent with SHTns conventions and api_compat.jl)
+    reverse!(θ); reverse!(x); reverse!(w)  # Store latitude in north-pole-first order.
 
     # Compute normalization factors for spherical harmonics
     Nlm = Nlm_table(lmax, mmax)  # currently orthonormal; future: adjust per norm/cs_phase
@@ -526,8 +517,7 @@ function create_gauss_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1, 
     # Construct and return the complete configuration
     return SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type=:gauss, θ, φ, x, w, Nlm,
                      cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                     st, norm, cs_phase, real_norm, robert_form, phi_scale=:dft,
-                     compute_device = :cpu, device_preference = [:cpu])
+                     st, norm, cs_phase, real_norm, robert_form, phi_scale=:dft)
 end
 
 """
@@ -669,8 +659,7 @@ Enable south-pole-first latitude ordering. In this mode, latitude data starts
 at the south pole (θ=π) instead of the default north pole (θ=0).
 
 This reverses the internal grid arrays (θ, x, w, st) and recalculates
-any precomputed Legendre tables if necessary. This matches the `SHT_SOUTH_POLE_FIRST`
-flag behavior in the SHTns C library.
+any precomputed Legendre tables if necessary.
 
 # Example
 ```julia
@@ -1050,6 +1039,9 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     mmax ≤ lmax || throw(ArgumentError("mmax must be ≤ lmax"))
     mres ≥ 1 || throw(ArgumentError("mres must be ≥ 1"))
     nlon ≥ (2*mmax + 1) || throw(ArgumentError("nlon must be ≥ 2*mmax+1"))
+    use_dh_weights && !include_poles && throw(ArgumentError(
+        "Driscoll-Healy weights require include_poles=true",
+    ))
     # Regular grids benefit from a slight oversampling in latitude for accuracy
     min_nlat = include_poles ? (lmax + 1) : (lmax + 2)
     nlat ≥ min_nlat || throw(ArgumentError("nlat must be ≥ $(min_nlat) for regular grids"))
@@ -1127,8 +1119,7 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
     cfg = SHTConfig(; lmax, mmax, mres, nlat, nlon, grid_type,
                     θ, φ, x, w, Nlm,
                     cphi = 2π / nlon, nlm, li, mi, nspat = nlat*nlon,
-                    st, norm, cs_phase, real_norm, robert_form, phi_scale,
-                    compute_device = :cpu, device_preference = [:cpu])
+                    st, norm, cs_phase, real_norm, robert_form, phi_scale)
 
     if precompute_plm
         prepare_plm_tables!(cfg)
@@ -1143,10 +1134,11 @@ end
                    grid_type::Symbol=:gauss) -> SHTConfig
 
 Compatibility wrapper for configuration creation used in some docs/snippets.
-Supports Gauss–Legendre (`grid_type = :gauss`) and regular equiangular
-(`grid_type = :regular` or `:regular_poles`) grids, forwarding to the
-appropriate creator. `nlat`/`nlon` defaults are adjusted to satisfy accuracy
-constraints for the chosen grid.
+Supports Gauss–Legendre (`grid_type = :gauss`), regular equiangular
+(`grid_type = :regular` or `:regular_poles`), and Driscoll-Healy
+(`grid_type = :driscoll_healy`) grids, forwarding to the appropriate creator.
+`nlat`/`nlon` defaults are adjusted to satisfy accuracy constraints for the
+chosen grid.
 """
 function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
                        nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal,
@@ -1154,21 +1146,26 @@ function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
                        robert_form::Bool=false, grid_type::Symbol=:gauss,
                        include_poles::Bool=false, precompute_plm::Bool=grid_type != :gauss)
     # Make args robust to underspecified values from older docs/snippets
-    min_lat = grid_type == :gauss ? (lmax + 1) : (grid_type == :regular_poles ? (lmax + 1) : (lmax + 2))
-    include_poles_eff = include_poles || grid_type == :regular_poles
+    pole_grid = grid_type === :regular_poles || grid_type === :driscoll_healy
+    min_lat = grid_type === :gauss ? (lmax + 1) : (pole_grid ? (lmax + 1) : (lmax + 2))
+    include_poles_eff = include_poles || pole_grid
     nlat_eff = max(nlat, min_lat)               # Regular grids benefit from a small oversampling
     nlon_eff = max(nlon, 2*mmax + 1)            # Azimuthal resolution requires ≥ 2*mmax+1
     if grid_type == :gauss
         return create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,
                                    norm=norm, cs_phase=cs_phase,
                                    real_norm=real_norm, robert_form=robert_form)
-    elseif grid_type == :regular || grid_type == :regular_poles
+    elseif grid_type === :regular || grid_type === :regular_poles || grid_type === :driscoll_healy
         return create_regular_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,
                                      norm=norm, cs_phase=cs_phase, real_norm=real_norm,
                                      robert_form=robert_form, include_poles=include_poles_eff,
-                                     precompute_plm=precompute_plm)
+                                     precompute_plm=precompute_plm,
+                                     use_dh_weights=grid_type === :driscoll_healy)
     else
-        throw(ArgumentError("unsupported grid_type=$(grid_type); choose :gauss or :regular"))
+        throw(ArgumentError(
+            "unsupported grid_type=$(grid_type); choose :gauss, :regular, " *
+            ":regular_poles, or :driscoll_healy",
+        ))
     end
 end
 
@@ -1299,6 +1296,11 @@ Use `copy(cfg)` to get a fully independent copy that can be safely modified
 (e.g., `set_south_pole_first!`) without affecting the original.
 """
 function Base.copy(cfg::SHTConfig)
+    plm_tables = [copy(t) for t in cfg.plm_tables]
+    dplm_tables = [copy(t) for t in cfg.dplm_tables]
+    NP_tables = cfg.NP_tables === cfg.plm_tables ? plm_tables : [copy(t) for t in cfg.NP_tables]
+    NdP_tables = cfg.NdP_tables === cfg.dplm_tables ? dplm_tables : [copy(t) for t in cfg.NdP_tables]
+
     return SHTConfig(;
         lmax = cfg.lmax, mmax = cfg.mmax, mres = cfg.mres,
         nlat = cfg.nlat, nlon = cfg.nlon, grid_type = cfg.grid_type,
@@ -1309,12 +1311,10 @@ function Base.copy(cfg::SHTConfig)
         norm = cfg.norm, cs_phase = cfg.cs_phase, real_norm = cfg.real_norm,
         robert_form = cfg.robert_form, phi_scale = cfg.phi_scale,
         use_plm_tables = cfg.use_plm_tables, on_the_fly = cfg.on_the_fly,
-        compute_device = cfg.compute_device,
-        device_preference = copy(cfg.device_preference),
-        plm_tables = [copy(t) for t in cfg.plm_tables],
-        dplm_tables = [copy(t) for t in cfg.dplm_tables],
-        NP_tables = [copy(t) for t in cfg.NP_tables],
-        NdP_tables = [copy(t) for t in cfg.NdP_tables],
+        plm_tables = plm_tables,
+        dplm_tables = dplm_tables,
+        NP_tables = NP_tables,
+        NdP_tables = NdP_tables,
         howmany = cfg.howmany, spec_dist = cfg.spec_dist,
         south_pole_first = cfg.south_pole_first,
         allow_padding = cfg.allow_padding,
@@ -1322,74 +1322,3 @@ function Base.copy(cfg::SHTConfig)
         spat_dist = cfg.spat_dist,
     )
 end
-
-# ==== GPU DEVICE MANAGEMENT FUNCTIONS ====
-
-"""
-    create_gauss_config_gpu(lmax, nlat; nlon=nothing, mres=1, device=:auto, kwargs...)
-
-Create a spherical harmonic configuration with GPU device selection.
-Enhanced version of `create_gauss_config` with automatic device detection.
-
-# Arguments
-- `device::Symbol`: Target device (:auto, :cpu, :cuda)
-- `device_preference::Vector{Symbol}`: Preference order when device=:auto
-"""
-function create_gauss_config_gpu(lmax::Int, nlat::Int;
-                                nlon::Union{Int,Nothing}=nothing,
-                                mres::Int=1,
-                                device::Symbol=:auto,
-                                device_preference::Vector{Symbol}=[:cuda, :cpu],
-                                kwargs...)
-
-    # Compute effective nlon: use provided value or default
-    nlon_eff = isnothing(nlon) ? _default_nlon(lmax) : nlon
-
-    # Create the base configuration
-    cfg = create_gauss_config(lmax, nlat; nlon=nlon_eff, mres=mres, kwargs...)
-    
-    # Determine the compute device
-    if device == :auto
-        selected_device, gpu_available = select_compute_device(device_preference)
-    else
-        selected_device = device
-        gpu_available = (device != :cpu)
-    end
-    
-    # Set device configuration
-    cfg.compute_device = selected_device
-    cfg.device_preference = copy(device_preference)
-    
-    return cfg
-end
-
-"""
-    set_config_device!(cfg::SHTConfig, device::Symbol)
-
-Change the compute device for an existing configuration.
-"""
-function set_config_device!(cfg::SHTConfig, device::Symbol)
-    if device ∉ [:cpu, :cuda, :amdgpu]
-        throw(ArgumentError("Unsupported device: $device. Must be :cpu, :cuda, or :amdgpu"))
-    end
-    
-    cfg.compute_device = device
-    
-    # Update device preference to put the selected device first
-    new_preference = [device]
-    for dev in cfg.device_preference
-        if dev != device
-            push!(new_preference, dev)
-        end
-    end
-    cfg.device_preference = new_preference
-    
-    return cfg
-end
-
-"""Get the current compute device for a configuration."""
-get_config_device(cfg::SHTConfig) = cfg.compute_device
-
-"""Check if a configuration is set up for GPU computing."""
-is_gpu_config(cfg::SHTConfig) = cfg.compute_device != :cpu
-

@@ -51,7 +51,6 @@ DEBUGGING TIPS
    - `PencilArrays.size_global(arr)` shows full global dimensions
 
 3. Common issues:
-   - "Unable to get global indices": PencilArrays version incompatibility
    - Hanging on MPI calls: Ensure all ranks call collective operations
    - Wrong results: Check that θ/φ ranges are correctly identified
 
@@ -76,10 +75,8 @@ Parallel extension module providing MPI-distributed spherical harmonic transform
 See module-level comments for architecture overview and debugging tips.
 
 # Module state
-All mutable module-level state lives in the `_STATE` constant (a struct with
-fields for plan caches, locks, and toggles). Individual `const _xxx` names
-below are kept as aliases pointing at `_STATE` fields so existing call sites
-don't have to change while the bundling reads more clearly in one place.
+The extension keeps its FFT plan caches, locks, and cache controls in direct
+module constants.
 """
 
 using Base.Threads                       # Threads.@threads and locks/macros
@@ -128,31 +125,11 @@ using SHTnsKit                           # Core spherical harmonic functionality
 end
 
 # ===== MODULE STATE =====
-# All mutable module-level state grouped into one struct for easier reasoning
-# about lifecycle, teardown in tests, and to collect all tunables in one place.
-# The individual `_pfft_cache` / `_cache_lock` / ... const names below are
-# preserved as aliases for backward-compatible call sites.
-struct _ParallelExtState
-    cache_enabled::Base.RefValue{Bool}                  # toggle plan caching
-    pfft_cache::IdDict{Any,Any}                         # FFT plan cache (keyed by shape/type/comm)
-    pfft_cache_max::Base.RefValue{Int}                  # soft cap on pfft_cache entries
-    cache_lock::Threads.ReentrantLock                   # guards pfft_cache
-    fftw_cache_lock::Threads.ReentrantLock              # guards local-FFTW plan caches
-end
-
-const _STATE = _ParallelExtState(
-    Ref{Bool}(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "1") == "1"),
-    IdDict{Any,Any}(),
-    Ref{Int}(parse(Int, get(ENV, "SHTNSKIT_PFFT_CACHE_MAX", "64"))),
-    Threads.ReentrantLock(),
-    Threads.ReentrantLock(),
-)
-
-# Back-compat aliases — exact same objects, just reachable under the old names.
-const _CACHE_PENCILFFTS    = _STATE.cache_enabled
-const _pfft_cache          = _STATE.pfft_cache
-const _PFFT_CACHE_MAX      = _STATE.pfft_cache_max
-const _cache_lock          = _STATE.cache_lock
+const _CACHE_PENCILFFTS = Ref(get(ENV, "SHTNSKIT_CACHE_PENCILFFTS", "1") == "1")
+const _pfft_cache = IdDict{Any,Any}()
+const _PFFT_CACHE_MAX = Ref(parse(Int, get(ENV, "SHTNSKIT_PFFT_CACHE_MAX", "64")))
+const _cache_lock = Threads.ReentrantLock()
+const _fftw_cache_lock = Threads.ReentrantLock()
 
 """
     pfft_cache_max!(n::Int) -> Int
@@ -261,10 +238,6 @@ function _get_or_plan(kind::Symbol, A)
 end
 
 
-# ===== VERSION-AGNOSTIC COMPATIBILITY LAYER =====
-# Robust API compatibility patterns for PencilArrays across versions
-# Uses method-based dispatch and try-catch for maximum reliability
-
 # ===== PENCIL GRID SUGGESTION =====
 @inline function _infer_comm_size(comm_or_nprocs::Any)
     comm_or_nprocs === nothing && return 1
@@ -370,92 +343,8 @@ function _suggest_pencil_grid_impl(comm_or_nprocs::Any, nlat::Integer, nlon::Int
     return best
 end
 
-# Diagnostic function to detect PencilArrays version and capabilities
-function _detect_pencilarray_version()
-    version_info = Dict{Symbol, Any}()
-
-    # Check for v0.19+ API (uses get_comm, range_local)
-    version_info[:has_get_comm] = isdefined(PencilArrays, :get_comm)
-    version_info[:has_range_local] = isdefined(PencilArrays, :range_local)
-    version_info[:has_size_local] = isdefined(PencilArrays, :size_local)
-
-    # Check for modern API (v0.17+)
-    version_info[:has_communicator] = isdefined(PencilArrays, :communicator)
-    version_info[:has_allocate] = isdefined(PencilArrays, :allocate)
-    version_info[:has_globalindices] = isdefined(PencilArrays, :globalindices)
-
-    # Check for legacy API patterns
-    version_info[:has_comm] = isdefined(PencilArrays, :comm)
-    version_info[:has_global_indices] = isdefined(PencilArrays, :global_indices)
-    version_info[:has_pencilarray_constructor] = isdefined(PencilArrays, :PencilArray)
-
-    # Try to determine approximate version based on API availability
-    if version_info[:has_get_comm] && version_info[:has_range_local]
-        version_info[:estimated_version] = "v0.19+"
-    elseif version_info[:has_communicator] && version_info[:has_allocate] && version_info[:has_globalindices]
-        version_info[:estimated_version] = "v0.17+"
-    elseif version_info[:has_comm] || version_info[:has_global_indices]
-        version_info[:estimated_version] = "v0.15-v0.16"
-    else
-        version_info[:estimated_version] = "unknown/very_old"
-    end
-
-    return version_info
-end
-
-# Get version info (cached for performance)
-const _PENCILARRAY_VERSION_INFO = Ref{Union{Nothing, Dict{Symbol, Any}}}(nothing)
-function pencilarray_version_info()
-    if _PENCILARRAY_VERSION_INFO[] === nothing
-        _PENCILARRAY_VERSION_INFO[] = _detect_pencilarray_version()
-    end
-    return _PENCILARRAY_VERSION_INFO[]
-end
-
-# Get MPI communicator from PencilArray with robust fallback chain
-function communicator(A)
-    # PencilArrays v0.19+ uses get_comm
-    if hasmethod(PencilArrays.get_comm, (typeof(A),))
-        return PencilArrays.get_comm(A)
-    end
-
-    # Modern PencilArrays API (v0.17+)
-    if isdefined(PencilArrays, :communicator) && hasmethod(PencilArrays.communicator, (typeof(A),))
-        return PencilArrays.communicator(A)
-    end
-
-    # Legacy API patterns (v0.15-v0.16)
-    if isdefined(PencilArrays, :comm) && hasmethod(PencilArrays.comm, (typeof(A),))
-        return PencilArrays.comm(A)
-    end
-
-    # Try get_comm on the pencil object
-    try
-        pen = pencil(A)
-        if hasmethod(PencilArrays.get_comm, (typeof(pen),))
-            return PencilArrays.get_comm(pen)
-        end
-    catch
-    end
-
-    # Direct field access fallback (very old versions)
-    try
-        return A.pencil.comm
-    catch
-        # Last resort: try global communicator access patterns
-        if hasfield(typeof(A), :pencil)
-            p = getfield(A, :pencil)
-            if hasfield(typeof(p), :comm)
-                return getfield(p, :comm)
-            elseif hasfield(typeof(p), :communicator)
-                return getfield(p, :communicator)
-            end
-        end
-    end
-
-    error("Unable to extract MPI communicator from PencilArray. "
-          * "This may indicate an incompatible PencilArrays version.")
-end
+# PencilArrays 0.19 is the package's declared compatibility target.
+@inline communicator(A) = PencilArrays.get_comm(A)
 
 # Allocate PencilArray - simplified API for SHTnsKit needs
 """
@@ -464,9 +353,8 @@ end
 Allocate a new PencilArray with the same decomposition as the prototype.
 The optional `eltype` parameter allows changing the element type.
 
-Note: The `dims` keyword from legacy API is ignored - decomposition is inherited from prototype.
 """
-function allocate(prototype::PencilArray; dims=nothing, eltype::Type{T}=eltype(prototype)) where T
+function allocate(prototype::PencilArray; eltype::Type{T}=eltype(prototype)) where T
     # Get the pencil configuration from the prototype
     pen = pencil(prototype)
     # Allocate a new PencilArray with the same configuration
@@ -503,63 +391,7 @@ function zeros_like(prototype::PencilArray, ::Type{T}=eltype(prototype)) where T
     return arr
 end
 
-# Get global indices with robust fallback patterns
-function globalindices(A, dim)
-    # PencilArrays v0.19+ uses range_local on the pencil
-    try
-        pen = pencil(A)
-        ranges = PencilArrays.range_local(pen)
-        if dim <= length(ranges)
-            return ranges[dim]
-        end
-    catch
-    end
-
-    # Modern PencilArrays API (v0.17+)
-    if isdefined(PencilArrays, :globalindices) && hasmethod(PencilArrays.globalindices, (typeof(A), typeof(dim)))
-        return PencilArrays.globalindices(A, dim)
-    end
-
-    # Legacy API patterns (v0.15-v0.16)
-    if isdefined(PencilArrays, :global_indices) && hasmethod(PencilArrays.global_indices, (typeof(A), typeof(dim)))
-        return PencilArrays.global_indices(A, dim)
-    end
-
-    # Direct field access patterns
-    try
-        return A.pencil.axes[dim]
-    catch
-        # Alternative field access patterns
-        try
-            p = getfield(A, :pencil)
-            if hasfield(typeof(p), :axes)
-                ax = getfield(p, :axes)
-                return ax[dim]
-            elseif hasfield(typeof(p), :global_axes)
-                global_axes = getfield(p, :global_axes)
-                return global_axes[dim]
-            end
-        catch
-            # Last resort: try to reconstruct from size information
-            # Only safe if local_size == global_size (no distribution along this dimension)
-            if hasmethod(size, (typeof(A),)) && hasmethod(PencilArrays.size_global, (typeof(A),))
-                local_size = size(A)
-                global_size = PencilArrays.size_global(A)
-                if dim <= length(global_size) && dim <= length(local_size)
-                    if local_size[dim] == global_size[dim]
-                        # No distribution along this dimension - safe to return full range
-                        return 1:global_size[dim]
-                    end
-                    # Distributed along this dimension but can't determine local indices
-                    # Fall through to error
-                end
-            end
-        end
-    end
-
-    error("Unable to get global indices for dimension $dim from PencilArray. "
-          * "This may indicate an incompatible PencilArrays version.")
-end
+@inline globalindices(A, dim) = PencilArrays.range_local(PencilArrays.pencil(A))[dim]
 
 # ===== DISTRIBUTED FFT WRAPPERS =====
 # Use FFTW for 1D FFTs along the longitude dimension (not PencilFFTs which is for multi-D)
@@ -567,7 +399,6 @@ end
 
 # Cache for FFTW 1D plans (key includes inplace flag)
 const _fftw_plan_cache = Dict{Tuple{Symbol, Int, DataType, Bool}, Any}()
-const _fftw_cache_lock = _STATE.fftw_cache_lock
 
 """
     get_fftw_plan(kind, n, T) -> plan
@@ -692,7 +523,7 @@ function ifft_along_dim2!(output::AbstractMatrix{Complex{T}}, input::AbstractMat
     return output
 end
 
-# Legacy API wrappers for backward compatibility (used by existing code)
+# Local FFT wrappers used by the extension's plan cache.
 function plan_fft(A::PencilArray; dims=:)
     # Return a placeholder that indicates we'll use FFTW on local data
     return (kind=:fft, local_size=size(parent(A)))
@@ -1009,21 +840,6 @@ end
 
 # Note: Avoid forwarding Base.zeros(Pencil) to PencilArrays.zeros to prevent
 # potential recursion when PencilArrays.zeros may call Base.zeros internally.
-
-# ===== MIGRATION NOTES =====
-# The previous version compatibility shims (prior to this update) used fragile patterns:
-# - Simple isdefined() checks that could miss method signature changes
-# - Direct field access without proper error handling
-# - Hardcoded fallback paths that assumed specific internal structures
-#
-# The new robust patterns provide:
-# - Method-based existence checking with proper type signatures
-# - Multi-level fallback chains with comprehensive error handling
-# - Version detection utilities for debugging compatibility issues
-# - Graceful degradation rather than hard failures where possible
-#
-# This should maintain compatibility across PencilArrays v0.15+ while being
-# more resilient to API changes in future versions.
 
 # ===== EXPORTS =====
 # Export types and functions defined in this extension

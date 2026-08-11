@@ -157,7 +157,7 @@ end
     @test isapprox(Vp_ml, Vp_ml_ref; rtol=1e-10, atol=1e-12)
 end
 
-@testset "Regular grid and shtns flags" begin
+@testset "Regular grid" begin
     lmax = 8
     # Driscoll-Healy quadrature for exact equiangular transforms
     nlat = 2 * (lmax + 1)
@@ -178,17 +178,6 @@ end
     alm_err = maximum(abs.(alm_rt - alm))
     @test alm_err < 1e-6
 
-    flags = SHTnsKit.SHT_REGULAR + SHTnsKit.SHT_SOUTH_POLE_FIRST
-    cfg_init = shtns_init(flags, lmax, lmax, 1, lmax, 2*lmax)
-    @test cfg_init.grid_type == :regular
-    @test cfg_init.nlon == max(2*lmax + 1, 4)
-    @test cfg_init.nlat >= lmax + 2
-    @test cfg_init.θ[1] > cfg_init.θ[end]
-
-    cfg_shrink = shtns_create_with_grid(cfg_init, lmax - 2, 0)
-    @test cfg_shrink.grid_type == cfg_init.grid_type
-    @test cfg_shrink.nlat == cfg_init.nlat
-    @test cfg_shrink.use_plm_tables == cfg_init.use_plm_tables
 end
 
 @testset "LM_cplx compatibility" begin
@@ -240,17 +229,8 @@ end
 # For proper MPI testing with multiple processes, run:
 #   mpiexec -n 4 julia --project test/test_mpi_pencil.jl
 
-# Define globalindices helper needed by other parallel tests
-@eval function _get_global_indices(A, dim)
-    try
-        @eval import PencilArrays: pencil, range_local
-        pen = pencil(A)
-        ranges = range_local(pen)
-        return ranges[dim]
-    catch
-        return 1:size(A, dim)
-    end
-end
+# Define the PencilArrays 0.19 index helper used by optional parallel tests.
+@eval _get_global_indices(A, dim) = PencilArrays.range_local(PencilArrays.pencil(A))[dim]
 
 @testset "Parallel rfft equivalence (optional)" begin
     try
@@ -277,15 +257,11 @@ end
 
             Alm_c = zeros(ComplexF64, lmax+1, lmax+1)
             Alm_r = similar(Alm_c)
-            Alm_kw = similar(Alm_c)
             plan_c = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=false)
             plan_r = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=true)
-            plan_kw = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_packed_storage=true)
             SHTnsKit.dist_analysis!(plan_c, Alm_c, fθφ)
             SHTnsKit.dist_analysis!(plan_r, Alm_r, fθφ)
-            SHTnsKit.dist_analysis!(plan_kw, Alm_kw, fθφ)
             @test isapprox(Alm_c, Alm_r; rtol=1e-10, atol=1e-12)
-            @test isapprox(Alm_c, Alm_kw; rtol=1e-10, atol=1e-12)
 
             # Vector - use global indices for consistent field across processes
             Vt = PencilArrays.PencilArray{Float64}(undef, P)
@@ -373,8 +349,7 @@ end
                     end
                 end
 
-                # Scalar plan with scratch buffers exercises allocate(dims=(:θ,:m)) path
-                aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=true, with_spatial_scratch=true)
+                aplan = _get_parallel_ext().DistAnalysisPlan(cfg, fθφ; use_rfft=true)
                 Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
                 SHTnsKit.dist_analysis!(aplan, Alm, fθφ)
 

@@ -36,16 +36,13 @@ using PencilArrays: PencilArray
 using SHTnsKit
 using FFTW
 
-# ----- PencilArrays compat ---------------------------------------------------
+# ----- PencilArrays helpers -------------------------------------------------
 # `communicator` and `globalindices` are internal helpers of the sibling
 # SHTnsKitParallelExt module and are NOT exported by PencilArrays (verified
 # across 0.19.8–0.19.11). This is a SEPARATE extension module, so without local
 # definitions every rrule below throws `UndefVarError` the moment it fires.
-# These mirror the primary (v0.19+) resolution paths used by the main ext.
-@inline function communicator(A)
-    hasmethod(PencilArrays.get_comm, (typeof(A),)) && return PencilArrays.get_comm(A)
-    return PencilArrays.get_comm(PencilArrays.pencil(A))
-end
+# These mirror the primary 0.19 API used by the main extension.
+@inline communicator(A) = PencilArrays.get_comm(A)
 
 @inline globalindices(A, dim) = PencilArrays.range_local(PencilArrays.pencil(A))[dim]
 

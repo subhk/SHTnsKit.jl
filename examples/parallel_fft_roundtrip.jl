@@ -51,7 +51,7 @@ end
 pθ, pφ = procgrid(SIZE)
 topo = PencilArrays.Pencil((nlat, nlon), (pθ, pφ), COMM)
 
-# Safe allocation helper for PencilArrays v0.19+
+# Allocation helper for PencilArrays v0.19
 function pa_zeros(::Type{T}, pen::Pencil) where {T}
     local_dims = PencilArrays.size_local(pen)
     local_data = zeros(T, local_dims...)

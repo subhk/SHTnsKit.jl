@@ -21,7 +21,7 @@ Pkg.add("SHTnsKit")
 ### System Requirements
 
 - **Operating System**: Linux, macOS, or Windows with WSL
-- **Julia**: Version 1.9 or later (1.11+ recommended)
+- **Julia**: Version 1.10, 1.11, or 1.12
 - **Memory**: At least 4GB RAM (16GB+ for large parallel problems)
 - **Storage**: 2GB free space for dependencies (including MPI)
 - **MPI Library**: OpenMPI or MPICH for parallel functionality

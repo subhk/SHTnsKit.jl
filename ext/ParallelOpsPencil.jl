@@ -8,9 +8,9 @@
 In-place multiply by -l(l+1) for distributed Alm with dims (:l,:m). No communication.
 """
 function SHTnsKit.dist_apply_laplacian!(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray)
-    # Scalar-indexing the PencilArray avoids `.*=` on a row slice which, in
-    # newer PencilArrays versions, tries to construct a `similar` PencilArray
-    # of different size and throws `DimensionMismatch`.
+    # Scalar-indexing the PencilArray avoids `.*=` on a row slice, which tries
+    # to construct a differently sized `similar` PencilArray and throws
+    # `DimensionMismatch`.
     lloc = axes(Alm_pencil, 1); gl_l = collect(Int, globalindices(Alm_pencil, 1))
     mloc = axes(Alm_pencil, 2)
     @inbounds for (ii, il) in enumerate(lloc)

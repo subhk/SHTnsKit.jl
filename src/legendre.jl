@@ -832,9 +832,9 @@ end
 Return `θ` and `φ` arrays where `θ ∈ [0, π]` (Gauss–Legendre nodes mapped) and
 `φ ∈ [0, 2π)` equally spaced longitudes suitable for FFT-based azimuthal transforms.
 
-Note: The returned arrays follow the gausslegendre ordering (south-to-north, x from -1 to +1).
-For north-to-south ordering compatible with SHTns conventions, the caller should reverse
-the arrays after calling this function (as done in api_compat.jl for shtns_set_grid).
+Note: The returned arrays follow the gausslegendre ordering (south-to-north,
+`x` from -1 to +1). Callers that need north-to-south ordering should reverse
+the latitude-dependent arrays.
 """
 function thetaphi_from_nodes(nlat::Int, nlon::Int)
     x, w = gausslegendre(nlat)

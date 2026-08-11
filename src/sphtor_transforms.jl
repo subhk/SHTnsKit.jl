@@ -231,10 +231,6 @@ end
 Transform horizontal vector field components to spheroidal/toroidal coefficients.
 """
 function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix; use_rfft::Bool=false)
-    if is_gpu_config(cfg)
-        return gpu_analysis_sphtor(cfg, Vt, Vp)
-    end
-
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))

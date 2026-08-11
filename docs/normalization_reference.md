@@ -1,57 +1,38 @@
 # SHTnsKit Normalization Reference
 
-This document explains the normalization conventions implemented in SHTnsKit.jl, corresponding to the SHTns C library standards.
+This document explains the normalization and phase conventions implemented by
+SHTnsKit.
 
 ## Normalization Conventions
 
-### 1. SHT_ORTHONORMAL (Default)
-**Description**: Orthonormal spherical harmonics with 4π normalization
+### 1. `:orthonormal` (default)
+**Description**: Orthonormal spherical harmonics
 **Formula**: Y_l^m has unit norm over the unit sphere
 **Integration Factor**: 4π (for analysis from spatial data)
 **Real Coefficients**: Factor of 2 for m > 0 (real/imaginary separation)
 
-### 2. SHT_FOURPI 
+### 2. `:fourpi`
 **Description**: 4π normalization convention
-**Formula**: Coefficients scaled by (2l+1)/4π
+**Formula**: Basis functions are scaled by `sqrt(4π)` relative to orthonormal
 **Integration Factor**: 4π
 **Synthesis**: Includes factorial corrections for proper reconstruction
 
-### 3. SHT_SCHMIDT
+### 3. `:schmidt`
 **Description**: Schmidt semi-normalized harmonics
 **Formula**: Removes sqrt(2) factor for m > 0 terms
 **Integration Factor**: 4π with m-dependent corrections
 **Usage**: Common in geophysics applications
 
-### 4. SHT_REAL_NORM
-**Description**: Real-valued normalization for unit sphere
-**Formula**: Standard normalization without complex factors
-**Integration Factor**: 4π
+The independent `real_norm=true` option controls the real-field coefficient
+convention. The `cs_phase` option controls whether the Condon–Shortley
+`(-1)^m` phase is included.
 
 ## Implementation Details
 
-### Analysis Transform Normalization
-```julia
-function _get_analysis_normalization(cfg, l, m)
-```
-- Converts spatial data to spectral coefficients
-- Accounts for quadrature weights and grid integration
-- Handles real/complex coefficient separation for m > 0
-
-### Synthesis Transform Normalization  
-```julia
-function _get_synthesis_normalization(cfg, l, m)
-```
-- Reconstructs spatial data from spectral coefficients
-- Applies degree-dependent scaling factors
-- Ensures proper amplitude preservation
-
-### Vector Field Normalization
-```julia
-function _get_vector_analysis_normalization(cfg, l, m)
-```
-- Includes l(l+1) scaling for vector spherical harmonics
-- Accounts for gradient operations in vector transforms
-- Handles both toroidal and spheroidal components
+SHTnsKit computes with an internal orthonormal, Condon–Shortley basis and
+converts coefficients at the transform boundary according to `cfg.norm` and
+`cfg.cs_phase`. Scalar, vector, QST, packed, and batch transforms share those
+configuration values.
 
 ## Mathematical Background
 
@@ -62,29 +43,26 @@ The spherical harmonic functions Y_l^m(θ,φ) satisfy:
 Where N_{lm} is the normalization constant depending on the convention:
 
 - **Orthonormal**: N_{lm} = 1
-- **4π**: N_{lm} = 4π/(2l+1) 
-- **Schmidt**: N_{lm} = 4π with m-dependent factors
-- **Real**: N_{lm} = 4π/(2l+1) without complex factors
+- **4π**: N_{lm} = 4π
+- **Schmidt, m=0**: N_{lm} = 4π/(2l+1)
+- **Schmidt, m>0**: N_{lm} = 8π/(2l+1)
 
 ## Usage Examples
 
 ```julia
-# Create configuration with orthonormal harmonics
-cfg = create_config(Float64, 10, 10, 1; norm=SHT_ORTHONORMAL)  # nlat auto-adjusted if < lmax+1
+# Orthonormal harmonics with the Condon–Shortley phase
+cfg = create_gauss_config(10, 12; norm=:orthonormal, cs_phase=true)
 
-# Analysis normalization for l=5, m=3
-analysis_norm = _get_analysis_normalization(cfg, 5, 3)
+# Geodesy-style 4π normalization without the Condon–Shortley phase
+cfg_fourpi = create_gauss_config(10, 12; norm=:fourpi, cs_phase=false)
 
-# Synthesis normalization for reconstruction
-synthesis_norm = _get_synthesis_normalization(cfg, 5, 3)
-
-# Vector field normalization
-vector_norm = _get_vector_analysis_normalization(cfg, 5, 3)
+field = rand(cfg.nlat, cfg.nlon)
+alm = analysis(cfg, field)
+recovered = synthesis(cfg, alm)
 ```
 
 ## Notes
 
-1. **Consistency**: All normalization functions are consistent with SHTns C library
-2. **Performance**: Optimized implementations cache common factors
-3. **Accuracy**: Proper handling of factorial terms and m-dependent corrections
-4. **Flexibility**: Support for all major normalization conventions
+1. **Consistency**: Analysis and synthesis use the same configuration convention.
+2. **Performance**: Conversion scale matrices are cached on the configuration.
+3. **Accuracy**: Degree/order factors and phase changes are applied coefficient-wise.

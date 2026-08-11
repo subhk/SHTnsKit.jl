@@ -62,86 +62,37 @@ DEBUGGING CHECKLIST
 ================================================================================
 =#
 
-# ===== PER-PENCIL TOPOLOGY PREDICATES =====
+# ===== RANK-SYMMETRIC TOPOLOGY PREDICATES =====
 #
 # `φ_is_local_all` and `θ_is_distributed` decide which branch a transform takes,
 # and the branches enter different collectives, so both must be REDUCED rather
-# than evaluated per rank — see the long comments at each use site. But they are
-# also fixed properties of the decomposition: for a given pencil and
-# communicator the answer never changes. Recomputing them in the body of every
-# transform turned the recommended θ-only pencil from one collective per
-# `dist_analysis` call into three, which is a latency-bound slowdown and an extra
-# serialization point at scale. `DistAnalysisPlan`/`DistSphtorPlan` already
-# compute them once at construction (ParallelPlans.jl); this gives the
-# non-planned path the same treatment.
+# than evaluated per rank. They share one bitmask `Allreduce`, reducing the old
+# two-collective implementation to one while guaranteeing that every rank enters
+# the same collective on every non-planned transform call.
 #
-# Two properties make this safe:
-#
-#  1. ONE collective, not two. `φ_is_local_all` is stored inverted so both
-#     predicates are OR-reductions and share a single `Allreduce` on a bitmask.
-#     Even a cache miss is cheaper than the code it replaces.
-#
-#  2. Rank-symmetric hit/miss. The cache is keyed on the pencil OBJECT and the
-#     communicator, so every rank misses on the first use of a given pencil and
-#     hits on every later use — the same pattern on all ranks, which is exactly
-#     the condition a collective needs. Do NOT re-key this on anything a rank
-#     could compute differently from its peers (local sizes, ownership, rank id):
-#     if one rank hits while another misses, the missing rank enters the
-#     `Allreduce` alone and the job hangs.
-#
-# `Pencil` is an immutable struct, so it cannot key a `WeakKeyDict` (that needs a
-# finalizer, hence a mutable key). Entries are therefore strong and are bounded
-# by `_PENCIL_TOPOLOGY_MAX` instead, so code that rebuilds a pencil per shell or
-# timestep cannot grow this without limit. The eviction is a full `empty!` keyed
-# on a size the ranks all reach at the same call — deliberately NOT an LRU or
-# per-entry policy, so that the hit/miss pattern stays identical on every rank.
-const _PENCIL_TOPOLOGY_CACHE = IdDict{Any,IdDict{Any,Tuple{Bool,Bool}}}()
-const _PENCIL_TOPOLOGY_LOCK = ReentrantLock()
-const _PENCIL_TOPOLOGY_MAX = 256
+# Do not cache this behind rank-local object identity. Equivalent `Pencil`
+# objects may be rebuilt on only some ranks between calls; an identity-cache hit
+# would then return on those ranks while their peers block in this `Allreduce`.
+# Planned transforms already store these predicates in their collectively-built
+# plans and therefore do not pay this per-call reduction.
 
 """
     _pencil_topology(key_arr, comm, nθ_local, nφ_local, nlat, nlon) -> (φ_is_local_all, θ_is_distributed)
 
-Reduced topology predicates for `key_arr`'s pencil over `comm`, computed once per
-`(pencil, comm)` pair with a single `Allreduce` and cached thereafter.
+Reduced topology predicates for `key_arr`'s decomposition over `comm`, computed
+with a single `Allreduce`.
 
 Every rank must call this at the same point in its program, exactly as it must
 for the `Allreduce` this replaces.
 """
-function _pencil_topology(key_arr, comm, nθ_local::Int, nφ_local::Int, nlat::Int, nlon::Int)
-    key = pencil(key_arr)
-    # Look up without holding the lock across the collective below.
-    lock(_PENCIL_TOPOLOGY_LOCK)
-    try
-        inner = get(_PENCIL_TOPOLOGY_CACHE, key, nothing)
-        if inner !== nothing
-            hit = get(inner, comm, nothing)
-            hit === nothing || return hit
-        end
-    finally
-        unlock(_PENCIL_TOPOLOGY_LOCK)
-    end
-
+function _pencil_topology(_key_arr, comm, nθ_local::Int, nφ_local::Int, nlat::Int, nlon::Int)
     # Both predicates as OR-reductions in one bitmask: bit 0 = "some rank does NOT
     # own the full φ range", bit 1 = "some rank owns fewer than all latitudes".
     flags = UInt8(0)
     nφ_local == nlon || (flags |= 0x01)
     nθ_local < nlat && (flags |= 0x02)
     allflags = MPI.Allreduce(flags, |, comm)
-    val = ((allflags & 0x01) == 0, (allflags & 0x02) != 0)
-
-    lock(_PENCIL_TOPOLOGY_LOCK)
-    try
-        # Bounded, and evicted wholesale so every rank drops the same entries at
-        # the same call — a partial eviction could leave one rank hitting while
-        # another misses, and the miss would enter the `Allreduce` alone.
-        length(_PENCIL_TOPOLOGY_CACHE) >= _PENCIL_TOPOLOGY_MAX && empty!(_PENCIL_TOPOLOGY_CACHE)
-        inner = get!(() -> IdDict{Any,Tuple{Bool,Bool}}(), _PENCIL_TOPOLOGY_CACHE, key)
-        inner[comm] = val
-    finally
-        unlock(_PENCIL_TOPOLOGY_LOCK)
-    end
-    return val
+    return ((allflags & 0x01) == 0, (allflags & 0x02) != 0)
 end
 
 # ===== ENHANCED PACKED STORAGE SYSTEM =====
@@ -241,32 +192,6 @@ function _packed_to_dense!(dense::Matrix{ComplexF64}, packed::Vector{ComplexF64}
         @inbounds @simd ivdep for i in 1:n_packed
             l, m = info.packed_to_lm[i]
             dense[l+1, m+1] = packed[i]
-        end
-    end
-    return dense
-end
-
-# Backwards compatibility with existing interface
-function _dense_to_packed!(packed::Vector{ComplexF64}, dense::Matrix{ComplexF64}, cfg)
-    lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
-    @inbounds for m in 0:mmax
-        (m % mres == 0) || continue
-        @simd ivdep for l in m:lmax
-            lm = SHTnsKit.LM_index(lmax, mres, l, m) + 1
-            packed[lm] = dense[l+1, m+1]
-        end
-    end
-    return packed
-end
-
-function _packed_to_dense!(dense::Matrix{ComplexF64}, packed::Vector{ComplexF64}, cfg)
-    lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
-    fill!(dense, 0)
-    @inbounds for m in 0:mmax
-        (m % mres == 0) || continue
-        @simd ivdep for l in m:lmax
-            lm = SHTnsKit.LM_index(lmax, mres, l, m) + 1
-            dense[l+1, m+1] = packed[lm]
         end
     end
     return dense
@@ -398,11 +323,7 @@ function _scatter_from_fft_phi(Fθm::AbstractMatrix{<:Complex}, θ_range::Abstra
     return local_data
 end
 
-function SHTnsKit.dist_analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false, use_cache_blocking::Bool=true, use_loop_fusion::Bool=true)
-    # Keep strategy keywords in the public signature, but route through the
-    # single maintained implementation until alternate kernels diverge again.
-    _ = use_cache_blocking
-    _ = use_loop_fusion
+function SHTnsKit.dist_analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
     return dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
 end
 
@@ -780,33 +701,6 @@ Decompose latitude instead: `SHTnsKit.create_spatial_pencil(cfg; comm)` or `Penc
     return Alm_local
 end
 
-"""
-    dist_analysis_fused_cache_blocked(cfg, fθφ; kwargs...)
-
-Cache-optimized parallel analysis with loop fusion for maximum performance.
-Fuses FFT processing, Legendre integration, and normalization into optimized loops.
-
-Note: Currently redirects to dist_analysis_standard. Cache blocking is implemented there.
-"""
-function dist_analysis_fused_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
-    # Redirect to standard implementation which has proper PencilArrays API usage
-    return dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
-end
-
-"""
-    dist_analysis_cache_blocked(cfg, fθφ; kwargs...)
-
-Cache-optimized parallel analysis that processes data in cache-friendly blocks
-to minimize memory bandwidth and improve performance on NUMA systems.
-
-Note: Currently redirects to dist_analysis_standard. Cache blocking is implemented there.
-"""
-function dist_analysis_cache_blocked(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false, use_packed_storage::Bool=false)
-    # Redirect to standard implementation which has proper PencilArrays API usage
-    return dist_analysis_standard(cfg, fθφ; use_tables, use_rfft, use_packed_storage)
-end
-
-
 function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
     cfg = plan.cfg
     if plan.fallback_standard
@@ -863,18 +757,6 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
     copyto!(Alm_out, plan.Alm_work)
     return Alm_out
 end
-
-"""
-    dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ; use_tables)
-
-Compatibility wrapper for older scalar-plan code paths.
-Scalar analysis plans no longer own separate scratch buffers, so this simply
-forwards to `dist_analysis_standard`.
-"""
-function dist_analysis_with_scratch_buffers(plan::DistAnalysisPlan, fθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
-    return dist_analysis_standard(plan.cfg, fθφ; use_tables, use_rfft=plan.use_rfft)
-end
-
 
 """
 Optional `Aminus` (internal): coefficients for the NEGATIVE-m half of a genuinely
@@ -2046,8 +1928,8 @@ function dist_analysis_distributed(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # reachable with the explicit MPITopology the empty-partition cases need) the
     # single owner sees `1 < 1 == false` and skips the block while the empty
     # ranks see `0 < 1 == true` and enter the full-comm Allreduce alone — which
-    # never completes. Cached per (pencil, comm), so the collective is paid once
-    # for this decomposition rather than on every call.
+    # never completes. The shared topology reduction above keeps this branch
+    # rank-symmetric.
     _, θ_is_distributed =
         _pencil_topology(fθφ, comm, nθ_local, size(parent(fθφ), 2), cfg.nlat, cfg.nlon)
     if θ_is_distributed
@@ -2832,7 +2714,7 @@ function _dist_analysis_2d_safe(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
 
     # Check if θ is distributed. Reduced, not per-rank: see the same guard in
     # `dist_analysis_distributed` — an unmatched full-comm Allreduce hangs.
-    # Cached per (pencil, comm); the collective is paid once per decomposition.
+    # The shared topology reduction keeps this branch rank-symmetric.
     _, θ_is_distributed =
         _pencil_topology(fθφ, comm, nθ_local, size(parent(fθφ), 2), nlat, nlon)
 
@@ -3255,10 +3137,9 @@ function _dist_analysis_2d_aligned(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
     # instead of O(lmax²) global communication
     # Reduced, not per-rank: `nθ_local < nlat` is not uniform when a pencil has
     # more θ partitions than rows (nlat=1 on ≥2 θ-ranks), and the lone owner would
-    # then skip the block while the empty ranks enter the collective alone and hang. Reduced over `l_comm`,
-    # which is the communicator the guarded Allreduce below actually uses — the
-    # cache is keyed on (pencil, comm) precisely so this l_comm answer never
-    # aliases the full-comm one for the same pencil.
+    # then skip the block while the empty ranks enter the collective alone and
+    # hang. Reduce over `l_comm`, which is the communicator the guarded Allreduce
+    # below actually uses.
     _, θ_is_distributed =
         _pencil_topology(fθφ, l_comm, nθ_local, size(parent(fθφ), 2), nlat, nlon)
 

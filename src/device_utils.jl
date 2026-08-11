@@ -105,7 +105,6 @@ function set_device!(device::ComputeDevice)
 end
 
 to_device(::CPU, value) = _to_cpu(value)
-to_device(device::ComputeDevice, value) = throw(MethodError(to_device, (device, value)))
 
 function to_device(::GPU, value)
     adapter = _gpu_adapter(on_device(value) isa GPU ? value : nothing; operation=:to_device)
@@ -124,8 +123,8 @@ function to_device(::GPU, value, prototype)
 end
 
 # Preserve the original value-first order and add the prototype form.
-to_device(value, device::ComputeDevice) = to_device(device, value)
-to_device(value, device::ComputeDevice, prototype) = to_device(device, value, prototype)
+to_device(value::AbstractArray, device::ComputeDevice) = to_device(device, value)
+to_device(value::AbstractArray, device::ComputeDevice, prototype) = to_device(device, value, prototype)
 to_device(value) = to_device(get_device(), value)
 
 _to_cpu(value) = value

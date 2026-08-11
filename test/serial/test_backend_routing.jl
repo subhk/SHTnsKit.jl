@@ -84,3 +84,11 @@ end
         SHTnsKit._DEVICE_STATE[] = saved_device
     end
 end
+
+@testset "Device argument orders are unambiguous" begin
+    ambiguities = Test.detect_ambiguities(SHTnsKit; recursive=true)
+    device_ambiguities = filter(ambiguities) do methods
+        any(method -> method.name == :to_device, methods)
+    end
+    @test isempty(device_ambiguities)
+end

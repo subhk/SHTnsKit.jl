@@ -21,7 +21,7 @@ function __init__()
 end
 
 _gpu_adapter_functional(::AMDGPUAdapter) = AMDGPU.functional()
-_gpu_adapter_matches(::AMDGPUAdapter, ::ROCArray) = true
+_gpu_adapter_matches(::AMDGPUAdapter, ::AMDGPU.AnyROCArray) = true
 
 function _gpu_adapter_adapt(::AMDGPUAdapter, value)
     AMDGPU.functional() || throw(SHTnsKit.BackendUnavailableError(
@@ -31,14 +31,14 @@ function _gpu_adapter_adapt(::AMDGPUAdapter, value)
     return ROCArray(value)
 end
 
-on_device(::ROCArray) = SHTnsKit.GPU()
+on_device(::AMDGPU.AnyROCArray) = SHTnsKit.GPU()
 
 # Storage inference is established here. Scalar ROCm mathematics is added in
 # Task 5, so the core adapter protocol returns an explicit unsupported error
 # instead of entering the CPU implementation or copying to host.
-analysis(cfg::SHTConfig, field::ROCArray{T,2}; kwargs...) where {T} =
+analysis(cfg::SHTConfig, field::AMDGPU.AnyROCArray{T,2}; kwargs...) where {T} =
     analysis(SHTnsKit.GPU(), cfg, field; kwargs...)
-synthesis(cfg::SHTConfig, coefficients::ROCArray{T,2}; kwargs...) where {T} =
+synthesis(cfg::SHTConfig, coefficients::AMDGPU.AnyROCArray{T,2}; kwargs...) where {T} =
     synthesis(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
 
 end # module SHTnsKitAMDGPUExt

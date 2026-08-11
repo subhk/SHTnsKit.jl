@@ -37,7 +37,18 @@ function __init__()
 end
 
 _gpu_adapter_functional(::CUDAAdapter) = CUDA.functional()
-_gpu_adapter_matches(::CUDAAdapter, ::CuArray) = true
+_gpu_adapter_matches(::CUDAAdapter, ::CUDA.AnyCuArray) = true
+
+function _require_cuda(operation::Symbol, device)
+    CUDA.functional() || throw(SHTnsKit.BackendUnavailableError(
+        operation,
+        "CUDA.jl is loaded but CUDA.functional() is false; configure a working CUDA runtime (CPU fallback is available only through gpu_analysis_safe/gpu_synthesis_safe)",
+    ))
+    device isa SHTnsKit.GPU || throw(ArgumentError(
+        "`$operation` is a strict GPU operation and does not accept CPU(); use a gpu_*_safe wrapper for explicit fallback",
+    ))
+    return nothing
+end
 
 function _gpu_adapter_adapt(::CUDAAdapter, value)
     CUDA.functional() || throw(SHTnsKit.BackendUnavailableError(
@@ -47,20 +58,20 @@ function _gpu_adapter_adapt(::CUDAAdapter, value)
     return CuArray(value)
 end
 
-function _gpu_adapter_analysis(::CUDAAdapter, cfg::SHTConfig, field::CuArray; kwargs...)
+function _gpu_adapter_analysis(::CUDAAdapter, cfg::SHTConfig, field::CUDA.AnyCuArray; kwargs...)
     # The compatibility wrapper currently materializes its result on the host.
     # Typed routing restores device residency; Task 5 replaces this bridge with
     # the fully device-resident shared scalar pipeline.
     return CuArray(gpu_analysis(cfg, field; device=SHTnsKit.GPU(), kwargs...))
 end
 
-function _gpu_adapter_synthesis(::CUDAAdapter, cfg::SHTConfig, coefficients::CuArray; kwargs...)
+function _gpu_adapter_synthesis(::CUDAAdapter, cfg::SHTConfig, coefficients::CUDA.AnyCuArray; kwargs...)
     return CuArray(gpu_synthesis(cfg, coefficients; device=SHTnsKit.GPU(), kwargs...))
 end
 
-analysis(cfg::SHTConfig, field::CuArray{T,2}; kwargs...) where {T} =
+analysis(cfg::SHTConfig, field::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
     analysis(SHTnsKit.GPU(), cfg, field; kwargs...)
-synthesis(cfg::SHTConfig, coefficients::CuArray{T,2}; kwargs...) where {T} =
+synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
     synthesis(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
 
 """
@@ -83,7 +94,7 @@ _to_gpu_impl(arr::CuArray) = arr
 
 Returns `GPU()` for CUDA arrays.
 """
-on_device(::CuArray) = SHTnsKit.GPU()
+on_device(::CUDA.AnyCuArray) = SHTnsKit.GPU()
 
 @inline _is_cpu_device(::SHTnsKit.CPU) = true
 @inline _is_cpu_device(::SHTnsKit.GPU) = false
@@ -351,7 +362,7 @@ end
 end
 
 """
-    gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device())
+    gpu_analysis(cfg::SHTConfig, spatial_data; device=GPU())
 
 GPU-accelerated spherical harmonic analysis transform using cuFFT.
 
@@ -362,10 +373,8 @@ Implements: a_lm = ∫∫ f(θ,φ) Y_l^m*(θ,φ) sin(θ) dθ dφ
 Fully parallelized: all (l,m) coefficients computed in a single kernel launch.
 
 """
-function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device())
-    if _is_cpu_device(device)
-        return SHTnsKit.analysis(cfg, spatial_data)
-    end
+function gpu_analysis(cfg::SHTConfig, spatial_data; device=SHTnsKit.GPU())
+    _require_cuda(:gpu_analysis, device)
 
     # Validate input dimensions
     nlat, nlon = cfg.nlat, cfg.nlon
@@ -432,7 +441,7 @@ function gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device())
 end
 
 """
-    gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
+    gpu_synthesis(cfg::SHTConfig, coeffs; device=GPU(), real_output=true)
 
 GPU-accelerated spherical harmonic synthesis transform using cuFFT.
 
@@ -442,10 +451,8 @@ Implements: f(θ,φ) = Σ_l Σ_m a_lm Y_l^m(θ,φ)
 
 Fully parallelized: all (θ,m) Fourier modes computed in a single kernel launch.
 """
-function gpu_synthesis(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
-    if _is_cpu_device(device)
-        return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
-    end
+function gpu_synthesis(cfg::SHTConfig, coeffs; device=SHTnsKit.GPU(), real_output=true)
+    _require_cuda(:gpu_synthesis, device)
 
     # Validate input dimensions
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -564,7 +571,7 @@ end
 end
 
 """
-    gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
+    gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=GPU())
 
 GPU-accelerated spheroidal-toroidal decomposition of vector fields using proper spectral method.
 
@@ -575,10 +582,8 @@ Uses the adjoint of the synthesis formula with Gauss-Legendre quadrature:
 Where F_θ, F_φ are Fourier modes of Vθ, Vφ and w_i are quadrature weights.
 All computation stays on GPU for maximum performance.
 """
-function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
-    if _is_cpu_device(device)
-        return SHTnsKit.analysis_sphtor(cfg, vθ, vφ)
-    end
+function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=SHTnsKit.GPU())
+    _require_cuda(:gpu_analysis_sphtor, device)
 
     backend = CUDABackend()
     nlat, nlon = cfg.nlat, cfg.nlon
@@ -715,7 +720,7 @@ function gpu_analysis_sphtor(cfg::SHTConfig, vθ, vφ; device=get_device())
 end
 
 """
-    gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
+    gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=GPU(), real_output=true)
 
 GPU-accelerated synthesis of spheroidal-toroidal vector field components using proper spectral method.
 
@@ -725,10 +730,8 @@ Uses the spectral formula:
 
 Where ∂Y_l^m/∂θ = -sinθ * N_lm * dP_l^m/dx (x = cosθ)
 """
-function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=get_device(), real_output=true)
-    if _is_cpu_device(device)
-        return SHTnsKit.synthesis_sphtor(cfg, sph_coeffs, tor_coeffs; real_output=real_output)
-    end
+function gpu_synthesis_sphtor(cfg::SHTConfig, sph_coeffs, tor_coeffs; device=SHTnsKit.GPU(), real_output=true)
+    _require_cuda(:gpu_synthesis_sphtor, device)
 
     backend = CUDABackend()
     nlat, nlon = cfg.nlat, cfg.nlon
@@ -861,14 +864,12 @@ end
 # ============================================================================
 
 """
-    gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=get_device())
+    gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=GPU())
 
 GPU-accelerated Laplacian operator in spectral space.
 """
-function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=get_device())
-    if _is_cpu_device(device)
-        return SHTnsKit.apply_laplacian!(cfg, coeffs)
-    end
+function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=SHTnsKit.GPU())
+    _require_cuda(:gpu_apply_laplacian!, device)
 
     # Validate input dimensions
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -899,12 +900,9 @@ Get memory information for the active CUDA device.
 Returns a named tuple with `free` and `total` fields (in bytes).
 """
 function gpu_memory_info()
-    if CUDA.functional()
-        mem = CUDA.MemoryInfo()
-        return (free=mem.free_bytes, total=mem.total_bytes)
-    else
-        return (free=Sys.free_memory(), total=Sys.total_memory())
-    end
+    _require_cuda(:gpu_memory_info, SHTnsKit.GPU())
+    mem = CUDA.MemoryInfo()
+    return (free=mem.free_bytes, total=mem.total_bytes)
 end
 
 """
@@ -913,6 +911,7 @@ end
 Check if sufficient GPU memory is available.
 """
 function check_gpu_memory(required_bytes::Int)
+    CUDA.functional() || return false
     try
         mem_info = gpu_memory_info()
         if mem_info.free < required_bytes
@@ -922,7 +921,7 @@ function check_gpu_memory(required_bytes::Int)
         return true
     catch e
         @warn "Could not check memory availability: $e"
-        return true
+        return false
     end
 end
 
@@ -932,13 +931,12 @@ end
 Clear the active CUDA device's memory cache.
 """
 function gpu_clear_cache!()
-    if CUDA.functional()
-        try
-            CUDA.reclaim()
-            @info "CUDA memory cache cleared"
-        catch e
-            @warn "Failed to clear CUDA cache: $e"
-        end
+    _require_cuda(:gpu_clear_cache!, SHTnsKit.GPU())
+    try
+        CUDA.reclaim()
+        @info "CUDA memory cache cleared"
+    catch e
+        @warn "Failed to clear CUDA cache: $e"
     end
     return nothing
 end
@@ -970,7 +968,7 @@ end
 Memory-safe GPU analysis with automatic fallback to CPU.
 """
 function gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device())
-    if _is_cpu_device(device)
+    if _is_cpu_device(device) || !CUDA.functional()
         return SHTnsKit.analysis(cfg, spatial_data)
     end
 
@@ -998,7 +996,7 @@ end
 Memory-safe GPU synthesis with automatic fallback to CPU.
 """
 function gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
-    if _is_cpu_device(device)
+    if _is_cpu_device(device) || !CUDA.functional()
         return SHTnsKit.synthesis(cfg, coeffs; real_output=real_output)
     end
 

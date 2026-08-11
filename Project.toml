@@ -8,6 +8,7 @@ FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [weakdeps]
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
@@ -22,6 +23,7 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [extensions]
 SHTnsKitAdvancedADExt = ["ChainRulesCore"]
+SHTnsKitAMDGPUExt = ["AMDGPU", "GPUArrays", "GPUArraysCore", "KernelAbstractions"]
 SHTnsKitForwardDiffExt = ["ForwardDiff"]
 SHTnsKitGPUExt = ["CUDA", "GPUArrays", "GPUArraysCore", "KernelAbstractions"]
 SHTnsKitLoopVecExt = ["LoopVectorization"]
@@ -30,6 +32,7 @@ SHTnsKitParallelADExt = ["ChainRulesCore", "MPI", "PencilArrays", "PencilFFTs"]
 SHTnsKitZygoteExt = ["Zygote"]
 
 [compat]
+AMDGPU = "1, 2"
 Aqua = "0.8"
 CUDA = "5"
 ChainRulesCore = "1"

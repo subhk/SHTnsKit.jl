@@ -268,7 +268,7 @@ export spectral_range, spatial_range, latitude_range, mode_range     # SHT-speci
 export local_range, local_size                                       # PencilArray-aware range helpers
 
 # ===== DEVICE MANAGEMENT =====
-export ComputeDevice, CPU, GPU
+export ComputeDevice, CPU, GPU, BackendUnavailableError
 export get_device, set_device!, to_device, on_device
 
 # ===== EXTENSION-PROVIDED FUNCTIONS =====
@@ -390,7 +390,7 @@ with an MPI-aware heuristic that favours balanced 2D decompositions.
 suggest_pencil_grid
 
 # GPU extension fallbacks
-const _GPU_NOT_LOADED_MSG = "GPU extension not loaded. Install and load CUDA.jl with GPUArrays and KernelAbstractions"
+const _GPU_NOT_LOADED_MSG = "GPU extension not loaded. Install and load CUDA.jl or AMDGPU.jl with GPUArrays and KernelAbstractions"
 gpu_analysis(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_synthesis(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)
 gpu_analysis_safe(args...; kwargs...) = error(_GPU_NOT_LOADED_MSG)

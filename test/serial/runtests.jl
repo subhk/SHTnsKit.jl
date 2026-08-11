@@ -16,6 +16,7 @@ using Test
     include("test_fft_utils.jl")
     include("test_buffer_utils.jl")
     include("test_device_utils.jl")
+    include("test_backend_routing.jl")
     include("test_cleanup_contract.jl")
     include("test_loop_utils.jl")
     include("test_spectral_diagnostics.jl")

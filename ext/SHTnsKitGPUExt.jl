@@ -8,6 +8,9 @@ using LinearAlgebra, FFTW
 using CUDA
 using CUDA.CUFFT
 
+include("GPUCommon.jl")
+using .GPUCommon: laplacian_kernel!
+
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
                  gpu_analysis_sphtor, gpu_synthesis_sphtor,
@@ -15,19 +18,50 @@ import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_s
                  gpu_memory_info, check_gpu_memory, gpu_clear_cache!,
                  estimate_memory_usage, get_available_gpus, set_gpu_device
 
-# Import device utilities functions to override
-import SHTnsKit: on_device, _notify_cuda_loaded!
+# Import device routing functions to extend.
+import SHTnsKit: analysis, synthesis, on_device,
+                 _register_gpu_adapter!, _gpu_adapter_functional,
+                 _gpu_adapter_matches, _gpu_adapter_adapt,
+                 _gpu_adapter_analysis, _gpu_adapter_synthesis
 
 # ============================================================================
 # CUDA Backend Integration with device_utils.jl
 # ============================================================================
 
-# Notify the main module that CUDA is available
+mutable struct CUDAAdapter end
+const CUDA_ADAPTER = CUDAAdapter()
+
 function __init__()
-    if CUDA.functional()
-        _notify_cuda_loaded!()
-    end
+    _register_gpu_adapter!(:cuda, CUDA_ADAPTER)
+    return nothing
 end
+
+_gpu_adapter_functional(::CUDAAdapter) = CUDA.functional()
+_gpu_adapter_matches(::CUDAAdapter, ::CuArray) = true
+
+function _gpu_adapter_adapt(::CUDAAdapter, value)
+    CUDA.functional() || throw(SHTnsKit.BackendUnavailableError(
+        :to_device,
+        "CUDA.jl is loaded but CUDA.functional() is false",
+    ))
+    return CuArray(value)
+end
+
+function _gpu_adapter_analysis(::CUDAAdapter, cfg::SHTConfig, field::CuArray; kwargs...)
+    # The compatibility wrapper currently materializes its result on the host.
+    # Typed routing restores device residency; Task 5 replaces this bridge with
+    # the fully device-resident shared scalar pipeline.
+    return CuArray(gpu_analysis(cfg, field; device=SHTnsKit.GPU(), kwargs...))
+end
+
+function _gpu_adapter_synthesis(::CUDAAdapter, cfg::SHTConfig, coefficients::CuArray; kwargs...)
+    return CuArray(gpu_synthesis(cfg, coefficients; device=SHTnsKit.GPU(), kwargs...))
+end
+
+analysis(cfg::SHTConfig, field::CuArray{T,2}; kwargs...) where {T} =
+    analysis(SHTnsKit.GPU(), cfg, field; kwargs...)
+synthesis(cfg::SHTConfig, coefficients::CuArray{T,2}; kwargs...) where {T} =
+    synthesis(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
 
 """
     _to_gpu_impl(arr::AbstractArray)
@@ -825,17 +859,6 @@ end
 # ============================================================================
 # Laplacian operator
 # ============================================================================
-
-@kernel function laplacian_kernel!(output, input, lmax, mmax)
-    l, m = @index(Global, NTuple)
-    if l <= lmax + 1 && m <= mmax + 1
-        l_val = l - 1
-        m_val = m - 1
-        if l_val >= m_val
-            output[l, m] = -l_val * (l_val + 1) * input[l, m]
-        end
-    end
-end
 
 """
     gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=get_device())

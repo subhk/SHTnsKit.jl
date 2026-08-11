@@ -253,19 +253,38 @@ function _validate_dense_plan_output!(plan::DistAnalysisPlan,
     return nothing
 end
 
+function _validate_analysis_plan_input!(plan::DistAnalysisPlan,
+                                        input::PencilArray,
+                                        operation::Symbol)
+    comm = communicator(plan.prototype_θφ)
+    expected_type = eltype(plan.prototype_θφ)
+    type_code = _plan_output_type_code(eltype(input))
+    flags = eltype(input) === expected_type ? UInt32(0) : UInt32(0x0004)
+    type_code == 0 && (flags |= 0x0004)
+    plan.use_rfft && !(eltype(input) <: Real) && (flags |= 0x0010)
+    MPI.Allreduce(type_code, min, comm) == MPI.Allreduce(type_code, max, comm) ||
+        (flags |= 0x0004)
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
 function _validate_synthesis_plan_output!(plan::DistPlan,
                                           output::PencilArray,
                                           coefficients::PencilArray,
                                           real_output::Bool,
                                           operation::Symbol)
     comm = communicator(plan.prototype_θφ)
-    _validate_collective_scalar_options!(
-        comm, plan.use_rfft, real_output, operation,
+    _validate_scalar_pencil!(
+        plan.cfg, coefficients,
+        (plan.cfg.lmax + 1, plan.cfg.mmax + 1), operation;
+        comm, peer=plan.prototype_θφ, require_full_first_dim=true,
+        use_rfft=plan.use_rfft, real_output, require_complex_input=true,
     )
-    coefficient_type = eltype(coefficients)
-    expected_type = real_output ? typeof(real(zero(coefficient_type))) :
-                                  coefficient_type
-    flags = eltype(output) === expected_type ? UInt32(0) : UInt32(0x0004)
+    RT = _plan_real_type(eltype(plan.prototype_θφ))
+    expected_coefficient_type = Complex{RT}
+    expected_output_type = real_output ? RT : expected_coefficient_type
+    flags = eltype(coefficients) === expected_coefficient_type &&
+            eltype(output) === expected_output_type ? UInt32(0) : UInt32(0x0004)
     type_code = _plan_output_type_code(eltype(output))
     type_code == 0 && (flags |= 0x0004)
     MPI.Allreduce(type_code, min, comm) == MPI.Allreduce(type_code, max, comm) ||
@@ -1199,6 +1218,9 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
     _validate_identical_pencil_layout!(
         plan.prototype_θφ, fθφ, :dist_analysis_plan_input,
     )
+    _validate_analysis_plan_input!(
+        plan, fθφ, :dist_analysis_plan_input_type,
+    )
     _validate_dense_plan_output!(plan, Alm_out, :dist_analysis_plan_output)
     if plan.fallback_standard
         # φ-distributed layout: needs the longitude Allgather; reuse the
@@ -1216,15 +1238,13 @@ function SHTnsKit.dist_analysis!(plan::DistAnalysisPlan, Alm_out::AbstractMatrix
     # FFT along φ into the plan-owned buffer via the cached-plan helpers
     # (avoids both the per-call buffer and FFTW re-planning).
     if plan.use_rfft
-        eltype(local_data) <: Real ||
-            throw(ArgumentError("plan was built with use_rfft=true; fθφ must hold real data"))
         SHTnsKit.rfft_phi!(plan.Fθm, local_data)
     else
         SHTnsKit.fft_phi!(plan.Fθm, local_data)
     end
 
     # Legendre integration into the plan-owned work matrix
-    fill!(plan.Alm_work, zero(ComplexF64))
+    fill!(plan.Alm_work, zero(eltype(plan.Alm_work)))
     use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.plm_tables) &&
               length(cfg.plm_tables) == mmax + 1 && size(cfg.plm_tables[1], 2) == cfg.nlat
     if use_tbl

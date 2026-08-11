@@ -737,6 +737,49 @@ end
         @test all(==(ComplexF64(14)), wrong_analysis_shape)
         MPI.Barrier(adapter.comm)
 
+        varying_analysis_kind = if rank == 0
+            input = PencilArray{Float64}(undef, layout_1d)
+            fill!(parent(input), 0.25)
+            input
+        else
+            input = PencilArray{ComplexF64}(undef, layout_1d)
+            fill!(parent(input), ComplexF64(0.25, 0.125))
+            input
+        end
+        fill!(layout_dense, ComplexF64(20, -3))
+        @test _all_ranks_catch(adapter.comm) do
+            analysis!(layout_analysis_plan, layout_dense, varying_analysis_kind)
+        end
+        @test all(==(ComplexF64(20, -3)), layout_dense)
+        MPI.Barrier(adapter.comm)
+
+        varying_analysis_precision = if rank == 0
+            input = PencilArray{Float64}(undef, layout_1d)
+            fill!(parent(input), 0.25)
+            input
+        else
+            input = PencilArray{Float32}(undef, layout_1d)
+            fill!(parent(input), 0.25f0)
+            input
+        end
+        fill!(layout_dense, ComplexF64(21, -4))
+        @test _all_ranks_catch(adapter.comm) do
+            analysis!(
+                layout_analysis_plan, layout_dense, varying_analysis_precision,
+            )
+        end
+        @test all(==(ComplexF64(21, -4)), layout_dense)
+        MPI.Barrier(adapter.comm)
+        layout_rfft_plan = extension.DistAnalysisPlan(
+            layout_cfg, layout_field; use_rfft=true,
+        )
+        fill!(layout_dense, ComplexF64(22, -5))
+        @test _all_ranks_catch(adapter.comm) do
+            analysis!(layout_rfft_plan, layout_dense, varying_analysis_kind)
+        end
+        @test all(==(ComplexF64(22, -5)), layout_dense)
+        MPI.Barrier(adapter.comm)
+
         layout_spectral = analysis(layout_cfg, layout_field)
         layout_synthesis_plan = extension.DistPlan(layout_cfg, layout_field)
         wrong_layout_output = PencilArray{Float64}(undef, layout_2d)
@@ -745,6 +788,34 @@ end
             synthesis!(layout_synthesis_plan, wrong_layout_output, layout_spectral)
         end
         @test all(==(7.0), parent(wrong_layout_output))
+
+        self_spectral = PencilArray{ComplexF64}(
+            undef,
+            Pencil(
+                (layout_cfg.lmax + 1, layout_cfg.mmax + 1), (2,),
+                MPI.COMM_SELF,
+            ),
+        )
+        fill!(parent(self_spectral), ComplexF64(0.5, -0.25))
+        varying_coefficient_comm = rank == 0 ? self_spectral : layout_spectral
+        comm_check_output = PencilArray{Float64}(undef, layout_1d)
+        @test _all_ranks_catch(adapter.comm) do
+            extension._validate_synthesis_plan_output!(
+                layout_synthesis_plan, comm_check_output,
+                varying_coefficient_comm, true,
+                :test_synthesis_plan_coefficient_comm,
+            )
+        end
+        MPI.Barrier(adapter.comm)
+        fill!(parent(comm_check_output), 23)
+        @test _all_ranks_catch(adapter.comm) do
+            synthesis!(
+                layout_synthesis_plan, comm_check_output,
+                varying_coefficient_comm,
+            )
+        end
+        @test all(==(23.0), parent(comm_check_output))
+        MPI.Barrier(adapter.comm)
 
         wrong_synthesis_type = if rank == 0
             output = PencilArray{Float64}(undef, layout_1d)
@@ -922,6 +993,52 @@ end
         for m in 0:cfg.mmax
             m % cfg.mres == 0 && continue
             @test iszero(maximum(abs, @view planned[:, m + 1]))
+        end
+
+        for T in (Float32, Float64), use_rfft in (false, true)
+            plan_cfg = create_gauss_config(
+                4, 7; nlon=12, mres=2, norm=:schmidt,
+                real_norm=true, cs_phase=false,
+            )
+            plan_coefficients = Complex{T}.(_variant_coefficients(plan_cfg, T))
+            plan_field = T.(synthesis(plan_cfg, plan_coefficients))
+            plan_pencil = Pencil(
+                (plan_cfg.nlat, plan_cfg.nlon), (1,), adapter.comm,
+            )
+            plan_field_distributed = PencilArray{T}(undef, plan_pencil)
+            plan_ranges = PencilArrays.range_local(plan_pencil)
+            for (j, jglobal) in pairs(plan_ranges[2]),
+                (i, iglobal) in pairs(plan_ranges[1])
+                parent(plan_field_distributed)[i, j] =
+                    plan_field[iglobal, jglobal]
+            end
+            analysis_plan = extension.DistAnalysisPlan(
+                plan_cfg, plan_field_distributed; use_rfft,
+            )
+            plan_output = zeros(
+                Complex{T}, plan_cfg.lmax + 1, plan_cfg.mmax + 1,
+            )
+            @test analysis!(
+                analysis_plan, plan_output, plan_field_distributed,
+            ) === plan_output
+            tolerance = T === Float32 ? 3f-4 : 5e-11
+            @test plan_output ≈ analysis(
+                plan_cfg, plan_field,
+            ) atol=tolerance rtol=tolerance
+            @test eltype(plan_output) === Complex{T}
+
+            plan_spectral = matrix_to_spectral_pencil(
+                plan_cfg, plan_coefficients; comm=adapter.comm,
+            )
+            synthesis_plan_t = extension.DistPlan(
+                plan_cfg, plan_field_distributed; use_rfft,
+            )
+            plan_spatial_output = PencilArray{T}(undef, plan_pencil)
+            @test synthesis!(
+                synthesis_plan_t, plan_spatial_output, plan_spectral,
+            ) === plan_spatial_output
+            @test _collect_spatial(plan_spatial_output, plan_cfg) ≈
+                  plan_field atol=tolerance rtol=tolerance
         end
 
         complex_spatial = PencilArray{ComplexF64}(undef, pencil(spatial))

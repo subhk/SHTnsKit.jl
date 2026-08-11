@@ -34,7 +34,7 @@ function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
     return
 end
 
-struct DistAnalysisPlan
+struct DistAnalysisPlan{CT<:Complex}
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
     use_rfft::Bool
@@ -48,14 +48,35 @@ struct DistAnalysisPlan
     weights_cache::Vector{Float64}
     x_cache::Vector{Float64}
     P::Vector{Float64}
-    Fθm::Matrix{ComplexF64}
-    Alm_work::Matrix{ComplexF64}
+    Fθm::Matrix{CT}
+    Alm_work::Matrix{CT}
     θ_is_distributed::Bool
     # θ-column subcomm for the partial-sum reduction (Comm_split once here
     # instead of every call). Equals the full communicator when θ is not
     # distributed or for the fallback path; freed by MPI_Finalize with the
     # plan's lifetime (plans are long-lived by design).
     reduce_comm::MPI.Comm
+end
+
+@inline _plan_real_type(::Type{Float32}) = Float32
+@inline _plan_real_type(::Type{ComplexF32}) = Float32
+@inline _plan_real_type(::Type{Float64}) = Float64
+@inline _plan_real_type(::Type{ComplexF64}) = Float64
+@inline _plan_real_type(::Type) = nothing
+
+function _validate_plan_prototype_precision(prototype_θφ::PencilArray,
+                                            comm, operation::Symbol)
+    candidate = _plan_real_type(eltype(prototype_θφ))
+    code = candidate === Float32 ? 1 : candidate === Float64 ? 2 : 0
+    min_code = MPI.Allreduce(code, min, comm)
+    max_code = MPI.Allreduce(code, max, comm)
+    if code == 0 || min_code != max_code
+        throw(ArgumentError(
+            "$operation requires one replicated Float32/64 or " *
+            "ComplexF32/64 prototype precision on every rank",
+        ))
+    end
+    return candidate
 end
 
 function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
@@ -65,6 +86,9 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
     _validate_cfg_replicated(cfg, comm)
+    RT = _validate_plan_prototype_precision(
+        prototype_θφ, comm, :DistAnalysisPlan,
+    )
     θ_globals = collect(Int, globalindices(prototype_θφ, 1))
     nθ_local = length(θ_globals)
     nlon_local = size(parent(prototype_θφ), 2)
@@ -78,8 +102,8 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     x_cache = Float64[cfg.x[i] for i in θ_globals]
     P = Vector{Float64}(undef, cfg.lmax + 1)
     nbins = use_rfft ? (cfg.nlon ÷ 2 + 1) : cfg.nlon
-    Fθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
-    Alm_work = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
+    Fθm = Matrix{Complex{RT}}(undef, nθ_local, nbins)
+    Alm_work = Matrix{Complex{RT}}(undef, cfg.lmax + 1, cfg.mmax + 1)
     # Reduced, not per-rank. The consumers (`dist_analysis!`,
     # `dist_analysis_sphtor!`) guard a full-comm `MPI.Allreduce!` with this flag,
     # so a topology where one rank owns every latitude and the rest own none
@@ -109,7 +133,9 @@ function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft
     # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
-    _validate_cfg_replicated(cfg, communicator(prototype_θφ))
+    comm = communicator(prototype_θφ)
+    _validate_cfg_replicated(cfg, comm)
+    _validate_plan_prototype_precision(prototype_θφ, comm, :DistPlan)
     return DistPlan(cfg, prototype_θφ, use_rfft)
 end
 

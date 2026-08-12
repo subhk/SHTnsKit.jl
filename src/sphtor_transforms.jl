@@ -727,9 +727,12 @@ function divergence_from_spheroidal!(cfg::SHTConfig, δ::AbstractMatrix, Slm::Ab
     size(δ) == size(Slm) || throw(DimensionMismatch("divergence output dims"))
     fill!(δ, zero(eltype(δ)))
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
-        δ[row, col] = -(l * (l + 1)) * Slm[row, col]
+    @inbounds for m in 0:mmax
+        m % cfg.mres == 0 || continue
+        for l in max(1, m):lmax
+            row = l + 1; col = m + 1
+            δ[row, col] = -(l * (l + 1)) * Slm[row, col]
+        end
     end
     return δ
 end
@@ -748,10 +751,13 @@ function spheroidal_from_divergence!(cfg::SHTConfig, Slm::AbstractMatrix, δlm::
     size(Slm) == size(δlm) || throw(DimensionMismatch("spheroidal output dims"))
     fill!(Slm, zero(eltype(Slm)))
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
-        ll1 = l * (l + 1)
-        Slm[row, col] = ll1 == 0 ? zero(eltype(Slm)) : -(δlm[row, col] / ll1)
+    @inbounds for m in 0:mmax
+        m % cfg.mres == 0 || continue
+        for l in max(1, m):lmax
+            row = l + 1; col = m + 1
+            ll1 = l * (l + 1)
+            Slm[row, col] = ll1 == 0 ? zero(eltype(Slm)) : -(δlm[row, col] / ll1)
+        end
     end
     return Slm
 end
@@ -770,9 +776,12 @@ function vorticity_from_toroidal!(cfg::SHTConfig, ζ::AbstractMatrix, Tlm::Abstr
     size(ζ) == size(Tlm) || throw(DimensionMismatch("vorticity output dims"))
     fill!(ζ, zero(eltype(ζ)))
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
-        ζ[row, col] = -(l * (l + 1)) * Tlm[row, col]
+    @inbounds for m in 0:mmax
+        m % cfg.mres == 0 || continue
+        for l in max(1, m):lmax
+            row = l + 1; col = m + 1
+            ζ[row, col] = -(l * (l + 1)) * Tlm[row, col]
+        end
     end
     return ζ
 end
@@ -791,10 +800,13 @@ function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::Abs
     size(Tlm) == size(ζlm) || throw(DimensionMismatch("toroidal output dims"))
     fill!(Tlm, zero(eltype(Tlm)))
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
-        ll1 = l * (l + 1)
-        Tlm[row, col] = ll1 == 0 ? zero(eltype(Tlm)) : -(ζlm[row, col] / ll1)
+    @inbounds for m in 0:mmax
+        m % cfg.mres == 0 || continue
+        for l in max(1, m):lmax
+            row = l + 1; col = m + 1
+            ll1 = l * (l + 1)
+            Tlm[row, col] = ll1 == 0 ? zero(eltype(Tlm)) : -(ζlm[row, col] / ll1)
+        end
     end
     return Tlm
 end

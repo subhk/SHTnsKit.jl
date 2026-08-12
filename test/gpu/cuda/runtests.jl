@@ -189,6 +189,18 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     run_shared_vector_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_scalar_workspace_cache_reference(extension.GPUCommon)
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitGPUExt.jl"), String)
+    @test !occursin("_GPU_POLE_TOL", source)
+    @test !occursin("vector_analysis_contrib_kernel!", source)
+    @test all(method -> method.module === SHTnsKit, methods(gpu_analysis_sphtor))
+    @test all(method -> method.module === SHTnsKit, methods(gpu_synthesis_sphtor))
+    @test which(
+        gpu_analysis_sphtor,
+        Tuple{SHTConfig,Matrix{Float32},Matrix{Float32}},
+    ).module === SHTnsKit
+    @test which(
+        gpu_synthesis_sphtor,
+        Tuple{SHTConfig,Matrix{ComplexF32},Matrix{ComplexF32}},
+    ).module === SHTnsKit
     vector_pipeline = split(
         split(source, "function _cuda_vector_analysis"; limit=2)[2],
         "@inline function _cuda_lcap"; limit=2,

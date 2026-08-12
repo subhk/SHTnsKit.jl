@@ -317,6 +317,15 @@ export matrix_to_spectral_pencil, spectral_pencil_to_matrix                 # Di
 
 @inline _parallel_ext_module() = Base.get_extension(@__MODULE__, :SHTnsKitParallelExt)
 
+"""Construct the parallel extension's concrete distributed vector plan."""
+function DistSphtorPlan(args...; kwargs...)
+    ext = _parallel_ext_module()
+    ext === nothing && error(
+        "Parallel extension not loaded. Load MPI, PencilArrays, and PencilFFTs first",
+    )
+    return getproperty(ext, :DistSphtorPlan)(args...; kwargs...)
+end
+
 function fft_plan_cache_enabled()
     ext = _parallel_ext_module()
     return ext === nothing ? false : getproperty(ext, :_fft_plan_cache_enabled_impl)()

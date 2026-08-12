@@ -249,6 +249,11 @@ function _test_vector_operator_backend(adapter::VectorParityAdapter)
     S, Tlm = _vector_modes(cfg, Float32)
     S[1, 1] = 7f0 + 2f0im
     Tlm[1, 1] = -3f0 + 1f0im
+    # Stored column 2 is physical m=1 and is forbidden when mres=2.
+    # Operators must ignore adversarial nonzero storage there, not merely rely
+    # on transforms to have cleared it earlier.
+    S[2, 2] = 11f0 - 4f0im
+    Tlm[3, 2] = -9f0 + 6f0im
     Sd = vector_place(adapter, cfg, S, :spectral)
     Td = vector_place(adapter, cfg, Tlm, :spectral)
 
@@ -260,11 +265,14 @@ function _test_vector_operator_backend(adapter::VectorParityAdapter)
     @test divh ≈ divergence_from_spheroidal(cfg, S)
     @test vorth ≈ vorticity_from_toroidal(cfg, Tlm)
     @test iszero(divh[1, 1]); @test iszero(vorth[1, 1])
+    @test all(iszero, divh[:, 2])
+    @test all(iszero, vorth[:, 2])
 
     Sback = spheroidal_from_divergence(cfg, div)
     Tback = toroidal_from_vorticity(cfg, vort)
     expected_S = copy(S); expected_T = copy(Tlm)
     expected_S[1, 1] = 0; expected_T[1, 1] = 0
+    expected_S[:, 2] .= 0; expected_T[:, 2] .= 0
     @test vector_collect(adapter, Sback, cfg) ≈ expected_S
     @test vector_collect(adapter, Tback, cfg) ≈ expected_T
 
@@ -408,6 +416,7 @@ function run_shared_vector_kernel_reference(common, backend)
     @test all(iszero, S_out[:, 2])
     @test all(iszero, T_out[:, 2])
 
+    S[2, 2] = CT(13, -5)
     diagonal = similar(S)
     event = common.vector_diagonal_kernel!(backend)(
         diagonal, S, cfg.lmax, cfg.mmax, cfg.mres, false;
@@ -415,13 +424,14 @@ function run_shared_vector_kernel_reference(common, backend)
     )
     event === nothing || wait(event)
     @test diagonal ≈ divergence_from_spheroidal(cfg, S)
+    @test all(iszero, diagonal[:, 2])
     recovered = similar(S)
     event = common.vector_diagonal_kernel!(backend)(
         recovered, diagonal, cfg.lmax, cfg.mmax, cfg.mres, true;
         ndrange=size(S),
     )
     event === nothing || wait(event)
-    expected = copy(S); expected[1, 1] = 0
+    expected = copy(S); expected[1, 1] = 0; expected[:, 2] .= 0
     @test recovered ≈ expected
     return nothing
 end

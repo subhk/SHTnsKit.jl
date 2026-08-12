@@ -1380,6 +1380,7 @@ if isempty(ARGS) || "sphtor_full" in ARGS
 
         @test isdefined(SHTnsKit, :dist_analysis_sphtor)
         @test isdefined(SHTnsKit, :dist_synthesis_sphtor)
+        @test isdefined(SHTnsKit, :DistSphtorPlan)
         dense_S, dense_T = dist_analysis_sphtor(cfg, Vtd, Vpd)
         @test dense_S isa Matrix{ComplexF32}
         @test dense_T isa Matrix{ComplexF32}
@@ -1397,25 +1398,36 @@ if isempty(ARGS) || "sphtor_full" in ARGS
         @test _collect_spatial(dense_Vtd, cfg) ≈ Vt atol=4f-4 rtol=4f-4
         @test _collect_spatial(dense_Vpd, cfg) ≈ Vp atol=4f-4 rtol=4f-4
 
-        plan = extension.DistSphtorPlan(cfg, Vtd)
+        plan = SHTnsKit.DistSphtorPlan(cfg, Vtd)
         @test eltype(plan.Ftθm) === ComplexF32
         @test eltype(plan.Fpθm) === ComplexF32
         @test eltype(plan.Slm_work) === ComplexF32
         @test eltype(plan.Tlm_work) === ComplexF32
         plan_S = zeros(ComplexF32, cfg.lmax + 1, cfg.mmax + 1)
         plan_T = similar(plan_S)
-        dist_analysis_sphtor!(plan, plan_S, plan_T, Vtd, Vpd)
+        analysis_sphtor!(plan, plan_S, plan_T, Vtd, Vpd)
         @test plan_S ≈ dense_S atol=4f-4 rtol=4f-4
         @test plan_T ≈ dense_T atol=4f-4 rtol=4f-4
+        compat_S = similar(plan_S); compat_T = similar(plan_T)
+        dist_analysis_sphtor!(plan, compat_S, compat_T, Vtd, Vpd)
+        @test compat_S == plan_S
+        @test compat_T == plan_T
         plan_Vt = PencilArray{Float32}(undef, pencil(Vtd))
         plan_Vp = PencilArray{Float32}(undef, pencil(Vpd))
-        dist_synthesis_sphtor!(
+        synthesis_sphtor!(
             plan, plan_Vt, plan_Vp, plan_S, plan_T; real_output=true,
         )
         @test _collect_spatial(plan_Vt, cfg) ≈ Vt atol=4f-4 rtol=4f-4
         @test _collect_spatial(plan_Vp, cfg) ≈ Vp atol=4f-4 rtol=4f-4
+        compat_Vt = PencilArray{Float32}(undef, pencil(Vtd))
+        compat_Vp = PencilArray{Float32}(undef, pencil(Vpd))
+        dist_synthesis_sphtor!(
+            plan, compat_Vt, compat_Vp, plan_S, plan_T; real_output=true,
+        )
+        @test parent(compat_Vt) == parent(plan_Vt)
+        @test parent(compat_Vp) == parent(plan_Vp)
 
-        scratch_plan = extension.DistSphtorPlan(
+        scratch_plan = SHTnsKit.DistSphtorPlan(
             cfg, Vtd; with_spatial_scratch=true,
         )
         @test eltype(scratch_plan.spatial_scratch.Fθ) === ComplexF32
@@ -1435,7 +1447,7 @@ if isempty(ARGS) || "sphtor_full" in ARGS
             :gauss, 3, 8; mres=2, norm=:schmidt,
             real_norm=true, cs_phase=false,
         )
-        mres_plan = extension.DistSphtorPlan(
+        mres_plan = SHTnsKit.DistSphtorPlan(
             mres_cfg, Vtd; with_spatial_scratch=true,
         )
         unsupported = zeros(ComplexF32, mres_cfg.lmax + 1, mres_cfg.mmax + 1)

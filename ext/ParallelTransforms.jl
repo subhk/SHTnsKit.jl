@@ -2294,6 +2294,17 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractM
     return Slm_out, Tlm_out
 end
 
+function SHTnsKit.analysis_sphtor!(plan::DistSphtorPlan,
+                                    Slm_out::AbstractMatrix,
+                                    Tlm_out::AbstractMatrix,
+                                    Vtθφ::PencilArray,
+                                    Vpθφ::PencilArray;
+                                    use_tables=plan.cfg.use_plm_tables)
+    return SHTnsKit.dist_analysis_sphtor!(
+        plan, Slm_out, Tlm_out, Vtθφ, Vpθφ; use_tables,
+    )
+end
+
 # Distributed vector synthesis (spheroidal/toroidal) from dense spectra
 function _legacy_dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
                                        Slm::AbstractMatrix,
@@ -2495,6 +2506,17 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::Penci
         copyto!(Vtθφ_out, Vt); copyto!(Vpθφ_out, Vp)
         return Vtθφ_out, Vpθφ_out
     end
+end
+
+function SHTnsKit.synthesis_sphtor!(plan::DistSphtorPlan,
+                                     Vtθφ_out::PencilArray,
+                                     Vpθφ_out::PencilArray,
+                                     Slm::AbstractMatrix,
+                                     Tlm::AbstractMatrix;
+                                     real_output::Bool=true)
+    return SHTnsKit.dist_synthesis_sphtor!(
+        plan, Vtθφ_out, Vpθφ_out, Slm, Tlm; real_output,
+    )
 end
 
 # Full implementation using pre-allocated scratch buffers to eliminate allocations

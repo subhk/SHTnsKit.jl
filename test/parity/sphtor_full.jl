@@ -58,7 +58,9 @@ _vector_tol(::Type{Float32}) = (atol=4f-4, rtol=4f-4)
 _vector_tol(::Type{Float64}) = (atol=6e-11, rtol=6e-11)
 
 function _external_vector_coefficients(cfg, canonical)
-    external = similar(canonical)
+    # Conversion visits only valid l >= m storage; initialize forbidden entries
+    # so MPI replicated-input validation never observes rank-local garbage.
+    external = zero(canonical)
     SHTnsKit.convert_alm_norm!(external, canonical, cfg; to_internal=false)
     return external
 end
@@ -201,6 +203,47 @@ function _test_vector_signs(adapter::VectorParityAdapter)
     @test vector_collect(adapter, gotT[2], cfg) ≈ refT[2] atol=2e-12 rtol=2e-12
 end
 
+function _test_vector_m1_pole_signal(adapter::VectorParityAdapter)
+    cfg = _vector_config(:regular_poles, 2, 5; mres=1)
+    CT = ComplexF64
+    S_can = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+    T_can = zero(S_can)
+    S_can[2, 2] = CT(0.2, -0.1)
+    T_can[2, 2] = CT(-0.12, 0.07)
+    S = _external_vector_coefficients(cfg, S_can)
+    Tlm = _external_vector_coefficients(cfg, T_can)
+    prototype = vector_place(
+        adapter, cfg, zeros(Float64, cfg.nlat, cfg.nlon), :spatial,
+    )
+    Vt, Vp = vector_synthesis(
+        adapter, cfg, vector_place(adapter, cfg, S, :spectral),
+        vector_place(adapter, cfg, Tlm, :spectral), prototype;
+        real_output=true,
+    )
+    Vth = vector_collect(adapter, Vt, cfg)
+    Vph = vector_collect(adapter, Vp, cfg)
+
+    # Y_1^1 = -sqrt(3/(8π)) sin(θ) exp(iφ).  Its theta derivative
+    # changes sign between poles, while Y/sin(θ) does not.
+    c11 = sqrt(3 / (8pi))
+    for i in findall(x -> isapprox(abs(x), 1; atol=8eps(Float64)), cfg.x),
+        j in 1:cfg.nlon
+        north = cfg.x[i] > 0
+        d = north ? -c11 : c11
+        p = -c11
+        wave = cis(cfg.φ[j])
+        expected_t = 2real(
+            (d * S_can[2, 2] - im * p * T_can[2, 2]) * wave,
+        )
+        expected_p = 2real(
+            (im * p * S_can[2, 2] + d * T_can[2, 2]) * wave,
+        )
+        @test Vth[i, j] ≈ expected_t atol=3e-12 rtol=3e-12
+        @test Vph[i, j] ≈ expected_p atol=3e-12 rtol=3e-12
+    end
+    return nothing
+end
+
 function _test_vector_mres(adapter::VectorParityAdapter)
     cfg = _vector_config(:gauss, 3, 8; mres=2)
     unsupported = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
@@ -337,6 +380,7 @@ function run_sphtor_full_parity(adapter::VectorParityAdapter;
             _test_vector_case(adapter, cfg, T)
         end
         _test_vector_signs(adapter)
+        _test_vector_m1_pole_signal(adapter)
         _test_vector_mres(adapter)
         _test_vector_operator_backend(adapter)
     end
@@ -354,6 +398,58 @@ end
 
 """Compile and numerically validate the vendor-neutral vector kernels on KA CPU."""
 function run_shared_vector_kernel_reference(common, backend)
+    pole_cfg = _vector_config(:regular_poles, 2, 5; mres=1)
+    pole_x, _, _, pole_Nlm = common.vector_host_tables(pole_cfg, Float32)
+    pole_P = zeros(Float32, pole_cfg.nlat, pole_cfg.lmax + 1, pole_cfg.mmax + 1)
+    pole_dtheta = similar(pole_P)
+    pole_over_sin = similar(pole_P)
+    event = common.vector_derivative_table_kernel!(backend)(
+        pole_P, pole_dtheta, pole_over_sin, pole_x, pole_Nlm,
+        pole_cfg.lmax, pole_cfg.mmax;
+        ndrange=(pole_cfg.nlat, pole_cfg.mmax + 1),
+    )
+    event === nothing || wait(event)
+    north = argmax(pole_x)
+    south = argmin(pole_x)
+    c11 = sqrt(Float32(3) / Float32(8pi))
+    @test pole_dtheta[north, 2, 2] ≈ -c11 atol=8f-6 rtol=8f-6
+    @test pole_over_sin[north, 2, 2] ≈ -c11 atol=8f-6 rtol=8f-6
+    @test pole_dtheta[south, 2, 2] ≈ c11 atol=8f-6 rtol=8f-6
+    @test pole_over_sin[south, 2, 2] ≈ -c11 atol=8f-6 rtol=8f-6
+
+    @test isdefined(common, :vector_config_signature)
+    if isdefined(common, :vector_config_signature)
+        vector_cache = common.ScalarTableCache(2)
+        identity = objectid(pole_cfg)
+        scalar_signature = common.scalar_config_signature(pole_cfg)
+        signature_before = common.vector_config_signature(pole_cfg)
+        before = pole_dtheta[north, 2, 2]
+        common.scalar_cache_insert!(
+            vector_cache, :mock, identity, Float32, signature_before, :before,
+        )
+        pole_cfg.Nlm[2, 2] *= 2
+        @test common.scalar_config_signature(pole_cfg) == scalar_signature
+        signature_after = common.vector_config_signature(pole_cfg)
+        @test signature_after != signature_before
+        @test common.scalar_cache_lookup(
+            vector_cache, :mock, identity, Float32, signature_after,
+        ) === nothing
+        common.scalar_cache_insert!(
+            vector_cache, :mock, identity, Float32, signature_after, :after,
+        )
+        @test common.scalar_cache_size(vector_cache; device=:mock) == 1
+
+        pole_x2, _, _, pole_Nlm2 = common.vector_host_tables(pole_cfg, Float32)
+        event = common.vector_derivative_table_kernel!(backend)(
+            pole_P, pole_dtheta, pole_over_sin, pole_x2, pole_Nlm2,
+            pole_cfg.lmax, pole_cfg.mmax;
+            ndrange=(pole_cfg.nlat, pole_cfg.mmax + 1),
+        )
+        event === nothing || wait(event)
+        @test pole_dtheta[north, 2, 2] ≈ 2before atol=8f-6 rtol=8f-6
+        @test pole_over_sin[north, 2, 2] ≈ -2c11 atol=8f-6 rtol=8f-6
+    end
+
     cfg = _vector_config(
         :regular_poles, 3, 8; mres=2, norm=:schmidt,
         real_norm=true, cs_phase=false, robert_form=true,

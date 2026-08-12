@@ -13,6 +13,7 @@ using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
                   scalar_analysis_kernel!, scalar_synthesis_kernel!,
                   coefficient_conversion_kernel!,
                   coefficient_batch_conversion_kernel!, scalar_config_signature,
+                  vector_config_signature,
                   real_pack_kernel!, real_unpack_kernel!,
                   mode_analysis_kernel!, mode_synthesis_kernel!,
                   scalar_batch_analysis_kernel!, scalar_batch_synthesis_kernel!,
@@ -22,8 +23,7 @@ using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
 using .GPUCommon: ScalarWorkspaceCache, scalar_workspace_use!,
                   scalar_workspace_clear!, scalar_workspace_size
 using .GPUCommon: vector_derivative_table_kernel!, vector_analysis_kernel!,
-                  vector_synthesis_kernel!, vector_diagonal_kernel!,
-                  vector_host_tables
+                  vector_synthesis_kernel!, vector_diagonal_kernel!
 
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
@@ -92,16 +92,23 @@ function _gpu_adapter_adapt(::CUDAAdapter, value)
     return CuArray(value)
 end
 
-struct CUDAScalarTables{TX,TW,TP,TS,TD,TO}
+struct CUDAScalarTables{TX,TW,TP,TS}
     x::TX
     weights::TW
     Plm::TP
+    scales::TS
+end
+
+struct CUDAVectorTables{TX,TW,TS,TD,TO}
+    x::TX
+    weights::TW
     scales::TS
     dtheta::TD
     over_sin::TO
 end
 
 const _CUDA_SCALAR_CACHE = ScalarTableCache(8)
+const _CUDA_VECTOR_CACHE = ScalarTableCache(8)
 const _CUDA_WORKSPACE_CACHE = ScalarWorkspaceCache(8)
 
 function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
@@ -113,28 +120,52 @@ function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
     )
     cached === nothing || return cached
 
-    x_host, weights_host, scales_host, Nlm_host = vector_host_tables(cfg, T)
+    x_host, weights_host, scales_host = scalar_host_tables(cfg, T)
     x = CuArray(x_host)
     weights = CuArray(weights_host)
     scales = CuArray(scales_host)
-    Nlm = CuArray(Nlm_host)
     Plm = CUDA.zeros(T, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1)
-    dtheta = similar(Plm)
-    over_sin = similar(Plm)
     backend = CUDABackend()
-    kernel! = vector_derivative_table_kernel!(backend)
-    kernel!(Plm, dtheta, over_sin, x, Nlm, cfg.lmax, cfg.mmax;
+    kernel! = legendre_table_kernel!(backend)
+    kernel!(Plm, x, cfg.lmax, cfg.mmax;
             ndrange=(cfg.nlat, cfg.mmax + 1))
     CUDA.synchronize()
-    built = CUDAScalarTables(x, weights, Plm, scales, dtheta, over_sin)
+    built = CUDAScalarTables(x, weights, Plm, scales)
 
     return scalar_cache_insert!(
         _CUDA_SCALAR_CACHE, device, identity, T, signature, built,
     )
 end
 
+function _cuda_vector_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
+    device = CUDA.deviceid(CUDA.device())
+    identity = objectid(cfg)
+    signature = vector_config_signature(cfg)
+    cached = scalar_cache_lookup(
+        _CUDA_VECTOR_CACHE, device, identity, T, signature,
+    )
+    cached === nothing || return cached
+
+    scalar = _cuda_scalar_tables(cfg, T)
+    Nlm = CuArray(T.(cfg.Nlm))
+    Plm = similar(scalar.Plm)
+    dtheta = similar(Plm)
+    over_sin = similar(Plm)
+    kernel! = vector_derivative_table_kernel!(CUDABackend())
+    kernel!(Plm, dtheta, over_sin, scalar.x, Nlm, cfg.lmax, cfg.mmax;
+            ndrange=(cfg.nlat, cfg.mmax + 1))
+    CUDA.synchronize()
+    built = CUDAVectorTables(
+        scalar.x, scalar.weights, scalar.scales, dtheta, over_sin,
+    )
+    return scalar_cache_insert!(
+        _CUDA_VECTOR_CACHE, device, identity, T, signature, built,
+    )
+end
+
 function _cuda_clear_scalar_cache!(; device=nothing)
     scalar_cache_clear!(_CUDA_SCALAR_CACHE; device)
+    scalar_cache_clear!(_CUDA_VECTOR_CACHE; device)
     scalar_workspace_clear!(_CUDA_WORKSPACE_CACHE; device)
     return nothing
 end
@@ -461,7 +492,7 @@ function _cuda_vector_analysis_direct!(owner, cfg::SHTConfig,
     Base.mightalias(Sout, Tout) && throw(ArgumentError(
         "Sout and Tout must not alias each other",
     ))
-    tables = _cuda_scalar_tables(cfg, RT)
+    tables = _cuda_vector_tables(cfg, RT)
     return _with_cuda_vector_workspace(owner, cfg, RT) do workspace
         copyto!(workspace.Ftheta, Vt)
         copyto!(workspace.Fphi, Vp)
@@ -526,7 +557,7 @@ function _cuda_vector_synthesis_direct!(owner, cfg::SHTConfig,
     Base.mightalias(Vt, Vp) && throw(ArgumentError(
         "Vt and Vp must not alias each other",
     ))
-    tables = _cuda_scalar_tables(cfg, RT)
+    tables = _cuda_vector_tables(cfg, RT)
     return _with_cuda_vector_workspace(owner, cfg, RT) do workspace
         fill!(workspace.Ftheta, zero(CT))
         fill!(workspace.Fphi, zero(CT))

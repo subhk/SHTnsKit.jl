@@ -15,14 +15,14 @@ using .GPUCommon: legendre_table_kernel!, scalar_analysis_kernel!,
                   mode_analysis_kernel!, mode_synthesis_kernel!,
                   scalar_batch_analysis_kernel!, scalar_batch_synthesis_kernel!,
                   complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
-                  scalar_config_signature, scalar_host_tables,
+                  scalar_config_signature, vector_config_signature,
+                  scalar_host_tables,
                   ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
                   scalar_cache_clear!, scalar_cache_size
 using .GPUCommon: ScalarWorkspaceCache, scalar_workspace_use!,
                   scalar_workspace_clear!, scalar_workspace_size
 using .GPUCommon: vector_derivative_table_kernel!, vector_analysis_kernel!,
-                  vector_synthesis_kernel!, vector_diagonal_kernel!,
-                  vector_host_tables
+                  vector_synthesis_kernel!, vector_diagonal_kernel!
 
 import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  analysis_packed, synthesis_packed,
@@ -80,16 +80,23 @@ function _require_amdgpu(operation::Symbol)
     return nothing
 end
 
-struct AMDGPUScalarTables{TX,TW,TP,TS,TD,TO}
+struct AMDGPUScalarTables{TX,TW,TP,TS}
     x::TX
     weights::TW
     Plm::TP
+    scales::TS
+end
+
+struct AMDGPUVectorTables{TX,TW,TS,TD,TO}
+    x::TX
+    weights::TW
     scales::TS
     dtheta::TD
     over_sin::TO
 end
 
 const _AMDGPU_SCALAR_CACHE = ScalarTableCache(8)
+const _AMDGPU_VECTOR_CACHE = ScalarTableCache(8)
 const _AMDGPU_WORKSPACE_CACHE = ScalarWorkspaceCache(8)
 
 function _amdgpu_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
@@ -101,28 +108,52 @@ function _amdgpu_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloa
     )
     cached === nothing || return cached
 
-    x_host, weights_host, scales_host, Nlm_host = vector_host_tables(cfg, T)
+    x_host, weights_host, scales_host = scalar_host_tables(cfg, T)
     x = ROCArray(x_host)
     weights = ROCArray(weights_host)
     scales = ROCArray(scales_host)
-    Nlm = ROCArray(Nlm_host)
     Plm = AMDGPU.zeros(T, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1)
-    dtheta = similar(Plm)
-    over_sin = similar(Plm)
     backend = ROCBackend()
-    kernel! = vector_derivative_table_kernel!(backend)
-    kernel!(Plm, dtheta, over_sin, x, Nlm, cfg.lmax, cfg.mmax;
+    kernel! = legendre_table_kernel!(backend)
+    kernel!(Plm, x, cfg.lmax, cfg.mmax;
             ndrange=(cfg.nlat, cfg.mmax + 1))
     AMDGPU.synchronize()
-    built = AMDGPUScalarTables(x, weights, Plm, scales, dtheta, over_sin)
+    built = AMDGPUScalarTables(x, weights, Plm, scales)
 
     return scalar_cache_insert!(
         _AMDGPU_SCALAR_CACHE, device, identity, T, signature, built,
     )
 end
 
+function _amdgpu_vector_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
+    device = AMDGPU.device_id()
+    identity = objectid(cfg)
+    signature = vector_config_signature(cfg)
+    cached = scalar_cache_lookup(
+        _AMDGPU_VECTOR_CACHE, device, identity, T, signature,
+    )
+    cached === nothing || return cached
+
+    scalar = _amdgpu_scalar_tables(cfg, T)
+    Nlm = ROCArray(T.(cfg.Nlm))
+    Plm = similar(scalar.Plm)
+    dtheta = similar(Plm)
+    over_sin = similar(Plm)
+    kernel! = vector_derivative_table_kernel!(ROCBackend())
+    kernel!(Plm, dtheta, over_sin, scalar.x, Nlm, cfg.lmax, cfg.mmax;
+            ndrange=(cfg.nlat, cfg.mmax + 1))
+    AMDGPU.synchronize()
+    built = AMDGPUVectorTables(
+        scalar.x, scalar.weights, scalar.scales, dtheta, over_sin,
+    )
+    return scalar_cache_insert!(
+        _AMDGPU_VECTOR_CACHE, device, identity, T, signature, built,
+    )
+end
+
 function _amdgpu_clear_scalar_cache!(; device=nothing)
     scalar_cache_clear!(_AMDGPU_SCALAR_CACHE; device)
+    scalar_cache_clear!(_AMDGPU_VECTOR_CACHE; device)
     scalar_workspace_clear!(_AMDGPU_WORKSPACE_CACHE; device)
     return nothing
 end
@@ -452,7 +483,7 @@ function _amdgpu_vector_analysis_direct!(owner, cfg::SHTConfig,
     Base.mightalias(Sout, Tout) && throw(ArgumentError(
         "Sout and Tout must not alias each other",
     ))
-    tables = _amdgpu_scalar_tables(cfg, RT)
+    tables = _amdgpu_vector_tables(cfg, RT)
     return _with_amdgpu_vector_workspace(owner, cfg, RT) do workspace
         copyto!(workspace.Ftheta, Vt)
         copyto!(workspace.Fphi, Vp)
@@ -517,7 +548,7 @@ function _amdgpu_vector_synthesis_direct!(owner, cfg::SHTConfig,
     Base.mightalias(Vt, Vp) && throw(ArgumentError(
         "Vt and Vp must not alias each other",
     ))
-    tables = _amdgpu_scalar_tables(cfg, RT)
+    tables = _amdgpu_vector_tables(cfg, RT)
     return _with_amdgpu_vector_workspace(owner, cfg, RT) do workspace
         fill!(workspace.Ftheta, zero(CT))
         fill!(workspace.Fphi, zero(CT))

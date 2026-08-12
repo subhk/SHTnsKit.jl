@@ -180,6 +180,10 @@ function SHTnsKit.analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, 
                                    use_tables=cfg.use_plm_tables,
                                    use_rfft::Bool=false,
                                    return_pencil::Bool=true)
+    comm = communicator(Vtθφ)
+    return_pencil = _validate_collective_bool_option!(
+        comm, return_pencil, :analysis_sphtor, UInt32(0x1000),
+    )
     if return_pencil
         return dist_analysis_sphtor_pencil(cfg, Vtθφ, Vpθφ; use_rfft)
     else

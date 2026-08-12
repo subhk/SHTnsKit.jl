@@ -81,6 +81,12 @@ end
     @test isdefined(extension, :_amdgpu_vector_synthesis)
     @test isdefined(extension, :_amdgpu_vector_analysis_direct!)
     @test isdefined(extension, :_amdgpu_vector_synthesis_direct!)
+    @test fieldnames(extension.AMDGPUScalarTables) == (:x, :weights, :Plm, :scales)
+    @test isdefined(extension, :AMDGPUVectorTables)
+    @test isdefined(extension, :_AMDGPU_VECTOR_CACHE)
+    @test isdefined(extension, :_amdgpu_vector_tables)
+    @test extension._AMDGPU_SCALAR_CACHE.max_per_device == 8
+    @test extension._AMDGPU_VECTOR_CACHE.max_per_device == 8
     @test which(
         analysis_sphtor,
         Tuple{SHTConfig,ROCArray{Float32,2},ROCArray{Float32,2}},
@@ -144,10 +150,21 @@ end
     extension.GPUCommon.scalar_cache_insert!(
         extension._AMDGPU_SCALAR_CACHE, cache_device, UInt(1), Float32, UInt(1), :sentinel,
     )
+    if isdefined(extension, :_AMDGPU_VECTOR_CACHE)
+        extension.GPUCommon.scalar_cache_insert!(
+            extension._AMDGPU_VECTOR_CACHE, cache_device,
+            UInt(1), Float32, UInt(1), :vector_sentinel,
+        )
+    end
     extension._amdgpu_clear_scalar_cache!(; device=cache_device)
     @test extension.GPUCommon.scalar_cache_size(
         extension._AMDGPU_SCALAR_CACHE; device=cache_device,
     ) == 0
+    if isdefined(extension, :_AMDGPU_VECTOR_CACHE)
+        @test extension.GPUCommon.scalar_cache_size(
+            extension._AMDGPU_VECTOR_CACHE; device=cache_device,
+        ) == 0
+    end
     workspace_cache = extension.GPUCommon.ScalarWorkspaceCache(2)
     workspace_owner = Ref(:owner)
     builds = Ref(0)
@@ -174,6 +191,17 @@ end
     run_shared_vector_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_scalar_workspace_cache_reference(extension.GPUCommon)
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitAMDGPUExt.jl"), String)
+    @test occursin("function _amdgpu_vector_tables", source)
+    if occursin("function _amdgpu_vector_tables", source)
+        scalar_table_builder = split(
+            split(source, "function _amdgpu_scalar_tables"; limit=2)[2],
+            "function _amdgpu_vector_tables"; limit=2,
+        )[1]
+        @test occursin("scalar_host_tables", scalar_table_builder)
+        @test !occursin("vector_host_tables", scalar_table_builder)
+        @test !occursin("vector_derivative_table_kernel!", scalar_table_builder)
+        @test !occursin("dtheta", scalar_table_builder)
+    end
     vector_pipeline = split(
         split(source, "function _amdgpu_vector_analysis"; limit=2)[2],
         "@inline function _amdgpu_lcap"; limit=2,
@@ -199,6 +227,7 @@ end
     @test occursin("_amdgpu_batch_synthesis_direct!", source)
     @test occursin("_amdgpu_vector_analysis_direct!", source)
     @test occursin("_amdgpu_vector_synthesis_direct!", source)
+    @test occursin("tables = _amdgpu_vector_tables(cfg, RT)", source)
     @test occursin("FFTW.plan_rfft", source)
     @test !occursin(
         r"result\s*=\s*_amdgpu_(?:scalar_analysis|scalar_synthesis|batch_analysis|batch_synthesis)\(",

@@ -95,6 +95,12 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension, :_cuda_vector_synthesis)
     @test isdefined(extension, :_cuda_vector_analysis_direct!)
     @test isdefined(extension, :_cuda_vector_synthesis_direct!)
+    @test fieldnames(extension.CUDAScalarTables) == (:x, :weights, :Plm, :scales)
+    @test isdefined(extension, :CUDAVectorTables)
+    @test isdefined(extension, :_CUDA_VECTOR_CACHE)
+    @test isdefined(extension, :_cuda_vector_tables)
+    @test extension._CUDA_SCALAR_CACHE.max_per_device == 8
+    @test extension._CUDA_VECTOR_CACHE.max_per_device == 8
     @test which(
         analysis_sphtor,
         Tuple{SHTConfig,CuArray{Float32,2},CuArray{Float32,2}},
@@ -158,10 +164,21 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     extension.GPUCommon.scalar_cache_insert!(
         extension._CUDA_SCALAR_CACHE, cache_device, UInt(1), Float32, UInt(1), :sentinel,
     )
+    if isdefined(extension, :_CUDA_VECTOR_CACHE)
+        extension.GPUCommon.scalar_cache_insert!(
+            extension._CUDA_VECTOR_CACHE, cache_device,
+            UInt(1), Float32, UInt(1), :vector_sentinel,
+        )
+    end
     extension._cuda_clear_scalar_cache!(; device=cache_device)
     @test extension.GPUCommon.scalar_cache_size(
         extension._CUDA_SCALAR_CACHE; device=cache_device,
     ) == 0
+    if isdefined(extension, :_CUDA_VECTOR_CACHE)
+        @test extension.GPUCommon.scalar_cache_size(
+            extension._CUDA_VECTOR_CACHE; device=cache_device,
+        ) == 0
+    end
     workspace_cache = extension.GPUCommon.ScalarWorkspaceCache(2)
     workspace_owner = Ref(:owner)
     builds = Ref(0)
@@ -189,6 +206,17 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     run_shared_vector_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_scalar_workspace_cache_reference(extension.GPUCommon)
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitGPUExt.jl"), String)
+    @test occursin("function _cuda_vector_tables", source)
+    if occursin("function _cuda_vector_tables", source)
+        scalar_table_builder = split(
+            split(source, "function _cuda_scalar_tables"; limit=2)[2],
+            "function _cuda_vector_tables"; limit=2,
+        )[1]
+        @test occursin("scalar_host_tables", scalar_table_builder)
+        @test !occursin("vector_host_tables", scalar_table_builder)
+        @test !occursin("vector_derivative_table_kernel!", scalar_table_builder)
+        @test !occursin("dtheta", scalar_table_builder)
+    end
     @test !occursin("_GPU_POLE_TOL", source)
     @test !occursin("vector_analysis_contrib_kernel!", source)
     @test all(method -> method.module === SHTnsKit, methods(gpu_analysis_sphtor))
@@ -226,6 +254,7 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test occursin("_cuda_batch_synthesis_direct!", source)
     @test occursin("_cuda_vector_analysis_direct!", source)
     @test occursin("_cuda_vector_synthesis_direct!", source)
+    @test occursin("tables = _cuda_vector_tables(cfg, RT)", source)
     @test occursin("CUFFT.plan_rfft", source)
     @test !occursin(
         r"result\s*=\s*_cuda_(?:scalar_analysis|scalar_synthesis|batch_analysis|batch_synthesis)\(",

@@ -139,7 +139,19 @@ function _collective_validation_error(comm, local_flags::UInt32, operation::Symb
     flags & 0x0100 != 0 && push!(descriptions, "invalid or rank-varying degree truncation")
     flags & 0x0200 != 0 && push!(descriptions, "LM_cplx requires mres == 1 on every rank")
     flags & 0x0400 != 0 && push!(descriptions, "real-valued input required")
+    flags & 0x0800 != 0 && push!(descriptions, "invalid or rank-varying use_tables")
+    flags & 0x1000 != 0 && push!(descriptions, "rank-varying return_pencil")
     throw(ArgumentError("$operation collective validation failed: $(join(descriptions, ", "))"))
+end
+
+function _validate_collective_bool_option!(comm, value, operation::Symbol,
+                                           flag::UInt32)
+    code = value === false ? 0 : value === true ? 1 : -1
+    minimum = MPI.Allreduce(code, min, comm)
+    maximum = MPI.Allreduce(code, max, comm)
+    flags = code < 0 || minimum != maximum ? flag : UInt32(0)
+    _collective_validation_error(comm, flags, operation)
+    return value::Bool
 end
 
 function _collective_truncation(comm, ltr::Integer, lmax::Int, operation::Symbol)
@@ -2138,14 +2150,16 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig,
                                        Vpθφ::PencilArray;
                                        use_tables=cfg.use_plm_tables,
                                        use_rfft::Bool=false)
+    comm = communicator(Vtθφ)
+    use_tables = _validate_collective_bool_option!(
+        comm, use_tables, :dist_analysis_sphtor, UInt32(0x0800),
+    )
     # `use_tables` is retained for API compatibility.  The owner-native path
     # selects the package's pole-safe normalized recurrence independently of
     # the dense legacy implementation.
-    use_tables isa Bool || throw(ArgumentError("use_tables must be Bool"))
     Slm, Tlm = dist_analysis_sphtor_pencil(
         cfg, Vtθφ, Vpθφ; use_rfft,
     )
-    comm = communicator(Vtθφ)
     return SHTnsKit.spectral_pencil_to_matrix(cfg, Slm; comm),
            SHTnsKit.spectral_pencil_to_matrix(cfg, Tlm; comm)
 end

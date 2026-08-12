@@ -207,7 +207,7 @@ function test_pencil_native_path(adapter::MPIScalarAdapter)
     return nothing
 end
 
-function _all_ranks_catch(call, comm)
+function _all_ranks_catch(call, comm; message_contains=nothing)
     message = try
         call()
         ""
@@ -215,7 +215,8 @@ function _all_ranks_catch(call, comm)
         "$(typeof(err)): $(sprint(showerror, err))"
     end
     reference = MPI.bcast(message, 0, comm)
-    caught_same = !isempty(message) && message == reference
+    caught_same = !isempty(message) && message == reference &&
+        (message_contains === nothing || occursin(message_contains, message))
     total = MPI.Allreduce(caught_same ? 1 : 0, +, comm)
     MPI.Barrier(comm)
     return total == MPI.Comm_size(comm)
@@ -1482,6 +1483,34 @@ if isempty(ARGS) || "sphtor_full" in ARGS
         @test _all_ranks_catch(vector_adapter.comm) do
             analysis_sphtor(cfg, Vtd, bad)
         end
+
+        @test _all_ranks_catch(
+            vector_adapter.comm;
+            message_contains="invalid or rank-varying use_tables",
+        ) do
+            dist_analysis_sphtor(cfg, Vtd, Vpd; use_tables=:invalid)
+        end
+        MPI.Barrier(vector_adapter.comm)
+
+        rank_tables = iszero(rank % 2)
+        @test _all_ranks_catch(
+            vector_adapter.comm;
+            message_contains="invalid or rank-varying use_tables",
+        ) do
+            dist_analysis_sphtor(cfg, Vtd, Vpd; use_tables=rank_tables)
+        end
+        MPI.Barrier(vector_adapter.comm)
+
+        rank_return_pencil = iszero(rank % 2)
+        @test _all_ranks_catch(
+            vector_adapter.comm;
+            message_contains="rank-varying return_pencil",
+        ) do
+            analysis_sphtor(
+                cfg, Vtd, Vpd; return_pencil=rank_return_pencil,
+            )
+        end
+        MPI.Barrier(vector_adapter.comm)
     end
 end
 

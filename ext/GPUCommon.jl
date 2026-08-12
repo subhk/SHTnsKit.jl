@@ -12,7 +12,7 @@ export laplacian_kernel!, legendre_table_kernel!, scalar_analysis_kernel!,
        complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
        vector_derivative_table_kernel!, vector_analysis_kernel!,
        vector_synthesis_kernel!, vector_diagonal_kernel!, vector_host_tables,
-       scalar_config_signature, scalar_host_tables,
+       scalar_config_signature, vector_config_signature, scalar_host_tables,
        ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
        scalar_cache_clear!, scalar_cache_size,
        ScalarWorkspaceCache, scalar_workspace_use!,
@@ -245,6 +245,17 @@ function scalar_config_signature(cfg::SHTnsKit.SHTConfig)
         cfg.grid_type, cfg.cphi, cfg.south_pole_first,
         cfg.norm, cfg.real_norm, cfg.cs_phase, grid_hash,
     ))
+end
+
+"""
+Fingerprint every mutable input consumed only by vector derivative tables.
+
+Scalar transforms do not depend on `Nlm`; keeping this separate prevents an
+`Nlm` mutation from rebuilding scalar tables while still invalidating the
+pole-sensitive vector cache entry for the same configuration identity.
+"""
+function vector_config_signature(cfg::SHTnsKit.SHTConfig)
+    return hash(Tuple(cfg.Nlm), scalar_config_signature(cfg))
 end
 
 """Build the small typed host setup vectors copied once into a vendor cache."""

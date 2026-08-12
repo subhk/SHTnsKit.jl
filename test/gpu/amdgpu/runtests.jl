@@ -461,5 +461,6 @@ end
         )
         run_sphtor_full_parity(AMDGPUVectorAdapter())
         run_qst_full_parity(AMDGPUQSTAdapter())
+        run_gpu_vector_mode_edge_parity(AMDGPUVectorAdapter())
     end
 end

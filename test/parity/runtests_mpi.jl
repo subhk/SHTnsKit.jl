@@ -1851,6 +1851,12 @@ if isempty(ARGS) || "vector_variants" in ARGS
         @test _collect_distributed_vector(got_m[1]) ≈ expected_m[1] atol=5f-4 rtol=5f-4
         @test _collect_distributed_vector(got_m[2]) ≈ expected_m[2] atol=5f-4 rtol=5f-4
         @test _collect_distributed_vector(got_qm[1]) ≈ expected_qm[1] atol=5f-4 rtol=5f-4
+        got_qm32 = synthesis_qst_ml(
+            cfg, Int32(stored_im), Qmd, Smd, Tmd, ltr,
+        )
+        for (got, expected) in zip(got_qm32, expected_qm)
+            @test _collect_distributed_vector(got) ≈ expected atol=5f-4 rtol=5f-4
+        end
         extension._reset_pencil_scalar_stats!()
         back_m = analysis_sphtor_ml(cfg, stored_im, got_m..., ltr)
         mode_analysis_stats = extension._pencil_scalar_stats()
@@ -2003,6 +2009,19 @@ if isempty(ARGS) || "vector_variants" in ARGS
         @test rejected_mode_stats.scalar_mode_synthesis_sent_elements == 0
         @test rejected_mode_stats.vector_mode_synthesis_sent_elements == 0
         @test rejected_mode_stats.vector_mode_sent_elements == 0
+        MPI.Barrier(MPI.COMM_WORLD)
+
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(
+            MPI.COMM_WORLD; message_contains="degree truncation",
+        ) do
+            synthesis_qst_ml(
+                cfg, big(typemax(Int)) + 1, Qmd, Smd, Tmd, ltr,
+            )
+        end
+        overflow_mode_stats = extension._pencil_scalar_stats()
+        @test overflow_mode_stats.scalar_mode_synthesis_sent_elements == 0
+        @test overflow_mode_stats.vector_mode_synthesis_sent_elements == 0
         MPI.Barrier(MPI.COMM_WORLD)
 
         empty_spatial = _place_distributed_batch(

@@ -336,9 +336,10 @@ end
 Mode-limited transform for specific azimuthal mode im.
 """
 function analysis_qst_ml(cfg::SHTConfig, im::Integer, Vr_m::AbstractVector{<:Complex}, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Integer)
+    stored_im, _, lcap = _validate_stored_order(cfg, im, ltr)
     # Transform each component for this specific mode
-    Ql = analysis_packed_ml(cfg, im, Vr_m, ltr)
-    Sl, Tl = analysis_sphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
+    Ql = analysis_packed_ml(cfg, stored_im, Vr_m, lcap)
+    Sl, Tl = analysis_sphtor_ml(cfg, stored_im, Vt_m, Vp_m, lcap)
     # Both fixed-mode sub-transforms already return configured coefficients.
 
     return Ql, Sl, Tl
@@ -360,9 +361,10 @@ end
 Mode-limited synthesis for specific azimuthal mode im.
 """
 function synthesis_qst_ml(cfg::SHTConfig, im::Integer, Ql::AbstractVector{<:Complex}, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Integer)
+    stored_im, _, lcap = _validate_stored_order(cfg, im, ltr)
     # Each fixed-mode sub-transform converts its component to canonical once.
-    Vr_m = synthesis_packed_ml(cfg, im, Ql, ltr)
-    Vt_m, Vp_m = synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
+    Vr_m = synthesis_packed_ml(cfg, stored_im, Ql, lcap)
+    Vt_m, Vp_m = synthesis_sphtor_ml(cfg, stored_im, Sl, Tl, lcap)
 
     return Vr_m, Vt_m, Vp_m
 end

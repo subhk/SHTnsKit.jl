@@ -600,5 +600,6 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         )
         run_sphtor_full_parity(CUDAVectorAdapter())
         run_qst_full_parity(CUDAQSTAdapter())
+        run_gpu_vector_mode_edge_parity(CUDAVectorAdapter())
     end
 end

@@ -469,26 +469,34 @@ end
     q_idx = @index(Global)
     l = physical_m + q_idx - 1
     if l <= lcap
-        Svalue = zero(eltype(Sout))
-        Tvalue = zero(eltype(Tout))
-        @inbounds for i in 1:length(weights)
-            s = sqrt(max(zero(eltype(x)), one(eltype(x)) - x[i] * x[i]))
-            Ft = Ftheta[i]
-            Fp = Fphi[i]
-            if robert_form && !iszero(s)
-                Ft /= s
-                Fp /= s
+        if l < max(1, physical_m)
+            # Vector spherical harmonics have no l=0 coefficient.  Keep its
+            # logical axisymmetric storage slot exact without evaluating the
+            # undefined 1/(l(l+1)) analysis factor.
+            Sout[q_idx] = zero(eltype(Sout))
+            Tout[q_idx] = zero(eltype(Tout))
+        else
+            Svalue = zero(eltype(Sout))
+            Tvalue = zero(eltype(Tout))
+            @inbounds for i in 1:length(weights)
+                s = sqrt(max(zero(eltype(x)), one(eltype(x)) - x[i] * x[i]))
+                Ft = Ftheta[i]
+                Fp = Fphi[i]
+                if robert_form && !iszero(s)
+                    Ft /= s
+                    Fp /= s
+                end
+                d = dtheta[i, l + 1, physical_m + 1]
+                term = complex(zero(d), typeof(d)(physical_m) *
+                                over_sin[i, l + 1, physical_m + 1])
+                factor = weights[i] * cphi / typeof(d)(l * (l + 1))
+                Svalue += factor * (Ft * d + conj(term) * Fp)
+                Tvalue += factor * (-conj(term) * Ft + d * Fp)
             end
-            d = dtheta[i, l + 1, physical_m + 1]
-            term = complex(zero(d), typeof(d)(physical_m) *
-                            over_sin[i, l + 1, physical_m + 1])
-            factor = weights[i] * cphi / typeof(d)(l * (l + 1))
-            Svalue += factor * (Ft * d + conj(term) * Fp)
-            Tvalue += factor * (-conj(term) * Ft + d * Fp)
+            scale = scales[l + 1, physical_m + 1]
+            Sout[q_idx] = Svalue / scale
+            Tout[q_idx] = Tvalue / scale
         end
-        scale = scales[l + 1, physical_m + 1]
-        Sout[q_idx] = Svalue / scale
-        Tout[q_idx] = Tvalue / scale
     end
 end
 

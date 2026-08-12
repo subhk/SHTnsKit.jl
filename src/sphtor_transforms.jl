@@ -1004,8 +1004,8 @@ the synthesis formulas:
     Vθ = ∂S/∂θ - (im/sinθ) * T
     Vφ = (im/sinθ) * S + ∂T/∂θ
 """
-@inline function _validate_vector_fixed_order(cfg::SHTConfig, stored_im::Integer,
-                                              ltr::Integer)
+@inline function _validate_stored_order(cfg::SHTConfig, stored_im::Integer,
+                                        ltr::Integer)
     im_value, representable = _degree_limit_candidate(stored_im)
     max_im = cfg.mmax ÷ cfg.mres
     representable && 0 <= im_value <= max_im || throw(ArgumentError(
@@ -1016,6 +1016,12 @@ the synthesis formulas:
     lcap >= physical_m || throw(ArgumentError(
         "ltr must satisfy ltr >= im*mres=$physical_m",
     ))
+    return im_value, physical_m, lcap
+end
+
+@inline function _validate_vector_fixed_order(cfg::SHTConfig, stored_im::Integer,
+                                              ltr::Integer)
+    _, physical_m, lcap = _validate_stored_order(cfg, stored_im, ltr)
     return physical_m, lcap
 end
 

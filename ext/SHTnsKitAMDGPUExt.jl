@@ -807,18 +807,22 @@ synthesis_qst_l_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
     synthesis_qst_l(SHTnsKit.GPU(), cfg, Q, S, Tlm, ltr; real_output=false)
 analysis_qst_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
                 Vr::AMDGPU.AnyROCArray{T,1}, Vt::AMDGPU.AnyROCArray{R,1},
-                Vp::AMDGPU.AnyROCArray{U,1}, ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =
-    (analysis_packed_ml(SHTnsKit.GPU(), cfg, im, Vr, ltr),
-     _amdgpu_vector_mode_analysis(cfg, im, Vt, Vp, ltr)...)
+                Vp::AMDGPU.AnyROCArray{U,1}, ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} = begin
+    stored_im, _, lcap = SHTnsKit._validate_stored_order(cfg, im, ltr)
+    (analysis_packed_ml(SHTnsKit.GPU(), cfg, stored_im, Vr, lcap),
+     _amdgpu_vector_mode_analysis(cfg, stored_im, Vt, Vp, lcap)...)
+end
 analysis_qst_ml(cfg::SHTConfig, im::Integer, Vr::AMDGPU.AnyROCArray{T,1},
                 Vt::AMDGPU.AnyROCArray{R,1}, Vp::AMDGPU.AnyROCArray{U,1},
                 ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =
     analysis_qst_ml(SHTnsKit.GPU(), cfg, im, Vr, Vt, Vp, ltr)
 synthesis_qst_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
                  Q::AMDGPU.AnyROCArray{T,1}, S::AMDGPU.AnyROCArray{R,1},
-                 Tlm::AMDGPU.AnyROCArray{U,1}, ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =
-    (synthesis_packed_ml(SHTnsKit.GPU(), cfg, im, Q, ltr),
-     _amdgpu_vector_mode_synthesis(cfg, im, S, Tlm, ltr)...)
+                 Tlm::AMDGPU.AnyROCArray{U,1}, ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} = begin
+    stored_im, _, lcap = SHTnsKit._validate_stored_order(cfg, im, ltr)
+    (synthesis_packed_ml(SHTnsKit.GPU(), cfg, stored_im, Q, lcap),
+     _amdgpu_vector_mode_synthesis(cfg, stored_im, S, Tlm, lcap)...)
+end
 synthesis_qst_ml(cfg::SHTConfig, im::Integer, Q::AMDGPU.AnyROCArray{T,1},
                  S::AMDGPU.AnyROCArray{R,1}, Tlm::AMDGPU.AnyROCArray{U,1},
                  ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =

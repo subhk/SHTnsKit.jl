@@ -477,6 +477,48 @@ function run_shared_vector_kernel_reference(common, backend)
     @test all(isfinite, dtheta)
     @test all(isfinite, over_sin)
 
+    # Vector modes have no l=0 degree.  Analyze an independently synthesized
+    # axisymmetric mode and require the shared kernel to leave that logical
+    # storage slot finite and exactly zero while recovering active degrees.
+    lcap0 = cfg.lmax
+    S_mode0 = CT[0, 0.05 - 0.02im, -0.03 + 0.01im, 0.02 + 0.015im]
+    T_mode0 = CT[0, -0.025 + 0.01im, 0.015 - 0.005im, -0.01 + 0.02im]
+    Vt_mode0, Vp_mode0 = synthesis_sphtor_ml(
+        SHTnsKit.CPU(), cfg, 0, S_mode0, T_mode0, lcap0,
+    )
+    S_mode_out = fill(CT(91, -17), lcap0 + 1)
+    T_mode_out = fill(CT(-83, 23), lcap0 + 1)
+    event = common.vector_mode_analysis_kernel!(backend)(
+        S_mode_out, T_mode_out, Vt_mode0, Vp_mode0, dtheta, over_sin,
+        weights, scales, x, T(cfg.cphi), 0, lcap0, cfg.robert_form;
+        ndrange=lcap0 + 1,
+    )
+    event === nothing || wait(event)
+    @test isfinite(S_mode_out[1]) && iszero(S_mode_out[1])
+    @test isfinite(T_mode_out[1]) && iszero(T_mode_out[1])
+    @test all(isfinite, S_mode_out)
+    @test all(isfinite, T_mode_out)
+    @test S_mode_out[2:end] ≈ S_mode0[2:end] atol=4f-4 rtol=4f-4
+    @test T_mode_out[2:end] ≈ T_mode0[2:end] atol=4f-4 rtol=4f-4
+
+    # Synthesis and the spheroidal-only gradient convention must ignore l=0,
+    # even when its storage slot contains adversarial noise.
+    noisy_S0 = copy(S_mode0); noisy_T0 = copy(T_mode0)
+    noisy_S0[1] = CT(77, -31); noisy_T0[1] = CT(-59, 19)
+    Vt_shared = zeros(CT, cfg.nlat); Vp_shared = similar(Vt_shared)
+    event = common.vector_mode_synthesis_kernel!(backend)(
+        Vt_shared, Vp_shared, noisy_S0, noisy_T0, dtheta, over_sin,
+        scales, x, T(SHTnsKit.phi_inv_scale(cfg)), 0, lcap0,
+        cfg.robert_form; ndrange=cfg.nlat,
+    )
+    event === nothing || wait(event)
+    @test Vt_shared ≈ Vt_mode0 atol=8f-6 rtol=8f-6
+    @test Vp_shared ≈ Vp_mode0 atol=8f-6 rtol=8f-6
+    grad_ref = synthesis_grad_ml(SHTnsKit.CPU(), cfg, 0, noisy_S0, lcap0)
+    @test grad_ref == synthesis_sph_ml(
+        SHTnsKit.CPU(), cfg, 0, noisy_S0, lcap0,
+    )
+
     S_can, T_can = _vector_modes(cfg, T)
     S = _external_vector_coefficients(cfg, S_can)
     Tlm = _external_vector_coefficients(cfg, T_can)

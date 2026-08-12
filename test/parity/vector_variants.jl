@@ -94,6 +94,44 @@ function test_cpu_vector_variant_reds()
             @test qst[2] ≈ got[1] atol=tol rtol=tol
             @test qst[3] ≈ got[2] atol=tol rtol=tol
         end
+
+        cfg = _variant_cfg(Float32; mres=2)
+        stored32 = Int32(1)
+        physical_m = Int(stored32) * cfg.mres
+        ltr = cfg.lmax
+        Q = ComplexF32[0.03f0l - 0.01f0im for l in physical_m:ltr]
+        S = ComplexF32[0.02f0l + 0.015f0im for l in physical_m:ltr]
+        Tlm = ComplexF32[-0.01f0l + 0.005f0im for l in physical_m:ltr]
+        synthesized32 = synthesis_qst_ml(CPU(), cfg, stored32, Q, S, Tlm, ltr)
+        @test synthesized32 == synthesis_qst_ml(
+            CPU(), cfg, Int(stored32), Q, S, Tlm, ltr,
+        )
+        analyzed32 = analysis_qst_ml(CPU(), cfg, stored32, synthesized32..., ltr)
+        @test analyzed32[1] ≈ Q atol=3f-5 rtol=3f-5
+        @test analyzed32[2] ≈ S atol=3f-5 rtol=3f-5
+        @test analyzed32[3] ≈ Tlm atol=3f-5 rtol=3f-5
+
+        for invalid in (big(typemax(Int)) + 1, big(typemin(Int)) - 1)
+            for call in (
+                () -> synthesis_qst_ml(
+                    CPU(), cfg, invalid, Q, S, Tlm, ltr,
+                ),
+                () -> analysis_qst_ml(
+                    CPU(), cfg, invalid, synthesized32..., ltr,
+                ),
+            )
+                caught = try
+                    call()
+                    nothing
+                catch error
+                    error
+                end
+                @test caught isa ArgumentError
+                @test sprint(showerror, caught) ==
+                      "ArgumentError: im must be an Int-representable " *
+                      "stored-order index satisfying 0 <= im <= 3"
+            end
+        end
     end
 
     @testset "variant validation happens before work" begin
@@ -249,6 +287,8 @@ function test_gpu_vector_variant_contract(extension, matrix_real, matrix_complex
             (:synthesis_qst_l, Tuple{SHTConfig,matrix_complex,matrix_complex,matrix_complex,Int}),
             (:analysis_qst_ml, Tuple{SHTConfig,Int,vector_complex,vector_complex,vector_complex,Int}),
             (:synthesis_qst_ml, Tuple{SHTConfig,Int,vector_complex,vector_complex,vector_complex,Int}),
+            (:analysis_qst_ml, Tuple{SHTConfig,Int32,vector_complex,vector_complex,vector_complex,Int}),
+            (:synthesis_qst_ml, Tuple{SHTConfig,Int32,vector_complex,vector_complex,vector_complex,Int}),
             (:analysis_sphtor_batch, Tuple{SHTConfig,array3_real,array3_real}),
             (:synthesis_sphtor_batch, Tuple{SHTConfig,array3_complex,array3_complex}),
             (:analysis_qst_batch, Tuple{SHTConfig,array3_real,array3_real,array3_real}),
@@ -273,6 +313,10 @@ function test_gpu_vector_variant_contract(extension, matrix_real, matrix_complex
             (:synthesis_grad_ml, Tuple{SHTnsKit.GPU,SHTConfig,Int,vector_complex,Int}),
             (:synthesis_qst_l_cplx,
              Tuple{SHTnsKit.GPU,SHTConfig,matrix_complex,matrix_complex,matrix_complex,Int}),
+            (:analysis_qst_ml,
+             Tuple{SHTnsKit.GPU,SHTConfig,Int32,vector_complex,vector_complex,vector_complex,Int}),
+            (:synthesis_qst_ml,
+             Tuple{SHTnsKit.GPU,SHTConfig,Int32,vector_complex,vector_complex,vector_complex,Int}),
             (:synthesis_sphtor_batch_cplx,
              Tuple{SHTnsKit.GPU,SHTConfig,array3_complex,array3_complex}),
             (:synthesis_qst_batch_cplx,
@@ -281,6 +325,116 @@ function test_gpu_vector_variant_contract(extension, matrix_real, matrix_complex
         for (name, signature) in typed_signatures
             @test hasmethod(getproperty(SHTnsKit, name), signature)
         end
+    end
+    return nothing
+end
+
+"""Hardware-only fixed-mode l=0 and non-`Int` public dispatch checks."""
+function run_gpu_vector_mode_edge_parity(adapter::VectorParityAdapter)
+    @testset "GPU vector/QST `_ml` l=0 and Integer parity" begin
+        cfg = _variant_cfg(Float32; mres=2, norm=:schmidt,
+                           real_norm=true, cs_phase=false)
+        ltr = cfg.lmax
+        stored = Int32(0)
+        S = ComplexF32[0, 0.04 - 0.01im, -0.03 + 0.015im,
+                       0.02 + 0.01im, -0.015 - 0.005im,
+                       0.01 + 0.02im, -0.005 + 0.01im]
+        Tlm = ComplexF32[0, -0.025 + 0.01im, 0.02 - 0.005im,
+                         -0.01 + 0.015im, 0.008 + 0.004im,
+                         -0.006 + 0.003im, 0.004 - 0.002im]
+        Q = ComplexF32[0.03 + 0.01im, 0.02 - 0.005im, -0.01 + 0.004im,
+                       0.008 + 0.003im, -0.006 + 0.002im,
+                       0.004 - 0.001im, -0.003 + 0.002im]
+        Sd = vector_place(adapter, cfg, S, :spectral)
+        Td = vector_place(adapter, cfg, Tlm, :spectral)
+        Qd = vector_place(adapter, cfg, Q, :spectral)
+        expected_vector = synthesis_sphtor_ml(
+            SHTnsKit.CPU(), cfg, stored, S, Tlm, ltr,
+        )
+        typed_vector = synthesis_sphtor_ml(
+            SHTnsKit.GPU(), cfg, stored, Sd, Td, ltr,
+        )
+        inferred_vector = synthesis_sphtor_ml(cfg, stored, Sd, Td, ltr)
+        for (got, inferred, expected) in
+                zip(typed_vector, inferred_vector, expected_vector)
+            vector_resident(adapter, got); vector_resident(adapter, inferred)
+            @test eltype(got) === ComplexF32
+            @test vector_collect(adapter, got, cfg) ≈ expected atol=4f-4 rtol=4f-4
+            @test vector_collect(adapter, inferred, cfg) ≈ expected atol=4f-4 rtol=4f-4
+        end
+
+        for result in (
+            analysis_sphtor_ml(
+                SHTnsKit.GPU(), cfg, stored, typed_vector..., ltr,
+            ),
+            analysis_sphtor_ml(cfg, stored, inferred_vector..., ltr),
+        )
+            for (values, expected) in zip(result, (S, Tlm))
+                vector_resident(adapter, values)
+                host = vector_collect(adapter, values, cfg)
+                @test eltype(values) === ComplexF32
+                @test isfinite(host[1]) && iszero(host[1])
+                @test all(isfinite, host)
+                @test host[2:end] ≈ expected[2:end] atol=4f-4 rtol=4f-4
+            end
+        end
+
+        noisy_S = copy(S); noisy_S[1] = ComplexF32(71, -29)
+        noisy_Sd = vector_place(adapter, cfg, noisy_S, :spectral)
+        expected_grad = synthesis_grad_ml(
+            SHTnsKit.CPU(), cfg, stored, noisy_S, ltr,
+        )
+        for result in (
+            synthesis_grad_ml(
+                SHTnsKit.GPU(), cfg, stored, noisy_Sd, ltr,
+            ),
+            synthesis_grad_ml(cfg, stored, noisy_Sd, ltr),
+        )
+            for (values, expected) in zip(result, expected_grad)
+                vector_resident(adapter, values)
+                @test vector_collect(adapter, values, cfg) ≈
+                      expected atol=4f-4 rtol=4f-4
+            end
+        end
+
+        expected_qst = synthesis_qst_ml(
+            SHTnsKit.CPU(), cfg, stored, Q, S, Tlm, ltr,
+        )
+        typed_qst = synthesis_qst_ml(
+            SHTnsKit.GPU(), cfg, stored, Qd, Sd, Td, ltr,
+        )
+        inferred_qst = synthesis_qst_ml(cfg, stored, Qd, Sd, Td, ltr)
+        for (typed, inferred, expected) in zip(typed_qst, inferred_qst, expected_qst)
+            vector_resident(adapter, typed); vector_resident(adapter, inferred)
+            @test eltype(typed) === ComplexF32
+            @test vector_collect(adapter, typed, cfg) ≈ expected atol=4f-4 rtol=4f-4
+            @test vector_collect(adapter, inferred, cfg) ≈ expected atol=4f-4 rtol=4f-4
+        end
+        analyzed_qst = analysis_qst_ml(
+            SHTnsKit.GPU(), cfg, stored, typed_qst..., ltr,
+        )
+        inferred_analyzed_qst = analysis_qst_ml(cfg, stored, inferred_qst..., ltr)
+        for result in (analyzed_qst, inferred_analyzed_qst)
+            for (index, (values, expected)) in enumerate(zip(result, (Q, S, Tlm)))
+                vector_resident(adapter, values)
+                host = vector_collect(adapter, values, cfg)
+                @test all(isfinite, host)
+                if index > 1
+                    @test iszero(host[1])
+                    @test host[2:end] ≈ expected[2:end] atol=4f-4 rtol=4f-4
+                else
+                    @test host ≈ expected atol=4f-4 rtol=4f-4
+                end
+            end
+        end
+
+        invalid = big(typemax(Int)) + 1
+        @test_throws ArgumentError synthesis_qst_ml(
+            SHTnsKit.GPU(), cfg, invalid, Qd, Sd, Td, ltr,
+        )
+        @test_throws ArgumentError analysis_qst_ml(
+            SHTnsKit.GPU(), cfg, invalid, typed_qst..., ltr,
+        )
     end
     return nothing
 end

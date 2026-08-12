@@ -2,23 +2,106 @@
 # PencilArray operators
 ##########
 
+const _OPERATOR_STATS_LOCK = ReentrantLock()
+const _OPERATOR_STATS = Dict{Symbol,Int}(
+    :diagonal_payload_sent_elements => 0,
+    :narrow_payload_sent_elements => 0,
+)
+
+function _reset_operator_stats!()
+    lock(_OPERATOR_STATS_LOCK) do
+        for key in keys(_OPERATOR_STATS)
+            _OPERATOR_STATS[key] = 0
+        end
+    end
+    return nothing
+end
+
+function _operator_stats()
+    lock(_OPERATOR_STATS_LOCK) do
+        return (
+            diagonal_payload_sent_elements=
+                _OPERATOR_STATS[:diagonal_payload_sent_elements],
+            narrow_payload_sent_elements=
+                _OPERATOR_STATS[:narrow_payload_sent_elements],
+        )
+    end
+end
+
+function _validate_operator_pencils!(cfg, input::PencilArray,
+                                     output::PencilArray,
+                                     operation::Symbol;
+                                     comm=MPI.COMM_WORLD)
+    _validate_qst_pencil_communicators!(comm, (input, output), operation)
+    _validate_cfg_replicated(cfg, comm)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    _validate_scalar_pencil!(
+        cfg, input, expected, operation; comm, peer=output,
+        require_full_first_dim=true, required_decomposition=(2,),
+        require_complex_input=true,
+    )
+    _validate_scalar_pencil!(
+        cfg, output, expected, operation; comm, peer=input,
+        require_full_first_dim=true, required_decomposition=(2,),
+        require_complex_input=true,
+    )
+    _validate_identical_pencil_layout!(input, output, operation; comm)
+    flags = eltype(input) === eltype(output) ? UInt32(0) : UInt32(0x0004)
+    Base.mightalias(parent(input), parent(output)) && (flags |= 0x2000)
+    _collective_validation_error(comm, flags, operation)
+    return comm
+end
+
+function _validate_operator_matrix!(mx::AbstractVector{<:Real}, cfg,
+                                    comm, operation::Symbol)
+    code = _scalar_precision_code(eltype(mx))
+    flags = UInt32(0)
+    expected = 2cfg.nlm
+    length(mx) == expected || (flags |= 0x0001)
+    code == 0 && (flags |= 0x0004)
+    MPI.Allreduce(code, min, comm) == MPI.Allreduce(code, max, comm) ||
+        (flags |= 0x0004)
+
+    # Convert every valid representation to the same exact carrier before the
+    # collective: Float32 and Float64 values are represented exactly by
+    # Float64.  Invalid ranks still participate with the fixed configured
+    # length, so no rank can enter a differently shaped candidate collective.
+    values = zeros(Float64, expected)
+    if code != 0 && length(mx) == expected
+        @inbounds for k in eachindex(values)
+            values[k] = Float64(mx[k])
+            isfinite(values[k]) || (flags |= 0x4000)
+        end
+    end
+    reference = copy(values)
+    MPI.Bcast!(reference, 0, comm)
+    values == reference || (flags |= 0x4000)
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
 """
     dist_apply_laplacian!(cfg, Alm_pencil::PencilArray)
 
 In-place multiply by -l(l+1) for distributed Alm with dims (:l,:m). No communication.
 """
 function SHTnsKit.dist_apply_laplacian!(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray)
-    # Scalar-indexing the PencilArray avoids `.*=` on a row slice, which tries
-    # to construct a differently sized `similar` PencilArray and throws
-    # `DimensionMismatch`.
-    lloc = axes(Alm_pencil, 1); gl_l = collect(Int, globalindices(Alm_pencil, 1))
-    mloc = axes(Alm_pencil, 2)
-    @inbounds for (ii, il) in enumerate(lloc)
-        lval = gl_l[ii] - 1
-        factor = -(lval * (lval + 1))
-        for jm in mloc
-            Alm_pencil[il, jm] *= factor
-        end
+    comm = MPI.COMM_WORLD
+    _validate_qst_pencil_communicators!(comm, (Alm_pencil,), :dist_apply_laplacian!)
+    _validate_cfg_replicated(cfg, comm)
+    _validate_scalar_pencil!(
+        cfg, Alm_pencil, (cfg.lmax + 1, cfg.mmax + 1),
+        :dist_apply_laplacian!; comm, require_full_first_dim=true,
+        required_decomposition=(2,), require_complex_input=true,
+    )
+    l_globals = collect(Int, globalindices(Alm_pencil, 1))
+    m_globals = collect(Int, globalindices(Alm_pencil, 2))
+    values = parent(Alm_pencil)
+    @inbounds for (local_m, m_index) in pairs(m_globals),
+                  (local_l, l_index) in pairs(l_globals)
+        l = l_index - 1; m = m_index - 1
+        values[local_l, local_m] = m % cfg.mres == 0 && l >= max(1, m) ?
+            -(l * (l + 1)) * values[local_l, local_m] : zero(eltype(values))
     end
     return Alm_pencil
 end
@@ -26,67 +109,48 @@ end
 """
     dist_SH_mul_mx!(cfg, mx, Alm_pencil::PencilArray, R_pencil::PencilArray)
 
-Apply 3-diagonal operator to distributed Alm pencils using per-m Allgatherv of l-columns.
+Apply a three-diagonal operator to m-decomposed spectral pencils.  Every rank
+owns complete l columns for its local m orders, so l±1 neighbours are read from
+local storage and no payload communication is required.
 Forward pass: R[l,m] = mx[2*lm_prev+2]*Q[l-1,m] + mx[2*lm_next+1]*Q[l+1,m]
 where lm_prev = LM_index(l-1,m) and lm_next = LM_index(l+1,m).
 """
-function SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Alm_pencil::PencilArray, R_pencil::PencilArray)
-    lmax, mmax, mres = cfg.lmax, cfg.mmax, cfg.mres
-    lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
-    gl_l = collect(Int, globalindices(Alm_pencil, 1))
-    gl_m = collect(Int, globalindices(Alm_pencil, 2))
-    # This kernel reads the l±1 neighbours of every local coefficient out of a
-    # full l-column, so it is only valid when the l dimension is NOT distributed
-    # (the usual case: PencilArrays splits the last dim, m). That was asserted in
-    # a comment only — on an l-decomposed pencil the unowned entries of
-    # `col_full` stayed uninitialized and the operator silently returned garbage.
-    # Check it instead: the condition is rank-local and identical in form on
-    # every rank, so a violating pencil throws everywhere rather than deadlocking.
-    if length(gl_l) != lmax + 1
-        throw(ArgumentError("dist_SH_mul_mx! requires the l dimension to be local " *
-                            "(rank owns $(length(gl_l)) of $(lmax+1) degrees); " *
-                            "decompose the spectral pencil along m only"))
+function SHTnsKit.SH_mul_mx(::SHTnsKit.CPU, cfg::SHTnsKit.SHTConfig,
+                            mx::AbstractVector{<:Real},
+                            input::PencilArray, output::PencilArray)
+    comm = _validate_operator_pencils!(cfg, input, output, :SH_mul_mx)
+    _validate_operator_matrix!(mx, cfg, comm, :SH_mul_mx)
+    l_globals = collect(Int, globalindices(input, 1))
+    m_globals = collect(Int, globalindices(input, 2))
+    source = parent(input); destination = parent(output)
+    CT = promote_type(eltype(input), eltype(output), complex(eltype(mx)))
+    @inbounds for (local_m, m_index) in pairs(m_globals),
+                  (local_l, l_index) in pairs(l_globals)
+        l = l_index - 1; m = m_index - 1
+        acc = zero(CT)
+        if m % cfg.mres == 0 && l >= m
+            if l > m
+                below = SHTnsKit.LM_index(cfg.lmax, cfg.mres, l - 1, m)
+                acc += mx[2below + 2] * source[local_l - 1, local_m]
+            end
+            if l < cfg.lmax
+                above = SHTnsKit.LM_index(cfg.lmax, cfg.mres, l + 1, m)
+                acc += mx[2above + 1] * source[local_l + 1, local_m]
+            end
+        end
+        destination[local_l, local_m] = acc
     end
-    CT = promote_type(eltype(Alm_pencil), eltype(R_pencil), complex(eltype(mx)))  # AD/Float32-safe
-    col_full = zeros(CT, lmax + 1)
-    for (jj, jm) in enumerate(mloc)
-        mval = gl_m[jj] - 1
-        # Columns this operator does not compute must still be DEFINED: the
-        # caller's `R_pencil` is typically freshly `undef`-allocated, so a bare
-        # `continue` would leave them holding garbage rather than the zero the
-        # operator implies. Zero, then skip.
-        #   * m > mmax          — outside the spectral band (dealiased grids)
-        #   * m % mres != 0     — not a stored order; `LM_index` throws on these
-        if mval > mmax || (mval % mres != 0)
-            @inbounds for il in lloc
-                R_pencil[il, jm] = zero(eltype(R_pencil))
-            end
-            continue
-        end
-        # Extract the full l-column from local data
-        @inbounds for (ii, il) in enumerate(lloc)
-            col_full[gl_l[ii]] = Alm_pencil[il, jm]
-        end
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            acc = zero(CT)
-            # Contribution from lower neighbor Y_{l-1}^m (uses mx[2*lm_prev + 2])
-            if lval > mval && lval > 0
-                lm_prev = SHTnsKit.LM_index(lmax, mres, lval - 1, mval)
-                c_from_below = mx[2*lm_prev + 2]  # b_{l-1}^m coefficient
-                acc += c_from_below * col_full[lval]  # col_full[lval] = Q[l-1,m]
-            end
-            # Contribution from upper neighbor Y_{l+1}^m (uses mx[2*lm_next + 1])
-            if lval < lmax && lval + 1 >= mval
-                lm_next = SHTnsKit.LM_index(lmax, mres, lval + 1, mval)
-                c_from_above = mx[2*lm_next + 1]  # a_{l+1}^m coefficient
-                acc += c_from_above * col_full[lval + 2]  # col_full[lval+2] = Q[l+1,m]
-            end
-            R_pencil[il, jm] = acc
-        end
-    end
-    return R_pencil
+    return output
 end
+
+SHTnsKit.SH_mul_mx(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real},
+                   input::PencilArray, output::PencilArray) =
+    SHTnsKit.SH_mul_mx(SHTnsKit.CPU(), cfg, mx, input, output)
+
+SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig,
+                         mx::AbstractVector{<:Real}, input::PencilArray,
+                         output::PencilArray) =
+    SHTnsKit.SH_mul_mx(SHTnsKit.CPU(), cfg, mx, input, output)
 
 """
     dist_spatial_divergence(cfg, Vtθφ, Vpθφ; prototype_θφ=Vtθφ, use_rfft=false, real_output=true)

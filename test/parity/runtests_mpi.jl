@@ -12,6 +12,7 @@ include("sphtor_full.jl")
 include("qst_full.jl")
 include("vector_variants.jl")
 include("local_evaluation.jl")
+include("operators.jl")
 
 struct MPIScalarAdapter <: ScalarParityAdapter
     comm
@@ -367,7 +368,8 @@ end
 adapter = MPIScalarAdapter(MPI.COMM_WORLD)
 vector_adapter = MPIVectorAdapter(MPI.COMM_WORLD)
 qst_adapter = MPIQSTAdapter(MPI.COMM_WORLD)
-if isempty(ARGS) || (!("sphtor_full" in ARGS) && !("qst_full" in ARGS))
+if isempty(ARGS) || (!("sphtor_full" in ARGS) && !("qst_full" in ARGS) &&
+                     !("operators" in ARGS))
 # Exercise every mathematical axis without taking their full Cartesian product:
 # each Pencil construction owns an MPI Cartesian communicator, and a giant
 # product needlessly exhausts MPI implementations with a 2048-context limit.
@@ -2195,6 +2197,109 @@ if isempty(ARGS) || "local_evaluation" in ARGS
             @test extension._local_evaluation_stats().payload_reductions == 0
             MPI.Barrier(comm)
         end
+    end
+end
+
+if isempty(ARGS) || "operators" in ARGS
+    @testset "MPI spectral operator parity" begin
+        comm = MPI.COMM_WORLD
+        rank = MPI.Comm_rank(comm)
+        extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+        cfg = create_gauss_config(
+            6, 9; mmax=2, nlon=16, mres=2, norm=:schmidt,
+            real_norm=true, cs_phase=false,
+        )
+        dense = reshape(
+            ComplexF32.(1:((cfg.lmax + 1) * (cfg.mmax + 1))),
+            cfg.lmax + 1, cfg.mmax + 1,
+        )
+        source = matrix_to_spectral_pencil(cfg, dense; comm)
+        output = PencilArray{ComplexF32}(undef, pencil(source))
+        fill!(parent(output), ComplexF32(91, -17))
+
+        extension._reset_operator_stats!()
+        divergence = divergence_from_spheroidal(cfg, source)
+        @test divergence isa PencilArray
+        @test spectral_pencil_to_matrix(cfg, divergence) ==
+              divergence_from_spheroidal(cfg, dense)
+        @test extension._operator_stats().diagonal_payload_sent_elements == 0
+        MPI.Barrier(comm)
+
+        # The existing compatibility Laplacian is the same diagonal operator,
+        # remains local-only, and filters l=0/l<m/nonstored m exactly.
+        lap = matrix_to_spectral_pencil(cfg, dense; comm)
+        extension._reset_operator_stats!()
+        @test SHTnsKit.dist_apply_laplacian!(cfg, lap) === lap
+        @test spectral_pencil_to_matrix(cfg, lap) ==
+              divergence_from_spheroidal(cfg, dense)
+        @test extension._operator_stats().diagonal_payload_sent_elements == 0
+
+        mx = zeros(Float32, 2cfg.nlm)
+        mul_ct_matrix(cfg, mx)
+        reference_packed = zeros(ComplexF32, cfg.nlm)
+        SH_mul_mx(cfg, mx, SHTnsKit.pack_lm(cfg, dense), reference_packed)
+        reference = SHTnsKit.unpack_lm(cfg, reference_packed)
+        extension._reset_operator_stats!()
+        @test SH_mul_mx(SHTnsKit.CPU(), cfg, mx, source, output) === output
+        @test spectral_pencil_to_matrix(cfg, output) == reference
+        @test extension._operator_stats().narrow_payload_sent_elements == 0
+        fill!(parent(output), ComplexF32(91, -17))
+        @test SHTnsKit.dist_SH_mul_mx!(cfg, mx, source, output) === output
+        @test spectral_pencil_to_matrix(cfg, output) == reference
+
+        # Replicated coefficients must be compared elementwise.  These rank-0
+        # perturbations deliberately preserve the two historical weighted
+        # checksums and the extrema, so summary-only validation cannot detect
+        # them.
+        colliding_mx = ones(Float32, 2cfg.nlm)
+        colliding_mx[1] = -100
+        colliding_mx[end] = 100
+        if rank == 0
+            colliding_mx[2] += 6 / 128
+            colliding_mx[3] -= 8 / 128
+            colliding_mx[4] += 3 / 128
+        end
+        fill!(parent(output), ComplexF32(27, -5))
+        sentinel = copy(parent(output))
+        extension._reset_operator_stats!()
+        @test _all_ranks_catch(
+            comm; message_contains="rank-varying operator matrix",
+        ) do
+            SH_mul_mx(cfg, colliding_mx, source, output)
+        end
+        @test parent(output) == sentinel
+        @test extension._operator_stats().narrow_payload_sent_elements == 0
+        MPI.Barrier(comm)
+
+        # Four ranks over three m columns includes a zero-element owner and is
+        # still a valid local no-payload execution.
+        minimum_owned = MPI.Allreduce(length(parent(source)), min, comm)
+        MPI.Comm_size(comm) < 4 || @test minimum_owned == 0
+
+        # Rank-varying malformed layouts are rejected collectively on the
+        # trusted communicator before output mutation or payload traffic.
+        bad_pen = Pencil((cfg.lmax + 2, cfg.mmax + 1), (2,), comm)
+        malformed = PencilArray{ComplexF32}(undef, bad_pen)
+        fill!(parent(malformed), ComplexF32(3, -2))
+        candidate = rank == 0 ? malformed : source
+        fill!(parent(output), ComplexF32(27, -5))
+        sentinel = copy(parent(output))
+        extension._reset_operator_stats!()
+        @test _all_ranks_catch(comm; message_contains="global shape mismatch") do
+            SH_mul_mx(cfg, mx, candidate, output)
+        end
+        @test parent(output) == sentinel
+        @test extension._operator_stats().narrow_payload_sent_elements == 0
+        MPI.Barrier(comm)
+
+        self_source = matrix_to_spectral_pencil(cfg, dense; comm=MPI.COMM_SELF)
+        bad_comm_source = rank == 0 ? self_source : source
+        extension._reset_operator_stats!()
+        @test _all_ranks_catch(comm; message_contains="communicator mismatch") do
+            divergence_from_spheroidal(cfg, bad_comm_source)
+        end
+        @test extension._operator_stats().diagonal_payload_sent_elements == 0
+        MPI.Barrier(comm)
     end
 end
 

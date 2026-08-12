@@ -8,7 +8,9 @@ using KernelAbstractions
 using FFTW
 
 include("GPUCommon.jl")
-using .GPUCommon: legendre_table_kernel!, scalar_analysis_kernel!,
+using .GPUCommon: laplacian_kernel!, operator_matrix_kernel!,
+                  packed_operator_kernel!, legendre_table_kernel!,
+                  scalar_analysis_kernel!,
                   scalar_synthesis_kernel!, coefficient_conversion_kernel!,
                   coefficient_batch_conversion_kernel!,
                   real_pack_kernel!, real_unpack_kernel!,
@@ -60,6 +62,7 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  spheroidal_from_divergence, spheroidal_from_divergence!,
                  vorticity_from_toroidal, vorticity_from_toroidal!,
                  toroidal_from_vorticity, toroidal_from_vorticity!,
+                 mul_ct_matrix, st_dt_matrix, SH_mul_mx,
                  analysis!, synthesis!, analysis_sphtor!, synthesis_sphtor!,
                  synthesis_point, synthesis_point_cplx,
                  SH_to_lat, SH_to_lat_cplx, SHqst_to_point, SHqst_to_lat,
@@ -69,6 +72,8 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
                  _gpu_adapter_analysis_sphtor,
                  _gpu_adapter_synthesis_sphtor, _gpu_adapter_clear_cache!
+
+import SHTnsKit: gpu_apply_laplacian!
 
 mutable struct AMDGPUAdapter end
 const AMDGPU_ADAPTER = AMDGPUAdapter()
@@ -1111,34 +1116,140 @@ function _amdgpu_vector_diagonal!(output::AMDGPU.AnyROCArray,
     eltype(output) === eltype(input) || throw(ArgumentError(
         "vector operator input and output element types must match",
     ))
+    source = output === input || !Base.mightalias(output, input) ? input : copy(input)
     vector_diagonal_kernel!(ROCBackend())(
-        output, input, cfg.lmax, cfg.mmax, cfg.mres, inverse;
+        output, source, cfg.lmax, cfg.mmax, cfg.mres, inverse;
         ndrange=expected,
     )
     AMDGPU.synchronize()
     return output
 end
 
+function _amdgpu_operator_matrix!(cfg::SHTConfig,
+                                  mx::AMDGPU.AnyROCArray{T,1},
+                                  derivative::Bool) where {T<:Real}
+    _require_amdgpu(derivative ? :st_dt_matrix : :mul_ct_matrix)
+    length(mx) == 2cfg.nlm || throw(DimensionMismatch(
+        "mx length must be 2*nlm=$(2cfg.nlm)",
+    ))
+    metadata = SHTnsKit._gpu_operator_metadata(cfg, T)
+    li = ROCArray(metadata.li); mi = ROCArray(metadata.mi)
+    down = ROCArray(metadata.down_ratios); up = ROCArray(metadata.up_ratios)
+    operator_matrix_kernel!(ROCBackend())(
+        mx, li, mi, down, up, cfg.lmax, derivative; ndrange=cfg.nlm,
+    )
+    AMDGPU.synchronize()
+    return mx
+end
+
+mul_ct_matrix(::SHTnsKit.GPU, cfg::SHTConfig,
+              mx::AMDGPU.AnyROCArray{T,1}) where {T<:Real} =
+    _amdgpu_operator_matrix!(cfg, mx, false)
+mul_ct_matrix(cfg::SHTConfig, mx::AMDGPU.AnyROCArray{T,1}) where {T<:Real} =
+    mul_ct_matrix(SHTnsKit.GPU(), cfg, mx)
+st_dt_matrix(::SHTnsKit.GPU, cfg::SHTConfig,
+             mx::AMDGPU.AnyROCArray{T,1}) where {T<:Real} =
+    _amdgpu_operator_matrix!(cfg, mx, true)
+st_dt_matrix(cfg::SHTConfig, mx::AMDGPU.AnyROCArray{T,1}) where {T<:Real} =
+    st_dt_matrix(SHTnsKit.GPU(), cfg, mx)
+
+function SH_mul_mx(::SHTnsKit.GPU, cfg::SHTConfig,
+                   mx::AMDGPU.AnyROCArray{<:Real,1},
+                   input::AMDGPU.AnyROCArray{<:Complex,1},
+                   output::AMDGPU.AnyROCArray{<:Complex,1})
+    _require_amdgpu(:SH_mul_mx)
+    length(mx) == 2cfg.nlm || throw(DimensionMismatch(
+        "mx length must be 2*nlm=$(2cfg.nlm)",
+    ))
+    length(input) == cfg.nlm || throw(DimensionMismatch(
+        "Qlm length must be nlm=$(cfg.nlm)",
+    ))
+    length(output) == cfg.nlm || throw(DimensionMismatch(
+        "Rlm length must be nlm=$(cfg.nlm)",
+    ))
+    Base.mightalias(input, output) && throw(ArgumentError(
+        "SH_mul_mx input and output must not alias",
+    ))
+    T = typeof(real(zero(eltype(mx))))
+    metadata = SHTnsKit._gpu_operator_metadata(cfg, T)
+    lower = ROCArray(metadata.lower); upper = ROCArray(metadata.upper)
+    packed_operator_kernel!(ROCBackend())(
+        output, input, mx, lower, upper; ndrange=cfg.nlm,
+    )
+    AMDGPU.synchronize()
+    return output
+end
+
+SH_mul_mx(cfg::SHTConfig, mx::AMDGPU.AnyROCArray{<:Real,1},
+          input::AMDGPU.AnyROCArray{<:Complex,1},
+          output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    SH_mul_mx(SHTnsKit.GPU(), cfg, mx, input, output)
+
+function gpu_apply_laplacian!(cfg::SHTConfig, coeffs::AMDGPU.AnyROCArray;
+                              device=SHTnsKit.GPU())
+    device isa SHTnsKit.GPU || throw(ArgumentError(
+        "gpu_apply_laplacian! requires GPU(), got $(typeof(device))",
+    ))
+    _require_amdgpu(:gpu_apply_laplacian!)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(coeffs) == expected || throw(DimensionMismatch(
+        "coeffs must have size $expected",
+    ))
+    laplacian_kernel!(ROCBackend())(
+        coeffs, coeffs, cfg.lmax, cfg.mmax, cfg.mres; ndrange=expected,
+    )
+    AMDGPU.synchronize()
+    return coeffs
+end
+
 divergence_from_spheroidal(cfg::SHTConfig, input::AMDGPU.AnyROCArray) =
     divergence_from_spheroidal!(cfg, similar(input), input)
+divergence_from_spheroidal(::SHTnsKit.GPU, cfg::SHTConfig,
+                           input::AMDGPU.AnyROCArray) =
+    divergence_from_spheroidal(cfg, input)
 divergence_from_spheroidal!(cfg::SHTConfig, output::AMDGPU.AnyROCArray,
                             input::AMDGPU.AnyROCArray) =
     _amdgpu_vector_diagonal!(output, cfg, input; inverse=false)
+divergence_from_spheroidal!(::SHTnsKit.GPU, cfg::SHTConfig,
+                            output::AMDGPU.AnyROCArray,
+                            input::AMDGPU.AnyROCArray) =
+    divergence_from_spheroidal!(cfg, output, input)
 spheroidal_from_divergence(cfg::SHTConfig, input::AMDGPU.AnyROCArray) =
     spheroidal_from_divergence!(cfg, similar(input), input)
+spheroidal_from_divergence(::SHTnsKit.GPU, cfg::SHTConfig,
+                           input::AMDGPU.AnyROCArray) =
+    spheroidal_from_divergence(cfg, input)
 spheroidal_from_divergence!(cfg::SHTConfig, output::AMDGPU.AnyROCArray,
                             input::AMDGPU.AnyROCArray) =
     _amdgpu_vector_diagonal!(output, cfg, input; inverse=true)
+spheroidal_from_divergence!(::SHTnsKit.GPU, cfg::SHTConfig,
+                            output::AMDGPU.AnyROCArray,
+                            input::AMDGPU.AnyROCArray) =
+    spheroidal_from_divergence!(cfg, output, input)
 vorticity_from_toroidal(cfg::SHTConfig, input::AMDGPU.AnyROCArray) =
     vorticity_from_toroidal!(cfg, similar(input), input)
+vorticity_from_toroidal(::SHTnsKit.GPU, cfg::SHTConfig,
+                        input::AMDGPU.AnyROCArray) =
+    vorticity_from_toroidal(cfg, input)
 vorticity_from_toroidal!(cfg::SHTConfig, output::AMDGPU.AnyROCArray,
                          input::AMDGPU.AnyROCArray) =
     _amdgpu_vector_diagonal!(output, cfg, input; inverse=false)
+vorticity_from_toroidal!(::SHTnsKit.GPU, cfg::SHTConfig,
+                         output::AMDGPU.AnyROCArray,
+                         input::AMDGPU.AnyROCArray) =
+    vorticity_from_toroidal!(cfg, output, input)
 toroidal_from_vorticity(cfg::SHTConfig, input::AMDGPU.AnyROCArray) =
     toroidal_from_vorticity!(cfg, similar(input), input)
+toroidal_from_vorticity(::SHTnsKit.GPU, cfg::SHTConfig,
+                        input::AMDGPU.AnyROCArray) =
+    toroidal_from_vorticity(cfg, input)
 toroidal_from_vorticity!(cfg::SHTConfig, output::AMDGPU.AnyROCArray,
                          input::AMDGPU.AnyROCArray) =
     _amdgpu_vector_diagonal!(output, cfg, input; inverse=true)
+toroidal_from_vorticity!(::SHTnsKit.GPU, cfg::SHTConfig,
+                         output::AMDGPU.AnyROCArray,
+                         input::AMDGPU.AnyROCArray) =
+    toroidal_from_vorticity!(cfg, output, input)
 
 @inline function _amdgpu_lcap(cfg::SHTConfig, ltr::Integer)
     return SHTnsKit._validate_degree_limit(cfg, ltr)

@@ -183,6 +183,8 @@ function _collective_validation_error(comm, local_flags::UInt32, operation::Symb
     flags & 0x0400 != 0 && push!(descriptions, "real-valued input required")
     flags & 0x0800 != 0 && push!(descriptions, "invalid or rank-varying use_tables")
     flags & 0x1000 != 0 && push!(descriptions, "rank-varying return_pencil")
+    flags & 0x2000 != 0 && push!(descriptions, "input/output alias is unsupported")
+    flags & 0x4000 != 0 && push!(descriptions, "rank-varying operator matrix")
     throw(ArgumentError("$operation collective validation failed: $(join(descriptions, ", "))"))
 end
 

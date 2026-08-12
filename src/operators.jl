@@ -104,7 +104,8 @@ Out-of-range neighbors (l<m or l>lmax) are automatically ignored.
 
 Fill `mx` with coupling coefficients for cosθ operator: cosθ Y_l^m = a_l^m Y_{l-1}^m + b_l^m Y_{l+1}^m.
 """
-function mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real})
+function _operator_matrix!(cfg::SHTConfig, mx::AbstractVector{<:Real},
+                           derivative::Bool)
     # Validate coefficient matrix size (2 coefficients per (l,m) mode)
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
     
@@ -115,17 +116,61 @@ function mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real})
         
         # Coupling coefficient to Y_{l-1}^m (downward in degree)
         # From recurrence: cos(θ) Y_l^m = a_l^m Y_{l-1}^m + b_l^m Y_{l+1}^m
-        a = (l == 0) ? 0.0 : sqrt(max(0.0, (l^2 - m^2) / ((2l - 1) * (2l + 1))))
+        a = (l == 0 || l == m) ? 0.0 :
+            sqrt(max(0.0, (l^2 - m^2) / ((2l - 1) * (2l + 1))))
         
         # Coupling coefficient to Y_{l+1}^m (upward in degree)  
-        b = (l == cfg.lmax) ? 0.0 : sqrt(max(0.0, ((l + 1)^2 - m^2) / ((2l + 1) * (2l + 3))))
+        b = (l == cfg.lmax) ? 0.0 :
+            sqrt(max(0.0, ((l + 1)^2 - m^2) / ((2l + 1) * (2l + 3))))
+
+        # mx acts on the configured coefficients at the public boundary.  The
+        # orthonormal recurrence therefore needs the source/destination
+        # coefficient-scale ratio for conventions whose scale varies with l
+        # (Schmidt).  CS and REAL_NORM cancel because both neighbours share m.
+        source_scale = coefficient_scale_to_canonical(cfg, l, m)
+        if a != 0
+            a *= source_scale / coefficient_scale_to_canonical(cfg, l - 1, m)
+        end
+        if b != 0
+            b *= source_scale / coefficient_scale_to_canonical(cfg, l + 1, m)
+        end
         
         # Store in packed format: [c_minus, c_plus] for each (l,m)
-        mx[2*lm0 + 1] = a  # Coefficient for Y_{l-1}^m
-        mx[2*lm0 + 2] = b  # Coefficient for Y_{l+1}^m
+        mx[2*lm0 + 1] = derivative ? -(l + 1) * a : a
+        mx[2*lm0 + 2] = derivative ? l * b : b
     end
     return mx
 end
+
+"""Typed host metadata consumed by the vendor-neutral coefficient kernels."""
+function _gpu_operator_metadata(cfg::SHTConfig, ::Type{T}) where {T<:Real}
+    li = Int32.(cfg.li)
+    mi = Int32.(cfg.mi)
+    down_ratios = ones(T, cfg.nlm)
+    up_ratios = ones(T, cfg.nlm)
+    lower = zeros(Int32, cfg.nlm)
+    upper = zeros(Int32, cfg.nlm)
+    @inbounds for k in 1:cfg.nlm
+        l = cfg.li[k]; m = cfg.mi[k]
+        source = coefficient_scale_to_canonical(cfg, l, m)
+        if l > m
+            down_ratios[k] = T(source /
+                coefficient_scale_to_canonical(cfg, l - 1, m))
+            lower[k] = LM_index(cfg.lmax, cfg.mres, l - 1, m) + 1
+        end
+        if l < cfg.lmax
+            up_ratios[k] = T(source /
+                coefficient_scale_to_canonical(cfg, l + 1, m))
+            upper[k] = LM_index(cfg.lmax, cfg.mres, l + 1, m) + 1
+        end
+    end
+    return (; li, mi, down_ratios, up_ratios, lower, upper)
+end
+
+mul_ct_matrix(::CPU, cfg::SHTConfig, mx::AbstractVector{<:Real}) =
+    _operator_matrix!(cfg, mx, false)
+mul_ct_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real}) =
+    mul_ct_matrix(CPU(), cfg, mx)
 
 """
     st_dt_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real})
@@ -133,30 +178,10 @@ end
 Fill `mx` with coupling coefficients for sinθ ∂_θ operator:
 sinθ ∂_θ Y_l^m = l b_l^m Y_{l+1}^m - (l+1) a_l^m Y_{l-1}^m.
 """
-function st_dt_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real})
-    # Validate coefficient matrix size (2 coefficients per (l,m) mode)
-    length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
-    
-    # Fill coupling coefficients for the sin(θ) ∂/∂θ operator
-    @inbounds for lm0 in 0:(cfg.nlm-1)
-        l = cfg.li[lm0+1]  # Degree for this packed index
-        m = cfg.mi[lm0+1]  # Order for this packed index
-        
-        # Base coupling coefficients (same as cos(θ) operator)
-        a = (l == 0) ? 0.0 : sqrt(max(0.0, (l^2 - m^2) / ((2l - 1) * (2l + 1))))
-        b = (l == cfg.lmax) ? 0.0 : sqrt(max(0.0, ((l + 1)^2 - m^2) / ((2l + 1) * (2l + 3))))
-        
-        # Apply derivative operator weights
-        # sin(θ) ∂/∂θ Y_l^m = l b_l^m Y_{l+1}^m - (l+1) a_l^m Y_{l-1}^m
-        c_minus = -(l + 1) * a  # Coefficient for Y_{l-1}^m (negative contribution)
-        c_plus  =  l * b        # Coefficient for Y_{l+1}^m (positive contribution)
-        
-        # Store in packed format: [c_minus, c_plus] for each (l,m)
-        mx[2*lm0 + 1] = c_minus  # Coefficient for Y_{l-1}^m  
-        mx[2*lm0 + 2] = c_plus   # Coefficient for Y_{l+1}^m
-    end
-    return mx
-end
+st_dt_matrix(::CPU, cfg::SHTConfig, mx::AbstractVector{<:Real}) =
+    _operator_matrix!(cfg, mx, true)
+st_dt_matrix(cfg::SHTConfig, mx::AbstractVector{<:Real}) =
+    st_dt_matrix(CPU(), cfg, mx)
 
 """
     SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
@@ -170,11 +195,15 @@ Both `Qlm` and `Rlm` are length `cfg.nlm` packed vectors (m≥0, SHTns LM order)
     (`Rlm === Qlm`) reads already-mutated values and gives wrong results. Use a
     separate output buffer.
 """
-function SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
+function SH_mul_mx(::CPU, cfg::SHTConfig, mx::AbstractVector{<:Real},
+                   Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex})
     # Validate input array dimensions
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
     length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be nlm=$(cfg.nlm)"))
     length(Rlm) == cfg.nlm || throw(DimensionMismatch("Rlm length must be nlm=$(cfg.nlm)"))
+    Base.mightalias(Qlm, Rlm) && throw(ArgumentError(
+        "SH_mul_mx input and output must not alias",
+    ))
     
     lmax = cfg.lmax; mres = cfg.mres
     
@@ -209,3 +238,6 @@ function SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real}, Qlm::AbstractVect
     return Rlm
 end
 
+SH_mul_mx(cfg::SHTConfig, mx::AbstractVector{<:Real},
+          Qlm::AbstractVector{<:Complex}, Rlm::AbstractVector{<:Complex}) =
+    SH_mul_mx(CPU(), cfg, mx, Qlm, Rlm)

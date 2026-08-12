@@ -358,7 +358,10 @@ function _pencil_vector_diagonal!(output::PencilArray,
                                   input::PencilArray;
                                   inverse::Bool,
                                   operation::Symbol)
-    comm = communicator(input)
+    comm = MPI.COMM_WORLD
+    _validate_qst_pencil_communicators!(
+        comm, (input, output), operation,
+    )
     _validate_cfg_replicated(cfg, comm)
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     _validate_scalar_pencil!(

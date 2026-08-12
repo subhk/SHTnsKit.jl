@@ -11,8 +11,26 @@ include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
 include("../../parity/local_evaluation.jl")
+include("../../parity/operators.jl")
 
 struct AMDGPUScalarAdapter <: ScalarParityAdapter end
+struct AMDGPUOperatorAdapter <: GPUOperatorAdapter end
+operator_place(::AMDGPUOperatorAdapter, value) = ROCArray(value)
+function operator_strided_place(::AMDGPUOperatorAdapter, value::AbstractVector)
+    storage = AMDGPU.zeros(eltype(value), 2length(value))
+    result = @view storage[1:2:end]
+    copyto!(result, ROCArray(value))
+    return result
+end
+function operator_overlapping_matrix_place(::AMDGPUOperatorAdapter, value)
+    storage = AMDGPU.zeros(eltype(value), size(value, 1) + 1, size(value, 2))
+    source = @view storage[1:size(value, 1), :]
+    destination = @view storage[2:(size(value, 1) + 1), :]
+    copyto!(source, ROCArray(value))
+    return source, destination
+end
+operator_collect(::AMDGPUOperatorAdapter, value) = Array(value)
+operator_resident(::AMDGPUOperatorAdapter, value) = @test value isa AMDGPU.AnyROCArray
 function place(::AMDGPUScalarAdapter, ::SHTConfig, value, ::Symbol)
     if value isa PermutedDimsArray
         padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
@@ -145,6 +163,19 @@ end
     @test isdefined(extension.GPUCommon, :vector_analysis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_synthesis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_diagonal_kernel!)
+    @test isdefined(extension.GPUCommon, :operator_matrix_kernel!)
+    @test isdefined(extension.GPUCommon, :packed_operator_kernel!)
+    @test which(mul_ct_matrix,
+                Tuple{SHTnsKit.GPU,SHTConfig,ROCArray{Float32,1}}).module === extension
+    @test which(st_dt_matrix,
+                Tuple{SHTnsKit.GPU,SHTConfig,ROCArray{Float32,1}}).module === extension
+    @test which(SH_mul_mx,
+                Tuple{SHTnsKit.GPU,SHTConfig,ROCArray{Float32,1},
+                      ROCArray{ComplexF32,1},ROCArray{ComplexF32,1}}).module === extension
+    @test which(divergence_from_spheroidal,
+                Tuple{SHTnsKit.GPU,SHTConfig,ROCArray{ComplexF32,2}}).module === extension
+    @test which(gpu_apply_laplacian!,
+                Tuple{SHTConfig,ROCArray{ComplexF32,2}}).module === extension
     @test isdefined(extension.GPUCommon, :local_scalar_kernel!)
     @test isdefined(extension.GPUCommon, :local_complex_kernel!)
     @test isdefined(extension.GPUCommon, :local_qst_kernel!)
@@ -279,6 +310,7 @@ end
     run_shared_scalar_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_shared_scalar_variant_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_shared_vector_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
+    run_shared_operator_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_scalar_workspace_cache_reference(extension.GPUCommon)
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitAMDGPUExt.jl"), String)
     local_table_builder = split(
@@ -519,5 +551,6 @@ end
             AMDGPULocalEvaluationAdapter(), extension._amdgpu_clear_scalar_cache!,
         )
         run_local_evaluation_parity(AMDGPULocalEvaluationAdapter())
+        run_gpu_operator_parity(AMDGPUOperatorAdapter())
     end
 end

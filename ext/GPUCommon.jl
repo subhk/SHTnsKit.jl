@@ -3,7 +3,8 @@ module GPUCommon
 using KernelAbstractions
 using SHTnsKit
 
-export laplacian_kernel!, legendre_table_kernel!, scalar_analysis_kernel!,
+export laplacian_kernel!, operator_matrix_kernel!, packed_operator_kernel!,
+       legendre_table_kernel!, scalar_analysis_kernel!,
        scalar_synthesis_kernel!, coefficient_conversion_kernel!,
        coefficient_batch_conversion_kernel!,
        real_pack_kernel!, real_unpack_kernel!,
@@ -957,13 +958,53 @@ end
 
 # Device-neutral kernels live here. Vendor extensions own array placement,
 # FFT libraries, synchronization, device selection, and runtime inspection.
-@kernel function laplacian_kernel!(output, input, lmax, mmax)
+@kernel function operator_matrix_kernel!(mx, li, mi, down_ratios, up_ratios,
+                                         lmax, derivative)
+    k = @index(Global, Linear)
+    if k <= length(li)
+        l = li[k]
+        m = mi[k]
+        T = eltype(mx)
+        down = zero(T)
+        up = zero(T)
+        if l > m
+            down = sqrt(max(zero(T), T(l*l - m*m) /
+                T((2l - 1) * (2l + 1)))) * down_ratios[k]
+        end
+        if l < lmax
+            up = sqrt(max(zero(T), T((l + 1)^2 - m*m) /
+                T((2l + 1) * (2l + 3)))) * up_ratios[k]
+        end
+        mx[2k - 1] = derivative ? -T(l + 1) * down : down
+        mx[2k] = derivative ? T(l) * up : up
+    end
+end
+
+@kernel function packed_operator_kernel!(output, input, mx, lower, upper)
+    k = @index(Global, Linear)
+    if k <= length(input)
+        acc = zero(eltype(output))
+        below = lower[k]
+        above = upper[k]
+        if below > 0
+            acc += mx[2below] * input[below]
+        end
+        if above > 0
+            acc += mx[2above - 1] * input[above]
+        end
+        output[k] = acc
+    end
+end
+
+@kernel function laplacian_kernel!(output, input, lmax, mmax, mres)
     l, m = @index(Global, NTuple)
     if l <= lmax + 1 && m <= mmax + 1
         l_val = l - 1
         m_val = m - 1
-        if l_val >= m_val
+        if l_val >= max(1, m_val) && m_val % mres == 0
             output[l, m] = -l_val * (l_val + 1) * input[l, m]
+        else
+            output[l, m] = zero(eltype(output))
         end
     end
 end

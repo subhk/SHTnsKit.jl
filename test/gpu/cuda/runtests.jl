@@ -11,8 +11,26 @@ include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
 include("../../parity/local_evaluation.jl")
+include("../../parity/operators.jl")
 
 struct CUDAScalarAdapter <: ScalarParityAdapter end
+struct CUDAOperatorAdapter <: GPUOperatorAdapter end
+operator_place(::CUDAOperatorAdapter, value) = CuArray(value)
+function operator_strided_place(::CUDAOperatorAdapter, value::AbstractVector)
+    storage = CUDA.zeros(eltype(value), 2length(value))
+    result = @view storage[1:2:end]
+    copyto!(result, CuArray(value))
+    return result
+end
+function operator_overlapping_matrix_place(::CUDAOperatorAdapter, value)
+    storage = CUDA.zeros(eltype(value), size(value, 1) + 1, size(value, 2))
+    source = @view storage[1:size(value, 1), :]
+    destination = @view storage[2:(size(value, 1) + 1), :]
+    copyto!(source, CuArray(value))
+    return source, destination
+end
+operator_collect(::CUDAOperatorAdapter, value) = Array(value)
+operator_resident(::CUDAOperatorAdapter, value) = @test value isa CUDA.AnyCuArray
 function place(::CUDAScalarAdapter, ::SHTConfig, value, ::Symbol)
     if value isa PermutedDimsArray
         padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
@@ -159,6 +177,19 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension.GPUCommon, :vector_analysis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_synthesis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_diagonal_kernel!)
+    @test isdefined(extension.GPUCommon, :operator_matrix_kernel!)
+    @test isdefined(extension.GPUCommon, :packed_operator_kernel!)
+    @test which(mul_ct_matrix,
+                Tuple{SHTnsKit.GPU,SHTConfig,CuArray{Float32,1}}).module === extension
+    @test which(st_dt_matrix,
+                Tuple{SHTnsKit.GPU,SHTConfig,CuArray{Float32,1}}).module === extension
+    @test which(SH_mul_mx,
+                Tuple{SHTnsKit.GPU,SHTConfig,CuArray{Float32,1},
+                      CuArray{ComplexF32,1},CuArray{ComplexF32,1}}).module === extension
+    @test which(divergence_from_spheroidal,
+                Tuple{SHTnsKit.GPU,SHTConfig,CuArray{ComplexF32,2}}).module === extension
+    @test which(gpu_apply_laplacian!,
+                Tuple{SHTConfig,CuArray{ComplexF32,2}}).module === extension
     @test isdefined(extension.GPUCommon, :local_scalar_kernel!)
     @test isdefined(extension.GPUCommon, :local_complex_kernel!)
     @test isdefined(extension.GPUCommon, :local_qst_kernel!)
@@ -294,6 +325,7 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     run_shared_scalar_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_shared_scalar_variant_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_shared_vector_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
+    run_shared_operator_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_scalar_workspace_cache_reference(extension.GPUCommon)
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitGPUExt.jl"), String)
     local_table_builder = split(
@@ -658,5 +690,6 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
             CUDALocalEvaluationAdapter(), extension._cuda_clear_scalar_cache!,
         )
         run_local_evaluation_parity(CUDALocalEvaluationAdapter())
+        run_gpu_operator_parity(CUDAOperatorAdapter())
     end
 end

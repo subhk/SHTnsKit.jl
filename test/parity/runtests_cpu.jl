@@ -7,6 +7,7 @@ include("sphtor_full.jl")
 include("qst_full.jl")
 include("vector_variants.jl")
 include("local_evaluation.jl")
+include("operators.jl")
 
 run_scalar_full_parity(CPUScalarAdapter())
 @testset "scalar mres adjoint parity" begin
@@ -18,6 +19,7 @@ test_cpu_vector_variant_reds()
 run_local_evaluation_parity(CPULocalEvaluationAdapter())
 test_cpu_local_compatibility_and_validation()
 test_cpu_local_mixed_coordinate_precision()
+test_cpu_operator_parity()
 
 @testset "typed explicit complex synthesis" begin
     cfg = _scalar_config(:gauss, 3, 8)

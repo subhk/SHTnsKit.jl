@@ -9,7 +9,8 @@ using CUDA
 using CUDA.CUFFT
 
 include("GPUCommon.jl")
-using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
+using .GPUCommon: laplacian_kernel!, operator_matrix_kernel!,
+                  packed_operator_kernel!, legendre_table_kernel!,
                   scalar_analysis_kernel!, scalar_synthesis_kernel!,
                   coefficient_conversion_kernel!,
                   coefficient_batch_conversion_kernel!, scalar_config_signature,
@@ -69,6 +70,7 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  spheroidal_from_divergence, spheroidal_from_divergence!,
                  vorticity_from_toroidal, vorticity_from_toroidal!,
                  toroidal_from_vorticity, toroidal_from_vorticity!,
+                 mul_ct_matrix, st_dt_matrix, SH_mul_mx,
                  analysis!, synthesis!, analysis_sphtor!, synthesis_sphtor!,
                  synthesis_point, synthesis_point_cplx,
                  SH_to_lat, SH_to_lat_cplx, SHqst_to_point, SHqst_to_lat,
@@ -1140,34 +1142,122 @@ function _cuda_vector_diagonal!(output::CUDA.AnyCuArray,
     eltype(output) === eltype(input) || throw(ArgumentError(
         "vector operator input and output element types must match",
     ))
+    source = output === input || !Base.mightalias(output, input) ? input : copy(input)
     vector_diagonal_kernel!(CUDABackend())(
-        output, input, cfg.lmax, cfg.mmax, cfg.mres, inverse;
+        output, source, cfg.lmax, cfg.mmax, cfg.mres, inverse;
         ndrange=expected,
     )
     CUDA.synchronize()
     return output
 end
 
+function _cuda_operator_matrix!(cfg::SHTConfig, mx::CUDA.AnyCuArray{T,1},
+                                derivative::Bool) where {T<:Real}
+    _require_cuda(derivative ? :st_dt_matrix : :mul_ct_matrix, SHTnsKit.GPU())
+    length(mx) == 2cfg.nlm || throw(DimensionMismatch(
+        "mx length must be 2*nlm=$(2cfg.nlm)",
+    ))
+    metadata = SHTnsKit._gpu_operator_metadata(cfg, T)
+    li = CuArray(metadata.li); mi = CuArray(metadata.mi)
+    down = CuArray(metadata.down_ratios); up = CuArray(metadata.up_ratios)
+    operator_matrix_kernel!(CUDABackend())(
+        mx, li, mi, down, up, cfg.lmax, derivative; ndrange=cfg.nlm,
+    )
+    CUDA.synchronize()
+    return mx
+end
+
+mul_ct_matrix(::SHTnsKit.GPU, cfg::SHTConfig,
+              mx::CUDA.AnyCuArray{T,1}) where {T<:Real} =
+    _cuda_operator_matrix!(cfg, mx, false)
+mul_ct_matrix(cfg::SHTConfig, mx::CUDA.AnyCuArray{T,1}) where {T<:Real} =
+    mul_ct_matrix(SHTnsKit.GPU(), cfg, mx)
+st_dt_matrix(::SHTnsKit.GPU, cfg::SHTConfig,
+             mx::CUDA.AnyCuArray{T,1}) where {T<:Real} =
+    _cuda_operator_matrix!(cfg, mx, true)
+st_dt_matrix(cfg::SHTConfig, mx::CUDA.AnyCuArray{T,1}) where {T<:Real} =
+    st_dt_matrix(SHTnsKit.GPU(), cfg, mx)
+
+function SH_mul_mx(::SHTnsKit.GPU, cfg::SHTConfig,
+                   mx::CUDA.AnyCuArray{<:Real,1},
+                   input::CUDA.AnyCuArray{<:Complex,1},
+                   output::CUDA.AnyCuArray{<:Complex,1})
+    _require_cuda(:SH_mul_mx, SHTnsKit.GPU())
+    length(mx) == 2cfg.nlm || throw(DimensionMismatch(
+        "mx length must be 2*nlm=$(2cfg.nlm)",
+    ))
+    length(input) == cfg.nlm || throw(DimensionMismatch(
+        "Qlm length must be nlm=$(cfg.nlm)",
+    ))
+    length(output) == cfg.nlm || throw(DimensionMismatch(
+        "Rlm length must be nlm=$(cfg.nlm)",
+    ))
+    Base.mightalias(input, output) && throw(ArgumentError(
+        "SH_mul_mx input and output must not alias",
+    ))
+    T = typeof(real(zero(eltype(mx))))
+    metadata = SHTnsKit._gpu_operator_metadata(cfg, T)
+    lower = CuArray(metadata.lower); upper = CuArray(metadata.upper)
+    packed_operator_kernel!(CUDABackend())(
+        output, input, mx, lower, upper; ndrange=cfg.nlm,
+    )
+    CUDA.synchronize()
+    return output
+end
+
+SH_mul_mx(cfg::SHTConfig, mx::CUDA.AnyCuArray{<:Real,1},
+          input::CUDA.AnyCuArray{<:Complex,1},
+          output::CUDA.AnyCuArray{<:Complex,1}) =
+    SH_mul_mx(SHTnsKit.GPU(), cfg, mx, input, output)
+
 divergence_from_spheroidal(cfg::SHTConfig, input::CUDA.AnyCuArray) =
     divergence_from_spheroidal!(cfg, similar(input), input)
+divergence_from_spheroidal(::SHTnsKit.GPU, cfg::SHTConfig,
+                           input::CUDA.AnyCuArray) =
+    divergence_from_spheroidal(cfg, input)
 divergence_from_spheroidal!(cfg::SHTConfig, output::CUDA.AnyCuArray,
                             input::CUDA.AnyCuArray) =
     _cuda_vector_diagonal!(output, cfg, input; inverse=false)
+divergence_from_spheroidal!(::SHTnsKit.GPU, cfg::SHTConfig,
+                            output::CUDA.AnyCuArray,
+                            input::CUDA.AnyCuArray) =
+    divergence_from_spheroidal!(cfg, output, input)
 spheroidal_from_divergence(cfg::SHTConfig, input::CUDA.AnyCuArray) =
     spheroidal_from_divergence!(cfg, similar(input), input)
+spheroidal_from_divergence(::SHTnsKit.GPU, cfg::SHTConfig,
+                           input::CUDA.AnyCuArray) =
+    spheroidal_from_divergence(cfg, input)
 spheroidal_from_divergence!(cfg::SHTConfig, output::CUDA.AnyCuArray,
                             input::CUDA.AnyCuArray) =
     _cuda_vector_diagonal!(output, cfg, input; inverse=true)
+spheroidal_from_divergence!(::SHTnsKit.GPU, cfg::SHTConfig,
+                            output::CUDA.AnyCuArray,
+                            input::CUDA.AnyCuArray) =
+    spheroidal_from_divergence!(cfg, output, input)
 vorticity_from_toroidal(cfg::SHTConfig, input::CUDA.AnyCuArray) =
     vorticity_from_toroidal!(cfg, similar(input), input)
+vorticity_from_toroidal(::SHTnsKit.GPU, cfg::SHTConfig,
+                        input::CUDA.AnyCuArray) =
+    vorticity_from_toroidal(cfg, input)
 vorticity_from_toroidal!(cfg::SHTConfig, output::CUDA.AnyCuArray,
                          input::CUDA.AnyCuArray) =
     _cuda_vector_diagonal!(output, cfg, input; inverse=false)
+vorticity_from_toroidal!(::SHTnsKit.GPU, cfg::SHTConfig,
+                         output::CUDA.AnyCuArray,
+                         input::CUDA.AnyCuArray) =
+    vorticity_from_toroidal!(cfg, output, input)
 toroidal_from_vorticity(cfg::SHTConfig, input::CUDA.AnyCuArray) =
     toroidal_from_vorticity!(cfg, similar(input), input)
+toroidal_from_vorticity(::SHTnsKit.GPU, cfg::SHTConfig,
+                        input::CUDA.AnyCuArray) =
+    toroidal_from_vorticity(cfg, input)
 toroidal_from_vorticity!(cfg::SHTConfig, output::CUDA.AnyCuArray,
                          input::CUDA.AnyCuArray) =
     _cuda_vector_diagonal!(output, cfg, input; inverse=true)
+toroidal_from_vorticity!(::SHTnsKit.GPU, cfg::SHTConfig,
+                         output::CUDA.AnyCuArray,
+                         input::CUDA.AnyCuArray) =
+    toroidal_from_vorticity!(cfg, output, input)
 
 @inline function _cuda_lcap(cfg::SHTConfig, ltr::Integer)
     return SHTnsKit._validate_degree_limit(cfg, ltr)
@@ -2004,7 +2094,8 @@ end
 
 GPU-accelerated Laplacian operator in spectral space.
 """
-function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=SHTnsKit.GPU())
+function gpu_apply_laplacian!(cfg::SHTConfig, coeffs::CUDA.AnyCuArray;
+                              device=SHTnsKit.GPU())
     _require_cuda(:gpu_apply_laplacian!, device)
 
     # Validate input dimensions
@@ -2012,16 +2103,21 @@ function gpu_apply_laplacian!(cfg::SHTConfig, coeffs; device=SHTnsKit.GPU())
     size(coeffs, 1) == lmax + 1 || throw(DimensionMismatch("coeffs must have $(lmax+1) rows (lmax+1), got $(size(coeffs, 1))"))
     size(coeffs, 2) == mmax + 1 || throw(DimensionMismatch("coeffs must have $(mmax+1) columns (mmax+1), got $(size(coeffs, 2))"))
 
-    gpu_coeffs = CuArray(coeffs)
-    # Zero-initialize output to handle l < m entries (which should be zero)
-    output = CUDA.zeros(eltype(gpu_coeffs), size(gpu_coeffs))
-
-    backend = CUDABackend()
-    kernel! = laplacian_kernel!(backend)
-    kernel!(output, gpu_coeffs, lmax, mmax; ndrange=(lmax+1, mmax+1))
+    laplacian_kernel!(CUDABackend())(
+        coeffs, coeffs, lmax, mmax, cfg.mres; ndrange=(lmax+1, mmax+1),
+    )
     CUDA.synchronize()
+    return coeffs
+end
 
-    coeffs .= Array(output)
+# Historical host-buffer compatibility stays explicit and isolated.  Typed and
+# inferred device dispatch never enter this bridge.
+function gpu_apply_laplacian!(cfg::SHTConfig, coeffs::AbstractMatrix;
+                              device=SHTnsKit.GPU())
+    _require_cuda(:gpu_apply_laplacian!, device)
+    device_coeffs = CuArray(coeffs)
+    gpu_apply_laplacian!(cfg, device_coeffs; device)
+    copyto!(coeffs, device_coeffs)
     return coeffs
 end
 

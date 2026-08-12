@@ -723,16 +723,21 @@ function divergence_from_spheroidal(cfg::SHTConfig, Slm::AbstractMatrix)
     return divergence_from_spheroidal!(cfg, δ, Slm)
 end
 
+divergence_from_spheroidal(::CPU, cfg::SHTConfig, Slm::AbstractMatrix) =
+    divergence_from_spheroidal(cfg, Slm)
+divergence_from_spheroidal!(::CPU, cfg::SHTConfig, δ::AbstractMatrix,
+                            Slm::AbstractMatrix) =
+    divergence_from_spheroidal!(cfg, δ, Slm)
+
 function divergence_from_spheroidal!(cfg::SHTConfig, δ::AbstractMatrix, Slm::AbstractMatrix)
     size(δ) == size(Slm) || throw(DimensionMismatch("divergence output dims"))
-    fill!(δ, zero(eltype(δ)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(Slm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = δ !== Slm && Base.mightalias(δ, Slm) ? copy(Slm) : Slm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax
-        m % cfg.mres == 0 || continue
-        for l in max(1, m):lmax
-            row = l + 1; col = m + 1
-            δ[row, col] = -(l * (l + 1)) * Slm[row, col]
-        end
+    @inbounds for m in 0:mmax, l in 0:lmax
+        δ[l + 1, m + 1] = m % cfg.mres == 0 && l >= max(1, m) ?
+            -(l * (l + 1)) * source[l + 1, m + 1] : zero(eltype(δ))
     end
     return δ
 end
@@ -747,17 +752,23 @@ function spheroidal_from_divergence(cfg::SHTConfig, δlm::AbstractMatrix)
     return spheroidal_from_divergence!(cfg, Slm, δlm)
 end
 
+spheroidal_from_divergence(::CPU, cfg::SHTConfig, δlm::AbstractMatrix) =
+    spheroidal_from_divergence(cfg, δlm)
+spheroidal_from_divergence!(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                            δlm::AbstractMatrix) =
+    spheroidal_from_divergence!(cfg, Slm, δlm)
+
 function spheroidal_from_divergence!(cfg::SHTConfig, Slm::AbstractMatrix, δlm::AbstractMatrix)
     size(Slm) == size(δlm) || throw(DimensionMismatch("spheroidal output dims"))
-    fill!(Slm, zero(eltype(Slm)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(δlm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = Slm !== δlm && Base.mightalias(Slm, δlm) ? copy(δlm) : δlm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax
-        m % cfg.mres == 0 || continue
-        for l in max(1, m):lmax
-            row = l + 1; col = m + 1
-            ll1 = l * (l + 1)
-            Slm[row, col] = ll1 == 0 ? zero(eltype(Slm)) : -(δlm[row, col] / ll1)
-        end
+    @inbounds for m in 0:mmax, l in 0:lmax
+        valid = m % cfg.mres == 0 && l >= max(1, m)
+        ll1 = l * (l + 1)
+        Slm[l + 1, m + 1] = valid ? -(source[l + 1, m + 1] / ll1) :
+            zero(eltype(Slm))
     end
     return Slm
 end
@@ -772,16 +783,21 @@ function vorticity_from_toroidal(cfg::SHTConfig, Tlm::AbstractMatrix)
     return vorticity_from_toroidal!(cfg, ζ, Tlm)
 end
 
+vorticity_from_toroidal(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix) =
+    vorticity_from_toroidal(cfg, Tlm)
+vorticity_from_toroidal!(::CPU, cfg::SHTConfig, ζ::AbstractMatrix,
+                         Tlm::AbstractMatrix) =
+    vorticity_from_toroidal!(cfg, ζ, Tlm)
+
 function vorticity_from_toroidal!(cfg::SHTConfig, ζ::AbstractMatrix, Tlm::AbstractMatrix)
     size(ζ) == size(Tlm) || throw(DimensionMismatch("vorticity output dims"))
-    fill!(ζ, zero(eltype(ζ)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(Tlm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = ζ !== Tlm && Base.mightalias(ζ, Tlm) ? copy(Tlm) : Tlm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax
-        m % cfg.mres == 0 || continue
-        for l in max(1, m):lmax
-            row = l + 1; col = m + 1
-            ζ[row, col] = -(l * (l + 1)) * Tlm[row, col]
-        end
+    @inbounds for m in 0:mmax, l in 0:lmax
+        ζ[l + 1, m + 1] = m % cfg.mres == 0 && l >= max(1, m) ?
+            -(l * (l + 1)) * source[l + 1, m + 1] : zero(eltype(ζ))
     end
     return ζ
 end
@@ -796,17 +812,23 @@ function toroidal_from_vorticity(cfg::SHTConfig, ζlm::AbstractMatrix)
     return toroidal_from_vorticity!(cfg, Tlm, ζlm)
 end
 
+toroidal_from_vorticity(::CPU, cfg::SHTConfig, ζlm::AbstractMatrix) =
+    toroidal_from_vorticity(cfg, ζlm)
+toroidal_from_vorticity!(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix,
+                         ζlm::AbstractMatrix) =
+    toroidal_from_vorticity!(cfg, Tlm, ζlm)
+
 function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::AbstractMatrix)
     size(Tlm) == size(ζlm) || throw(DimensionMismatch("toroidal output dims"))
-    fill!(Tlm, zero(eltype(Tlm)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(ζlm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = Tlm !== ζlm && Base.mightalias(Tlm, ζlm) ? copy(ζlm) : ζlm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax
-        m % cfg.mres == 0 || continue
-        for l in max(1, m):lmax
-            row = l + 1; col = m + 1
-            ll1 = l * (l + 1)
-            Tlm[row, col] = ll1 == 0 ? zero(eltype(Tlm)) : -(ζlm[row, col] / ll1)
-        end
+    @inbounds for m in 0:mmax, l in 0:lmax
+        valid = m % cfg.mres == 0 && l >= max(1, m)
+        ll1 = l * (l + 1)
+        Tlm[l + 1, m + 1] = valid ? -(source[l + 1, m + 1] / ll1) :
+            zero(eltype(Tlm))
     end
     return Tlm
 end

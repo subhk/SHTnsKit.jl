@@ -260,7 +260,8 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     _validate_local_coordinates(cost, phi, :synthesis_point_cplx)
     alm_int = _internal_coefficients(alm, cfg)
     CT = eltype(alm_int)
-    PT = promote_type(typeof(float(cost)), typeof(float(phi)))
+    RT = typeof(real(zero(CT)))
+    PT = _local_basis_type(RT, cost, phi)
     x = convert(PT, cost)
     ph = convert(PT, phi)
     lmax, mmax = cfg.lmax, cfg.mmax

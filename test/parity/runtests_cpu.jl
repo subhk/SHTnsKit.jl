@@ -17,6 +17,7 @@ run_cpu_qst_full_parity()
 test_cpu_vector_variant_reds()
 run_local_evaluation_parity(CPULocalEvaluationAdapter())
 test_cpu_local_compatibility_and_validation()
+test_cpu_local_mixed_coordinate_precision()
 
 @testset "typed explicit complex synthesis" begin
     cfg = _scalar_config(:gauss, 3, 8)

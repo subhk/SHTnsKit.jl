@@ -476,6 +476,19 @@ end
     return nothing
 end
 
+# Ordinary coordinates are evaluated in the coefficient-owned floating-point
+# precision.  A non-AbstractFloat coordinate (for example a ForwardDiff Dual)
+# retains its own arithmetic type so the existing coordinate-AD behavior is not
+# erased, while Dual coefficient types continue to use the plain coordinate
+# type for the Legendre recurrence.
+@inline function _local_basis_type(::Type{RT}, coordinates::Real...) where {RT}
+    coordinate_types = map(value -> typeof(float(value)), coordinates)
+    if RT <: AbstractFloat && all(T -> T <: AbstractFloat, coordinate_types)
+        return RT
+    end
+    return promote_type(coordinate_types...)
+end
+
 function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
     on_device(Qlm) isa CPU || throw(ArgumentError(
         "synthesis_point with GPU storage requires GPU() dispatch",
@@ -490,7 +503,7 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
     # Float32 evaluations in Float32 while preserving Dual coefficient types.
     CT = eltype(Qlm_int)
     RT = typeof(real(zero(CT)))
-    PT = promote_type(typeof(float(cost)), typeof(float(phi)))
+    PT = _local_basis_type(RT, cost, phi)
     x = convert(PT, cost)
     ph = convert(PT, phi)
     result = zero(RT)

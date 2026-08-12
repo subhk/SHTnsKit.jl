@@ -29,7 +29,7 @@ function SH_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, cost::Real; n
     Qlm_int = _internal_coefficients(Qlm, cfg)
     CT = eltype(Qlm_int)
     RT = typeof(real(zero(CT)))
-    PT = typeof(float(cost))
+    PT = _local_basis_type(RT, cost)
     x = convert(PT, cost)
     lmax = cfg.lmax
     # Accumulator/output eltype follows the input so AD types (e.g.
@@ -88,7 +88,7 @@ function SH_to_lat_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex}, c
     alm_int = _internal_coefficients(alm_packed, cfg)
     CT = eltype(alm_int)
     RT = typeof(real(zero(CT)))
-    PT = typeof(float(cost))
+    PT = _local_basis_type(RT, cost)
     x = convert(PT, cost)
     P = Vector{PT}(undef, lmax + 1)
     vals = Vector{CT}(undef, nphi)
@@ -144,7 +144,7 @@ function SHqst_to_point(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abs
     Tlm_int = _internal_coefficients(Tlm, cfg)
     CT = promote_type(eltype(Qlm_int), eltype(Slm_int), eltype(Tlm_int))
     RT = typeof(real(zero(CT)))
-    PT = promote_type(typeof(float(cost)), typeof(float(phi)))
+    PT = _local_basis_type(RT, cost, phi)
     x = convert(PT, cost)
     phiv = convert(PT, phi)
     lmax = cfg.lmax; mmax = cfg.mmax
@@ -219,7 +219,7 @@ function SH_to_grad_point(cfg::SHTConfig, DrSlm::AbstractVector{<:Complex}, Slm:
     Slm_int = _internal_coefficients(Slm, cfg)
     CT = promote_type(eltype(DrSlm_int), eltype(Slm_int))
     RT = typeof(real(zero(CT)))
-    PT = promote_type(typeof(float(cost)), typeof(float(phi)))
+    PT = _local_basis_type(RT, cost, phi)
     x = convert(PT, cost)
     phiv = convert(PT, phi)
     lmax = cfg.lmax; mmax = cfg.mmax
@@ -294,7 +294,7 @@ function SHqst_to_lat(cfg::SHTConfig, Qlm::AbstractVector{<:Complex}, Slm::Abstr
     Tlm_int = _internal_coefficients(Tlm, cfg)
     CT = promote_type(eltype(Qlm_int), eltype(Slm_int), eltype(Tlm_int))
     RT = typeof(real(zero(CT)))
-    PT = typeof(float(cost))
+    PT = _local_basis_type(RT, cost)
     x = convert(PT, cost)
     lmax = cfg.lmax
     # Accumulator/output eltype follows the inputs so AD types propagate.

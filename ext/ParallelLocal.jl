@@ -308,9 +308,10 @@ function _collective_local_integer(comm, value::Integer, lower::Int, upper::Int,
 end
 
 function _validate_local_spectral_pencils!(cfg, values::Tuple,
-                                           operation::Symbol)
+                                           operation::Symbol;
+                                           comm=MPI.COMM_WORLD)
     reference = first(values)
-    comm = communicator(reference)
+    _validate_qst_pencil_communicators!(comm, values, operation)
     _validate_cfg_replicated(cfg, comm)
     for value in values
         _validate_scalar_pencil!(
@@ -458,8 +459,9 @@ function SHTnsKit.SH_to_grad_point(cfg::SHTnsKit.SHTConfig,
 end
 
 function _validate_local_complex_pencil!(cfg, coefficients::PencilArray,
-                                         operation::Symbol)
-    comm = communicator(coefficients)
+                                         operation::Symbol;
+                                         comm=MPI.COMM_WORLD)
+    _validate_qst_pencil_communicators!(comm, (coefficients,), operation)
     _validate_cfg_replicated(cfg, comm)
     _validate_scalar_pencil!(
         cfg, coefficients, (SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1), 1),

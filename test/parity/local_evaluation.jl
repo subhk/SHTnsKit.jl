@@ -360,3 +360,70 @@ function test_cpu_local_compatibility_and_validation()
     @test complex_canonical isa Vector{ComplexF64}
     return nothing
 end
+
+function test_cpu_local_mixed_coordinate_precision()
+    @testset "coefficient-owned local precision with mixed coordinates" begin
+        for (Tcoeff, Tcoord) in ((Float32, Float64), (Float64, Float32))
+            cfg = _local_config(:gauss, Tcoeff)
+            Qcan, Scan, Tcan, Drcan = _local_canonical_modes(cfg, Tcoeff)
+            dense = _local_external(cfg, Qcan)
+            Qp, Sp, Tp, Drp = map(
+                values -> _local_packed(cfg, values),
+                (Qcan, Scan, Tcan, Drcan),
+            )
+            complex_can, complex_external = _local_complex_modes(cfg, Tcoeff)
+            cost, phi = Tcoord(0.37), Tcoord(0.61)
+            tol = _local_tol(Tcoeff)
+
+            scalar = synthesis_point(CPU(), cfg, dense, cost, phi)
+            @test scalar isa Tcoeff
+            @test scalar ≈ _local_direct_scalar(
+                Qcan, Tcoeff(cost), Tcoeff(phi),
+            ) atol=tol.atol rtol=tol.rtol
+
+            scalar_complex = synthesis_point_cplx(
+                CPU(), cfg, complex_external, cost, phi,
+            )
+            @test scalar_complex isa Complex{Tcoeff}
+            @test scalar_complex ≈ _local_direct_complex(
+                complex_can, Tcoeff(cost), Tcoeff(phi),
+            ) atol=tol.atol rtol=tol.rtol
+
+            latitude = SH_to_lat(CPU(), cfg, Qp, cost; nphi=7)
+            complex_latitude = SH_to_lat_cplx(
+                CPU(), cfg, complex_external, cost; nphi=7,
+            )
+            @test eltype(latitude) === Tcoeff
+            @test eltype(complex_latitude) === Complex{Tcoeff}
+            @test latitude ≈ [
+                _local_direct_scalar(Qcan, Tcoeff(cost), Tcoeff(2pi*j/7))
+                for j in 0:6
+            ] atol=tol.atol rtol=tol.rtol
+            @test complex_latitude ≈ [
+                _local_direct_complex(complex_can, Tcoeff(cost), Tcoeff(2pi*j/7))
+                for j in 0:6
+            ] atol=tol.atol rtol=tol.rtol
+
+            qst = SHqst_to_point(CPU(), cfg, Qp, Sp, Tp, cost, phi)
+            grad = SH_to_grad_point(CPU(), cfg, Drp, Sp, cost, phi)
+            @test all(value -> value isa Tcoeff, qst)
+            @test all(value -> value isa Tcoeff, grad)
+            @test collect(qst) ≈ collect(_local_direct_qst(
+                cfg, Qcan, Scan, Tcan, Tcoeff(cost), Tcoeff(phi),
+            )) atol=tol.atol rtol=tol.rtol
+            @test collect(grad) ≈ collect(_local_direct_qst(
+                cfg, Drcan, Scan, zero(Tcan), Tcoeff(cost), Tcoeff(phi),
+            )) atol=tol.atol rtol=tol.rtol
+
+            qst_lat = SHqst_to_lat(CPU(), cfg, Qp, Sp, Tp, cost; nphi=7)
+            @test all(values -> eltype(values) === Tcoeff, qst_lat)
+            refs = [_local_direct_qst(
+                cfg, Qcan, Scan, Tcan, Tcoeff(cost), Tcoeff(2pi*j/7),
+            ) for j in 0:6]
+            for component in 1:3
+                @test qst_lat[component] ≈ getindex.(refs, component) atol=tol.atol rtol=tol.rtol
+            end
+        end
+    end
+    return nothing
+end

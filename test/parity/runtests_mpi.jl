@@ -2105,10 +2105,11 @@ if isempty(ARGS) || "local_evaluation" in ARGS
                              for j in 0:6] atol=3e-13 rtol=3e-13
 
         # Four ranks over three spectral columns exercises an empty local owner.
-        Qcan, Scan, Tcan, _ = _local_canonical_modes(cfg, Float64)
+        Qcan, Scan, Tcan, Drcan = _local_canonical_modes(cfg, Float64)
         Qp = matrix_to_spectral_pencil(cfg, _local_external(cfg, Qcan); comm)
         Sp = matrix_to_spectral_pencil(cfg, _local_external(cfg, Scan); comm)
         Tp = matrix_to_spectral_pencil(cfg, _local_external(cfg, Tcan); comm)
+        Drp = matrix_to_spectral_pencil(cfg, _local_external(cfg, Drcan); comm)
         minimum_owned = MPI.Allreduce(length(parent(Qp)), min, comm)
         MPI.Comm_size(comm) < 4 || @test minimum_owned == 0
 
@@ -2146,6 +2147,54 @@ if isempty(ARGS) || "local_evaluation" in ARGS
         end
         @test extension._local_evaluation_stats().payload_reductions == 0
         MPI.Barrier(comm)
+
+        # Build both candidates collectively before selecting a rank-varying
+        # communicator anchor.  Local evaluation must reject this on the
+        # trusted world communicator before touching either candidate's comm.
+        Qself = matrix_to_spectral_pencil(
+            cfg, _local_external(cfg, Qcan); comm=MPI.COMM_SELF,
+        )
+        Sself = matrix_to_spectral_pencil(
+            cfg, _local_external(cfg, Scan); comm=MPI.COMM_SELF,
+        )
+        Tself = matrix_to_spectral_pencil(
+            cfg, _local_external(cfg, Tcan); comm=MPI.COMM_SELF,
+        )
+        Drself = matrix_to_spectral_pencil(
+            cfg, _local_external(cfg, Drcan); comm=MPI.COMM_SELF,
+        )
+        badQ = rank == 0 ? Qself : Qp
+        badScomm = rank == 0 ? Sself : Sp
+        badT = rank == 0 ? Tself : Tp
+        badDr = rank == 0 ? Drself : Drp
+        for call in (
+            () -> synthesis_point(cfg, badQ, 0.2, 0.7),
+            () -> SH_to_lat(cfg, badQ, 0.2; nphi=5),
+            () -> SHqst_to_point(cfg, badQ, badScomm, badT, 0.2, 0.7),
+            () -> SHqst_to_lat(cfg, badQ, badScomm, badT, 0.2; nphi=5),
+            () -> SH_to_grad_point(cfg, badDr, badScomm, 0.2, 0.7),
+        )
+            extension._reset_local_evaluation_stats!()
+            @test _all_ranks_catch(comm; message_contains="communicator mismatch") do
+                call()
+            end
+            @test extension._local_evaluation_stats().payload_reductions == 0
+            MPI.Barrier(comm)
+        end
+
+        complex_self = _place_distributed_vector(external, MPI.COMM_SELF)
+        bad_complex = rank == 0 ? complex_self : distributed
+        for call in (
+            () -> synthesis_point_cplx(cfg, bad_complex, -0.28, 0.77),
+            () -> SH_to_lat_cplx(cfg, bad_complex, -0.28; nphi=7),
+        )
+            extension._reset_local_evaluation_stats!()
+            @test _all_ranks_catch(comm; message_contains="communicator mismatch") do
+                call()
+            end
+            @test extension._local_evaluation_stats().payload_reductions == 0
+            MPI.Barrier(comm)
+        end
     end
 end
 

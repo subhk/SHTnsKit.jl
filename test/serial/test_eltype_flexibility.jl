@@ -57,6 +57,26 @@ _partial(x::Dual) = partials(x, 1)
         @test _partial.(Vtd) ≈ Vt
     end
 
+    @testset "point and gradient evaluators keep Dual coefficient linearity" begin
+        Qd, Sd, Td = _dualize(Qlm), _dualize(Slm), _dualize(Tlm)
+        point = SHqst_to_point(cfg, Qlm, Slm, Tlm, cost, 0.7)
+        point_d = SHqst_to_point(cfg, Qd, Sd, Td, cost, 0.7)
+        @test collect(_value.(point_d)) ≈ collect(point)
+        @test collect(_partial.(point_d)) ≈ collect(point)
+
+        grad = SH_to_grad_point(cfg, Qlm, Slm, cost, 0.7)
+        grad_d = SH_to_grad_point(cfg, Qd, Sd, cost, 0.7)
+        @test collect(_value.(grad_d)) ≈ collect(grad)
+        @test collect(_partial.(grad_d)) ≈ collect(grad)
+
+        nc = SHTnsKit.nlm_cplx_calc(lmax, cfg.mmax, 1)
+        alm = [0.1 * k + 0.02im * k for k in 1:nc]
+        point_cplx = synthesis_point_cplx(cfg, alm, cost, 0.7)
+        point_cplx_d = synthesis_point_cplx(cfg, _dualize(alm), cost, 0.7)
+        @test _value(point_cplx_d) ≈ point_cplx
+        @test _partial(real(point_cplx_d)) ≈ real(point_cplx)
+    end
+
     @testset "synthesis_packed_ml accepts Dual coefficients" begin
         m = 1
         Ql = Qlm[1:(lmax - m + 1)]

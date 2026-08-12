@@ -21,6 +21,9 @@ using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
                   scalar_cache_insert!, scalar_cache_clear!, scalar_cache_size
 using .GPUCommon: ScalarWorkspaceCache, scalar_workspace_use!,
                   scalar_workspace_clear!, scalar_workspace_size
+using .GPUCommon: vector_derivative_table_kernel!, vector_analysis_kernel!,
+                  vector_synthesis_kernel!, vector_diagonal_kernel!,
+                  vector_host_tables
 
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
@@ -40,11 +43,20 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  analysis_packed_cplx_l, synthesis_packed_cplx_l,
                  analysis_batch, analysis_batch!,
                  synthesis_batch, synthesis_batch!, synthesis_batch_cplx,
-                 analysis!, synthesis!,
+                 analysis_sphtor, analysis_sphtor_cplx,
+                 synthesis_sphtor, synthesis_sphtor_cplx,
+                 synthesis_sph, synthesis_sph_cplx,
+                 synthesis_tor, synthesis_tor_cplx,
+                 divergence_from_spheroidal, divergence_from_spheroidal!,
+                 spheroidal_from_divergence, spheroidal_from_divergence!,
+                 vorticity_from_toroidal, vorticity_from_toroidal!,
+                 toroidal_from_vorticity, toroidal_from_vorticity!,
+                 analysis!, synthesis!, analysis_sphtor!, synthesis_sphtor!,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
-                 _gpu_adapter_clear_cache!
+                 _gpu_adapter_analysis_sphtor,
+                 _gpu_adapter_synthesis_sphtor, _gpu_adapter_clear_cache!
 
 # ============================================================================
 # CUDA Backend Integration with device_utils.jl
@@ -80,11 +92,13 @@ function _gpu_adapter_adapt(::CUDAAdapter, value)
     return CuArray(value)
 end
 
-struct CUDAScalarTables{TX,TW,TP,TS}
+struct CUDAScalarTables{TX,TW,TP,TS,TD,TO}
     x::TX
     weights::TW
     Plm::TP
     scales::TS
+    dtheta::TD
+    over_sin::TO
 end
 
 const _CUDA_SCALAR_CACHE = ScalarTableCache(8)
@@ -99,17 +113,20 @@ function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
     )
     cached === nothing || return cached
 
-    x_host, weights_host, scales_host = scalar_host_tables(cfg, T)
+    x_host, weights_host, scales_host, Nlm_host = vector_host_tables(cfg, T)
     x = CuArray(x_host)
     weights = CuArray(weights_host)
     scales = CuArray(scales_host)
+    Nlm = CuArray(Nlm_host)
     Plm = CUDA.zeros(T, cfg.nlat, cfg.lmax + 1, cfg.mmax + 1)
+    dtheta = similar(Plm)
+    over_sin = similar(Plm)
     backend = CUDABackend()
-    kernel! = legendre_table_kernel!(backend)
-    kernel!(Plm, x, cfg.lmax, cfg.mmax;
+    kernel! = vector_derivative_table_kernel!(backend)
+    kernel!(Plm, dtheta, over_sin, x, Nlm, cfg.lmax, cfg.mmax;
             ndrange=(cfg.nlat, cfg.mmax + 1))
     CUDA.synchronize()
-    built = CUDAScalarTables(x, weights, Plm, scales)
+    built = CUDAScalarTables(x, weights, Plm, scales, dtheta, over_sin)
 
     return scalar_cache_insert!(
         _CUDA_SCALAR_CACHE, device, identity, T, signature, built,
@@ -160,6 +177,33 @@ function _with_cuda_workspace(f, owner, cfg::SHTConfig, ::Type{RT},
     return scalar_workspace_use!(
         f, builder, _CUDA_WORKSPACE_CACHE, device, owner, RT,
         kind, shape, signature,
+    )
+end
+
+function _cuda_vector_workspace_builder(cfg::SHTConfig,
+                                        ::Type{RT}) where {RT<:AbstractFloat}
+    CT = Complex{RT}
+    Ftheta = CUDA.zeros(CT, cfg.nlat, cfg.nlon)
+    Fphi = similar(Ftheta)
+    return (;
+        Ftheta,
+        Fphi,
+        forward_theta=CUFFT.plan_fft!(Ftheta, 2),
+        forward_phi=CUFFT.plan_fft!(Fphi, 2),
+        inverse_theta=CUFFT.plan_ifft!(Ftheta, 2),
+        inverse_phi=CUFFT.plan_ifft!(Fphi, 2),
+    )
+end
+
+function _with_cuda_vector_workspace(f, owner, cfg::SHTConfig,
+                                     ::Type{RT}) where {RT<:AbstractFloat}
+    device = CUDA.deviceid(CUDA.device())
+    shape = (cfg.nlat, cfg.nlon, cfg.lmax, cfg.mmax, cfg.mres)
+    signature = hash((scalar_config_signature(cfg), :vector))
+    builder = () -> _cuda_vector_workspace_builder(cfg, RT)
+    return scalar_workspace_use!(
+        f, builder, _CUDA_WORKSPACE_CACHE, device, owner, RT,
+        :vector, shape, signature,
     )
 end
 
@@ -368,6 +412,229 @@ synthesis(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}; kwargs...) where {
     synthesis(SHTnsKit.GPU(), cfg, coefficients; kwargs...)
 synthesis_cplx(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}) where {T} =
     synthesis_cplx(SHTnsKit.GPU(), cfg, coefficients)
+
+function _cuda_vector_analysis(cfg::SHTConfig,
+                               Vt::CUDA.AnyCuArray{T,2},
+                               Vp::CUDA.AnyCuArray{R,2};
+                               use_rfft::Bool=false) where {T<:Number,R<:Number}
+    RT = typeof(float(real(zero(T))))
+    CT = Complex{RT}
+    Sout = CUDA.zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+    Tout = similar(Sout)
+    return _cuda_vector_analysis_direct!(
+        cfg, cfg, Sout, Tout, Vt, Vp; use_rfft,
+    )
+end
+
+function _cuda_vector_analysis_direct!(owner, cfg::SHTConfig,
+                                       Sout::CUDA.AnyCuArray,
+                                       Tout::CUDA.AnyCuArray,
+                                       Vt::CUDA.AnyCuArray{T,2},
+                                       Vp::CUDA.AnyCuArray{R,2};
+                                       use_rfft::Bool=false) where {T<:Number,R<:Number}
+    _require_cuda(:analysis_sphtor!, SHTnsKit.GPU())
+    size(Vt) == (cfg.nlat, cfg.nlon) || throw(DimensionMismatch(
+        "Vt must have size ($(cfg.nlat), $(cfg.nlon))",
+    ))
+    size(Vp) == size(Vt) || throw(DimensionMismatch("Vp must match Vt"))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(Sout) == expected || throw(DimensionMismatch("Sout must have size $expected"))
+    size(Tout) == expected || throw(DimensionMismatch("Tout must have size $expected"))
+    use_rfft && (!(T <: Real) || !(R <: Real)) && throw(ArgumentError(
+        "use_rfft=true requires real-valued vector components",
+    ))
+    RTt = typeof(float(real(zero(T))))
+    RTp = typeof(float(real(zero(R))))
+    RTt === RTp || throw(ArgumentError(
+        "Vt and Vp must use the same Float32/Float64 precision",
+    ))
+    RT = RTt
+    CT = Complex{RT}
+    RT in (Float32, Float64) || throw(ArgumentError(
+        "vector analysis supports Float32 and Float64 precision",
+    ))
+    eltype(Sout) === CT && eltype(Tout) === CT || throw(ArgumentError(
+        "Sout and Tout must have element type $CT",
+    ))
+    any(Base.mightalias(a, b) for a in (Sout, Tout), b in (Vt, Vp)) &&
+        throw(ArgumentError("vector analysis outputs must not alias inputs"))
+    Base.mightalias(Sout, Tout) && throw(ArgumentError(
+        "Sout and Tout must not alias each other",
+    ))
+    tables = _cuda_scalar_tables(cfg, RT)
+    return _with_cuda_vector_workspace(owner, cfg, RT) do workspace
+        copyto!(workspace.Ftheta, Vt)
+        copyto!(workspace.Fphi, Vp)
+        mul!(workspace.Ftheta, workspace.forward_theta, workspace.Ftheta)
+        mul!(workspace.Fphi, workspace.forward_phi, workspace.Fphi)
+        vector_analysis_kernel!(CUDABackend())(
+            Sout, Tout, workspace.Ftheta, workspace.Fphi,
+            tables.dtheta, tables.over_sin, tables.weights, tables.scales,
+            tables.x, RT(cfg.cphi), cfg.lmax, cfg.mmax, cfg.mres,
+            cfg.robert_form; ndrange=size(Sout),
+        )
+        CUDA.synchronize()
+        Sout, Tout
+    end
+end
+
+function _cuda_vector_synthesis(cfg::SHTConfig,
+                                Slm::CUDA.AnyCuArray{T,2},
+                                Tlm::CUDA.AnyCuArray{R,2};
+                                real_output::Bool=true,
+                                use_rfft::Bool=false) where {T<:Number,R<:Number}
+    RT = typeof(float(real(zero(T))))
+    output_type = real_output ? RT : Complex{RT}
+    Vt = CUDA.zeros(output_type, cfg.nlat, cfg.nlon)
+    Vp = similar(Vt)
+    return _cuda_vector_synthesis_direct!(
+        cfg, cfg, Vt, Vp, Slm, Tlm; real_output, use_rfft,
+    )
+end
+
+function _cuda_vector_synthesis_direct!(owner, cfg::SHTConfig,
+                                        Vt::CUDA.AnyCuArray,
+                                        Vp::CUDA.AnyCuArray,
+                                        Slm::CUDA.AnyCuArray{T,2},
+                                        Tlm::CUDA.AnyCuArray{R,2};
+                                        real_output::Bool=true,
+                                        use_rfft::Bool=false) where {T<:Number,R<:Number}
+    _require_cuda(:synthesis_sphtor!, SHTnsKit.GPU())
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(Slm) == expected || throw(DimensionMismatch("Slm must have size $expected"))
+    size(Tlm) == expected || throw(DimensionMismatch("Tlm must have size $expected"))
+    spatial = (cfg.nlat, cfg.nlon)
+    size(Vt) == spatial || throw(DimensionMismatch("Vt must have size $spatial"))
+    size(Vp) == spatial || throw(DimensionMismatch("Vp must have size $spatial"))
+    use_rfft && !real_output && throw(ArgumentError("use_rfft=true implies real_output"))
+    RTs = typeof(float(real(zero(T))))
+    RTt = typeof(float(real(zero(R))))
+    RTs === RTt || throw(ArgumentError(
+        "Slm and Tlm must use the same Float32/Float64 precision",
+    ))
+    RT = RTs
+    CT = Complex{RT}
+    RT in (Float32, Float64) || throw(ArgumentError(
+        "vector synthesis supports Float32 and Float64 precision",
+    ))
+    output_type = real_output ? RT : CT
+    eltype(Vt) === output_type && eltype(Vp) === output_type || throw(ArgumentError(
+        "Vt and Vp must have element type $output_type",
+    ))
+    any(Base.mightalias(a, b) for a in (Vt, Vp), b in (Slm, Tlm)) &&
+        throw(ArgumentError("vector synthesis outputs must not alias inputs"))
+    Base.mightalias(Vt, Vp) && throw(ArgumentError(
+        "Vt and Vp must not alias each other",
+    ))
+    tables = _cuda_scalar_tables(cfg, RT)
+    return _with_cuda_vector_workspace(owner, cfg, RT) do workspace
+        fill!(workspace.Ftheta, zero(CT))
+        fill!(workspace.Fphi, zero(CT))
+        vector_synthesis_kernel!(CUDABackend())(
+            workspace.Ftheta, workspace.Fphi, Slm, Tlm,
+            tables.dtheta, tables.over_sin, tables.scales, tables.x,
+            RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, cfg.lmax, cfg.mmax,
+            cfg.mres, real_output, cfg.robert_form;
+            ndrange=(cfg.nlat, cfg.mmax + 1),
+        )
+        CUDA.synchronize()
+        mul!(workspace.Ftheta, workspace.inverse_theta, workspace.Ftheta)
+        mul!(workspace.Fphi, workspace.inverse_phi, workspace.Fphi)
+        if real_output
+            Vt .= real.(workspace.Ftheta)
+            Vp .= real.(workspace.Fphi)
+        else
+            copyto!(Vt, workspace.Ftheta)
+            copyto!(Vp, workspace.Fphi)
+        end
+        CUDA.synchronize()
+        Vt, Vp
+    end
+end
+
+_gpu_adapter_analysis_sphtor(::CUDAAdapter, cfg::SHTConfig,
+                             Vt::CUDA.AnyCuArray, Vp::CUDA.AnyCuArray; kwargs...) =
+    _cuda_vector_analysis(cfg, Vt, Vp; kwargs...)
+_gpu_adapter_synthesis_sphtor(::CUDAAdapter, cfg::SHTConfig,
+                              Slm::CUDA.AnyCuArray, Tlm::CUDA.AnyCuArray; kwargs...) =
+    _cuda_vector_synthesis(cfg, Slm, Tlm; kwargs...)
+
+analysis_sphtor(cfg::SHTConfig, Vt::CUDA.AnyCuArray{T,2},
+                 Vp::CUDA.AnyCuArray{R,2}; kwargs...) where {T,R} =
+    analysis_sphtor(SHTnsKit.GPU(), cfg, Vt, Vp; kwargs...)
+analysis_sphtor_cplx(cfg::SHTConfig, Vt::CUDA.AnyCuArray{T,2},
+                      Vp::CUDA.AnyCuArray{R,2}) where {T<:Complex,R<:Complex} =
+    analysis_sphtor_cplx(SHTnsKit.GPU(), cfg, Vt, Vp)
+synthesis_sphtor(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2},
+                  Tlm::CUDA.AnyCuArray{R,2}; kwargs...) where {T,R} =
+    synthesis_sphtor(SHTnsKit.GPU(), cfg, Slm, Tlm; kwargs...)
+synthesis_sphtor_cplx(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2},
+                       Tlm::CUDA.AnyCuArray{R,2}) where {T,R} =
+    synthesis_sphtor_cplx(SHTnsKit.GPU(), cfg, Slm, Tlm)
+synthesis_sph(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
+    synthesis_sph(SHTnsKit.GPU(), cfg, Slm; kwargs...)
+synthesis_sph_cplx(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2}) where {T} =
+    synthesis_sph_cplx(SHTnsKit.GPU(), cfg, Slm)
+synthesis_tor(cfg::SHTConfig, Tlm::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
+    synthesis_tor(SHTnsKit.GPU(), cfg, Tlm; kwargs...)
+synthesis_tor_cplx(cfg::SHTConfig, Tlm::CUDA.AnyCuArray{T,2}) where {T} =
+    synthesis_tor_cplx(SHTnsKit.GPU(), cfg, Tlm)
+
+function analysis_sphtor!(plan::SHTPlan, Sout::CUDA.AnyCuArray,
+                           Tout::CUDA.AnyCuArray, Vt::CUDA.AnyCuArray,
+                           Vp::CUDA.AnyCuArray)
+    return _cuda_vector_analysis_direct!(
+        plan, plan.cfg, Sout, Tout, Vt, Vp; use_rfft=plan.use_rfft,
+    )
+end
+
+function synthesis_sphtor!(plan::SHTPlan, Vt::CUDA.AnyCuArray,
+                            Vp::CUDA.AnyCuArray, Slm::CUDA.AnyCuArray,
+                            Tlm::CUDA.AnyCuArray; real_output::Bool=true)
+    return _cuda_vector_synthesis_direct!(
+        plan, plan.cfg, Vt, Vp, Slm, Tlm;
+        real_output, use_rfft=plan.use_rfft,
+    )
+end
+
+function _cuda_vector_diagonal!(output::CUDA.AnyCuArray,
+                                cfg::SHTConfig,
+                                input::CUDA.AnyCuArray;
+                                inverse::Bool)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(input) == expected || throw(DimensionMismatch("input must have size $expected"))
+    size(output) == expected || throw(DimensionMismatch("output must have size $expected"))
+    eltype(output) === eltype(input) || throw(ArgumentError(
+        "vector operator input and output element types must match",
+    ))
+    vector_diagonal_kernel!(CUDABackend())(
+        output, input, cfg.lmax, cfg.mmax, cfg.mres, inverse;
+        ndrange=expected,
+    )
+    CUDA.synchronize()
+    return output
+end
+
+divergence_from_spheroidal(cfg::SHTConfig, input::CUDA.AnyCuArray) =
+    divergence_from_spheroidal!(cfg, similar(input), input)
+divergence_from_spheroidal!(cfg::SHTConfig, output::CUDA.AnyCuArray,
+                            input::CUDA.AnyCuArray) =
+    _cuda_vector_diagonal!(output, cfg, input; inverse=false)
+spheroidal_from_divergence(cfg::SHTConfig, input::CUDA.AnyCuArray) =
+    spheroidal_from_divergence!(cfg, similar(input), input)
+spheroidal_from_divergence!(cfg::SHTConfig, output::CUDA.AnyCuArray,
+                            input::CUDA.AnyCuArray) =
+    _cuda_vector_diagonal!(output, cfg, input; inverse=true)
+vorticity_from_toroidal(cfg::SHTConfig, input::CUDA.AnyCuArray) =
+    vorticity_from_toroidal!(cfg, similar(input), input)
+vorticity_from_toroidal!(cfg::SHTConfig, output::CUDA.AnyCuArray,
+                         input::CUDA.AnyCuArray) =
+    _cuda_vector_diagonal!(output, cfg, input; inverse=false)
+toroidal_from_vorticity(cfg::SHTConfig, input::CUDA.AnyCuArray) =
+    toroidal_from_vorticity!(cfg, similar(input), input)
+toroidal_from_vorticity!(cfg::SHTConfig, output::CUDA.AnyCuArray,
+                         input::CUDA.AnyCuArray) =
+    _cuda_vector_diagonal!(output, cfg, input; inverse=true)
 
 @inline function _cuda_lcap(cfg::SHTConfig, ltr::Integer)
     return SHTnsKit._validate_degree_limit(cfg, ltr)

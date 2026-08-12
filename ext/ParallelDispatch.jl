@@ -177,17 +177,191 @@ end
 ##########
 
 function SHTnsKit.analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray;
-                                   use_tables=cfg.use_plm_tables, return_pencil::Bool=false)
-    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; use_tables)
-
+                                   use_tables=cfg.use_plm_tables,
+                                   use_rfft::Bool=false,
+                                   return_pencil::Bool=true)
     if return_pencil
-        comm = communicator(Vtθφ)
-        return SHTnsKit.matrix_to_spectral_pencil(cfg, Slm; comm),
-               SHTnsKit.matrix_to_spectral_pencil(cfg, Tlm; comm)
+        return dist_analysis_sphtor_pencil(cfg, Vtθφ, Vpθφ; use_rfft)
     else
-        return Slm, Tlm
+        return SHTnsKit.dist_analysis_sphtor(
+            cfg, Vtθφ, Vpθφ; use_tables, use_rfft,
+        )
     end
 end
+
+function SHTnsKit.analysis_sphtor_cplx(cfg::SHTnsKit.SHTConfig,
+                                        Vtθφ::PencilArray,
+                                        Vpθφ::PencilArray;
+                                        return_pencil::Bool=true)
+    return SHTnsKit.analysis_sphtor(
+        cfg, Vtθφ, Vpθφ; return_pencil, use_rfft=false,
+    )
+end
+
+function SHTnsKit.synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
+                                    Slm::PencilArray, Tlm::PencilArray;
+                                    prototype_θφ::PencilArray,
+                                    real_output::Bool=true,
+                                    use_rfft::Bool=false)
+    Vt_local, Vp_local = dist_synthesis_sphtor_pencil(
+        cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft,
+    )
+    Vt = PencilArray{eltype(Vt_local)}(undef, pencil(prototype_θφ))
+    Vp = PencilArray{eltype(Vp_local)}(undef, pencil(prototype_θφ))
+    copyto!(parent(Vt), Vt_local); copyto!(parent(Vp), Vp_local)
+    return Vt, Vp
+end
+
+
+function SHTnsKit.synthesis_sphtor_cplx(cfg::SHTnsKit.SHTConfig,
+                                         Slm::PencilArray,
+                                         Tlm::PencilArray;
+                                         prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_sphtor(
+        cfg, Slm, Tlm; prototype_θφ, real_output=false,
+    )
+end
+
+function _zero_spectral_pencil_like(reference::PencilArray)
+    result = PencilArray{eltype(reference)}(undef, pencil(reference))
+    fill!(parent(result), zero(eltype(result)))
+    return result
+end
+
+function SHTnsKit.synthesis_sph(cfg::SHTnsKit.SHTConfig,
+                                Slm::PencilArray;
+                                prototype_θφ::PencilArray,
+                                real_output::Bool=true)
+    return SHTnsKit.synthesis_sphtor(
+        cfg, Slm, _zero_spectral_pencil_like(Slm);
+        prototype_θφ, real_output,
+    )
+end
+
+
+function SHTnsKit.synthesis_sph_cplx(cfg::SHTnsKit.SHTConfig,
+                                     Slm::PencilArray;
+                                     prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_sph(
+        cfg, Slm; prototype_θφ, real_output=false,
+    )
+end
+
+function SHTnsKit.synthesis_tor(cfg::SHTnsKit.SHTConfig,
+                                Tlm::PencilArray;
+                                prototype_θφ::PencilArray,
+                                real_output::Bool=true)
+    return SHTnsKit.synthesis_sphtor(
+        cfg, _zero_spectral_pencil_like(Tlm), Tlm;
+        prototype_θφ, real_output,
+    )
+end
+
+
+function SHTnsKit.synthesis_tor_cplx(cfg::SHTnsKit.SHTConfig,
+                                     Tlm::PencilArray;
+                                     prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_tor(
+        cfg, Tlm; prototype_θφ, real_output=false,
+    )
+end
+
+function _pencil_vector_diagonal!(output::PencilArray,
+                                  cfg::SHTnsKit.SHTConfig,
+                                  input::PencilArray;
+                                  inverse::Bool,
+                                  operation::Symbol)
+    comm = communicator(input)
+    _validate_cfg_replicated(cfg, comm)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    _validate_scalar_pencil!(
+        cfg, input, expected, operation; comm, peer=output,
+        require_full_first_dim=true, required_decomposition=(2,),
+    )
+    _validate_scalar_pencil!(
+        cfg, output, expected, operation; comm, peer=input,
+        require_full_first_dim=true, required_decomposition=(2,),
+    )
+    _validate_identical_pencil_layout!(input, output, operation; comm)
+    flags = eltype(input) === eltype(output) ? UInt32(0) : UInt32(0x0004)
+    _collective_validation_error(comm, flags, operation)
+
+    l_globals = collect(Int, globalindices(input, 1))
+    m_globals = collect(Int, globalindices(input, 2))
+    source = parent(input); destination = parent(output)
+    @inbounds for (local_m, m_index) in pairs(m_globals),
+                  (local_l, l_index) in pairs(l_globals)
+        l = l_index - 1; m = m_index - 1
+        if l >= max(1, m) && m % cfg.mres == 0
+            ll1 = l * (l + 1)
+            destination[local_l, local_m] = inverse ?
+                -(source[local_l, local_m] / ll1) :
+                -ll1 * source[local_l, local_m]
+        else
+            destination[local_l, local_m] = zero(eltype(destination))
+        end
+    end
+    return output
+end
+
+function _pencil_vector_diagonal(cfg::SHTnsKit.SHTConfig,
+                                 input::PencilArray;
+                                 inverse::Bool,
+                                 operation::Symbol)
+    output = PencilArray{eltype(input)}(undef, pencil(input))
+    return _pencil_vector_diagonal!(
+        output, cfg, input; inverse, operation,
+    )
+end
+
+SHTnsKit.divergence_from_spheroidal(cfg::SHTnsKit.SHTConfig,
+                                    input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=false, operation=:divergence_from_spheroidal,
+    )
+SHTnsKit.divergence_from_spheroidal!(cfg::SHTnsKit.SHTConfig,
+                                     output::PencilArray,
+                                     input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=false, operation=:divergence_from_spheroidal!,
+    )
+SHTnsKit.spheroidal_from_divergence(cfg::SHTnsKit.SHTConfig,
+                                    input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=true, operation=:spheroidal_from_divergence,
+    )
+SHTnsKit.spheroidal_from_divergence!(cfg::SHTnsKit.SHTConfig,
+                                     output::PencilArray,
+                                     input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=true, operation=:spheroidal_from_divergence!,
+    )
+SHTnsKit.vorticity_from_toroidal(cfg::SHTnsKit.SHTConfig,
+                                 input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=false, operation=:vorticity_from_toroidal,
+    )
+SHTnsKit.vorticity_from_toroidal!(cfg::SHTnsKit.SHTConfig,
+                                  output::PencilArray,
+                                  input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=false, operation=:vorticity_from_toroidal!,
+    )
+SHTnsKit.toroidal_from_vorticity(cfg::SHTnsKit.SHTConfig,
+                                 input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=true, operation=:toroidal_from_vorticity,
+    )
+SHTnsKit.toroidal_from_vorticity!(cfg::SHTnsKit.SHTConfig,
+                                  output::PencilArray,
+                                  input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=true, operation=:toroidal_from_vorticity!,
+    )
 
 function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray;
                                 return_pencil::Bool=false)

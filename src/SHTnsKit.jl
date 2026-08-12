@@ -297,7 +297,8 @@ export dist_analysis, dist_synthesis                      # Distributed transfor
 export dist_scalar_roundtrip!, dist_vector_roundtrip!    # Distributed roundtrip tests
 export DistPlan, dist_synthesis!                         # Distributed plans
 export DistAnalysisPlan, dist_analysis!                  
-export DistSphtorPlan, dist_analysis_sphtor!, dist_synthesis_sphtor!   # Distributed vector transforms
+export DistSphtorPlan, dist_analysis_sphtor, dist_synthesis_sphtor,
+       dist_analysis_sphtor!, dist_synthesis_sphtor!   # Distributed vector transforms
 export DistQstPlan, dist_analysis_qst!, dist_synthesis_qst!            # Distributed Q,S,T transforms
 export dist_SH_to_lat, dist_SH_to_point, dist_SHqst_to_point           # Distributed evaluation
 export dist_analysis_packed, dist_synthesis_packed                   # Distributed packed transforms

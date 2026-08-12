@@ -8,10 +8,52 @@ MPI.Init()
 
 include("scalar_full.jl")
 include("scalar_variants.jl")
+include("sphtor_full.jl")
 
 struct MPIScalarAdapter <: ScalarParityAdapter
     comm
 end
+
+struct MPIVectorAdapter <: VectorParityAdapter
+    comm
+end
+
+function vector_place(adapter::MPIVectorAdapter, cfg::SHTConfig,
+                      value::AbstractMatrix, kind::Symbol)
+    if kind === :spectral
+        return matrix_to_spectral_pencil(cfg, value; comm=adapter.comm)
+    end
+    pen = create_spatial_pencil(cfg; comm=adapter.comm)
+    placed = PencilArray{eltype(value)}(undef, pen)
+    theta = collect(PencilArrays.range_local(pen)[1])
+    phi = collect(PencilArrays.range_local(pen)[2])
+    for (j, jglobal) in pairs(phi), (i, iglobal) in pairs(theta)
+        parent(placed)[i, j] = value[iglobal, jglobal]
+    end
+    return placed
+end
+
+vector_collect(::MPIVectorAdapter, value::PencilArray, cfg::SHTConfig) =
+    size_global(value) == (cfg.lmax + 1, cfg.mmax + 1) ?
+        spectral_pencil_to_matrix(cfg, value) : _collect_spatial(value, cfg)
+vector_resident(::MPIVectorAdapter, value) = @test value isa PencilArray
+vector_analysis(::MPIVectorAdapter, cfg, Vt, Vp; use_rfft=false) =
+    analysis_sphtor(cfg, Vt, Vp; use_rfft)
+vector_analysis_cplx(::MPIVectorAdapter, cfg, Vt, Vp) =
+    analysis_sphtor_cplx(cfg, Vt, Vp)
+vector_synthesis(::MPIVectorAdapter, cfg, S, T, prototype;
+                 real_output=true, use_rfft=false) =
+    synthesis_sphtor(cfg, S, T; prototype_θφ=prototype, real_output, use_rfft)
+vector_synthesis_cplx(::MPIVectorAdapter, cfg, S, T, prototype) =
+    synthesis_sphtor_cplx(cfg, S, T; prototype_θφ=prototype)
+vector_sph(::MPIVectorAdapter, cfg, S, prototype; real_output=true) =
+    synthesis_sph(cfg, S; prototype_θφ=prototype, real_output)
+vector_sph_cplx(::MPIVectorAdapter, cfg, S, prototype) =
+    synthesis_sph_cplx(cfg, S; prototype_θφ=prototype)
+vector_tor(::MPIVectorAdapter, cfg, T, prototype; real_output=true) =
+    synthesis_tor(cfg, T; prototype_θφ=prototype, real_output)
+vector_tor_cplx(::MPIVectorAdapter, cfg, T, prototype) =
+    synthesis_tor_cplx(cfg, T; prototype_θφ=prototype)
 
 function place(adapter::MPIScalarAdapter, cfg::SHTConfig, value::AbstractMatrix, kind::Symbol)
     if kind === :spectral
@@ -274,6 +316,8 @@ function test_collective_validation(adapter::MPIScalarAdapter)
 end
 
 adapter = MPIScalarAdapter(MPI.COMM_WORLD)
+vector_adapter = MPIVectorAdapter(MPI.COMM_WORLD)
+if isempty(ARGS) || !("sphtor_full" in ARGS)
 # Exercise every mathematical axis without taking their full Cartesian product:
 # each Pencil construction owns an MPI Cartesian communicator, and a giant
 # product needlessly exhausts MPI implementations with a 2048-context limit.
@@ -1287,6 +1331,145 @@ end
         create_gauss_config(3, 6; nlon=10, mres=2) : complex_cfg
     @test _all_ranks_catch(adapter.comm) do
         dist_analysis_packed_cplx(rank_complex_cfg, complex_spatial)
+    end
+end
+end # scalar/full-variant runner selection
+
+if isempty(ARGS) || "sphtor_full" in ARGS
+    run_sphtor_full_parity(
+        vector_adapter;
+        grid_kinds=_VECTOR_GRID_KINDS,
+        precisions=(Float32, Float64),
+        mres_values=(1, 2),
+        norms=(:orthonormal,), real_norm_values=(false,),
+        cs_phase_values=(true,), robert_values=(false, true),
+        pole_orders=(false,),
+    )
+    run_sphtor_full_parity(
+        vector_adapter;
+        grid_kinds=(:gauss,), precisions=(Float64,), mres_values=(1,),
+        norms=(:orthonormal, :fourpi, :schmidt),
+        real_norm_values=(false, true), cs_phase_values=(false, true),
+        robert_values=(false,), pole_orders=(false, true),
+    )
+
+    @testset "Pencil-native vector path and collective validation" begin
+        cfg = _vector_config(:gauss, 3, 8; norm=:schmidt,
+                             real_norm=true, cs_phase=false)
+        S, Tlm = _vector_modes(cfg, Float32)
+        Vt, Vp = _direct_low_vector(cfg, S, Tlm; real_output=true)
+        Vtd = vector_place(vector_adapter, cfg, Vt, :spatial)
+        Vpd = vector_place(vector_adapter, cfg, Vp, :spatial)
+        Sd = vector_place(vector_adapter, cfg,
+                          _external_vector_coefficients(cfg, S), :spectral)
+        Td = vector_place(vector_adapter, cfg,
+                          _external_vector_coefficients(cfg, Tlm), :spectral)
+        extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+        extension._reset_pencil_scalar_stats!()
+        Sa, Ta = analysis_sphtor(cfg, Vtd, Vpd)
+        @test Sa isa PencilArray
+        @test Ta isa PencilArray
+        @test eltype(Sa) === ComplexF32
+        @test extension._pencil_scalar_stats().full_matrix_helper_calls == 0
+        extension._reset_pencil_scalar_stats!()
+        Vr = synthesis_sphtor(cfg, Sd, Td; prototype_θφ=Vtd)
+        @test Vr[1] isa PencilArray
+        @test Vr[2] isa PencilArray
+        @test eltype(Vr[1]) === Float32
+        @test extension._pencil_scalar_stats().full_matrix_helper_calls == 0
+
+        @test isdefined(SHTnsKit, :dist_analysis_sphtor)
+        @test isdefined(SHTnsKit, :dist_synthesis_sphtor)
+        dense_S, dense_T = dist_analysis_sphtor(cfg, Vtd, Vpd)
+        @test dense_S isa Matrix{ComplexF32}
+        @test dense_T isa Matrix{ComplexF32}
+        @test dense_S ≈ _external_vector_coefficients(cfg, S) atol=4f-4 rtol=4f-4
+        @test dense_T ≈ _external_vector_coefficients(cfg, Tlm) atol=4f-4 rtol=4f-4
+        dense_Vt, dense_Vp = dist_synthesis_sphtor(
+            cfg, dense_S, dense_T; prototype_θφ=Vtd,
+        )
+        @test dense_Vt isa Matrix{Float32}
+        @test dense_Vp isa Matrix{Float32}
+        dense_Vtd = PencilArray{Float32}(undef, pencil(Vtd))
+        dense_Vpd = PencilArray{Float32}(undef, pencil(Vpd))
+        copyto!(parent(dense_Vtd), dense_Vt)
+        copyto!(parent(dense_Vpd), dense_Vp)
+        @test _collect_spatial(dense_Vtd, cfg) ≈ Vt atol=4f-4 rtol=4f-4
+        @test _collect_spatial(dense_Vpd, cfg) ≈ Vp atol=4f-4 rtol=4f-4
+
+        plan = extension.DistSphtorPlan(cfg, Vtd)
+        @test eltype(plan.Ftθm) === ComplexF32
+        @test eltype(plan.Fpθm) === ComplexF32
+        @test eltype(plan.Slm_work) === ComplexF32
+        @test eltype(plan.Tlm_work) === ComplexF32
+        plan_S = zeros(ComplexF32, cfg.lmax + 1, cfg.mmax + 1)
+        plan_T = similar(plan_S)
+        dist_analysis_sphtor!(plan, plan_S, plan_T, Vtd, Vpd)
+        @test plan_S ≈ dense_S atol=4f-4 rtol=4f-4
+        @test plan_T ≈ dense_T atol=4f-4 rtol=4f-4
+        plan_Vt = PencilArray{Float32}(undef, pencil(Vtd))
+        plan_Vp = PencilArray{Float32}(undef, pencil(Vpd))
+        dist_synthesis_sphtor!(
+            plan, plan_Vt, plan_Vp, plan_S, plan_T; real_output=true,
+        )
+        @test _collect_spatial(plan_Vt, cfg) ≈ Vt atol=4f-4 rtol=4f-4
+        @test _collect_spatial(plan_Vp, cfg) ≈ Vp atol=4f-4 rtol=4f-4
+
+        scratch_plan = extension.DistSphtorPlan(
+            cfg, Vtd; with_spatial_scratch=true,
+        )
+        @test eltype(scratch_plan.spatial_scratch.Fθ) === ComplexF32
+        @test eltype(scratch_plan.spatial_scratch.Fφ) === ComplexF32
+        @test eltype(scratch_plan.spatial_scratch.Vtθ) === Float32
+        @test eltype(scratch_plan.spatial_scratch.Vpθ) === Float32
+        scratch_Vt = PencilArray{Float32}(undef, pencil(Vtd))
+        scratch_Vp = PencilArray{Float32}(undef, pencil(Vpd))
+        dist_synthesis_sphtor!(
+            scratch_plan, scratch_Vt, scratch_Vp, dense_S, dense_T;
+            real_output=true,
+        )
+        @test _collect_spatial(scratch_Vt, cfg) ≈ Vt atol=4f-4 rtol=4f-4
+        @test _collect_spatial(scratch_Vp, cfg) ≈ Vp atol=4f-4 rtol=4f-4
+
+        mres_cfg = _vector_config(
+            :gauss, 3, 8; mres=2, norm=:schmidt,
+            real_norm=true, cs_phase=false,
+        )
+        mres_plan = extension.DistSphtorPlan(
+            mres_cfg, Vtd; with_spatial_scratch=true,
+        )
+        unsupported = zeros(ComplexF32, mres_cfg.lmax + 1, mres_cfg.mmax + 1)
+        unsupported[2, 2] = 0.3f0 - 0.2f0im
+        zero_modes = zero(unsupported)
+        dist_synthesis_sphtor!(
+            mres_plan, scratch_Vt, scratch_Vp, unsupported, zero_modes;
+            real_output=true,
+        )
+        @test all(iszero, _collect_spatial(scratch_Vt, mres_cfg))
+        @test all(iszero, _collect_spatial(scratch_Vp, mres_cfg))
+
+        rank_bad_S = MPI.Comm_rank(vector_adapter.comm) == 0 ?
+            @view(dense_S[1:(end - 1), :]) : dense_S
+        @test _all_ranks_catch(vector_adapter.comm) do
+            dist_synthesis_sphtor!(
+                scratch_plan, scratch_Vt, scratch_Vp, rank_bad_S, dense_T;
+                real_output=true,
+            )
+        end
+        MPI.Barrier(vector_adapter.comm)
+
+        rank = MPI.Comm_rank(vector_adapter.comm)
+        # Construct the layout collectively on every rank, then vary only the
+        # local element type.  Constructing different Pencil shapes on
+        # different ranks would itself enter mismatched communicator
+        # collectives before the transform validation has a chance to run.
+        bad = rank == 0 ?
+            PencilArray{Float64}(undef, pencil(Vpd)) :
+            PencilArray{Float32}(undef, pencil(Vpd))
+        fill!(parent(bad), 0)
+        @test _all_ranks_catch(vector_adapter.comm) do
+            analysis_sphtor(cfg, Vtd, bad)
+        end
     end
 end
 

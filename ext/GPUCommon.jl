@@ -10,6 +10,8 @@ export laplacian_kernel!, legendre_table_kernel!, scalar_analysis_kernel!,
        mode_analysis_kernel!, mode_synthesis_kernel!,
        scalar_batch_analysis_kernel!, scalar_batch_synthesis_kernel!,
        complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
+       vector_derivative_table_kernel!, vector_analysis_kernel!,
+       vector_synthesis_kernel!, vector_diagonal_kernel!, vector_host_tables,
        scalar_config_signature, scalar_host_tables,
        ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
        scalar_cache_clear!, scalar_cache_size,
@@ -255,6 +257,13 @@ function scalar_host_tables(cfg::SHTnsKit.SHTConfig, ::Type{T}) where {T<:Abstra
     return T.(cfg.x), T.(cfg.w), scales
 end
 
+"""Build the typed host setup copied into a vendor's vector-table cache."""
+function vector_host_tables(cfg::SHTnsKit.SHTConfig,
+                            ::Type{T}) where {T<:AbstractFloat}
+    x, weights, scales = scalar_host_tables(cfg, T)
+    return x, weights, scales, T.(cfg.Nlm)
+end
+
 """Build orthonormal, Condon--Shortley associated Legendre values on device."""
 @kernel function legendre_table_kernel!(Plm, x, lmax, mmax)
     i, m_idx = @index(Global, NTuple)
@@ -288,6 +297,170 @@ end
                 previous2 = previous1
                 previous1 = value
             end
+        end
+    end
+end
+
+"""
+Build orthonormal P, dP/dtheta, and P/sin(theta) tables in backend precision.
+The exact-pole branch evaluates the finite m=1 limits analytically; no kernel
+ever forms a singular quotient and masks it afterwards.
+"""
+@kernel function vector_derivative_table_kernel!(Plm, dtheta, over_sin,
+                                                  x, Nlm, lmax, mmax)
+    i, m_idx = @index(Global, NTuple)
+    if i <= length(x) && m_idx <= mmax + 1
+        m = m_idx - 1
+        xi = x[i]
+        T = typeof(xi)
+        s = sqrt(max(zero(T), one(T) - xi * xi))
+        pmm = inv(sqrt(T(4) * T(pi)))
+        @inbounds for k in 1:m
+            tk = T(k)
+            pmm = -sqrt((T(2) * tk + one(T)) / (T(2) * tk)) * s * pmm
+        end
+        Plm[i, m + 1, m_idx] = pmm
+        if m < lmax
+            pm1m = sqrt(T(2m + 3)) * xi * pmm
+            Plm[i, m + 2, m_idx] = pm1m
+            previous2 = pmm
+            previous1 = pm1m
+            @inbounds for l in (m + 2):lmax
+                tl = T(l); tm = T(m)
+                a = sqrt(((T(2) * tl - one(T)) * (T(2) * tl + one(T))) /
+                         ((tl - tm) * (tl + tm)))
+                b = sqrt(((T(2) * tl + one(T)) * (tl - one(T) - tm) *
+                          (tl - one(T) + tm)) /
+                         ((T(2) * tl - T(3)) * (tl - tm) * (tl + tm)))
+                value = a * xi * previous1 - b * previous2
+                Plm[i, l + 1, m_idx] = value
+                previous2 = previous1
+                previous1 = value
+            end
+        end
+
+        @inbounds for l in 0:lmax
+            if l < m
+                Plm[i, l + 1, m_idx] = zero(T)
+                dtheta[i, l + 1, m_idx] = zero(T)
+                over_sin[i, l + 1, m_idx] = zero(T)
+            elseif iszero(s)
+                if m == 1
+                    half_ll1 = T(l * (l + 1)) / T(2)
+                    N = Nlm[l + 1, m_idx]
+                    north = xi > zero(T)
+                    dsign = north ? -one(T) : (isodd(l) ? one(T) : -one(T))
+                    psign = north ? -one(T) : (iseven(l) ? one(T) : -one(T))
+                    dtheta[i, l + 1, m_idx] = dsign * N * half_ll1
+                    over_sin[i, l + 1, m_idx] = psign * N * half_ll1
+                else
+                    dtheta[i, l + 1, m_idx] = zero(T)
+                    over_sin[i, l + 1, m_idx] = zero(T)
+                end
+            else
+                current = Plm[i, l + 1, m_idx]
+                previous = l == m ? zero(T) : Plm[i, l, m_idx]
+                beta = l == m ? zero(T) :
+                    sqrt(T((2l + 1) * (l * l - m * m)) / T(2l - 1))
+                dtheta[i, l + 1, m_idx] =
+                    (T(l) * xi * current - beta * previous) / s
+                over_sin[i, l + 1, m_idx] = current / s
+            end
+        end
+    end
+end
+
+"""Latitude contraction for the two tangential Fourier components."""
+@kernel function vector_analysis_kernel!(Sout, Tout, Ftheta, Fphi,
+                                          dtheta, over_sin, weights, scales,
+                                          x, cphi, lmax, mmax, mres,
+                                          robert_form)
+    l_idx, m_idx = @index(Global, NTuple)
+    if l_idx <= lmax + 1 && m_idx <= mmax + 1
+        l = l_idx - 1
+        m = m_idx - 1
+        if l >= max(1, m) && m % mres == 0
+            Svalue = zero(eltype(Sout))
+            Tvalue = zero(eltype(Tout))
+            @inbounds for i in 1:length(weights)
+                s = sqrt(max(zero(eltype(x)), one(eltype(x)) - x[i] * x[i]))
+                Ft = Ftheta[i, m_idx]
+                Fp = Fphi[i, m_idx]
+                if robert_form && !iszero(s)
+                    Ft /= s
+                    Fp /= s
+                end
+                d = dtheta[i, l_idx, m_idx]
+                term = complex(zero(d), typeof(d)(m) * over_sin[i, l_idx, m_idx])
+                factor = weights[i] * cphi / typeof(d)(l * (l + 1))
+                Svalue += factor * (Ft * d + conj(term) * Fp)
+                Tvalue += factor * (-conj(term) * Ft + d * Fp)
+            end
+            scale = scales[l_idx, m_idx]
+            Sout[l_idx, m_idx] = Svalue / scale
+            Tout[l_idx, m_idx] = Tvalue / scale
+        else
+            Sout[l_idx, m_idx] = zero(eltype(Sout))
+            Tout[l_idx, m_idx] = zero(eltype(Tout))
+        end
+    end
+end
+
+"""Vector Legendre synthesis into vendor-IFFT Fourier bins."""
+@kernel function vector_synthesis_kernel!(Ftheta, Fphi, Sin, Tin,
+                                           dtheta, over_sin, scales, x,
+                                           inv_scale, nlon, lmax, mmax,
+                                           mres, real_output, robert_form)
+    i, m_idx = @index(Global, NTuple)
+    if i <= size(Ftheta, 1) && m_idx <= mmax + 1
+        m = m_idx - 1
+        if m % mres == 0
+            gt = zero(eltype(Ftheta))
+            gp = zero(eltype(Fphi))
+            @inbounds for l in max(1, m):lmax
+                d = dtheta[i, l + 1, m_idx]
+                p = over_sin[i, l + 1, m_idx]
+                scale = scales[l + 1, m_idx]
+                S = scale * Sin[l + 1, m_idx]
+                Tv = scale * Tin[l + 1, m_idx]
+                term = complex(zero(d), typeof(d)(m) * p)
+                gt += d * S - term * Tv
+                gp += term * S + d * Tv
+            end
+            if robert_form
+                s = sqrt(max(zero(eltype(x)), one(eltype(x)) - x[i] * x[i]))
+                gt *= s
+                gp *= s
+            end
+            bt = inv_scale * gt
+            bp = inv_scale * gp
+            Ftheta[i, m_idx] = bt
+            Fphi[i, m_idx] = bp
+            if real_output && m > 0
+                negative_idx = nlon - m + 1
+                if negative_idx != m_idx
+                    Ftheta[i, negative_idx] = conj(bt)
+                    Fphi[i, negative_idx] = conj(bp)
+                end
+            end
+        end
+    end
+end
+
+"""Apply or invert the tangential `-l(l+1)` spectral multiplier."""
+@kernel function vector_diagonal_kernel!(output, input, lmax, mmax, mres,
+                                         inverse)
+    l_idx, m_idx = @index(Global, NTuple)
+    if l_idx <= lmax + 1 && m_idx <= mmax + 1
+        l = l_idx - 1
+        m = m_idx - 1
+        if l >= max(1, m) && m % mres == 0
+            ll1 = l * (l + 1)
+            output[l_idx, m_idx] = inverse ?
+                -(input[l_idx, m_idx] / ll1) :
+                -ll1 * input[l_idx, m_idx]
+        else
+            output[l_idx, m_idx] = zero(eltype(output))
         end
     end
 end

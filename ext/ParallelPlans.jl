@@ -139,17 +139,12 @@ function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft
     return DistPlan(cfg, prototype_θφ, use_rfft)
 end
 
-const _SphtorScratch = NamedTuple{(:Fθ, :Fφ, :Vtθ, :Vpθ, :P, :dPdx),
-                                   Tuple{Matrix{ComplexF64}, Matrix{ComplexF64},
-                                         Matrix{Float64}, Matrix{Float64},
-                                         Vector{Float64}, Vector{Float64}}}
-
-struct DistSphtorPlan
+struct DistSphtorPlan{CT<:Complex}
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
     use_rfft::Bool
     with_spatial_scratch::Bool
-    spatial_scratch::Union{Nothing, _SphtorScratch}
+    spatial_scratch::Union{Nothing, NamedTuple}
     # --- analysis scratch (always allocated; see DistAnalysisPlan) ---
     fallback_standard::Bool
     θ_globals::Vector{Int}
@@ -161,10 +156,10 @@ struct DistSphtorPlan
     dPdtheta::Vector{Float64}
     P_over_sth::Vector{Float64}
     Pbuf::Vector{Float64}
-    Ftθm::Matrix{ComplexF64}
-    Fpθm::Matrix{ComplexF64}
-    Slm_work::Matrix{ComplexF64}
-    Tlm_work::Matrix{ComplexF64}
+    Ftθm::Matrix{CT}
+    Fpθm::Matrix{CT}
+    Slm_work::Matrix{CT}
+    Tlm_work::Matrix{CT}
     θ_is_distributed::Bool
     reduce_comm::MPI.Comm
 end
@@ -176,6 +171,10 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
     _validate_cfg_replicated(cfg, comm)
+    RT = _validate_plan_prototype_precision(
+        prototype_θφ, comm, :DistSphtorPlan,
+    )
+    CT = Complex{RT}
     θ_globals = collect(Int, globalindices(prototype_θφ, 1))
     nθ_local = length(θ_globals)
     nlon = cfg.nlon
@@ -183,12 +182,14 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     scratch = if with_spatial_scratch
         # Pre-allocate all scratch buffers needed for synthesis
         (
-            Fθ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vθ
-            Fφ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vφ
-            Vtθ = Matrix{Float64}(undef, nθ_local, nlon),     # Real output for Vθ
-            Vpθ = Matrix{Float64}(undef, nθ_local, nlon),     # Real output for Vφ
-            P = Vector{Float64}(undef, lmax + 1),             # Legendre polynomial buffer
-            dPdx = Vector{Float64}(undef, lmax + 1),          # Legendre derivative buffer
+            Fθ = Matrix{CT}(undef, nθ_local, nlon),   # Fourier coeffs for Vθ
+            Fφ = Matrix{CT}(undef, nθ_local, nlon),   # Fourier coeffs for Vφ
+            Vtθ = Matrix{RT}(undef, nθ_local, nlon),  # Real output for Vθ
+            Vpθ = Matrix{RT}(undef, nθ_local, nlon),  # Real output for Vφ
+            P = Vector{Float64}(undef, lmax + 1),
+            dPdtheta = Vector{Float64}(undef, lmax + 1),
+            P_over_sth = Vector{Float64}(undef, lmax + 1),
+            Pbuf = Vector{Float64}(undef, lmax + 2),
         )
     else
         nothing
@@ -210,10 +211,10 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
         weights_cache[ii] = cfg.w[iglob]
     end
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
-    Ftθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
-    Fpθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
-    Slm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
-    Tlm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
+    Ftθm = Matrix{CT}(undef, nθ_local, nbins)
+    Fpθm = Matrix{CT}(undef, nθ_local, nbins)
+    Slm_work = Matrix{CT}(undef, lmax + 1, cfg.mmax + 1)
+    Tlm_work = Matrix{CT}(undef, lmax + 1, cfg.mmax + 1)
     # Reduced, not per-rank. The consumers (`dist_analysis!`,
     # `dist_analysis_sphtor!`) guard a full-comm `MPI.Allreduce!` with this flag,
     # so a topology where one rank owns every latitude and the rest own none

@@ -165,6 +165,13 @@ Base.@constprop :aggressive function synthesis_sphtor(cfg::SHTConfig, Slm::Abstr
     return _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(use_rfft))
 end
 
+function synthesis_sphtor(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                           Tlm::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:synthesis_sphtor, Slm)
+    _require_cpu_storage(:synthesis_sphtor, Tlm)
+    return synthesis_sphtor(cfg, Slm, Tlm; kwargs...)
+end
+
 function _synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                            ::Val{real_output}, ::Val{use_rfft}) where {real_output, use_rfft}
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -263,6 +270,104 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix;
     _externalize_coefficients!(Slm_int, cfg)
     _externalize_coefficients!(Tlm_int, cfg)
     return Slm_int, Tlm_int
+end
+
+function analysis_sphtor(::CPU, cfg::SHTConfig, Vt::AbstractMatrix,
+                          Vp::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:analysis_sphtor, Vt)
+    _require_cpu_storage(:analysis_sphtor, Vp)
+    return analysis_sphtor(cfg, Vt, Vp; kwargs...)
+end
+
+function _gpu_adapter_analysis_sphtor(adapter, cfg::SHTConfig, Vt, Vp; kwargs...)
+    throw(BackendUnavailableError(
+        :analysis_sphtor,
+        "the selected GPU adapter does not implement vector analysis",
+    ))
+end
+
+function _gpu_adapter_synthesis_sphtor(adapter, cfg::SHTConfig, Slm, Tlm;
+                                        kwargs...)
+    throw(BackendUnavailableError(
+        :synthesis_sphtor,
+        "the selected GPU adapter does not implement vector synthesis",
+    ))
+end
+
+function analysis_sphtor(::GPU, cfg::SHTConfig, Vt::AbstractMatrix,
+                          Vp::AbstractMatrix; prototype=nothing, kwargs...)
+    selection = prototype
+    selection === nothing && on_device(Vt) isa GPU && (selection = Vt)
+    selection === nothing && on_device(Vp) isa GPU && (selection = Vp)
+    adapter = _gpu_adapter(selection; operation=:analysis_sphtor)
+    for value in (Vt, Vp)
+        if on_device(value) isa GPU && !_gpu_adapter_matches(adapter, value)
+            throw(ArgumentError("vector inputs and GPU prototype use different vendors"))
+        end
+    end
+    Vtd = _gpu_adapter_matches(adapter, Vt) ? Vt : _gpu_adapter_adapt(adapter, Vt)
+    Vpd = _gpu_adapter_matches(adapter, Vp) ? Vp : _gpu_adapter_adapt(adapter, Vp)
+    return _gpu_adapter_analysis_sphtor(adapter, cfg, Vtd, Vpd; kwargs...)
+end
+
+function synthesis_sphtor(::GPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                           Tlm::AbstractMatrix; prototype=nothing, kwargs...)
+    selection = prototype
+    selection === nothing && on_device(Slm) isa GPU && (selection = Slm)
+    selection === nothing && on_device(Tlm) isa GPU && (selection = Tlm)
+    adapter = _gpu_adapter(selection; operation=:synthesis_sphtor)
+    for value in (Slm, Tlm)
+        if on_device(value) isa GPU && !_gpu_adapter_matches(adapter, value)
+            throw(ArgumentError("vector coefficients and GPU prototype use different vendors"))
+        end
+    end
+    Sd = _gpu_adapter_matches(adapter, Slm) ? Slm : _gpu_adapter_adapt(adapter, Slm)
+    Td = _gpu_adapter_matches(adapter, Tlm) ? Tlm : _gpu_adapter_adapt(adapter, Tlm)
+    return _gpu_adapter_synthesis_sphtor(adapter, cfg, Sd, Td; kwargs...)
+end
+
+"""
+    gpu_analysis_sphtor(cfg, Vt, Vp; device=GPU(), prototype=nothing)
+
+Compatibility wrapper for the historical host-returning GPU vector API.
+Ordinary `analysis_sphtor(GPU(), ...)` remains device-resident; this legacy
+entry point deliberately copies its two results back to CPU storage.
+"""
+function gpu_analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix,
+                             Vp::AbstractMatrix;
+                             device::ComputeDevice=GPU(), prototype=nothing)
+    device isa GPU || throw(ArgumentError(
+        "gpu_analysis_sphtor is strict and requires GPU()",
+    ))
+    result = try
+        analysis_sphtor(device, cfg, Vt, Vp; prototype)
+    catch err
+        err isa BackendUnavailableError || rethrow()
+        throw(BackendUnavailableError(:gpu_analysis_sphtor, err.detail))
+    end
+    return to_device(CPU(), result[1]), to_device(CPU(), result[2])
+end
+
+"""
+    gpu_synthesis_sphtor(cfg, S, T; device=GPU(), real_output=true,
+                         prototype=nothing)
+
+Compatibility wrapper for the historical host-returning GPU vector API.
+"""
+function gpu_synthesis_sphtor(cfg::SHTConfig, S::AbstractMatrix,
+                              T::AbstractMatrix;
+                              device::ComputeDevice=GPU(),
+                              real_output::Bool=true, prototype=nothing)
+    device isa GPU || throw(ArgumentError(
+        "gpu_synthesis_sphtor is strict and requires GPU()",
+    ))
+    result = try
+        synthesis_sphtor(device, cfg, S, T; prototype, real_output)
+    catch err
+        err isa BackendUnavailableError || rethrow()
+        throw(BackendUnavailableError(:gpu_synthesis_sphtor, err.detail))
+    end
+    return to_device(CPU(), result[1]), to_device(CPU(), result[2])
 end
 
 # ============================================================================
@@ -372,6 +477,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[col]
         NdP = cfg.NdP_tables[col]
@@ -392,6 +498,7 @@ end
     thread_Pb = _ensure_otf_scratch!(cfg._otf_scratch_Pb, lmax + 1)  # lmax+2 for extended P̄ row
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         tid = Threads.threadid()
         P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]; Pb = thread_Pb[tid]
@@ -433,6 +540,7 @@ end
     # output eltype, so AD types (e.g. ForwardDiff.Dual) still propagate.
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         Sacc = view(Slm, :, col)
         Tacc = view(Tlm, :, col)
@@ -468,6 +576,7 @@ end
     # pre-zeroed, one m per column → race-free, alloc-free, AD eltype preserved.
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         tid = Threads.threadid()
         Sacc = view(Slm, :, col)
@@ -497,6 +606,11 @@ function synthesis_sphtor_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::Abstrac
     return _synthesis_sphtor(cfg, Slm, Tlm, Val(false), Val(false))
 end
 
+function synthesis_sphtor_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                                Tlm::AbstractMatrix)
+    return synthesis_sphtor(CPU(), cfg, Slm, Tlm; real_output=false)
+end
+
 """
     analysis_sphtor_cplx(cfg, Vt, Vp) -> (Slm, Tlm)
 
@@ -506,6 +620,20 @@ function analysis_sphtor_cplx(cfg::SHTConfig, Vt::AbstractMatrix{<:Complex}, Vp:
     return analysis_sphtor(cfg, Vt, Vp)  # Same implementation works for complex
 end
 
+function analysis_sphtor_cplx(::CPU, cfg::SHTConfig,
+                               Vt::AbstractMatrix{<:Complex},
+                               Vp::AbstractMatrix{<:Complex})
+    return analysis_sphtor(CPU(), cfg, Vt, Vp)
+end
+
+analysis_sphtor_cplx(::GPU, cfg::SHTConfig, Vt::AbstractMatrix{<:Complex},
+                     Vp::AbstractMatrix{<:Complex}; prototype=nothing) =
+    analysis_sphtor(GPU(), cfg, Vt, Vp; prototype)
+
+synthesis_sphtor_cplx(::GPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                      Tlm::AbstractMatrix; prototype=nothing) =
+    synthesis_sphtor(GPU(), cfg, Slm, Tlm; prototype, real_output=false)
+
 """
     synthesis_sph(cfg, Slm; real_output=true) -> (Vt, Vp)
 
@@ -514,6 +642,18 @@ Transform only spheroidal component to spatial vector field (Tlm = 0).
 function synthesis_sph(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
     Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return synthesis_sphtor(cfg, Slm, Tlm_zero; real_output=real_output)
+end
+
+function synthesis_sph(::CPU, cfg::SHTConfig, Slm::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:synthesis_sph, Slm)
+    return synthesis_sph(cfg, Slm; kwargs...)
+end
+
+function synthesis_sph(::GPU, cfg::SHTConfig, Slm::AbstractMatrix;
+                       prototype=nothing, kwargs...)
+    zeroT = similar(Slm)
+    fill!(zeroT, zero(eltype(zeroT)))
+    return synthesis_sphtor(GPU(), cfg, Slm, zeroT; prototype, kwargs...)
 end
 
 """
@@ -527,6 +667,12 @@ function synthesis_sph_cplx(cfg::SHTConfig, Slm::AbstractMatrix)
     return _synthesis_sphtor(cfg, Slm, Tlm_zero, Val(false), Val(false))
 end
 
+synthesis_sph_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix) =
+    synthesis_sph(CPU(), cfg, Slm; real_output=false)
+synthesis_sph_cplx(::GPU, cfg::SHTConfig, Slm::AbstractMatrix;
+                   prototype=nothing) =
+    synthesis_sph(GPU(), cfg, Slm; prototype, real_output=false)
+
 """
     synthesis_tor(cfg, Tlm; real_output=true) -> (Vt, Vp)
 
@@ -535,6 +681,18 @@ Transform only toroidal component to spatial vector field (Slm = 0).
 function synthesis_tor(cfg::SHTConfig, Tlm::AbstractMatrix; real_output::Bool=true)
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return synthesis_sphtor(cfg, Slm_zero, Tlm; real_output=real_output)
+end
+
+function synthesis_tor(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:synthesis_tor, Tlm)
+    return synthesis_tor(cfg, Tlm; kwargs...)
+end
+
+function synthesis_tor(::GPU, cfg::SHTConfig, Tlm::AbstractMatrix;
+                       prototype=nothing, kwargs...)
+    zeroS = similar(Tlm)
+    fill!(zeroS, zero(eltype(zeroS)))
+    return synthesis_sphtor(GPU(), cfg, zeroS, Tlm; prototype, kwargs...)
 end
 
 """
@@ -547,6 +705,12 @@ function synthesis_tor_cplx(cfg::SHTConfig, Tlm::AbstractMatrix)
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return _synthesis_sphtor(cfg, Slm_zero, Tlm, Val(false), Val(false))
 end
+
+synthesis_tor_cplx(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix) =
+    synthesis_tor(CPU(), cfg, Tlm; real_output=false)
+synthesis_tor_cplx(::GPU, cfg::SHTConfig, Tlm::AbstractMatrix;
+                   prototype=nothing) =
+    synthesis_tor(GPU(), cfg, Tlm; prototype, real_output=false)
 
 """
     divergence_from_spheroidal(cfg, Slm) -> Matrix

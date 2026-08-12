@@ -293,6 +293,84 @@ function _validate_synthesis_plan_output!(plan::DistPlan,
     return nothing
 end
 
+function _validate_sphtor_analysis_plan!(plan::DistSphtorPlan,
+                                         Slm_out::AbstractMatrix,
+                                         Tlm_out::AbstractMatrix,
+                                         Vt::PencilArray,
+                                         Vp::PencilArray,
+                                         use_tables)
+    comm = communicator(plan.prototype_θφ)
+    _validate_cfg_replicated(plan.cfg, comm)
+    _validate_identical_pencil_layout!(
+        plan.prototype_θφ, Vt, :dist_analysis_sphtor_plan_input; comm,
+    )
+    _validate_identical_pencil_layout!(
+        Vt, Vp, :dist_analysis_sphtor_plan_input; comm,
+    )
+    _validate_collective_scalar_options!(
+        comm, plan.use_rfft, true, :dist_analysis_sphtor_plan,
+    )
+
+    expected = (plan.cfg.lmax + 1, plan.cfg.mmax + 1)
+    input_type = eltype(plan.prototype_θφ)
+    coefficient_type = eltype(plan.Slm_work)
+    flags = UInt32(0)
+    size(Slm_out) == expected && size(Tlm_out) == expected || (flags |= 0x0001)
+    eltype(Vt) === input_type && eltype(Vp) === input_type || (flags |= 0x0004)
+    eltype(Slm_out) === coefficient_type && eltype(Tlm_out) === coefficient_type ||
+        (flags |= 0x0004)
+    plan.use_rfft && (!(eltype(Vt) <: Real) || !(eltype(Vp) <: Real)) &&
+        (flags |= 0x0010)
+    table_code = use_tables === false ? 0 : use_tables === true ? 1 : -1
+    table_code < 0 && (flags |= 0x0004)
+    MPI.Allreduce(table_code, min, comm) == MPI.Allreduce(table_code, max, comm) ||
+        (flags |= 0x0004)
+    _collective_validation_error(comm, flags, :dist_analysis_sphtor_plan)
+    return nothing
+end
+
+function _validate_sphtor_synthesis_plan!(plan::DistSphtorPlan,
+                                          Vt_out::PencilArray,
+                                          Vp_out::PencilArray,
+                                          Slm::AbstractMatrix,
+                                          Tlm::AbstractMatrix,
+                                          real_output::Bool)
+    comm = communicator(plan.prototype_θφ)
+    _validate_cfg_replicated(plan.cfg, comm)
+    _validate_identical_pencil_layout!(
+        plan.prototype_θφ, Vt_out, :dist_synthesis_sphtor_plan_output; comm,
+    )
+    _validate_identical_pencil_layout!(
+        Vt_out, Vp_out, :dist_synthesis_sphtor_plan_output; comm,
+    )
+    _validate_collective_scalar_options!(
+        comm, plan.use_rfft, real_output, :dist_synthesis_sphtor_plan,
+    )
+
+    expected = (plan.cfg.lmax + 1, plan.cfg.mmax + 1)
+    CT = eltype(plan.Slm_work)
+    RT = typeof(real(zero(CT)))
+    output_type = real_output ? RT : CT
+    flags = UInt32(0)
+    size(Slm) == expected && size(Tlm) == expected || (flags |= 0x0001)
+    eltype(Slm) === CT && eltype(Tlm) === CT || (flags |= 0x0004)
+    eltype(Vt_out) === output_type && eltype(Vp_out) === output_type ||
+        (flags |= 0x0004)
+    _collective_validation_error(comm, flags, :dist_synthesis_sphtor_plan)
+
+    # Dense plan inputs are compatibility storage and must be replicated
+    # identically before any rank enters the transform path.
+    _validate_dense_synthesis!(
+        plan.cfg, Slm, plan.prototype_θφ;
+        real_output, use_rfft=plan.use_rfft,
+    )
+    _validate_dense_synthesis!(
+        plan.cfg, Tlm, plan.prototype_θφ;
+        real_output, use_rfft=plan.use_rfft,
+    )
+    return nothing
+end
+
 function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
                                   expected::Tuple{Int,Int}, operation::Symbol;
                                   comm=communicator(array), peer=nothing,
@@ -1645,8 +1723,286 @@ end
 
 ## Vector/QST distributed implementations
 
+function _validate_sphtor_spatial_inputs!(cfg::SHTnsKit.SHTConfig,
+                                          Vt::PencilArray, Vp::PencilArray;
+                                          use_rfft::Bool,
+                                          operation::Symbol=:analysis_sphtor)
+    comm = communicator(Vt)
+    _validate_cfg_replicated(cfg, comm)
+    _validate_scalar_pencil!(
+        cfg, Vt, (cfg.nlat, cfg.nlon), operation;
+        comm, peer=Vp, use_rfft, require_real_input=true,
+    )
+    _validate_scalar_pencil!(
+        cfg, Vp, (cfg.nlat, cfg.nlon), operation;
+        comm, peer=Vt, use_rfft, require_real_input=true,
+    )
+    _validate_identical_pencil_layout!(Vt, Vp, operation; comm)
+    flags = eltype(Vt) === eltype(Vp) ? UInt32(0) : UInt32(0x0004)
+    _collective_validation_error(comm, flags, operation)
+    return comm
+end
+
+function _validate_sphtor_synthesis_inputs!(cfg::SHTnsKit.SHTConfig,
+                                            Slm::PencilArray,
+                                            Tlm::PencilArray,
+                                            prototype::PencilArray;
+                                            real_output::Bool,
+                                            use_rfft::Bool)
+    comm = communicator(Slm)
+    _validate_cfg_replicated(cfg, comm)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    _validate_scalar_pencil!(
+        cfg, Slm, expected, :synthesis_sphtor;
+        comm, peer=Tlm, require_full_first_dim=true,
+        required_decomposition=(2,), use_rfft, real_output,
+        require_complex_input=true,
+    )
+    _validate_scalar_pencil!(
+        cfg, Tlm, expected, :synthesis_sphtor;
+        comm, peer=Slm, require_full_first_dim=true,
+        required_decomposition=(2,), use_rfft, real_output,
+        require_complex_input=true,
+    )
+    _validate_identical_pencil_layout!(Slm, Tlm, :synthesis_sphtor; comm)
+    _validate_scalar_pencil!(
+        cfg, prototype, (cfg.nlat, cfg.nlon), :synthesis_sphtor_prototype;
+        comm, peer=Slm, use_rfft, real_output,
+    )
+    coefficient_rt = typeof(real(zero(eltype(Slm))))
+    prototype_rt = typeof(real(zero(eltype(prototype))))
+    flags = eltype(Slm) === eltype(Tlm) && coefficient_rt === prototype_rt ?
+        UInt32(0) : UInt32(0x0004)
+    _collective_validation_error(comm, flags, :synthesis_sphtor)
+    return comm
+end
+
+function _analysis_sphtor_owned_block!(Sblock::AbstractMatrix{CT},
+                                        Tblock::AbstractMatrix{CT},
+                                        cfg::SHTnsKit.SHTConfig,
+                                        Ftheta::AbstractMatrix{CT},
+                                        Fphi::AbstractMatrix{CT},
+                                        theta_globals,
+                                        m_indices::AbstractVector{Int}) where {CT<:Complex}
+    fill!(Sblock, zero(CT)); fill!(Tblock, zero(CT))
+    RT = typeof(real(zero(CT)))
+    P = Vector{Float64}(undef, cfg.lmax + 1)
+    dtheta = similar(P); over_sin = similar(P)
+    scratch = Vector{Float64}(undef, cfg.lmax + 2)
+    @inbounds for (local_m, m_index) in pairs(m_indices)
+        m = m_index - 1
+        (0 <= m <= cfg.mmax && m % cfg.mres == 0) || continue
+        for (ii, iglobal) in pairs(theta_globals)
+            SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
+                P, dtheta, over_sin, cfg.x[iglobal], cfg.lmax, m, scratch,
+            )
+            Ft = Ftheta[ii, m_index]
+            Fp = Fphi[ii, m_index]
+            s = sqrt(max(0.0, 1 - cfg.x[iglobal]^2))
+            if cfg.robert_form && s > 0
+                Ft /= RT(s); Fp /= RT(s)
+            end
+            wi = RT(cfg.w[iglobal])
+            for l in max(1, m):cfg.lmax
+                d = RT(dtheta[l + 1])
+                term = complex(zero(RT), RT(m * over_sin[l + 1]))
+                factor = wi * RT(cfg.cphi) / RT(l * (l + 1))
+                Sblock[l + 1, local_m] +=
+                    factor * (Ft * d + conj(term) * Fp)
+                Tblock[l + 1, local_m] +=
+                    factor * (-conj(term) * Ft + d * Fp)
+            end
+        end
+    end
+    return Sblock, Tblock
+end
+
+"""Pencil-native vector analysis: reduce only each rank's owned m columns."""
+function dist_analysis_sphtor_pencil(cfg::SHTnsKit.SHTConfig,
+                                     Vt::PencilArray, Vp::PencilArray;
+                                     use_rfft::Bool=false)
+    comm = _validate_sphtor_spatial_inputs!(cfg, Vt, Vp; use_rfft)
+    Ft, theta_globals, phi_globals, phi_local, _ =
+        _pencil_scalar_fourier(cfg, Vt; use_rfft)
+    Fp, theta_globals_p, phi_globals_p, phi_local_p, _ =
+        _pencil_scalar_fourier(cfg, Vp; use_rfft)
+    theta_globals == theta_globals_p && phi_globals == phi_globals_p &&
+        phi_local == phi_local_p || error("validated vector Pencil layouts diverged")
+    CT = eltype(Ft)
+    Sout = PencilArray{CT}(undef, SHTnsKit.create_spectral_pencil(cfg; comm))
+    Tout = PencilArray{CT}(undef, pencil(Sout))
+    fill!(parent(Sout), zero(CT)); fill!(parent(Tout), zero(CT))
+    local_m = collect(Int, globalindices(Sout, 2))
+    first_local = isempty(local_m) ? 1 : first(local_m)
+    starts = MPI.Allgather(first_local, comm)
+    counts = MPI.Allgather(length(local_m), comm)
+    rank = MPI.Comm_rank(comm)
+    RT = typeof(real(zero(CT)))
+    for root in 0:(MPI.Comm_size(comm) - 1)
+        count = counts[root + 1]
+        first_m = starts[root + 1]
+        active = Int[midx for midx in first_m:(first_m + count - 1)
+                     if (midx - 1) % cfg.mres == 0]
+        Ssend = zeros(CT, cfg.lmax + 1, length(active))
+        Tsend = similar(Ssend); fill!(Tsend, zero(CT))
+        _analysis_sphtor_owned_block!(
+            Ssend, Tsend, cfg, Ft, Fp, theta_globals, active,
+        )
+        phi_local || _keep_one_phi_partner!(phi_globals, Ssend, Tsend)
+        Srecv = similar(Ssend); Trecv = similar(Tsend)
+        MPI.Reduce!(Ssend, Srecv, +, root, comm)
+        MPI.Reduce!(Tsend, Trecv, +, root, comm)
+        if rank == root
+            Sdest = parent(Sout); Tdest = parent(Tout)
+            l_globals = collect(Int, globalindices(Sout, 1))
+            for (source_j, m_index) in pairs(active),
+                (local_l, l_index) in pairs(l_globals)
+                l = l_index - 1; m = m_index - 1
+                if l >= max(1, m)
+                    local_j = m_index - first_m + 1
+                    scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+                    Sdest[local_l, local_j] = Srecv[l_index, source_j] / scale
+                    Tdest[local_l, local_j] = Trecv[l_index, source_j] / scale
+                end
+            end
+        end
+    end
+    return Sout, Tout
+end
+
+function _synthesis_sphtor_owned_modes!(Ftheta::AbstractMatrix{CT},
+                                         Fphi::AbstractMatrix{CT},
+                                         cfg::SHTnsKit.SHTConfig,
+                                         Slm::PencilArray, Tlm::PencilArray,
+                                         theta_first::Int,
+                                         real_output::Bool,
+                                         use_rfft::Bool) where {CT<:Complex}
+    fill!(Ftheta, zero(CT)); fill!(Fphi, zero(CT))
+    RT = typeof(real(zero(CT)))
+    P = Vector{Float64}(undef, cfg.lmax + 1)
+    dtheta = similar(P); over_sin = similar(P)
+    scratch = Vector{Float64}(undef, cfg.lmax + 2)
+    l_globals = collect(Int, globalindices(Slm, 1))
+    m_globals = collect(Int, globalindices(Slm, 2))
+    Slocal = parent(Slm); Tlocal = parent(Tlm)
+    inv_scale = RT(SHTnsKit.phi_inv_scale(cfg))
+    @inbounds for (local_m, m_index) in pairs(m_globals)
+        m = m_index - 1
+        m % cfg.mres == 0 || continue
+        for local_theta in axes(Ftheta, 1)
+            iglobal = theta_first + local_theta - 1
+            SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
+                P, dtheta, over_sin, cfg.x[iglobal], cfg.lmax, m, scratch,
+            )
+            gt = zero(CT); gp = zero(CT)
+            for (local_l, l_index) in pairs(l_globals)
+                l = l_index - 1
+                l >= max(1, m) || continue
+                scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+                S = scale * Slocal[local_l, local_m]
+                Tv = scale * Tlocal[local_l, local_m]
+                d = RT(dtheta[l_index])
+                term = complex(zero(RT), RT(m * over_sin[l_index]))
+                gt += d * S - term * Tv
+                gp += term * S + d * Tv
+            end
+            if cfg.robert_form
+                s = RT(sqrt(max(0.0, 1 - cfg.x[iglobal]^2)))
+                gt *= s; gp *= s
+            end
+            bt = inv_scale * gt; bp = inv_scale * gp
+            Ftheta[local_theta, m_index] = bt
+            Fphi[local_theta, m_index] = bp
+            if real_output && !use_rfft && m > 0
+                negative = cfg.nlon - m + 1
+                Ftheta[local_theta, negative] = conj(bt)
+                Fphi[local_theta, negative] = conj(bp)
+            end
+        end
+    end
+    return Ftheta, Fphi
+end
+
+"""Pencil-native vector synthesis without replicated global coefficient matrices."""
+function dist_synthesis_sphtor_pencil(cfg::SHTnsKit.SHTConfig,
+                                      Slm::PencilArray, Tlm::PencilArray;
+                                      prototype_θφ::PencilArray,
+                                      real_output::Bool=true,
+                                      use_rfft::Bool=false)
+    comm = _validate_sphtor_synthesis_inputs!(
+        cfg, Slm, Tlm, prototype_θφ; real_output, use_rfft,
+    )
+    CT = eltype(Slm); RT = typeof(real(zero(CT)))
+    output_type = real_output ? RT : CT
+    Vt_output = zeros(output_type, size(parent(prototype_θφ)))
+    Vp_output = similar(Vt_output); fill!(Vp_output, zero(output_type))
+    descriptors = _spatial_owner_descriptors(prototype_θφ, comm)
+    rank = MPI.Comm_rank(comm); nranks = MPI.Comm_size(comm)
+    roots = Int[]; seen = Set{Tuple{Int,Int}}()
+    for candidate in 0:(nranks - 1)
+        descriptor = (descriptors.θ_starts[candidate + 1],
+                      descriptors.θ_counts[candidate + 1])
+        descriptor[2] == 0 && continue
+        if !(descriptor in seen)
+            push!(seen, descriptor); push!(roots, candidate)
+        end
+    end
+    nbins = use_rfft ? cfg.nlon ÷ 2 + 1 : cfg.nlon
+    for (group, root) in pairs(roots)
+        theta_first = descriptors.θ_starts[root + 1]
+        theta_count = descriptors.θ_counts[root + 1]
+        Ft_send = zeros(CT, theta_count, nbins)
+        Fp_send = similar(Ft_send); fill!(Fp_send, zero(CT))
+        _synthesis_sphtor_owned_modes!(
+            Ft_send, Fp_send, cfg, Slm, Tlm, theta_first,
+            real_output, use_rfft,
+        )
+        Ft_recv = similar(Ft_send); Fp_recv = similar(Fp_send)
+        MPI.Reduce!(Ft_send, Ft_recv, +, root, comm)
+        MPI.Reduce!(Fp_send, Fp_recv, +, root, comm)
+        if rank == root
+            Vt_slab = real_output ? Matrix{RT}(undef, theta_count, cfg.nlon) :
+                                    Matrix{CT}(undef, theta_count, cfg.nlon)
+            Vp_slab = similar(Vt_slab)
+            if use_rfft
+                Vt_slab .= FFTW.irfft(Ft_recv, cfg.nlon, 2)
+                Vp_slab .= FFTW.irfft(Fp_recv, cfg.nlon, 2)
+            else
+                SHTnsKitParallelExt.ifft_along_dim2!(Vt_slab, Ft_recv)
+                SHTnsKitParallelExt.ifft_along_dim2!(Vp_slab, Fp_recv)
+            end
+            for destination in 0:(nranks - 1)
+                same_slab = descriptors.θ_starts[destination + 1] == theta_first &&
+                            descriptors.θ_counts[destination + 1] == theta_count
+                same_slab || continue
+                phi_count = descriptors.φ_counts[destination + 1]
+                phi_count == 0 && continue
+                phi_first = descriptors.φ_starts[destination + 1]
+                vt_piece = copy(@view Vt_slab[:, phi_first:(phi_first + phi_count - 1)])
+                vp_piece = copy(@view Vp_slab[:, phi_first:(phi_first + phi_count - 1)])
+                if destination == root
+                    copyto!(Vt_output, vt_piece); copyto!(Vp_output, vp_piece)
+                else
+                    MPI.Send(vt_piece, destination, 8300 + 2group, comm)
+                    MPI.Send(vp_piece, destination, 8301 + 2group, comm)
+                end
+            end
+        elseif descriptors.θ_starts[rank + 1] == theta_first &&
+               descriptors.θ_counts[rank + 1] == theta_count &&
+               descriptors.φ_counts[rank + 1] > 0
+            MPI.Recv!(Vt_output, root, 8300 + 2group, comm)
+            MPI.Recv!(Vp_output, root, 8301 + 2group, comm)
+        end
+    end
+    return Vt_output, Vp_output
+end
+
 # Distributed vector analysis (spheroidal/toroidal)
-function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray; use_tables=cfg.use_plm_tables, use_rfft::Bool=false)
+function _legacy_dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig,
+                                      Vtθφ::PencilArray,
+                                      Vpθφ::PencilArray;
+                                      use_tables=cfg.use_plm_tables,
+                                      use_rfft::Bool=false)
     comm = communicator(Vtθφ)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
@@ -1745,7 +2101,8 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     else
         _sphtor_analysis_loop_otf!(Slm_local, Tlm_local, P, dPdtheta, P_over_sth, Pbuf,
                                    Ftθm, Fpθm, x_cache, sθ_cache, inv_sθ_cache,
-                                   weights_cache, cfg.robert_form, scaleφ, lmax, mmax)
+                                   weights_cache, cfg.robert_form, scaleφ,
+                                   cfg.mres, lmax, mmax)
     end
 
     # Only reduce if θ is actually distributed across processes
@@ -1775,18 +2132,38 @@ function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilAr
     return Slm_local, Tlm_local
 end
 
+"""Dense compatibility wrapper around the owner-native vector analysis."""
+function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig,
+                                       Vtθφ::PencilArray,
+                                       Vpθφ::PencilArray;
+                                       use_tables=cfg.use_plm_tables,
+                                       use_rfft::Bool=false)
+    # `use_tables` is retained for API compatibility.  The owner-native path
+    # selects the package's pole-safe normalized recurrence independently of
+    # the dense legacy implementation.
+    use_tables isa Bool || throw(ArgumentError("use_tables must be Bool"))
+    Slm, Tlm = dist_analysis_sphtor_pencil(
+        cfg, Vtθφ, Vpθφ; use_rfft,
+    )
+    comm = communicator(Vtθφ)
+    return SHTnsKit.spectral_pencil_to_matrix(cfg, Slm; comm),
+           SHTnsKit.spectral_pencil_to_matrix(cfg, Tlm; comm)
+end
+
 # Function barriers for the sphtor analysis accumulation (see the scalar
 # _analysis_loop_* barriers for the rationale: concrete argument types keep the
 # m/θ/l loops allocation-free).
 function _sphtor_analysis_loop_tbl!(cfg::SHTnsKit.SHTConfig,
-                                    Slm::Matrix{ComplexF64}, Tlm::Matrix{ComplexF64},
+                                    Slm::AbstractMatrix{CT}, Tlm::AbstractMatrix{CT},
                                     NP_tables::Vector{Matrix{Float64}}, NdP_tables::Vector{Matrix{Float64}},
-                                    Ftθm::Matrix{ComplexF64}, Fpθm::Matrix{ComplexF64},
+                                    Ftθm::AbstractMatrix{CT}, Fpθm::AbstractMatrix{CT},
                                     θ_globals::Vector{Int},
                                     sθ_cache::Vector{Float64}, weights_cache::Vector{Float64},
-                                    robert_form::Bool, scaleφ::Float64, lmax::Int, mmax::Int)
+                                    robert_form::Bool, scaleφ::Float64,
+                                    lmax::Int, mmax::Int) where {CT<:Complex}
     nθ_local = length(θ_globals)
     for mval in 0:mmax
+        mval % cfg.mres == 0 || continue
         col = mval + 1
         tblNP  = NP_tables[col]
         tblNdP = NdP_tables[col]
@@ -1815,15 +2192,19 @@ function _sphtor_analysis_loop_tbl!(cfg::SHTnsKit.SHTConfig,
     return nothing
 end
 
-function _sphtor_analysis_loop_otf!(Slm::Matrix{ComplexF64}, Tlm::Matrix{ComplexF64},
+function _sphtor_analysis_loop_otf!(Slm::AbstractMatrix{CT},
+                                    Tlm::AbstractMatrix{CT},
                                     P::Vector{Float64}, dPdtheta::Vector{Float64},
                                     P_over_sth::Vector{Float64}, Pbuf::Vector{Float64},
-                                    Ftθm::Matrix{ComplexF64}, Fpθm::Matrix{ComplexF64},
+                                    Ftθm::AbstractMatrix{CT}, Fpθm::AbstractMatrix{CT},
                                     x_cache::Vector{Float64}, sθ_cache::Vector{Float64},
                                     inv_sθ_cache::Vector{Float64}, weights_cache::Vector{Float64},
-                                    robert_form::Bool, scaleφ::Float64, lmax::Int, mmax::Int)
+                                    robert_form::Bool, scaleφ::Float64,
+                                    mres::Int, lmax::Int,
+                                    mmax::Int) where {CT<:Complex}
     nθ_local = length(x_cache)
     for mval in 0:mmax
+        mval % mres == 0 || continue
         col = mval + 1
         for ii in 1:nθ_local
             sθ = sθ_cache[ii]
@@ -1853,6 +2234,9 @@ end
 function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
                                          Vtθφ::PencilArray, Vpθφ::PencilArray; use_tables=plan.cfg.use_plm_tables)
     cfg = plan.cfg
+    _validate_sphtor_analysis_plan!(
+        plan, Slm_out, Tlm_out, Vtθφ, Vpθφ, use_tables,
+    )
     if plan.fallback_standard
         # φ-distributed layout: needs the longitude gather; reuse the allocating
         # cfg-form path.
@@ -1881,8 +2265,8 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractM
         SHTnsKit.fft_phi!(plan.Fpθm, local_Vp)
     end
 
-    fill!(plan.Slm_work, zero(ComplexF64))
-    fill!(plan.Tlm_work, zero(ComplexF64))
+    fill!(plan.Slm_work, zero(eltype(plan.Slm_work)))
+    fill!(plan.Tlm_work, zero(eltype(plan.Tlm_work)))
     use_tbl = use_tables && cfg.use_plm_tables && !isempty(cfg.NP_tables) && !isempty(cfg.NdP_tables) &&
               length(cfg.NP_tables) == mmax + 1 && length(cfg.NdP_tables) == mmax + 1
     if use_tbl
@@ -1894,7 +2278,8 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractM
         _sphtor_analysis_loop_otf!(plan.Slm_work, plan.Tlm_work, plan.P, plan.dPdtheta,
                                    plan.P_over_sth, plan.Pbuf, plan.Ftθm, plan.Fpθm,
                                    plan.x_cache, plan.sθ_cache, plan.inv_sθ_cache,
-                                   plan.weights_cache, cfg.robert_form, cfg.cphi, lmax, mmax)
+                                   plan.weights_cache, cfg.robert_form, cfg.cphi,
+                                   cfg.mres, lmax, mmax)
     end
 
     if plan.θ_is_distributed
@@ -1904,11 +2289,18 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistSphtorPlan, Slm_out::AbstractM
 
     copyto!(Slm_out, plan.Slm_work)
     copyto!(Tlm_out, plan.Tlm_work)
+    SHTnsKit._externalize_coefficients!(Slm_out, cfg)
+    SHTnsKit._externalize_coefficients!(Tlm_out, cfg)
     return Slm_out, Tlm_out
 end
 
 # Distributed vector synthesis (spheroidal/toroidal) from dense spectra
-function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+function _legacy_dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
+                                       Slm::AbstractMatrix,
+                                       Tlm::AbstractMatrix;
+                                       prototype_θφ::PencilArray,
+                                       real_output::Bool=true,
+                                       use_rfft::Bool=false)
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
     nlat = cfg.nlat
@@ -2022,15 +2414,39 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::AbstractMa
     return Vtθφ, Vpθφ
 end
 
-# Convenience: spectral inputs as PencilArray (dense layout (:l,:m))
-function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
-    Slm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Slm)
-    Tlm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Tlm)
-    return SHTnsKit.dist_synthesis_sphtor(cfg, Slm_dense, Tlm_dense; prototype_θφ, real_output, use_rfft)
+"""Dense compatibility wrapper around owner-native vector synthesis."""
+function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
+                                        Slm::AbstractMatrix,
+                                        Tlm::AbstractMatrix;
+                                        prototype_θφ::PencilArray,
+                                        real_output::Bool=true,
+                                        use_rfft::Bool=false)
+    comm = communicator(prototype_θφ)
+    Slm_pencil = SHTnsKit.matrix_to_spectral_pencil(cfg, Slm; comm)
+    Tlm_pencil = SHTnsKit.matrix_to_spectral_pencil(cfg, Tlm; comm)
+    return dist_synthesis_sphtor_pencil(
+        cfg, Slm_pencil, Tlm_pencil;
+        prototype_θφ, real_output, use_rfft,
+    )
+end
+
+"""Pencil compatibility wrapper returning the prototype's local matrices."""
+function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
+                                        Slm::PencilArray,
+                                        Tlm::PencilArray;
+                                        prototype_θφ::PencilArray,
+                                        real_output::Bool=true,
+                                        use_rfft::Bool=false)
+    return dist_synthesis_sphtor_pencil(
+        cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft,
+    )
 end
 
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
                                          Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+    _validate_sphtor_synthesis_plan!(
+        plan, Vtθφ_out, Vpθφ_out, Slm, Tlm, real_output,
+    )
     # A complex field cannot be written into real output arrays. Rejected up front,
     # BEFORE any collective; the test is on local eltypes, which every rank agrees
     # on, so all ranks throw together and nothing deadlocks. See the twin in
@@ -2045,13 +2461,32 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::Penci
                             "that result. Pass complex output PencilArrays to get the true complex synthesis."))
     end
 
-    # The scratch spatial buffers are `Matrix{Float64}` (see `_SphtorScratch`), so
-    # they can only carry a real field; a complex request must take the
-    # allocating path or it would silently lose the imaginary half.
+    # The scratch spatial buffers carry the plan prototype's real precision;
+    # a complex request takes the allocating path because these buffers model
+    # the public real-output plan contract.
     if plan.with_spatial_scratch && plan.spatial_scratch !== nothing && real_output
-        # Use pre-allocated scratch buffers for zero-allocation synthesis
-        scratch = plan.spatial_scratch::_SphtorScratch
-        _dist_synthesis_sphtor_with_scratch!(plan.cfg, Slm, Tlm, scratch, Vtθφ_out, Vpθφ_out;
+        expected = (plan.cfg.lmax + 1, plan.cfg.mmax + 1)
+        size(Slm) == expected || throw(DimensionMismatch("Slm must have size $expected"))
+        size(Tlm) == expected || throw(DimensionMismatch("Tlm must have size $expected"))
+
+        # The public matrices use cfg's external convention. Convert once into
+        # plan-owned canonical buffers before the mathematical kernel, and clear
+        # stored-order columns that are not part of this mres configuration.
+        SHTnsKit.convert_alm_norm!(plan.Slm_work, Slm, plan.cfg; to_internal=true)
+        SHTnsKit.convert_alm_norm!(plan.Tlm_work, Tlm, plan.cfg; to_internal=true)
+        @inbounds for m in 0:plan.cfg.mmax
+            if m % plan.cfg.mres != 0
+                for l in 0:plan.cfg.lmax
+                    plan.Slm_work[l + 1, m + 1] = zero(eltype(plan.Slm_work))
+                    plan.Tlm_work[l + 1, m + 1] = zero(eltype(plan.Tlm_work))
+                end
+            end
+        end
+
+        # Use pre-allocated scratch buffers for zero-allocation synthesis.
+        scratch = plan.spatial_scratch::NamedTuple
+        _dist_synthesis_sphtor_with_scratch!(plan.cfg, plan.Slm_work, plan.Tlm_work,
+                                            scratch, Vtθφ_out, Vpθφ_out;
                                             prototype_θφ=plan.prototype_θφ, real_output, use_rfft=plan.use_rfft)
         return Vtθφ_out, Vpθφ_out
     else
@@ -2088,19 +2523,18 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
     Fθm = scratch.Fθ
     Fφm = scratch.Fφ
     P = scratch.P
-    fill!(Fθm, zero(ComplexF64))
-    fill!(Fφm, zero(ComplexF64))
-
-    # OTF normalized derivative buffers (small — no separate scratch needed)
-    dPdtheta   = Vector{Float64}(undef, lmax + 1)
-    P_over_sth = Vector{Float64}(undef, lmax + 1)
-    Pbuf       = Vector{Float64}(undef, lmax + 2)  # scratch for normalized dθ recurrence
+    dPdtheta = scratch.dPdtheta
+    P_over_sth = scratch.P_over_sth
+    Pbuf = scratch.Pbuf
+    fill!(Fθm, zero(eltype(Fθm)))
+    fill!(Fφm, zero(eltype(Fφm)))
 
     inv_scaleφ = SHTnsKit.phi_inv_scale(cfg)
     xv = cfg.x  # hoist field read out of the loops below (cfg is mutable, so not auto-hoisted)
 
     # Synthesis loop - accumulate Fourier coefficients
     for mval in 0:mmax
+        mval % cfg.mres == 0 || continue
         col = mval + 1
 
         for (ii, iglobθ) in enumerate(θ_globals)

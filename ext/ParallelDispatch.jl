@@ -373,14 +373,13 @@ function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig,
                                Vpθφ::PencilArray;
                                use_rfft::Bool=false,
                                return_pencil::Bool=true)
-    comm = communicator(Vrθφ)
+    comm = _validate_qst_spatial_inputs!(
+        cfg, Vrθφ, Vtθφ, Vpθφ; use_rfft,
+    )
     return_pencil = _validate_collective_bool_option!(
         comm, return_pencil, :analysis_qst, UInt32(0x1000),
     )
     if return_pencil
-        _validate_qst_spatial_inputs!(
-            cfg, Vrθφ, Vtθφ, Vpθφ; use_rfft,
-        )
         return dist_analysis_pencil(cfg, Vrθφ; use_rfft),
                dist_analysis_sphtor_pencil(cfg, Vtθφ, Vpθφ; use_rfft)...
     end

@@ -2622,12 +2622,33 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
 end
 
 # QST distributed implementations by composition
+function _validate_qst_pencil_communicators!(trusted_comm,
+                                              candidates::Tuple,
+                                              operation::Symbol)
+    flags = UInt32(0)
+    for candidate in candidates
+        compatible = try
+            candidate_comm = communicator(candidate)
+            MPI.Comm_size(candidate_comm) == MPI.Comm_size(trusted_comm) &&
+                MPI.Comm_compare(candidate_comm, trusted_comm) in
+                    (MPI.IDENT, MPI.CONGRUENT)
+        catch
+            false
+        end
+        compatible || (flags |= 0x0008)
+    end
+    return _collective_validation_error(trusted_comm, flags, operation)
+end
+
 function _validate_qst_spatial_inputs!(cfg::SHTnsKit.SHTConfig,
                                        Vr::PencilArray,
                                        Vt::PencilArray,
                                        Vp::PencilArray;
-                                       use_rfft::Bool)
-    comm = communicator(Vr)
+                                       use_rfft::Bool,
+                                       comm=MPI.COMM_WORLD)
+    _validate_qst_pencil_communicators!(
+        comm, (Vr, Vt, Vp), :analysis_qst,
+    )
     _validate_cfg_replicated(cfg, comm)
     for (value, peer) in ((Vr, Vt), (Vt, Vr), (Vp, Vr))
         _validate_scalar_pencil!(
@@ -2649,8 +2670,11 @@ function _validate_qst_synthesis_inputs!(cfg::SHTnsKit.SHTConfig,
                                          Tlm::PencilArray,
                                          prototype::PencilArray;
                                          real_output::Bool,
-    use_rfft::Bool)
-    comm = communicator(Qlm)
+                                         use_rfft::Bool,
+                                         comm=MPI.COMM_WORLD)
+    _validate_qst_pencil_communicators!(
+        comm, (Qlm, Slm, Tlm, prototype), :synthesis_qst,
+    )
     _validate_cfg_replicated(cfg, comm)
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     for (value, peer) in ((Qlm, prototype), (Slm, Qlm), (Tlm, Qlm))
@@ -2683,6 +2707,7 @@ function _validate_qst_analysis_plan!(
 )
     _validate_qst_spatial_inputs!(
         plan.cfg, Vr, Vt, Vp; use_rfft=plan.use_rfft,
+        comm=communicator(plan.prototype_θφ),
     )
     _validate_identical_pencil_layout!(
         plan.prototype_θφ, Vr, :dist_analysis_qst_plan_input;
@@ -2705,6 +2730,9 @@ function _validate_qst_synthesis_plan!(
     real_output::Bool,
 )
     comm = communicator(plan.prototype_θφ)
+    _validate_qst_pencil_communicators!(
+        comm, (Vr, Vt, Vp), :dist_synthesis_qst_plan_output,
+    )
     _validate_sphtor_synthesis_plan!(
         plan.sphtor_plan, Vt, Vp, S, Tlm, real_output,
     )
@@ -2763,6 +2791,9 @@ end
 
 # Synthesis to distributed fields from dense spectra
 function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+    _validate_qst_pencil_communicators!(
+        MPI.COMM_WORLD, (prototype_θφ,), :dist_synthesis_qst,
+    )
     for value in (Qlm, Slm, Tlm)
         _validate_dense_synthesis!(
             cfg, value, prototype_θφ; real_output, use_rfft,
@@ -2774,6 +2805,9 @@ function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatri
 end
 
 function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+    _validate_qst_synthesis_inputs!(
+        cfg, Qlm, Slm, Tlm, prototype_θφ; real_output, use_rfft,
+    )
     Qlm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Qlm)
     Slm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Slm)
     Tlm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Tlm)

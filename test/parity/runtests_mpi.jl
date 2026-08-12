@@ -1636,6 +1636,66 @@ if isempty(ARGS) || "qst_full" in ARGS
         @test parent(Vpcompat) == parent(Vpout)
 
         rank = MPI.Comm_rank(qst_adapter.comm)
+        self_spatial = PencilArray{Float32}(
+            undef,
+            Pencil((cfg.nlat, cfg.nlon), (1,), MPI.COMM_SELF),
+        )
+        fill!(parent(self_spatial), 0)
+        rank_bad_vr = rank == 0 ? self_spatial : Vrd
+        @test _all_ranks_catch(
+            qst_adapter.comm; message_contains="communicator mismatch",
+        ) do
+            analysis_qst(cfg, rank_bad_vr, Vtd, Vpd)
+        end
+        MPI.Barrier(qst_adapter.comm)
+
+        self_spectral = PencilArray{ComplexF32}(
+            undef,
+            Pencil(
+                (cfg.lmax + 1, cfg.mmax + 1), (2,), MPI.COMM_SELF,
+            ),
+        )
+        fill!(parent(self_spectral), 0)
+        rank_bad_q = rank == 0 ? self_spectral : Qd
+        @test _all_ranks_catch(
+            qst_adapter.comm; message_contains="communicator mismatch",
+        ) do
+            synthesis_qst(
+                cfg, rank_bad_q, Sd, Td; prototype_θφ=Vrd,
+            )
+        end
+        MPI.Barrier(qst_adapter.comm)
+
+        fill!(Qout, ComplexF32(31, -7))
+        fill!(Sout, ComplexF32(31, -7))
+        fill!(Tout, ComplexF32(31, -7))
+        @test _all_ranks_catch(
+            qst_adapter.comm; message_contains="communicator mismatch",
+        ) do
+            analysis_qst!(
+                plan, Qout, Sout, Tout, rank_bad_vr, Vtd, Vpd,
+            )
+        end
+        @test all(==(ComplexF32(31, -7)), Qout)
+        @test all(==(ComplexF32(31, -7)), Sout)
+        @test all(==(ComplexF32(31, -7)), Tout)
+        MPI.Barrier(qst_adapter.comm)
+
+        rank_bad_vr_out = rank == 0 ? self_spatial : Vrout
+        fill!(parent(Vtout), 32)
+        fill!(parent(Vpout), 32)
+        @test _all_ranks_catch(
+            qst_adapter.comm; message_contains="communicator mismatch",
+        ) do
+            synthesis_qst!(
+                plan, rank_bad_vr_out, Vtout, Vpout,
+                dense[1], dense[2], dense[3]; real_output=true,
+            )
+        end
+        @test all(==(32f0), parent(Vtout))
+        @test all(==(32f0), parent(Vpout))
+        MPI.Barrier(qst_adapter.comm)
+
         bad_vp = rank == 0 ?
             PencilArray{Float64}(undef, pencil(Vpd)) :
             PencilArray{Float32}(undef, pencil(Vpd))

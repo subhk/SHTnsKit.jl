@@ -9,6 +9,7 @@ include("../../parity/scalar_full.jl")
 include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
+include("../../parity/vector_variants.jl")
 
 struct AMDGPUScalarAdapter <: ScalarParityAdapter end
 function place(::AMDGPUScalarAdapter, ::SHTConfig, value, ::Symbol)
@@ -93,6 +94,10 @@ end
 @testset "AMDGPU backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitAMDGPUExt)
     @test extension !== nothing
+    test_gpu_vector_variant_contract(
+        extension, ROCArray{Float32,2}, ROCArray{ComplexF32,2},
+        ROCArray{ComplexF32,1}, ROCArray{Float32,3}, ROCArray{ComplexF32,3},
+    )
     @test isdefined(extension.GPUCommon, :scalar_analysis_kernel!)
     @test isdefined(extension.GPUCommon, :scalar_synthesis_kernel!)
     @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)

@@ -9,6 +9,7 @@ include("../../parity/scalar_full.jl")
 include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
+include("../../parity/vector_variants.jl")
 
 struct CUDAScalarAdapter <: ScalarParityAdapter end
 function place(::CUDAScalarAdapter, ::SHTConfig, value, ::Symbol)
@@ -107,6 +108,10 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
 @testset "CUDA backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitGPUExt)
     @test extension !== nothing
+    test_gpu_vector_variant_contract(
+        extension, CuArray{Float32,2}, CuArray{ComplexF32,2},
+        CuArray{ComplexF32,1}, CuArray{Float32,3}, CuArray{ComplexF32,3},
+    )
     @test isdefined(extension.GPUCommon, :scalar_analysis_kernel!)
     @test isdefined(extension.GPUCommon, :scalar_synthesis_kernel!)
     @test isdefined(extension.GPUCommon, :coefficient_conversion_kernel!)

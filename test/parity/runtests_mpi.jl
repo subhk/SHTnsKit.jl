@@ -10,6 +10,7 @@ include("scalar_full.jl")
 include("scalar_variants.jl")
 include("sphtor_full.jl")
 include("qst_full.jl")
+include("vector_variants.jl")
 
 struct MPIScalarAdapter <: ScalarParityAdapter
     comm
@@ -127,6 +128,29 @@ function _place_distributed_vector(values::AbstractVector, comm)
     @inbounds for (i, iglobal) in pairs(globals)
         parent(result)[i, 1] = values[iglobal]
     end
+    return result
+end
+
+function _place_distributed_batch(cfg::SHTConfig, values::AbstractArray{T,3},
+                                  kind::Symbol, comm) where {T}
+    decomposition = kind === :spatial ? (1,) : (2,)
+    result = PencilArray{T}(undef, Pencil(size(values), decomposition, comm))
+    ranges = map(d -> collect(Int, PencilArrays.range_local(result)[d]), 1:3)
+    @inbounds for (k, kg) in pairs(ranges[3]), (j, jg) in pairs(ranges[2]),
+                  (i, ig) in pairs(ranges[1])
+        parent(result)[i, j, k] = values[ig, jg, kg]
+    end
+    return result
+end
+
+function _collect_distributed_batch(value::PencilArray, comm)
+    result = zeros(eltype(value), size_global(value))
+    ranges = map(d -> collect(Int, PencilArrays.range_local(value)[d]), 1:3)
+    @inbounds for (k, kg) in pairs(ranges[3]), (j, jg) in pairs(ranges[2]),
+                  (i, ig) in pairs(ranges[1])
+        result[ig, jg, kg] = parent(value)[i, j, k]
+    end
+    MPI.Allreduce!(result, +, comm)
     return result
 end
 
@@ -1711,6 +1735,201 @@ if isempty(ARGS) || "qst_full" in ARGS
             )
         end
         MPI.Barrier(qst_adapter.comm)
+    end
+end
+
+if isempty(ARGS) || "vector_variants" in ARGS
+    @testset "Pencil-native vector/QST variants" begin
+        extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+        for (name, signature) in (
+            (:analysis_sphtor_l, Tuple{SHTConfig,PencilArray,PencilArray,Int}),
+            (:synthesis_sphtor_l, Tuple{SHTConfig,PencilArray,PencilArray,Int}),
+            (:analysis_sphtor_ml, Tuple{SHTConfig,Int,PencilArray,PencilArray,Int}),
+            (:synthesis_sphtor_ml, Tuple{SHTConfig,Int,PencilArray,PencilArray,Int}),
+            (:synthesis_grad_l, Tuple{SHTConfig,PencilArray,Int}),
+            (:synthesis_grad_ml, Tuple{SHTConfig,Int,PencilArray,Int}),
+            (:analysis_qst_l, Tuple{SHTConfig,PencilArray,PencilArray,PencilArray,Int}),
+            (:synthesis_qst_l, Tuple{SHTConfig,PencilArray,PencilArray,PencilArray,Int}),
+            (:analysis_qst_ml, Tuple{SHTConfig,Int,PencilArray,PencilArray,PencilArray,Int}),
+            (:synthesis_qst_ml, Tuple{SHTConfig,Int,PencilArray,PencilArray,PencilArray,Int}),
+            (:analysis_sphtor_batch, Tuple{SHTConfig,PencilArray,PencilArray}),
+            (:synthesis_sphtor_batch, Tuple{SHTConfig,PencilArray,PencilArray}),
+            (:analysis_qst_batch, Tuple{SHTConfig,PencilArray,PencilArray,PencilArray}),
+            (:synthesis_qst_batch, Tuple{SHTConfig,PencilArray,PencilArray,PencilArray}),
+        )
+            @test hasmethod(getproperty(SHTnsKit, name), signature)
+            hasmethod(getproperty(SHTnsKit, name), signature) &&
+                @test which(getproperty(SHTnsKit, name), signature).module === extension
+        end
+
+        cfg = _variant_cfg(Float32; mres=2, norm=:schmidt,
+                           real_norm=true, cs_phase=false)
+        ltr = 5
+        S = zeros(ComplexF32, cfg.lmax + 1, cfg.mmax + 1)
+        Tlm = zero(S); Q = zero(S)
+        S[3, 1] = 0.12f0
+        S[5, 5] = 0.04f0 - 0.02f0im
+        Tlm[4, 3] = ComplexF32(-0.03, 0.01)
+        Q[2, 1] = 0.08f0
+        S[7, 1] = 91f0; Tlm[7, 1] = -72f0; Q[7, 1] = 63f0
+        expected_v = synthesis_sphtor_l(CPU(), cfg, S, Tlm, ltr)
+        expected_q = synthesis_qst_l(CPU(), cfg, Q, S, Tlm, ltr)
+        prototype = vector_place(vector_adapter, cfg, expected_v[1], :spatial)
+        Sd = vector_place(vector_adapter, cfg, S, :spectral)
+        Td = vector_place(vector_adapter, cfg, Tlm, :spectral)
+        Qd = vector_place(vector_adapter, cfg, Q, :spectral)
+        extension._reset_pencil_scalar_stats!()
+        got_v = synthesis_sphtor_l(cfg, Sd, Td, ltr; prototype_θφ=prototype)
+        synthesis_stats = extension._pencil_scalar_stats()
+        active_positive_bins = length(0:cfg.mres:min(cfg.mmax, ltr))
+        active_fourier_bins = 2active_positive_bins - 1
+        max_theta_slab = MPI.Allreduce(
+            size(parent(prototype), 1), max, MPI.COMM_WORLD,
+        )
+        @test synthesis_stats.vector_synthesis_max_message_elements <=
+              max_theta_slab * active_fourier_bins
+        @test synthesis_stats.vector_synthesis_max_message_elements <
+              max_theta_slab * cfg.nlon
+        got_q = synthesis_qst_l(cfg, Qd, Sd, Td, ltr; prototype_θφ=prototype)
+        for (got, expected) in zip(got_v, expected_v)
+            @test got isa PencilArray
+            @test _collect_spatial(got, cfg) ≈ expected atol=4f-4 rtol=4f-4
+        end
+        for (got, expected) in zip(got_q, expected_q)
+            @test got isa PencilArray
+            @test _collect_spatial(got, cfg) ≈ expected atol=4f-4 rtol=4f-4
+        end
+        extension._reset_pencil_scalar_stats!()
+        analyzed_v = analysis_sphtor_l(cfg, got_v..., ltr)
+        analysis_stats = extension._pencil_scalar_stats()
+        active_lm = sum(ltr - max(1, m) + 1
+                        for m in 0:cfg.mres:min(cfg.mmax, ltr))
+        @test analysis_stats.vector_analysis_max_message_elements <= active_lm
+        @test analysis_stats.vector_analysis_sent_elements == 2active_lm
+        analyzed_q = analysis_qst_l(cfg, got_q..., ltr)
+        for (got, expected) in zip(analyzed_v, (S, Tlm))
+            host = spectral_pencil_to_matrix(cfg, got)
+            @test host[1:(ltr + 1), :] ≈ expected[1:(ltr + 1), :] atol=5f-4 rtol=5f-4
+            @test all(iszero, host[(ltr + 2):end, :])
+        end
+        for (got, expected) in zip(analyzed_q, (Q, S, Tlm))
+            host = spectral_pencil_to_matrix(cfg, got)
+            @test host[1:(ltr + 1), :] ≈ expected[1:(ltr + 1), :] atol=5f-4 rtol=5f-4
+        end
+
+        stored_im = 2; physical_m = stored_im * cfg.mres
+        Sm = ComplexF32.(S[(physical_m + 1):(ltr + 1), physical_m + 1])
+        Tm = ComplexF32.(Tlm[(physical_m + 1):(ltr + 1), physical_m + 1])
+        Qm = ComplexF32.(Q[(physical_m + 1):(ltr + 1), physical_m + 1])
+        Sm .= ComplexF32(0.04, -0.01); Tm .= ComplexF32(-0.02, 0.015)
+        Qm .= ComplexF32(0.03, 0.02)
+        expected_m = synthesis_sphtor_ml(CPU(), cfg, stored_im, Sm, Tm, ltr)
+        expected_qm = synthesis_qst_ml(CPU(), cfg, stored_im, Qm, Sm, Tm, ltr)
+        Smd = _place_distributed_vector(Sm, MPI.COMM_WORLD)
+        Tmd = _place_distributed_vector(Tm, MPI.COMM_WORLD)
+        Qmd = _place_distributed_vector(Qm, MPI.COMM_WORLD)
+        extension._reset_pencil_scalar_stats!()
+        got_m = synthesis_sphtor_ml(cfg, stored_im, Smd, Tmd, ltr)
+        mode_stats = extension._pencil_scalar_stats()
+        @test mode_stats.vector_mode_max_message_elements == length(Sm)
+        @test mode_stats.vector_mode_sent_elements == 2length(Sm)
+        got_qm = synthesis_qst_ml(cfg, stored_im, Qmd, Smd, Tmd, ltr)
+        @test _collect_distributed_vector(got_m[1]) ≈ expected_m[1] atol=5f-4 rtol=5f-4
+        @test _collect_distributed_vector(got_m[2]) ≈ expected_m[2] atol=5f-4 rtol=5f-4
+        @test _collect_distributed_vector(got_qm[1]) ≈ expected_qm[1] atol=5f-4 rtol=5f-4
+        back_m = analysis_sphtor_ml(cfg, stored_im, got_m..., ltr)
+        back_qm = analysis_qst_ml(cfg, stored_im, got_qm..., ltr)
+        @test _collect_distributed_vector(back_m[1]) ≈ Sm atol=5f-4 rtol=5f-4
+        @test _collect_distributed_vector(back_m[2]) ≈ Tm atol=5f-4 rtol=5f-4
+        @test _collect_distributed_vector(back_qm[1]) ≈ Qm atol=5f-4 rtol=5f-4
+        @test synthesis_grad_ml(cfg, stored_im, Smd, ltr)[1] isa PencilArray
+
+        for nfields in (1, 2, 5)
+            Qbatch = repeat(reshape(Q, size(Q)..., 1), 1, 1, nfields)
+            Sbatch = repeat(reshape(S, size(S)..., 1), 1, 1, nfields)
+            Tbatch = repeat(reshape(Tlm, size(Tlm)..., 1), 1, 1, nfields)
+            for k in 1:nfields
+                Qbatch[:, :, k] .*= k
+                Sbatch[:, :, k] .*= k
+                Tbatch[:, :, k] .*= k
+            end
+            cpu_fields = synthesis_qst_batch(CPU(), cfg, Qbatch, Sbatch, Tbatch)
+            Qbd = _place_distributed_batch(cfg, Qbatch, :spectral, MPI.COMM_WORLD)
+            Sbd = _place_distributed_batch(cfg, Sbatch, :spectral, MPI.COMM_WORLD)
+            Tbd = _place_distributed_batch(cfg, Tbatch, :spectral, MPI.COMM_WORLD)
+            distributed_fields = synthesis_qst_batch(cfg, Qbd, Sbd, Tbd)
+            for (got, expected) in zip(distributed_fields, cpu_fields)
+                @test got isa PencilArray
+                @test size_global(got)[3] == nfields
+                @test _collect_distributed_batch(got, MPI.COMM_WORLD) ≈
+                      expected atol=5f-4 rtol=5f-4
+            end
+            analyzed_batch = analysis_qst_batch(cfg, distributed_fields...)
+            for (got, expected) in zip(analyzed_batch, (Qbatch, Sbatch, Tbatch))
+                @test got isa PencilArray
+                @test _collect_distributed_batch(got, MPI.COMM_WORLD) ≈
+                      expected atol=6f-4 rtol=6f-4
+            end
+        end
+
+        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        one_batch = repeat(reshape(expected_v[1], cfg.nlat, cfg.nlon, 1), 1, 1, 2)
+        good_batch = _place_distributed_batch(
+            cfg, Float32.(one_batch), :spatial, MPI.COMM_WORLD,
+        )
+        float64_batch = _place_distributed_batch(
+            cfg, Float64.(one_batch), :spatial, MPI.COMM_WORLD,
+        )
+        bad_batch = rank == 0 ? float64_batch : good_batch
+        good_sentinel = copy(parent(good_batch))
+        bad_sentinel = copy(parent(bad_batch))
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(MPI.COMM_WORLD) do
+            analysis_sphtor_batch(cfg, good_batch, bad_batch)
+        end
+        @test parent(good_batch) == good_sentinel
+        @test parent(bad_batch) == bad_sentinel
+        rejected_stats = extension._pencil_scalar_stats()
+        @test rejected_stats.vector_analysis_sent_elements == 0
+        @test rejected_stats.vector_synthesis_sent_elements == 0
+        MPI.Barrier(MPI.COMM_WORLD)
+
+        rank_ltr = rank == 0 ? ltr - 1 : ltr
+        spectral_sentinel = copy(parent(Sd))
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(
+            MPI.COMM_WORLD; message_contains="degree truncation",
+        ) do
+            synthesis_sphtor_l(
+                cfg, Sd, Td, rank_ltr; prototype_θφ=prototype,
+            )
+        end
+        @test parent(Sd) == spectral_sentinel
+        @test extension._pencil_scalar_stats().vector_synthesis_sent_elements == 0
+        MPI.Barrier(MPI.COMM_WORLD)
+
+        rank_im = rank == 0 ? stored_im - 1 : stored_im
+        mode_sentinel = copy(parent(Smd))
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(
+            MPI.COMM_WORLD; message_contains="degree truncation",
+        ) do
+            synthesis_sphtor_ml(cfg, rank_im, Smd, Tmd, ltr)
+        end
+        @test parent(Smd) == mode_sentinel
+        @test extension._pencil_scalar_stats().vector_mode_sent_elements == 0
+        MPI.Barrier(MPI.COMM_WORLD)
+
+        empty_spatial = _place_distributed_batch(
+            cfg, zeros(Float32, cfg.nlat, cfg.nlon, 0), :spatial,
+            MPI.COMM_WORLD,
+        )
+        @test _all_ranks_catch(
+            MPI.COMM_WORLD; message_contains="global shape mismatch",
+        ) do
+            analysis_sphtor_batch(cfg, empty_spatial, empty_spatial)
+        end
+        MPI.Barrier(MPI.COMM_WORLD)
     end
 end
 

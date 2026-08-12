@@ -937,7 +937,7 @@ end
         @test_throws ArgumentError analysis_packed_ml(cfg, im, mode, overflow)
     end
 
-    @testset "TODO(Task 9): vector/QST stored-order index uses im*mres" begin
+    @testset "vector/QST stored-order index uses im*mres" begin
         cfg = create_gauss_config(6, 9; nlon=16, mres=2)
         reference_cfg = create_gauss_config(6, 9; nlon=16, mres=1)
         im = 2
@@ -945,15 +945,14 @@ end
         ltr = cfg.lmax
         coefficients = fill(ComplexF64(0.1, 0.03), ltr - physical_m + 1)
         zeros_mode = zeros(ComplexF64, length(coefficients))
-        # Task 9 must make the vector and QST `_ml` APIs interpret `im` in the
-        # same stored-order sense as scalar `_ml`. These executable skips are
-        # removed when that task lands; Task 6 deliberately does not implement it.
-        @test_skip synthesis_sphtor_ml(
+        # Vector and QST fixed-order APIs use the same stored-order index as
+        # scalar `_ml`: physical m is `im*mres`.
+        @test synthesis_sphtor_ml(
             cfg, im, coefficients, zeros_mode, ltr,
         ) == synthesis_sphtor_ml(
             reference_cfg, physical_m, coefficients, zeros_mode, ltr,
         )
-        @test_skip synthesis_qst_ml(
+        @test synthesis_qst_ml(
             cfg, im, coefficients, coefficients, zeros_mode, ltr,
         ) == synthesis_qst_ml(
             reference_cfg, physical_m,

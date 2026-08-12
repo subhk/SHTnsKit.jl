@@ -81,6 +81,12 @@ const _PENCIL_SCALAR_STATS = Dict{Symbol,Int}(
     :synthesis_packed_max_message_elements => 0,
     :synthesis_packed_sent_elements => 0,
     :synthesis_max_message_elements => 0,
+    :vector_analysis_max_message_elements => 0,
+    :vector_analysis_sent_elements => 0,
+    :vector_synthesis_max_message_elements => 0,
+    :vector_synthesis_sent_elements => 0,
+    :vector_mode_max_message_elements => 0,
+    :vector_mode_sent_elements => 0,
 )
 
 function _reset_pencil_scalar_stats!()
@@ -114,6 +120,18 @@ function _pencil_scalar_stats()
             synthesis_packed_sent_elements=
                 _PENCIL_SCALAR_STATS[:synthesis_packed_sent_elements],
             synthesis_max_message_elements=_PENCIL_SCALAR_STATS[:synthesis_max_message_elements],
+            vector_analysis_max_message_elements=
+                _PENCIL_SCALAR_STATS[:vector_analysis_max_message_elements],
+            vector_analysis_sent_elements=
+                _PENCIL_SCALAR_STATS[:vector_analysis_sent_elements],
+            vector_synthesis_max_message_elements=
+                _PENCIL_SCALAR_STATS[:vector_synthesis_max_message_elements],
+            vector_synthesis_sent_elements=
+                _PENCIL_SCALAR_STATS[:vector_synthesis_sent_elements],
+            vector_mode_max_message_elements=
+                _PENCIL_SCALAR_STATS[:vector_mode_max_message_elements],
+            vector_mode_sent_elements=
+                _PENCIL_SCALAR_STATS[:vector_mode_sent_elements],
         )
     end
 end
@@ -163,6 +181,21 @@ function _collective_truncation(comm, ltr::Integer, lmax::Int, operation::Symbol
     minimum_ltr == maximum_ltr || (flags |= 0x0100)
     _collective_validation_error(comm, flags, operation)
     return converted
+end
+
+function _collective_fixed_order(comm, cfg::SHTnsKit.SHTConfig,
+                                 stored_im::Integer, ltr::Integer,
+                                 operation::Symbol)
+    lcap = _collective_truncation(comm, ltr, cfg.lmax, operation)
+    candidate, representable = SHTnsKit._degree_limit_candidate(stored_im)
+    max_im = cfg.mmax ÷ cfg.mres
+    flags = !representable || !(0 <= candidate <= max_im) ||
+            candidate * cfg.mres > lcap ? UInt32(0x0100) : UInt32(0)
+    minimum_im = MPI.Allreduce(candidate, min, comm)
+    maximum_im = MPI.Allreduce(candidate, max, comm)
+    minimum_im == maximum_im || (flags |= 0x0100)
+    _collective_validation_error(comm, flags, operation)
+    return candidate, candidate * cfg.mres, lcap
 end
 
 """
@@ -1514,7 +1547,8 @@ end
 function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConfig,
                                  Alm::PencilArray, θ_first::Int,
                                  real_output::Bool, use_rfft::Bool;
-                                 Aminus=nothing) where {CT<:Complex}
+                                 Aminus=nothing,
+                                 lcap::Int=cfg.lmax) where {CT<:Complex}
     fill!(Fθm, zero(CT))
     coefficients = parent(Alm)
     l_globals = collect(Int, globalindices(Alm, 1))
@@ -1534,7 +1568,7 @@ function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConf
                 table = cfg.NP_tables[m_index]
                 for (local_l, l_index) in pairs(l_globals)
                     l = l_index - 1
-                    if l >= m
+                    if l <= lcap && l >= m
                         scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
                         radial += RT(table[l_index, iglob]) * scale * coefficients[local_l, local_m]
                         if Aminus !== nothing && m > 0
@@ -1547,7 +1581,7 @@ function _synthesis_owned_modes!(Fθm::AbstractMatrix{CT}, cfg::SHTnsKit.SHTConf
                 SHTnsKit.Plm_norm_row!(P, cfg.x[iglob], cfg.lmax, m)
                 for (local_l, l_index) in pairs(l_globals)
                     l = l_index - 1
-                    if l >= m
+                    if l <= lcap && l >= m
                         scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
                         radial += RT(P[l_index]) * scale * coefficients[local_l, local_m]
                         if Aminus !== nothing && m > 0
@@ -1593,10 +1627,12 @@ the other owners of that slab.
 function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
                                  prototype_θφ::PencilArray,
                                  real_output::Bool=true, use_rfft::Bool=false,
-                                 Aminus=nothing)
+                                 Aminus=nothing,
+                                 ltr::Integer=cfg.lmax)
     # Coefficients are the trusted input. Inspect candidate prototype metadata
     # locally, while every validation collective stays on this communicator.
     comm = communicator(Alm)
+    lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_l)
     _validate_scalar_pencil!(
         cfg, Alm, (cfg.lmax + 1, cfg.mmax + 1), :synthesis;
         comm, peer=prototype_θφ, require_full_first_dim=true,
@@ -1648,7 +1684,7 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
         θ_count = descriptors.θ_counts[root + 1]
         send = zeros(CT, θ_count, nbins)
         _synthesis_owned_modes!(
-            send, cfg, Alm, θ_first, real_output, use_rfft; Aminus,
+            send, cfg, Alm, θ_first, real_output, use_rfft; Aminus, lcap,
         )
         receive = zeros(CT, size(send))
         _record_pencil_scalar_stat!(
@@ -1778,7 +1814,8 @@ function _analysis_sphtor_owned_block!(Sblock::AbstractMatrix{CT},
                                         Ftheta::AbstractMatrix{CT},
                                         Fphi::AbstractMatrix{CT},
                                         theta_globals,
-                                        m_indices::AbstractVector{Int}) where {CT<:Complex}
+                                        m_indices::AbstractVector{Int},
+                                        lcap::Int=cfg.lmax) where {CT<:Complex}
     fill!(Sblock, zero(CT)); fill!(Tblock, zero(CT))
     RT = typeof(real(zero(CT)))
     P = Vector{Float64}(undef, cfg.lmax + 1)
@@ -1789,7 +1826,7 @@ function _analysis_sphtor_owned_block!(Sblock::AbstractMatrix{CT},
         (0 <= m <= cfg.mmax && m % cfg.mres == 0) || continue
         for (ii, iglobal) in pairs(theta_globals)
             SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
-                P, dtheta, over_sin, cfg.x[iglobal], cfg.lmax, m, scratch,
+                P, dtheta, over_sin, cfg.x[iglobal], lcap, m, scratch,
             )
             Ft = Ftheta[ii, m_index]
             Fp = Fphi[ii, m_index]
@@ -1798,7 +1835,7 @@ function _analysis_sphtor_owned_block!(Sblock::AbstractMatrix{CT},
                 Ft /= RT(s); Fp /= RT(s)
             end
             wi = RT(cfg.w[iglobal])
-            for l in max(1, m):cfg.lmax
+            for l in max(1, m):lcap
                 d = RT(dtheta[l + 1])
                 term = complex(zero(RT), RT(m * over_sin[l + 1]))
                 factor = wi * RT(cfg.cphi) / RT(l * (l + 1))
@@ -1815,8 +1852,10 @@ end
 """Pencil-native vector analysis: reduce only each rank's owned m columns."""
 function dist_analysis_sphtor_pencil(cfg::SHTnsKit.SHTConfig,
                                      Vt::PencilArray, Vp::PencilArray;
-                                     use_rfft::Bool=false)
+                                     use_rfft::Bool=false,
+                                     ltr::Integer=cfg.lmax)
     comm = _validate_sphtor_spatial_inputs!(cfg, Vt, Vp; use_rfft)
+    lcap = _collective_truncation(comm, ltr, cfg.lmax, :analysis_sphtor_l)
     Ft, theta_globals, phi_globals, phi_local, _ =
         _pencil_scalar_fourier(cfg, Vt; use_rfft)
     Fp, theta_globals_p, phi_globals_p, phi_local_p, _ =
@@ -1837,28 +1876,46 @@ function dist_analysis_sphtor_pencil(cfg::SHTnsKit.SHTConfig,
         count = counts[root + 1]
         first_m = starts[root + 1]
         active = Int[midx for midx in first_m:(first_m + count - 1)
-                     if (midx - 1) % cfg.mres == 0]
-        Ssend = zeros(CT, cfg.lmax + 1, length(active))
-        Tsend = similar(Ssend); fill!(Tsend, zero(CT))
+                     if (midx - 1) <= lcap && (midx - 1) % cfg.mres == 0]
+        active_entries = Tuple{Int,Int}[]
+        for (source_j, m_index) in pairs(active)
+            m = m_index - 1
+            for l in max(1, m):lcap
+                push!(active_entries, (l + 1, source_j))
+            end
+        end
+        isempty(active_entries) && continue
+        Sblock = zeros(CT, lcap + 1, length(active))
+        Tblock = similar(Sblock); fill!(Tblock, zero(CT))
         _analysis_sphtor_owned_block!(
-            Ssend, Tsend, cfg, Ft, Fp, theta_globals, active,
+            Sblock, Tblock, cfg, Ft, Fp, theta_globals, active, lcap,
         )
-        phi_local || _keep_one_phi_partner!(phi_globals, Ssend, Tsend)
+        phi_local || _keep_one_phi_partner!(phi_globals, Sblock, Tblock)
+        Ssend = CT[Sblock[index...] for index in active_entries]
+        Tsend = CT[Tblock[index...] for index in active_entries]
         Srecv = similar(Ssend); Trecv = similar(Tsend)
+        _record_pencil_scalar_stat!(
+            :vector_analysis_max_message_elements, length(Ssend); maximum=true,
+        )
+        _record_pencil_scalar_stat!(
+            :vector_analysis_sent_elements, 2length(Ssend),
+        )
         MPI.Reduce!(Ssend, Srecv, +, root, comm)
         MPI.Reduce!(Tsend, Trecv, +, root, comm)
         if rank == root
             Sdest = parent(Sout); Tdest = parent(Tout)
             l_globals = collect(Int, globalindices(Sout, 1))
-            for (source_j, m_index) in pairs(active),
-                (local_l, l_index) in pairs(l_globals)
+            local_l_by_global = Dict(l_index => local_l
+                                     for (local_l, l_index) in pairs(l_globals))
+            for (receive_i, (l_index, source_j)) in pairs(active_entries)
+                local_l = get(local_l_by_global, l_index, 0)
+                iszero(local_l) && continue
+                m_index = active[source_j]
                 l = l_index - 1; m = m_index - 1
-                if l >= max(1, m)
-                    local_j = m_index - first_m + 1
-                    scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
-                    Sdest[local_l, local_j] = Srecv[l_index, source_j] / scale
-                    Tdest[local_l, local_j] = Trecv[l_index, source_j] / scale
-                end
+                local_j = m_index - first_m + 1
+                scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+                Sdest[local_l, local_j] = Srecv[receive_i] / scale
+                Tdest[local_l, local_j] = Trecv[receive_i] / scale
             end
         end
     end
@@ -1871,7 +1928,8 @@ function _synthesis_sphtor_owned_modes!(Ftheta::AbstractMatrix{CT},
                                          Slm::PencilArray, Tlm::PencilArray,
                                          theta_first::Int,
                                          real_output::Bool,
-                                         use_rfft::Bool) where {CT<:Complex}
+                                         use_rfft::Bool,
+                                         lcap::Int=cfg.lmax) where {CT<:Complex}
     fill!(Ftheta, zero(CT)); fill!(Fphi, zero(CT))
     RT = typeof(real(zero(CT)))
     P = Vector{Float64}(undef, cfg.lmax + 1)
@@ -1887,12 +1945,12 @@ function _synthesis_sphtor_owned_modes!(Ftheta::AbstractMatrix{CT},
         for local_theta in axes(Ftheta, 1)
             iglobal = theta_first + local_theta - 1
             SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
-                P, dtheta, over_sin, cfg.x[iglobal], cfg.lmax, m, scratch,
+                P, dtheta, over_sin, cfg.x[iglobal], lcap, m, scratch,
             )
             gt = zero(CT); gp = zero(CT)
             for (local_l, l_index) in pairs(l_globals)
                 l = l_index - 1
-                l >= max(1, m) || continue
+                l <= lcap && l >= max(1, m) || continue
                 scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
                 S = scale * Slocal[local_l, local_m]
                 Tv = scale * Tlocal[local_l, local_m]
@@ -1923,10 +1981,12 @@ function dist_synthesis_sphtor_pencil(cfg::SHTnsKit.SHTConfig,
                                       Slm::PencilArray, Tlm::PencilArray;
                                       prototype_θφ::PencilArray,
                                       real_output::Bool=true,
-                                      use_rfft::Bool=false)
+                                      use_rfft::Bool=false,
+                                      ltr::Integer=cfg.lmax)
     comm = _validate_sphtor_synthesis_inputs!(
         cfg, Slm, Tlm, prototype_θφ; real_output, use_rfft,
     )
+    lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_sphtor_l)
     CT = eltype(Slm); RT = typeof(real(zero(CT)))
     output_type = real_output ? RT : CT
     Vt_output = zeros(output_type, size(parent(prototype_θφ)))
@@ -1943,28 +2003,47 @@ function dist_synthesis_sphtor_pencil(cfg::SHTnsKit.SHTConfig,
         end
     end
     nbins = use_rfft ? cfg.nlon ÷ 2 + 1 : cfg.nlon
+    active_positive_bins = lcap < 1 ? Int[] :
+        Int[m + 1 for m in 0:cfg.mres:min(cfg.mmax, lcap)]
+    active_bins = copy(active_positive_bins)
+    if real_output && !use_rfft
+        append!(active_bins, (cfg.nlon - (bin - 1) + 1
+                              for bin in active_positive_bins if bin > 1))
+    end
     for (group, root) in pairs(roots)
         theta_first = descriptors.θ_starts[root + 1]
         theta_count = descriptors.θ_counts[root + 1]
-        Ft_send = zeros(CT, theta_count, nbins)
-        Fp_send = similar(Ft_send); fill!(Fp_send, zero(CT))
+        Ft_full = zeros(CT, theta_count, nbins)
+        Fp_full = similar(Ft_full); fill!(Fp_full, zero(CT))
         _synthesis_sphtor_owned_modes!(
-            Ft_send, Fp_send, cfg, Slm, Tlm, theta_first,
-            real_output, use_rfft,
+            Ft_full, Fp_full, cfg, Slm, Tlm, theta_first,
+            real_output, use_rfft, lcap,
         )
+        Ft_send = copy(@view Ft_full[:, active_bins])
+        Fp_send = copy(@view Fp_full[:, active_bins])
         Ft_recv = similar(Ft_send); Fp_recv = similar(Fp_send)
+        _record_pencil_scalar_stat!(
+            :vector_synthesis_max_message_elements, length(Ft_send); maximum=true,
+        )
+        _record_pencil_scalar_stat!(
+            :vector_synthesis_sent_elements, 2length(Ft_send),
+        )
         MPI.Reduce!(Ft_send, Ft_recv, +, root, comm)
         MPI.Reduce!(Fp_send, Fp_recv, +, root, comm)
         if rank == root
+            Ft_fourier = zeros(CT, theta_count, nbins)
+            Fp_fourier = similar(Ft_fourier); fill!(Fp_fourier, zero(CT))
+            copyto!(@view(Ft_fourier[:, active_bins]), Ft_recv)
+            copyto!(@view(Fp_fourier[:, active_bins]), Fp_recv)
             Vt_slab = real_output ? Matrix{RT}(undef, theta_count, cfg.nlon) :
                                     Matrix{CT}(undef, theta_count, cfg.nlon)
             Vp_slab = similar(Vt_slab)
             if use_rfft
-                Vt_slab .= FFTW.irfft(Ft_recv, cfg.nlon, 2)
-                Vp_slab .= FFTW.irfft(Fp_recv, cfg.nlon, 2)
+                Vt_slab .= FFTW.irfft(Ft_fourier, cfg.nlon, 2)
+                Vp_slab .= FFTW.irfft(Fp_fourier, cfg.nlon, 2)
             else
-                SHTnsKitParallelExt.ifft_along_dim2!(Vt_slab, Ft_recv)
-                SHTnsKitParallelExt.ifft_along_dim2!(Vp_slab, Fp_recv)
+                SHTnsKitParallelExt.ifft_along_dim2!(Vt_slab, Ft_fourier)
+                SHTnsKitParallelExt.ifft_along_dim2!(Vp_slab, Fp_fourier)
             end
             for destination in 0:(nranks - 1)
                 same_slab = descriptors.θ_starts[destination + 1] == theta_first &&
@@ -1990,6 +2069,91 @@ function dist_synthesis_sphtor_pencil(cfg::SHTnsKit.SHTConfig,
         end
     end
     return Vt_output, Vp_output
+end
+
+# Fixed-order variants use PencilArrays of global shape `(logical_length, 1)`.
+# Only that active one-dimensional payload is reduced; no dense `(l,m)` matrix
+# is ever constructed.
+function _validate_mode_pencils!(comm, values::Tuple, expected_length::Int,
+                                 operation::Symbol)
+    _validate_qst_pencil_communicators!(comm, values, operation)
+    first_value = first(values)
+    flags = UInt32(0)
+    for value in values
+        size_global(value) == (expected_length, 1) || (flags |= 0x0001)
+        eltype(value) <: Complex || (flags |= 0x0004)
+        eltype(value) === eltype(first_value) || (flags |= 0x0004)
+    end
+    for value in Iterators.drop(values, 1)
+        _validate_identical_pencil_layout!(first_value, value, operation; comm)
+    end
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
+function _collect_mode_vector(value::PencilArray, expected_length::Int, comm)
+    result = zeros(eltype(value), expected_length)
+    globals = collect(Int, globalindices(value, 1))
+    source = parent(value)
+    @inbounds for (local_i, global_i) in pairs(globals)
+        result[global_i] = source[local_i, 1]
+    end
+    _record_pencil_scalar_stat!(
+        :vector_mode_max_message_elements, length(result); maximum=true,
+    )
+    _record_pencil_scalar_stat!(:vector_mode_sent_elements, length(result))
+    MPI.Allreduce!(result, +, comm)
+    return result
+end
+
+function _mode_pencil(values::AbstractVector, comm)
+    result = PencilArray{eltype(values)}(
+        undef, Pencil((length(values), 1), (1,), comm),
+    )
+    globals = collect(Int, globalindices(result, 1))
+    @inbounds for (local_i, global_i) in pairs(globals)
+        parent(result)[local_i, 1] = values[global_i]
+    end
+    return result
+end
+
+function _analysis_sphtor_mode_pencil(cfg::SHTnsKit.SHTConfig,
+                                      stored_im::Integer,
+                                      Vt::PencilArray, Vp::PencilArray,
+                                      ltr::Integer)
+    comm = communicator(Vt)
+    _validate_cfg_replicated(cfg, comm)
+    stored, physical_m, lcap = _collective_fixed_order(
+        comm, cfg, stored_im, ltr, :analysis_sphtor_ml,
+    )
+    _validate_mode_pencils!(comm, (Vt, Vp), cfg.nlat, :analysis_sphtor_ml)
+    Vt_host = _collect_mode_vector(Vt, cfg.nlat, comm)
+    Vp_host = _collect_mode_vector(Vp, cfg.nlat, comm)
+    S, Tlm = SHTnsKit.analysis_sphtor_ml(
+        SHTnsKit.CPU(), cfg, stored, Vt_host, Vp_host, lcap,
+    )
+    length(S) == lcap - physical_m + 1 || error("fixed-order length invariant")
+    return _mode_pencil(S, comm), _mode_pencil(Tlm, comm)
+end
+
+function _synthesis_sphtor_mode_pencil(cfg::SHTnsKit.SHTConfig,
+                                       stored_im::Integer,
+                                       S::PencilArray, Tlm::PencilArray,
+                                       ltr::Integer)
+    comm = communicator(S)
+    _validate_cfg_replicated(cfg, comm)
+    stored, physical_m, lcap = _collective_fixed_order(
+        comm, cfg, stored_im, ltr, :synthesis_sphtor_ml,
+    )
+    active_length = lcap - physical_m + 1
+    _validate_mode_pencils!(comm, (S, Tlm), active_length,
+                            :synthesis_sphtor_ml)
+    S_host = _collect_mode_vector(S, active_length, comm)
+    T_host = _collect_mode_vector(Tlm, active_length, comm)
+    Vt, Vp = SHTnsKit.synthesis_sphtor_ml(
+        SHTnsKit.CPU(), cfg, stored, S_host, T_host, lcap,
+    )
+    return _mode_pencil(Vt, comm), _mode_pencil(Vp, comm)
 end
 
 # Distributed vector analysis (spheroidal/toroidal)

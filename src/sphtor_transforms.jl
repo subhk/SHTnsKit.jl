@@ -811,17 +811,22 @@ function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::Abs
     return Tlm
 end
 
-Base.@constprop :aggressive function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+Base.@constprop :aggressive function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     return _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(real_output))
 end
 
-function synthesis_sphtor_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int)
+function synthesis_sphtor_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer)
     # Dedicated complex helper avoids inference depending on a runtime keyword.
     return _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(false))
 end
 
-function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int,
+synthesis_sphtor_l_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                         Tlm::AbstractMatrix, ltr::Integer) =
+    synthesis_sphtor_l(CPU(), cfg, Slm, Tlm, ltr; real_output=false)
+
+function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer,
                              ::Val{real_output}) where {real_output}
+    ltr = _validate_degree_limit(cfg, ltr)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
@@ -864,7 +869,8 @@ function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractM
     return Vt, Vp
 end
 
-function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
+function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Integer)
+    ltr = _validate_degree_limit(cfg, ltr)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
@@ -883,50 +889,90 @@ function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatri
     return Slm, Tlm
 end
 
+function analysis_sphtor_l(::CPU, cfg::SHTConfig, Vt::AbstractMatrix,
+                            Vp::AbstractMatrix, ltr::Integer)
+    _require_cpu_storage(:analysis_sphtor_l, Vt)
+    _require_cpu_storage(:analysis_sphtor_l, Vp)
+    return analysis_sphtor_l(cfg, Vt, Vp, ltr)
+end
+
+function synthesis_sphtor_l(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                             Tlm::AbstractMatrix, ltr::Integer; kwargs...)
+    _require_cpu_storage(:synthesis_sphtor_l, Slm)
+    _require_cpu_storage(:synthesis_sphtor_l, Tlm)
+    return synthesis_sphtor_l(cfg, Slm, Tlm, ltr; kwargs...)
+end
+
 """
     synthesis_sph_l(cfg, Slm, ltr; real_output=true) -> (Vt, Vp)
 
 Degree-limited spheroidal-only transform.
 """
-function synthesis_sph_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_sph_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     # Use a zero-view toroidal spectrum so the shared S/T implementation does
     # not pay for an all-zero dense allocation.
     Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr; real_output=real_output)
 end
 
-function synthesis_sph_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int)
+function synthesis_sph_l(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                         ltr::Integer; kwargs...)
+    _require_cpu_storage(:synthesis_sph_l, Slm)
+    return synthesis_sph_l(cfg, Slm, ltr; kwargs...)
+end
+
+function synthesis_sph_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Integer)
     Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return _synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr, Val(false))
 end
+
+synthesis_sph_l_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                      ltr::Integer) =
+    synthesis_sph_l(CPU(), cfg, Slm, ltr; real_output=false)
 
 """
     synthesis_tor_l(cfg, Tlm, ltr; real_output=true) -> (Vt, Vp)
 
 Degree-limited toroidal-only transform.
 """
-function synthesis_tor_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_tor_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     # Use a zero-view spheroidal spectrum so the shared S/T implementation
     # stays allocation-light.
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr; real_output=real_output)
 end
 
-function synthesis_tor_l_cplx(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int)
+function synthesis_tor_l(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix,
+                         ltr::Integer; kwargs...)
+    _require_cpu_storage(:synthesis_tor_l, Tlm)
+    return synthesis_tor_l(cfg, Tlm, ltr; kwargs...)
+end
+
+function synthesis_tor_l_cplx(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Integer)
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return _synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr, Val(false))
 end
+
+synthesis_tor_l_cplx(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix,
+                      ltr::Integer) =
+    synthesis_tor_l(CPU(), cfg, Tlm, ltr; real_output=false)
 
 """
     synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
 
 Mode-limited spheroidal-only synthesis wrapper.
 """
-function synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_sph_ml(cfg::SHTConfig, im::Integer, Sl::AbstractVector{<:Complex}, ltr::Integer)
     # Mode-limited wrappers use zero-vector views for the missing component;
     # this avoids an O(ltr-im) allocation on repeated per-mode calls.
     Tl_zero = _zero_spectral_vector(eltype(Sl), length(Sl))
     return synthesis_sphtor_ml(cfg, im, Sl, Tl_zero, ltr)
+end
+
+function synthesis_sph_ml(::CPU, cfg::SHTConfig, im::Integer,
+                          Sl::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:synthesis_sph_ml, Sl)
+    return synthesis_sph_ml(cfg, im, Sl, ltr)
 end
 
 """
@@ -934,11 +980,17 @@ end
 
 Mode-limited toroidal-only synthesis wrapper.
 """
-function synthesis_tor_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_tor_ml(cfg::SHTConfig, im::Integer, Tl::AbstractVector{<:Complex}, ltr::Integer)
     # Mode-limited wrappers use zero-vector views for the missing component;
     # this avoids an O(ltr-im) allocation on repeated per-mode calls.
     Sl_zero = _zero_spectral_vector(eltype(Tl), length(Tl))
     return synthesis_sphtor_ml(cfg, im, Sl_zero, Tl, ltr)
+end
+
+function synthesis_tor_ml(::CPU, cfg::SHTConfig, im::Integer,
+                          Tl::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:synthesis_tor_ml, Tl)
+    return synthesis_tor_ml(cfg, im, Tl, ltr)
 end
 
 """
@@ -952,7 +1004,23 @@ the synthesis formulas:
     Vθ = ∂S/∂θ - (im/sinθ) * T
     Vφ = (im/sinθ) * S + ∂T/∂θ
 """
-function analysis_sphtor_ml(cfg::SHTConfig, mval::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
+@inline function _validate_vector_fixed_order(cfg::SHTConfig, stored_im::Integer,
+                                              ltr::Integer)
+    im_value, representable = _degree_limit_candidate(stored_im)
+    max_im = cfg.mmax ÷ cfg.mres
+    representable && 0 <= im_value <= max_im || throw(ArgumentError(
+        "im must be an Int-representable stored-order index satisfying 0 <= im <= $max_im",
+    ))
+    lcap = _validate_degree_limit(cfg, ltr)
+    physical_m = im_value * cfg.mres
+    lcap >= physical_m || throw(ArgumentError(
+        "ltr must satisfy ltr >= im*mres=$physical_m",
+    ))
+    return physical_m, lcap
+end
+
+function analysis_sphtor_ml(cfg::SHTConfig, stored_im::Integer, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Integer)
+    mval, ltr = _validate_vector_fixed_order(cfg, stored_im, ltr)
     nlat = cfg.nlat
     length(Vt_m) == nlat || throw(DimensionMismatch("Vt_m length must be nlat"))
     length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat"))
@@ -1005,6 +1073,14 @@ function analysis_sphtor_ml(cfg::SHTConfig, mval::Int, Vt_m::AbstractVector{<:Co
     return Sl, Tl
 end
 
+function analysis_sphtor_ml(::CPU, cfg::SHTConfig, stored_im::Integer,
+                            Vt::AbstractVector{<:Complex},
+                            Vp::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:analysis_sphtor_ml, Vt)
+    _require_cpu_storage(:analysis_sphtor_ml, Vp)
+    return analysis_sphtor_ml(cfg, stored_im, Vt, Vp, ltr)
+end
+
 """
     synthesis_sphtor_ml(cfg, mval, Sl, Tl, ltr) -> (Vt_m, Vp_m)
 
@@ -1016,7 +1092,8 @@ The order argument is named `mval`, NOT `im`: a binding called `im` shadows
 Julia's imaginary unit, and `1.0im` is juxtaposition (`1.0 * im`), so the
 coupling terms above silently became real. Do not rename it back.
 """
-function synthesis_sphtor_ml(cfg::SHTConfig, mval::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_sphtor_ml(cfg::SHTConfig, stored_im::Integer, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Integer)
+    mval, ltr = _validate_vector_fixed_order(cfg, stored_im, ltr)
     nlat = cfg.nlat
     expected_len = ltr - mval + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
@@ -1073,6 +1150,14 @@ function synthesis_sphtor_ml(cfg::SHTConfig, mval::Int, Sl::AbstractVector{<:Com
     return Vt_m, Vp_m
 end
 
+function synthesis_sphtor_ml(::CPU, cfg::SHTConfig, stored_im::Integer,
+                             Sl::AbstractVector{<:Complex},
+                             Tl::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:synthesis_sphtor_ml, Sl)
+    _require_cpu_storage(:synthesis_sphtor_ml, Tl)
+    return synthesis_sphtor_ml(cfg, stored_im, Sl, Tl, ltr)
+end
+
 """
     synthesis_grad(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
 
@@ -1082,20 +1167,31 @@ function synthesis_grad(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=t
     return synthesis_sph(cfg, Slm; real_output=real_output)
 end
 
+synthesis_grad(::CPU, cfg::SHTConfig, Slm::AbstractMatrix; kwargs...) =
+    synthesis_sph(CPU(), cfg, Slm; kwargs...)
+
 """
     synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
 
 Degree-limited gradient synthesis alias.
 """
-function synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     return synthesis_sph_l(cfg, Slm, ltr; real_output=real_output)
 end
+
+synthesis_grad_l(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                 ltr::Integer; kwargs...) =
+    synthesis_sph_l(CPU(), cfg, Slm, ltr; kwargs...)
 
 """
     synthesis_grad_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
 
 Mode-limited gradient synthesis alias.
 """
-function synthesis_grad_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_grad_ml(cfg::SHTConfig, im::Integer, Sl::AbstractVector{<:Complex}, ltr::Integer)
     return synthesis_sph_ml(cfg, im, Sl, ltr)
 end
+
+synthesis_grad_ml(::CPU, cfg::SHTConfig, im::Integer,
+                  Sl::AbstractVector{<:Complex}, ltr::Integer) =
+    synthesis_sph_ml(CPU(), cfg, im, Sl, ltr)

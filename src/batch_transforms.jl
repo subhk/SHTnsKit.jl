@@ -774,6 +774,7 @@ function analysis_sphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3}
     nlat == cfg.nlat || throw(DimensionMismatch("first dim must be nlat=$(cfg.nlat)"))
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
     size(Vp_batch) == size(Vt_batch) || throw(DimensionMismatch("Vt and Vp must have same shape"))
+    nfields > 0 || throw(ArgumentError("analysis_sphtor_batch requires at least one field"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     # Follow the inputs, promoted across both components — hardcoding ComplexF64
@@ -802,6 +803,14 @@ function analysis_sphtor_batch(cfg::SHTConfig, Vt_batch::AbstractArray{<:Real,3}
     return Slm_batch, Tlm_batch
 end
 
+function analysis_sphtor_batch(::CPU, cfg::SHTConfig,
+                                Vt_batch::AbstractArray{<:Real,3},
+                                Vp_batch::AbstractArray{<:Real,3})
+    _require_cpu_storage(:analysis_sphtor_batch, Vt_batch)
+    _require_cpu_storage(:analysis_sphtor_batch, Vp_batch)
+    return analysis_sphtor_batch(cfg, Vt_batch, Vp_batch)
+end
+
 """
     synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
                            Tlm_batch::AbstractArray{<:Complex,3}; real_output::Bool=true)
@@ -819,11 +828,24 @@ Base.@constprop :aggressive function synthesis_sphtor_batch(cfg::SHTConfig, Slm_
     return _synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch, Val(real_output))
 end
 
+function synthesis_sphtor_batch(::CPU, cfg::SHTConfig,
+                                 Slm_batch::AbstractArray{<:Complex,3},
+                                 Tlm_batch::AbstractArray{<:Complex,3}; kwargs...)
+    _require_cpu_storage(:synthesis_sphtor_batch, Slm_batch)
+    _require_cpu_storage(:synthesis_sphtor_batch, Tlm_batch)
+    return synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch; kwargs...)
+end
+
 """Complex-output batch spheroidal/toroidal synthesis with a concrete return type."""
 function synthesis_sphtor_batch_cplx(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
                                      Tlm_batch::AbstractArray{<:Complex,3})
     return _synthesis_sphtor_batch(cfg, Slm_batch, Tlm_batch, Val(false))
 end
+
+synthesis_sphtor_batch_cplx(::CPU, cfg::SHTConfig,
+                            Slm_batch::AbstractArray{<:Complex,3},
+                            Tlm_batch::AbstractArray{<:Complex,3}) =
+    synthesis_sphtor_batch(CPU(), cfg, Slm_batch, Tlm_batch; real_output=false)
 
 function _synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Complex,3},
                                  Tlm_batch::AbstractArray{<:Complex,3},
@@ -834,6 +856,7 @@ function _synthesis_sphtor_batch(cfg::SHTConfig, Slm_batch::AbstractArray{<:Comp
     size(Tlm_batch) == size(Slm_batch) || throw(DimensionMismatch("Slm and Tlm must have same shape"))
 
     nfields = size(Slm_batch, 3)
+    nfields > 0 || throw(ArgumentError("synthesis_sphtor_batch requires at least one field"))
     nlat, nlon = cfg.nlat, cfg.nlon
 
     # Follow the inputs, promoted across both — hardcoding Float64/ComplexF64
@@ -886,6 +909,7 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     nlon == cfg.nlon || throw(DimensionMismatch("second dim must be nlon=$(cfg.nlon)"))
     size(Vt_batch) == size(Vr_batch) || throw(DimensionMismatch("Vr and Vt must have same shape"))
     size(Vp_batch) == size(Vr_batch) || throw(DimensionMismatch("Vr and Vp must have same shape"))
+    nfields > 0 || throw(ArgumentError("analysis_qst_batch requires at least one field"))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     # Follow the input eltype, as `analysis_batch` does — but promote across all
@@ -921,6 +945,16 @@ function analysis_qst_batch(cfg::SHTConfig, Vr_batch::AbstractArray{<:Real,3},
     return Qlm_batch, Slm_batch, Tlm_batch
 end
 
+function analysis_qst_batch(::CPU, cfg::SHTConfig,
+                            Vr_batch::AbstractArray{<:Real,3},
+                            Vt_batch::AbstractArray{<:Real,3},
+                            Vp_batch::AbstractArray{<:Real,3})
+    for value in (Vr_batch, Vt_batch, Vp_batch)
+        _require_cpu_storage(:analysis_qst_batch, value)
+    end
+    return analysis_qst_batch(cfg, Vr_batch, Vt_batch, Vp_batch)
+end
+
 """
     synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
                         Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3};
@@ -939,12 +973,31 @@ Base.@constprop :aggressive function synthesis_qst_batch(cfg::SHTConfig, Qlm_bat
     return _synthesis_qst_batch(cfg, Qlm_batch, Slm_batch, Tlm_batch, Val(real_output))
 end
 
+function synthesis_qst_batch(::CPU, cfg::SHTConfig,
+                             Qlm_batch::AbstractArray{<:Complex,3},
+                             Slm_batch::AbstractArray{<:Complex,3},
+                             Tlm_batch::AbstractArray{<:Complex,3}; kwargs...)
+    for value in (Qlm_batch, Slm_batch, Tlm_batch)
+        _require_cpu_storage(:synthesis_qst_batch, value)
+    end
+    return synthesis_qst_batch(cfg, Qlm_batch, Slm_batch, Tlm_batch; kwargs...)
+end
+
 """Complex-output batch QST synthesis with a concrete return type."""
 function synthesis_qst_batch_cplx(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
                                   Slm_batch::AbstractArray{<:Complex,3},
                                   Tlm_batch::AbstractArray{<:Complex,3})
     return _synthesis_qst_batch(cfg, Qlm_batch, Slm_batch, Tlm_batch, Val(false))
 end
+
+
+synthesis_qst_batch_cplx(::CPU, cfg::SHTConfig,
+                         Qlm_batch::AbstractArray{<:Complex,3},
+                         Slm_batch::AbstractArray{<:Complex,3},
+                         Tlm_batch::AbstractArray{<:Complex,3}) =
+    synthesis_qst_batch(
+        CPU(), cfg, Qlm_batch, Slm_batch, Tlm_batch; real_output=false,
+    )
 
 function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex,3},
                               Slm_batch::AbstractArray{<:Complex,3}, Tlm_batch::AbstractArray{<:Complex,3},
@@ -956,6 +1009,7 @@ function _synthesis_qst_batch(cfg::SHTConfig, Qlm_batch::AbstractArray{<:Complex
     size(Tlm_batch) == size(Qlm_batch) || throw(DimensionMismatch("Qlm and Tlm must have same shape"))
 
     nfields = size(Qlm_batch, 3)
+    nfields > 0 || throw(ArgumentError("synthesis_qst_batch requires at least one field"))
     nlat, nlon = cfg.nlat, cfg.nlon
 
     # Output eltype follows the input, as in `_synthesis_batch` — hardcoding

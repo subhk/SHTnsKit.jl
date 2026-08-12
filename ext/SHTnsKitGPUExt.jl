@@ -23,7 +23,9 @@ using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
 using .GPUCommon: ScalarWorkspaceCache, scalar_workspace_use!,
                   scalar_workspace_clear!, scalar_workspace_size
 using .GPUCommon: vector_derivative_table_kernel!, vector_analysis_kernel!,
-                  vector_synthesis_kernel!, vector_diagonal_kernel!
+                  vector_synthesis_kernel!, vector_diagonal_kernel!,
+                  vector_mode_analysis_kernel!, vector_mode_synthesis_kernel!,
+                  vector_batch_analysis_kernel!, vector_batch_synthesis_kernel!
 
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
@@ -45,8 +47,20 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  synthesis_batch, synthesis_batch!, synthesis_batch_cplx,
                  analysis_sphtor, analysis_sphtor_cplx,
                  synthesis_sphtor, synthesis_sphtor_cplx,
+                 analysis_sphtor_l, synthesis_sphtor_l,
+                 synthesis_sphtor_l_cplx, synthesis_sph_l,
+                 synthesis_sph_l_cplx, synthesis_tor_l,
+                 synthesis_tor_l_cplx, analysis_sphtor_ml,
+                 synthesis_sphtor_ml, synthesis_sph_ml, synthesis_tor_ml,
+                 synthesis_grad, synthesis_grad_l, synthesis_grad_ml,
                  analysis_qst, analysis_qst_cplx,
                  synthesis_qst, synthesis_qst_cplx,
+                 analysis_qst_l, synthesis_qst_l, synthesis_qst_l_cplx,
+                 analysis_qst_ml, synthesis_qst_ml,
+                 analysis_sphtor_batch, synthesis_sphtor_batch,
+                 synthesis_sphtor_batch_cplx,
+                 analysis_qst_batch, synthesis_qst_batch,
+                 synthesis_qst_batch_cplx,
                  synthesis_sph, synthesis_sph_cplx,
                  synthesis_tor, synthesis_tor_cplx,
                  divergence_from_spheroidal, divergence_from_spheroidal!,
@@ -449,13 +463,14 @@ synthesis_cplx(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{T,2}) where {T} =
 function _cuda_vector_analysis(cfg::SHTConfig,
                                Vt::CUDA.AnyCuArray{T,2},
                                Vp::CUDA.AnyCuArray{R,2};
-                               use_rfft::Bool=false) where {T<:Number,R<:Number}
+                               use_rfft::Bool=false,
+                               lcap::Int=cfg.lmax) where {T<:Number,R<:Number}
     RT = typeof(float(real(zero(T))))
     CT = Complex{RT}
     Sout = CUDA.zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
     Tout = similar(Sout)
     return _cuda_vector_analysis_direct!(
-        cfg, cfg, Sout, Tout, Vt, Vp; use_rfft,
+        cfg, cfg, Sout, Tout, Vt, Vp; use_rfft, lcap,
     )
 end
 
@@ -464,12 +479,14 @@ function _cuda_vector_analysis_direct!(owner, cfg::SHTConfig,
                                        Tout::CUDA.AnyCuArray,
                                        Vt::CUDA.AnyCuArray{T,2},
                                        Vp::CUDA.AnyCuArray{R,2};
-                                       use_rfft::Bool=false) where {T<:Number,R<:Number}
+                                       use_rfft::Bool=false,
+                                       lcap::Int=cfg.lmax) where {T<:Number,R<:Number}
     _require_cuda(:analysis_sphtor!, SHTnsKit.GPU())
     size(Vt) == (cfg.nlat, cfg.nlon) || throw(DimensionMismatch(
         "Vt must have size ($(cfg.nlat), $(cfg.nlon))",
     ))
     size(Vp) == size(Vt) || throw(DimensionMismatch("Vp must match Vt"))
+    0 <= lcap <= cfg.lmax || throw(ArgumentError("invalid vector degree cap"))
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     size(Sout) == expected || throw(DimensionMismatch("Sout must have size $expected"))
     size(Tout) == expected || throw(DimensionMismatch("Tout must have size $expected"))
@@ -500,11 +517,12 @@ function _cuda_vector_analysis_direct!(owner, cfg::SHTConfig,
         copyto!(workspace.Fphi, Vp)
         mul!(workspace.Ftheta, workspace.forward_theta, workspace.Ftheta)
         mul!(workspace.Fphi, workspace.forward_phi, workspace.Fphi)
+        fill!(Sout, zero(CT)); fill!(Tout, zero(CT))
         vector_analysis_kernel!(CUDABackend())(
             Sout, Tout, workspace.Ftheta, workspace.Fphi,
             tables.dtheta, tables.over_sin, tables.weights, tables.scales,
-            tables.x, RT(cfg.cphi), cfg.lmax, cfg.mmax, cfg.mres,
-            cfg.robert_form; ndrange=size(Sout),
+            tables.x, RT(cfg.cphi), lcap, min(cfg.mmax, lcap), cfg.mres,
+            cfg.robert_form; ndrange=(lcap + 1, min(cfg.mmax, lcap) + 1),
         )
         CUDA.synchronize()
         Sout, Tout
@@ -515,13 +533,14 @@ function _cuda_vector_synthesis(cfg::SHTConfig,
                                 Slm::CUDA.AnyCuArray{T,2},
                                 Tlm::CUDA.AnyCuArray{R,2};
                                 real_output::Bool=true,
-                                use_rfft::Bool=false) where {T<:Number,R<:Number}
+                                use_rfft::Bool=false,
+                                lcap::Int=cfg.lmax) where {T<:Number,R<:Number}
     RT = typeof(float(real(zero(T))))
     output_type = real_output ? RT : Complex{RT}
     Vt = CUDA.zeros(output_type, cfg.nlat, cfg.nlon)
     Vp = similar(Vt)
     return _cuda_vector_synthesis_direct!(
-        cfg, cfg, Vt, Vp, Slm, Tlm; real_output, use_rfft,
+        cfg, cfg, Vt, Vp, Slm, Tlm; real_output, use_rfft, lcap,
     )
 end
 
@@ -531,11 +550,13 @@ function _cuda_vector_synthesis_direct!(owner, cfg::SHTConfig,
                                         Slm::CUDA.AnyCuArray{T,2},
                                         Tlm::CUDA.AnyCuArray{R,2};
                                         real_output::Bool=true,
-                                        use_rfft::Bool=false) where {T<:Number,R<:Number}
+                                        use_rfft::Bool=false,
+                                        lcap::Int=cfg.lmax) where {T<:Number,R<:Number}
     _require_cuda(:synthesis_sphtor!, SHTnsKit.GPU())
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     size(Slm) == expected || throw(DimensionMismatch("Slm must have size $expected"))
     size(Tlm) == expected || throw(DimensionMismatch("Tlm must have size $expected"))
+    0 <= lcap <= cfg.lmax || throw(ArgumentError("invalid vector degree cap"))
     spatial = (cfg.nlat, cfg.nlon)
     size(Vt) == spatial || throw(DimensionMismatch("Vt must have size $spatial"))
     size(Vp) == spatial || throw(DimensionMismatch("Vp must have size $spatial"))
@@ -566,9 +587,9 @@ function _cuda_vector_synthesis_direct!(owner, cfg::SHTConfig,
         vector_synthesis_kernel!(CUDABackend())(
             workspace.Ftheta, workspace.Fphi, Slm, Tlm,
             tables.dtheta, tables.over_sin, tables.scales, tables.x,
-            RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, cfg.lmax, cfg.mmax,
+            RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, lcap, min(cfg.mmax, lcap),
             cfg.mres, real_output, cfg.robert_form;
-            ndrange=(cfg.nlat, cfg.mmax + 1),
+            ndrange=(cfg.nlat, min(cfg.mmax, lcap) + 1),
         )
         CUDA.synchronize()
         mul!(workspace.Ftheta, workspace.inverse_theta, workspace.Ftheta)
@@ -628,6 +649,304 @@ synthesis_qst_cplx(cfg::SHTConfig, Qlm::CUDA.AnyCuArray{T,2},
                    Slm::CUDA.AnyCuArray{R,2},
                    Tlm::CUDA.AnyCuArray{S,2}) where {T,R,S} =
     synthesis_qst_cplx(SHTnsKit.GPU(), cfg, Qlm, Slm, Tlm)
+
+# --------------------------------------------------------------------------
+# Degree/fixed-order/vector/QST variants.  These methods deliberately live in
+# the vendor extension so an inferred call can never enter a host implementation.
+
+function analysis_sphtor_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                            Vt::CUDA.AnyCuArray{T,2},
+                            Vp::CUDA.AnyCuArray{R,2}, ltr::Integer) where {T,R}
+    lcap = SHTnsKit._validate_degree_limit(cfg, ltr)
+    return _cuda_vector_analysis(cfg, Vt, Vp; lcap)
+end
+analysis_sphtor_l(cfg::SHTConfig, Vt::CUDA.AnyCuArray{T,2},
+                   Vp::CUDA.AnyCuArray{R,2}, ltr::Integer) where {T,R} =
+    analysis_sphtor_l(SHTnsKit.GPU(), cfg, Vt, Vp, ltr)
+
+function synthesis_sphtor_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                             Slm::CUDA.AnyCuArray{T,2},
+                             Tlm::CUDA.AnyCuArray{R,2}, ltr::Integer;
+                             real_output::Bool=true) where {T,R}
+    lcap = SHTnsKit._validate_degree_limit(cfg, ltr)
+    return _cuda_vector_synthesis(cfg, Slm, Tlm; real_output, lcap)
+end
+synthesis_sphtor_l(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2},
+                    Tlm::CUDA.AnyCuArray{R,2}, ltr::Integer; kwargs...) where {T,R} =
+    synthesis_sphtor_l(SHTnsKit.GPU(), cfg, Slm, Tlm, ltr; kwargs...)
+synthesis_sphtor_l_cplx(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2},
+                         Tlm::CUDA.AnyCuArray{R,2}, ltr::Integer) where {T,R} =
+    synthesis_sphtor_l(SHTnsKit.GPU(), cfg, Slm, Tlm, ltr; real_output=false)
+synthesis_sphtor_l_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                        Slm::CUDA.AnyCuArray{T,2},
+                        Tlm::CUDA.AnyCuArray{R,2}, ltr::Integer) where {T,R} =
+    synthesis_sphtor_l(SHTnsKit.GPU(), cfg, Slm, Tlm, ltr; real_output=false)
+
+function _cuda_zero_spectrum(reference::CUDA.AnyCuArray, cfg::SHTConfig)
+    return CUDA.zeros(eltype(reference), cfg.lmax + 1, cfg.mmax + 1)
+end
+synthesis_sph_l(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2}, ltr::Integer;
+                real_output::Bool=true) where {T} =
+    synthesis_sphtor_l(SHTnsKit.GPU(), cfg, Slm, _cuda_zero_spectrum(Slm, cfg),
+                       ltr; real_output)
+synthesis_sph_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                Slm::CUDA.AnyCuArray{T,2}, ltr::Integer;
+                kwargs...) where {T} = synthesis_sph_l(cfg, Slm, ltr; kwargs...)
+synthesis_sph_l_cplx(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2},
+                     ltr::Integer) where {T} =
+    synthesis_sph_l(cfg, Slm, ltr; real_output=false)
+synthesis_sph_l_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                     Slm::CUDA.AnyCuArray{T,2}, ltr::Integer) where {T} =
+    synthesis_sph_l(cfg, Slm, ltr; real_output=false)
+synthesis_tor_l(cfg::SHTConfig, Tlm::CUDA.AnyCuArray{T,2}, ltr::Integer;
+                real_output::Bool=true) where {T} =
+    synthesis_sphtor_l(SHTnsKit.GPU(), cfg, _cuda_zero_spectrum(Tlm, cfg), Tlm,
+                       ltr; real_output)
+synthesis_tor_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                Tlm::CUDA.AnyCuArray{T,2}, ltr::Integer;
+                kwargs...) where {T} = synthesis_tor_l(cfg, Tlm, ltr; kwargs...)
+synthesis_tor_l_cplx(cfg::SHTConfig, Tlm::CUDA.AnyCuArray{T,2},
+                     ltr::Integer) where {T} =
+    synthesis_tor_l(cfg, Tlm, ltr; real_output=false)
+synthesis_tor_l_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                     Tlm::CUDA.AnyCuArray{T,2}, ltr::Integer) where {T} =
+    synthesis_tor_l(cfg, Tlm, ltr; real_output=false)
+
+function _cuda_vector_mode_analysis(cfg::SHTConfig, stored_im::Integer,
+                                    Vt::CUDA.AnyCuArray{T,1},
+                                    Vp::CUDA.AnyCuArray{R,1},
+                                    ltr::Integer) where {T<:Complex,R<:Complex}
+    physical_m, lcap = SHTnsKit._validate_vector_fixed_order(cfg, stored_im, ltr)
+    length(Vt) == cfg.nlat || throw(DimensionMismatch("Vt mode length mismatch"))
+    length(Vp) == cfg.nlat || throw(DimensionMismatch("Vp mode length mismatch"))
+    RTt = typeof(float(real(zero(T)))); RTp = typeof(float(real(zero(R))))
+    RTt === RTp || throw(ArgumentError("mode components must have the same precision"))
+    RT = RTt; CT = Complex{RT}
+    tables = _cuda_vector_tables(cfg, RT)
+    Sout = CUDA.zeros(CT, lcap - physical_m + 1)
+    Tout = similar(Sout)
+    vector_mode_analysis_kernel!(CUDABackend())(
+        Sout, Tout, Vt, Vp, tables.dtheta, tables.over_sin,
+        tables.weights, tables.scales, tables.x, RT(cfg.cphi), physical_m,
+        lcap, cfg.robert_form; ndrange=length(Sout),
+    )
+    CUDA.synchronize()
+    return Sout, Tout
+end
+
+function _cuda_vector_mode_synthesis(cfg::SHTConfig, stored_im::Integer,
+                                     Sl::CUDA.AnyCuArray{T,1},
+                                     Tl::CUDA.AnyCuArray{R,1},
+                                     ltr::Integer) where {T<:Complex,R<:Complex}
+    physical_m, lcap = SHTnsKit._validate_vector_fixed_order(cfg, stored_im, ltr)
+    expected = lcap - physical_m + 1
+    length(Sl) == expected || throw(DimensionMismatch("Sl mode length mismatch"))
+    length(Tl) == expected || throw(DimensionMismatch("Tl mode length mismatch"))
+    RTs = typeof(float(real(zero(T)))); RTt = typeof(float(real(zero(R))))
+    RTs === RTt || throw(ArgumentError("mode coefficients must have the same precision"))
+    RT = RTs; CT = Complex{RT}
+    tables = _cuda_vector_tables(cfg, RT)
+    Vt = CUDA.zeros(CT, cfg.nlat); Vp = similar(Vt)
+    vector_mode_synthesis_kernel!(CUDABackend())(
+        Vt, Vp, Sl, Tl, tables.dtheta, tables.over_sin, tables.scales,
+        tables.x, RT(SHTnsKit.phi_inv_scale(cfg)), physical_m, lcap,
+        cfg.robert_form; ndrange=cfg.nlat,
+    )
+    CUDA.synchronize()
+    return Vt, Vp
+end
+
+analysis_sphtor_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
+                   Vt::CUDA.AnyCuArray{T,1}, Vp::CUDA.AnyCuArray{R,1},
+                   ltr::Integer) where {T<:Complex,R<:Complex} =
+    _cuda_vector_mode_analysis(cfg, im, Vt, Vp, ltr)
+analysis_sphtor_ml(cfg::SHTConfig, im::Integer, Vt::CUDA.AnyCuArray{T,1},
+                   Vp::CUDA.AnyCuArray{R,1}, ltr::Integer) where {T<:Complex,R<:Complex} =
+    analysis_sphtor_ml(SHTnsKit.GPU(), cfg, im, Vt, Vp, ltr)
+synthesis_sphtor_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
+                    Sl::CUDA.AnyCuArray{T,1}, Tl::CUDA.AnyCuArray{R,1},
+                    ltr::Integer) where {T<:Complex,R<:Complex} =
+    _cuda_vector_mode_synthesis(cfg, im, Sl, Tl, ltr)
+synthesis_sphtor_ml(cfg::SHTConfig, im::Integer, Sl::CUDA.AnyCuArray{T,1},
+                    Tl::CUDA.AnyCuArray{R,1}, ltr::Integer) where {T<:Complex,R<:Complex} =
+    synthesis_sphtor_ml(SHTnsKit.GPU(), cfg, im, Sl, Tl, ltr)
+synthesis_sph_ml(cfg::SHTConfig, im::Integer, Sl::CUDA.AnyCuArray{T,1},
+                 ltr::Integer) where {T<:Complex} =
+    synthesis_sphtor_ml(cfg, im, Sl, CUDA.zeros(T, length(Sl)), ltr)
+synthesis_sph_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
+                 Sl::CUDA.AnyCuArray{T,1}, ltr::Integer) where {T<:Complex} =
+    synthesis_sph_ml(cfg, im, Sl, ltr)
+synthesis_tor_ml(cfg::SHTConfig, im::Integer, Tl::CUDA.AnyCuArray{T,1},
+                 ltr::Integer) where {T<:Complex} =
+    synthesis_sphtor_ml(cfg, im, CUDA.zeros(T, length(Tl)), Tl, ltr)
+synthesis_tor_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
+                 Tl::CUDA.AnyCuArray{T,1}, ltr::Integer) where {T<:Complex} =
+    synthesis_tor_ml(cfg, im, Tl, ltr)
+synthesis_grad(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
+    synthesis_sph(cfg, Slm; kwargs...)
+synthesis_grad(::SHTnsKit.GPU, cfg::SHTConfig,
+               Slm::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
+    synthesis_grad(cfg, Slm; kwargs...)
+synthesis_grad_l(cfg::SHTConfig, Slm::CUDA.AnyCuArray{T,2}, ltr::Integer;
+                 kwargs...) where {T} = synthesis_sph_l(cfg, Slm, ltr; kwargs...)
+synthesis_grad_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                 Slm::CUDA.AnyCuArray{T,2}, ltr::Integer;
+                 kwargs...) where {T} = synthesis_grad_l(cfg, Slm, ltr; kwargs...)
+synthesis_grad_ml(cfg::SHTConfig, im::Integer, Sl::CUDA.AnyCuArray{T,1},
+                  ltr::Integer) where {T<:Complex} =
+    synthesis_sph_ml(cfg, im, Sl, ltr)
+synthesis_grad_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
+                  Sl::CUDA.AnyCuArray{T,1}, ltr::Integer) where {T<:Complex} =
+    synthesis_grad_ml(cfg, im, Sl, ltr)
+
+analysis_qst_l(::SHTnsKit.GPU, cfg::SHTConfig,
+               Vr::CUDA.AnyCuArray{T,2}, Vt::CUDA.AnyCuArray{R,2},
+               Vp::CUDA.AnyCuArray{S,2}, ltr::Integer) where {T,R,S} = begin
+    lcap = SHTnsKit._validate_degree_limit(cfg, ltr)
+    (_cuda_scalar_analysis(cfg, Vr; lcap),
+     _cuda_vector_analysis(cfg, Vt, Vp; lcap)...)
+end
+analysis_qst_l(cfg::SHTConfig, Vr::CUDA.AnyCuArray{T,2},
+               Vt::CUDA.AnyCuArray{R,2}, Vp::CUDA.AnyCuArray{S,2},
+               ltr::Integer) where {T,R,S} =
+    analysis_qst_l(SHTnsKit.GPU(), cfg, Vr, Vt, Vp, ltr)
+synthesis_qst_l(::SHTnsKit.GPU, cfg::SHTConfig,
+                Q::CUDA.AnyCuArray{T,2}, S::CUDA.AnyCuArray{R,2},
+                Tlm::CUDA.AnyCuArray{U,2}, ltr::Integer;
+                real_output::Bool=true) where {T,R,U} = begin
+    lcap = SHTnsKit._validate_degree_limit(cfg, ltr)
+    (_cuda_scalar_synthesis(cfg, Q; real_output, lcap),
+     _cuda_vector_synthesis(cfg, S, Tlm; real_output, lcap)...)
+end
+synthesis_qst_l(cfg::SHTConfig, Q::CUDA.AnyCuArray{T,2},
+                S::CUDA.AnyCuArray{R,2}, Tlm::CUDA.AnyCuArray{U,2},
+                ltr::Integer; kwargs...) where {T,R,U} =
+    synthesis_qst_l(SHTnsKit.GPU(), cfg, Q, S, Tlm, ltr; kwargs...)
+synthesis_qst_l_cplx(cfg::SHTConfig, Q::CUDA.AnyCuArray{T,2},
+                     S::CUDA.AnyCuArray{R,2}, Tlm::CUDA.AnyCuArray{U,2},
+                     ltr::Integer) where {T,R,U} =
+    synthesis_qst_l(cfg, Q, S, Tlm, ltr; real_output=false)
+synthesis_qst_l_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                     Q::CUDA.AnyCuArray{T,2}, S::CUDA.AnyCuArray{R,2},
+                     Tlm::CUDA.AnyCuArray{U,2}, ltr::Integer) where {T,R,U} =
+    synthesis_qst_l(SHTnsKit.GPU(), cfg, Q, S, Tlm, ltr; real_output=false)
+analysis_qst_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
+                Vr::CUDA.AnyCuArray{T,1}, Vt::CUDA.AnyCuArray{R,1},
+                Vp::CUDA.AnyCuArray{U,1}, ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =
+    (analysis_packed_ml(SHTnsKit.GPU(), cfg, im, Vr, ltr),
+     _cuda_vector_mode_analysis(cfg, im, Vt, Vp, ltr)...)
+analysis_qst_ml(cfg::SHTConfig, im::Integer, Vr::CUDA.AnyCuArray{T,1},
+                Vt::CUDA.AnyCuArray{R,1}, Vp::CUDA.AnyCuArray{U,1},
+                ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =
+    analysis_qst_ml(SHTnsKit.GPU(), cfg, im, Vr, Vt, Vp, ltr)
+synthesis_qst_ml(::SHTnsKit.GPU, cfg::SHTConfig, im::Integer,
+                 Q::CUDA.AnyCuArray{T,1}, S::CUDA.AnyCuArray{R,1},
+                 Tlm::CUDA.AnyCuArray{U,1}, ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =
+    (synthesis_packed_ml(SHTnsKit.GPU(), cfg, im, Q, ltr),
+     _cuda_vector_mode_synthesis(cfg, im, S, Tlm, ltr)...)
+synthesis_qst_ml(cfg::SHTConfig, im::Integer, Q::CUDA.AnyCuArray{T,1},
+                 S::CUDA.AnyCuArray{R,1}, Tlm::CUDA.AnyCuArray{U,1},
+                 ltr::Integer) where {T<:Complex,R<:Complex,U<:Complex} =
+    synthesis_qst_ml(SHTnsKit.GPU(), cfg, im, Q, S, Tlm, ltr)
+
+function _cuda_vector_batch_analysis(cfg::SHTConfig,
+                                     Vt::CUDA.AnyCuArray{T,3},
+                                     Vp::CUDA.AnyCuArray{R,3}) where {T<:Real,R<:Real}
+    size(Vt, 1) == cfg.nlat && size(Vt, 2) == cfg.nlon ||
+        throw(DimensionMismatch("vector batch must start with (nlat, nlon)"))
+    size(Vp) == size(Vt) || throw(DimensionMismatch("Vt/Vp batch shape mismatch"))
+    nfields = size(Vt, 3)
+    nfields > 0 || throw(ArgumentError("analysis_sphtor_batch requires at least one field"))
+    RTt = float(T); RTp = float(R)
+    RTt === RTp || throw(ArgumentError("vector batches must use the same precision"))
+    RT = RTt; CT = Complex{RT}
+    tables = _cuda_vector_tables(cfg, RT)
+    Ft = CT.(Vt); Fp = CT.(Vp)
+    gpu_fft!(Ft, 2); gpu_fft!(Fp, 2)
+    Sout = CUDA.zeros(CT, cfg.lmax + 1, cfg.mmax + 1, nfields)
+    Tout = similar(Sout)
+    vector_batch_analysis_kernel!(CUDABackend())(
+        Sout, Tout, Ft, Fp, tables.dtheta, tables.over_sin,
+        tables.weights, tables.scales, tables.x, RT(cfg.cphi), cfg.lmax,
+        cfg.mmax, cfg.mres, cfg.robert_form; ndrange=size(Sout),
+    )
+    CUDA.synchronize()
+    return Sout, Tout
+end
+
+function _cuda_vector_batch_synthesis(cfg::SHTConfig,
+                                      S::CUDA.AnyCuArray{T,3},
+                                      Tlm::CUDA.AnyCuArray{R,3};
+                                      real_output::Bool=true) where {T<:Complex,R<:Complex}
+    size(S, 1) == cfg.lmax + 1 && size(S, 2) == cfg.mmax + 1 ||
+        throw(DimensionMismatch("vector coefficient batch has wrong spectral shape"))
+    size(Tlm) == size(S) || throw(DimensionMismatch("S/T batch shape mismatch"))
+    nfields = size(S, 3)
+    nfields > 0 || throw(ArgumentError("synthesis_sphtor_batch requires at least one field"))
+    RTs = typeof(float(real(zero(T)))); RTt = typeof(float(real(zero(R))))
+    RTs === RTt || throw(ArgumentError("vector batches must use the same precision"))
+    RT = RTs; CT = Complex{RT}
+    tables = _cuda_vector_tables(cfg, RT)
+    Ft = CUDA.zeros(CT, cfg.nlat, cfg.nlon, nfields); Fp = similar(Ft)
+    vector_batch_synthesis_kernel!(CUDABackend())(
+        Ft, Fp, S, Tlm, tables.dtheta, tables.over_sin, tables.scales,
+        tables.x, RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, cfg.lmax,
+        cfg.mmax, cfg.mres, real_output, cfg.robert_form;
+        ndrange=(cfg.nlat, cfg.mmax + 1, nfields),
+    )
+    CUDA.synchronize()
+    gpu_ifft!(Ft, 2); gpu_ifft!(Fp, 2)
+    return real_output ? (real.(Ft), real.(Fp)) : (Ft, Fp)
+end
+
+analysis_sphtor_batch(::SHTnsKit.GPU, cfg::SHTConfig,
+                      Vt::CUDA.AnyCuArray{T,3},
+                      Vp::CUDA.AnyCuArray{R,3}) where {T<:Real,R<:Real} =
+    _cuda_vector_batch_analysis(cfg, Vt, Vp)
+analysis_sphtor_batch(cfg::SHTConfig, Vt::CUDA.AnyCuArray{T,3},
+                      Vp::CUDA.AnyCuArray{R,3}) where {T<:Real,R<:Real} =
+    analysis_sphtor_batch(SHTnsKit.GPU(), cfg, Vt, Vp)
+synthesis_sphtor_batch(::SHTnsKit.GPU, cfg::SHTConfig,
+                       S::CUDA.AnyCuArray{T,3},
+                       Tlm::CUDA.AnyCuArray{R,3};
+                       real_output::Bool=true) where {T<:Complex,R<:Complex} =
+    _cuda_vector_batch_synthesis(cfg, S, Tlm; real_output)
+synthesis_sphtor_batch(cfg::SHTConfig, S::CUDA.AnyCuArray{T,3},
+                       Tlm::CUDA.AnyCuArray{R,3}; kwargs...) where {T<:Complex,R<:Complex} =
+    synthesis_sphtor_batch(SHTnsKit.GPU(), cfg, S, Tlm; kwargs...)
+synthesis_sphtor_batch_cplx(cfg::SHTConfig, S::CUDA.AnyCuArray{T,3},
+                            Tlm::CUDA.AnyCuArray{R,3}) where {T<:Complex,R<:Complex} =
+    synthesis_sphtor_batch(SHTnsKit.GPU(), cfg, S, Tlm; real_output=false)
+synthesis_sphtor_batch_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                            S::CUDA.AnyCuArray{T,3},
+                            Tlm::CUDA.AnyCuArray{R,3}) where {T<:Complex,R<:Complex} =
+    synthesis_sphtor_batch(SHTnsKit.GPU(), cfg, S, Tlm; real_output=false)
+
+analysis_qst_batch(::SHTnsKit.GPU, cfg::SHTConfig,
+                   Vr::CUDA.AnyCuArray{T,3}, Vt::CUDA.AnyCuArray{R,3},
+                   Vp::CUDA.AnyCuArray{U,3}) where {T<:Real,R<:Real,U<:Real} =
+    (_cuda_batch_analysis(cfg, Vr), _cuda_vector_batch_analysis(cfg, Vt, Vp)...)
+analysis_qst_batch(cfg::SHTConfig, Vr::CUDA.AnyCuArray{T,3},
+                   Vt::CUDA.AnyCuArray{R,3}, Vp::CUDA.AnyCuArray{U,3}) where {T<:Real,R<:Real,U<:Real} =
+    analysis_qst_batch(SHTnsKit.GPU(), cfg, Vr, Vt, Vp)
+synthesis_qst_batch(::SHTnsKit.GPU, cfg::SHTConfig,
+                    Q::CUDA.AnyCuArray{T,3}, S::CUDA.AnyCuArray{R,3},
+                    Tlm::CUDA.AnyCuArray{U,3};
+                    real_output::Bool=true) where {T<:Complex,R<:Complex,U<:Complex} =
+    (_cuda_batch_synthesis(cfg, Q; real_output),
+     _cuda_vector_batch_synthesis(cfg, S, Tlm; real_output)...)
+synthesis_qst_batch(cfg::SHTConfig, Q::CUDA.AnyCuArray{T,3},
+                    S::CUDA.AnyCuArray{R,3}, Tlm::CUDA.AnyCuArray{U,3};
+                    kwargs...) where {T<:Complex,R<:Complex,U<:Complex} =
+    synthesis_qst_batch(SHTnsKit.GPU(), cfg, Q, S, Tlm; kwargs...)
+synthesis_qst_batch_cplx(cfg::SHTConfig, Q::CUDA.AnyCuArray{T,3},
+                         S::CUDA.AnyCuArray{R,3},
+                         Tlm::CUDA.AnyCuArray{U,3}) where {T<:Complex,R<:Complex,U<:Complex} =
+    synthesis_qst_batch(SHTnsKit.GPU(), cfg, Q, S, Tlm; real_output=false)
+synthesis_qst_batch_cplx(::SHTnsKit.GPU, cfg::SHTConfig,
+                         Q::CUDA.AnyCuArray{T,3}, S::CUDA.AnyCuArray{R,3},
+                         Tlm::CUDA.AnyCuArray{U,3}) where {T<:Complex,R<:Complex,U<:Complex} =
+    synthesis_qst_batch(SHTnsKit.GPU(), cfg, Q, S, Tlm; real_output=false)
 
 function analysis_sphtor!(plan::SHTPlan, Sout::CUDA.AnyCuArray,
                            Tout::CUDA.AnyCuArray, Vt::CUDA.AnyCuArray,

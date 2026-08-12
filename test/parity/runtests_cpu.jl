@@ -23,6 +23,7 @@ test_cpu_local_mixed_coordinate_precision()
 test_cpu_operator_parity()
 run_rotation_parity(CPURotationAdapter())
 test_cpu_rotation_conventions_and_validation()
+test_angle_axis_pi_singularity()
 
 @testset "typed explicit complex synthesis" begin
     cfg = _scalar_config(:gauss, 3, 8)

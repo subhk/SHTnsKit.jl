@@ -169,6 +169,7 @@ end
     run_shared_rotation_kernel_reference(
         extension.GPUCommon, KernelAbstractions.CPU(),
     )
+    test_angle_axis_pi_singularity()
     if AMDGPU.functional()
         run_rotation_parity(AMDGPURotationAdapter())
     else

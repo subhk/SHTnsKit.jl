@@ -183,6 +183,7 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     run_shared_rotation_kernel_reference(
         extension.GPUCommon, KernelAbstractions.CPU(),
     )
+    test_angle_axis_pi_singularity()
     if CUDA.functional()
         run_rotation_parity(CUDARotationAdapter())
     else

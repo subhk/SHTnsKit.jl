@@ -257,14 +257,20 @@ function shtns_rotation_set_angle_axis(r::SHTRotation, theta::Real, Vx::Real, Vy
     
     # Extract ZYZ Euler angles
     # For R = Rz(α)Ry(β)Rz(γ): R13 = cα*sβ, R23 = sα*sβ, R31 = -sβ*cγ, R32 = sβ*sγ
-    β = acos(clamp(R33, -1.0, 1.0))
-    if abs(sin(β)) > 1e-12
+    β = acos(clamp(R33, -one(R33), one(R33)))
+    singular_tolerance = sqrt(eps(typeof(θ)))
+    if abs(sin(β)) > singular_tolerance
         α = atan(R23, R13)    # atan2(sα*sβ, cα*sβ) = α
         γ = atan(R32, -R31)   # atan2(sβ*sγ, sβ*cγ) = γ
-    else
-        # β ~ 0 or π: set γ = 0 and α from R11,R21
+    elseif R33 > 0
+        # β ≈ 0: only α+γ is identifiable. Choose γ=0.
         α = atan(R21, R11)
-        γ = 0.0
+        γ = zero(β)
+    else
+        # β ≈ π: only α-γ is identifiable. With γ=0 the ZYZ matrix has
+        # R11=-cos(α), R12=-sin(α), so extract that difference directly.
+        α = atan(-R12, -R11)
+        γ = zero(β)
     end
     r.α = α; r.β = β; r.γ = γ; r.conv = :ZYZ
     return nothing

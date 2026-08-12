@@ -34,6 +34,75 @@ function _rotation_external(cfg, canonical)
     return external
 end
 
+function _zyz_matrix(alpha, beta, gamma)
+    ca, sa = cos(alpha), sin(alpha)
+    cb, sb = cos(beta), sin(beta)
+    cg, sg = cos(gamma), sin(gamma)
+    return [
+        ca*cb*cg - sa*sg  -ca*cb*sg - sa*cg  ca*sb
+        sa*cb*cg + ca*sg  -sa*cb*sg + ca*cg  sa*sb
+        -sb*cg              sb*sg                cb
+    ]
+end
+
+function _angle_axis_matrix(theta, x, y, z)
+    norm_axis = hypot(x, hypot(y, z))
+    x, y, z = x / norm_axis, y / norm_axis, z / norm_axis
+    c, s, t = cos(theta), sin(theta), one(theta) - cos(theta)
+    return [
+        c+t*x*x    t*x*y-s*z  t*x*z+s*y
+        t*y*x+s*z  c+t*y*y    t*y*z-s*x
+        t*z*x-s*y  t*z*y+s*x  c+t*z*z
+    ]
+end
+
+function test_angle_axis_pi_singularity()
+    @testset "angle-axis beta=pi ZYZ singularity" begin
+        for T in (Float32, Float64)
+            phi = T(0.37)
+            cases = (
+                (one(T), zero(T), zero(T), T(pi)),
+                (zero(T), one(T), zero(T), zero(T)),
+                (cos(phi), sin(phi), zero(T), T(pi) + 2phi),
+            )
+            tol = T === Float32 ? 2f-5 : 2e-12
+            nc = nlm_cplx_calc(2, 2, 1)
+            input = randn(MersenneTwister(0xA819 + sizeof(T)), Complex{T}, nc)
+            for (x, y, z, expected_delta) in cases
+                actual = SHTRotation(2, 2)
+                shtns_rotation_set_angle_axis(actual, T(pi), x, y, z)
+                @test _zyz_matrix(actual.α, actual.β, actual.γ) ≈
+                      _angle_axis_matrix(T(pi), x, y, z) atol=tol rtol=tol
+
+                expected = SHTRotation(2, 2)
+                shtns_rotation_set_angles_ZYZ(
+                    expected, expected_delta, T(pi), zero(T),
+                )
+                actual_output = similar(input)
+                expected_output = similar(input)
+                shtns_rotation_apply_cplx(
+                    SHTnsKit.CPU(), actual, input, actual_output,
+                )
+                shtns_rotation_apply_cplx(
+                    SHTnsKit.CPU(), expected, input, expected_output,
+                )
+                @test actual_output ≈ expected_output atol=tol rtol=tol
+
+                actual_d = zeros(T, 9); expected_d = zeros(T, 9)
+                shtns_rotation_wigner_d_matrix(actual, 1, actual_d)
+                shtns_rotation_wigner_d_matrix(expected, 1, expected_d)
+                @test actual_d ≈ expected_d atol=tol rtol=tol
+
+                actual_blocks = SHTnsKit._rotation_host_blocks(actual, T)
+                expected_blocks = SHTnsKit._rotation_host_blocks(expected, T)
+                @test actual_blocks.values ≈ expected_blocks.values atol=tol rtol=tol
+                @test cis(actual_blocks.alpha) ≈ cis(expected_blocks.alpha) atol=tol
+                @test cis(actual_blocks.gamma) ≈ cis(expected_blocks.gamma) atol=tol
+            end
+        end
+    end
+end
+
 function run_rotation_parity(adapter::RotationParityAdapter;
                              precisions=(Float32, Float64))
     @testset "rotation mathematical parity" begin

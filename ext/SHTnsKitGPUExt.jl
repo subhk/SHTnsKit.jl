@@ -26,6 +26,7 @@ using .GPUCommon: vector_derivative_table_kernel!, vector_analysis_kernel!,
                   vector_synthesis_kernel!, vector_diagonal_kernel!,
                   vector_mode_analysis_kernel!, vector_mode_synthesis_kernel!,
                   vector_batch_analysis_kernel!, vector_batch_synthesis_kernel!
+using .GPUCommon: local_scalar_kernel!, local_complex_kernel!, local_qst_kernel!
 
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
@@ -68,6 +69,9 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  vorticity_from_toroidal, vorticity_from_toroidal!,
                  toroidal_from_vorticity, toroidal_from_vorticity!,
                  analysis!, synthesis!, analysis_sphtor!, synthesis_sphtor!,
+                 synthesis_point, synthesis_point_cplx,
+                 SH_to_lat, SH_to_lat_cplx, SHqst_to_point, SHqst_to_lat,
+                 SH_to_grad_point,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
@@ -125,7 +129,164 @@ end
 
 const _CUDA_SCALAR_CACHE = ScalarTableCache(8)
 const _CUDA_VECTOR_CACHE = ScalarTableCache(8)
+const _CUDA_LOCAL_CACHE = ScalarTableCache(8)
 const _CUDA_WORKSPACE_CACHE = ScalarWorkspaceCache(8)
+
+struct CUDALocalTables{TP,TD,TO,TS}
+    Plm::TP
+    dtheta::TD
+    over_sin::TO
+    scales::TS
+end
+
+function _cuda_local_tables(cfg::SHTConfig, ::Type{T}, cost::Real) where {T<:AbstractFloat}
+    SHTnsKit._validate_local_cost(cost, :local_evaluation)
+    x = T(cost)
+    device = CUDA.deviceid(CUDA.device())
+    identity = objectid(cfg)
+    signature = hash((vector_config_signature(cfg), x))
+    cached = scalar_cache_lookup(
+        _CUDA_LOCAL_CACHE, device, identity, T, signature,
+    )
+    cached === nothing || return cached
+    x_device = CuArray(T[x])
+    Nlm = CuArray(T.(cfg.Nlm))
+    Plm = CUDA.zeros(T, 1, cfg.lmax + 1, cfg.mmax + 1)
+    dtheta = similar(Plm)
+    over_sin = similar(Plm)
+    vector_derivative_table_kernel!(CUDABackend())(
+        Plm, dtheta, over_sin, x_device, Nlm, cfg.lmax, cfg.mmax;
+        ndrange=(1, cfg.mmax + 1),
+    )
+    scales = _cuda_scalar_tables(cfg, T).scales
+    built = CUDALocalTables(Plm, dtheta, over_sin, scales)
+    return scalar_cache_insert!(
+        _CUDA_LOCAL_CACHE, device, identity, T, signature, built,
+    )
+end
+
+@inline function _cuda_local_precision(array)
+    T = typeof(real(zero(eltype(array))))
+    T in (Float32, Float64) || throw(ArgumentError(
+        "GPU local evaluation supports ComplexF32 and ComplexF64 coefficients",
+    ))
+    return T
+end
+
+function _cuda_validate_local_arrays(operation::Symbol, arrays...)
+    _require_cuda(operation, SHTnsKit.GPU())
+    for array in arrays
+        array isa CUDA.AnyCuArray || throw(ArgumentError(
+            "$operation requires CUDA-owned coefficient storage",
+        ))
+    end
+    first_type = eltype(first(arrays))
+    all(array -> eltype(array) === first_type, arrays) || throw(ArgumentError(
+        "$operation requires matching coefficient element types",
+    ))
+    return _cuda_local_precision(first(arrays))
+end
+
+function _cuda_local_scalar(cfg, coefficients, cost, phi;
+                            nphi::Int=1, ltr::Int=cfg.lmax,
+                            mtr::Int=cfg.mmax, complex_layout::Bool=false)
+    T = _cuda_validate_local_arrays(
+        complex_layout ? :synthesis_point_cplx : :synthesis_point, coefficients,
+    )
+    SHTnsKit._validate_local_coordinates(cost, phi, :local_evaluation)
+    SHTnsKit._validate_local_nphi(nphi, :local_evaluation)
+    0 <= ltr <= cfg.lmax || throw(ArgumentError("ltr must be within [0, lmax]"))
+    0 <= mtr <= cfg.mmax || throw(ArgumentError("mtr must be within [0, mmax]"))
+    complex_layout && cfg.mres != 1 && throw(ArgumentError(
+        "complex local evaluation supports mres==1 only",
+    ))
+    expected = complex_layout ? SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1) : nothing
+    if complex_layout
+        length(coefficients) == expected || throw(DimensionMismatch("alm length mismatch"))
+    else
+        size(coefficients) == (cfg.lmax + 1, cfg.mmax + 1) ||
+            throw(DimensionMismatch("Qlm must be (lmax+1, mmax+1)"))
+    end
+    tables = _cuda_local_tables(cfg, T, cost)
+    step = nphi == 1 ? zero(T) : T(2pi / nphi)
+    if complex_layout
+        output = similar(coefficients, Complex{T}, (nphi,))
+        local_complex_kernel!(CUDABackend())(
+            output, coefficients, tables.Plm, tables.scales,
+            T(phi), step, cfg.lmax, cfg.mmax, ltr; ndrange=nphi,
+        )
+    else
+        output = similar(coefficients, T, (nphi,))
+        local_scalar_kernel!(CUDABackend())(
+            output, coefficients, tables.Plm, tables.scales,
+            T(phi), step, cfg.lmax, cfg.mmax, cfg.mres, ltr, mtr;
+            ndrange=nphi,
+        )
+    end
+    return nphi == 1 ? reshape(output, ()) : output
+end
+
+function _cuda_local_qst(cfg, Q, S, Tlm, cost, phi;
+                         nphi::Int=1, ltr::Int=cfg.lmax,
+                         mtr::Int=cfg.mmax,
+                         has_q::Bool=true, has_s::Bool=true, has_t::Bool=true)
+    arrays = has_t ? (Q, S, Tlm) : (Q, S)
+    T = _cuda_validate_local_arrays(:SHqst_to_point, arrays...)
+    SHTnsKit._validate_local_coordinates(cost, phi, :local_evaluation)
+    SHTnsKit._validate_local_nphi(nphi, :local_evaluation)
+    0 <= ltr <= cfg.lmax || throw(ArgumentError("ltr must be within [0, lmax]"))
+    0 <= mtr <= cfg.mmax || throw(ArgumentError("mtr must be within [0, mmax]"))
+    for (name, array) in zip(("Qlm", "Slm", "Tlm"), (Q, S, Tlm))
+        ((name == "Tlm" && !has_t) || length(array) == cfg.nlm) ||
+            throw(DimensionMismatch("$name length"))
+    end
+    tables = _cuda_local_tables(cfg, T, cost)
+    Vr = similar(Q, T, (nphi,)); Vt = similar(Q, T, (nphi,)); Vp = similar(Q, T, (nphi,))
+    step = nphi == 1 ? zero(T) : T(2pi / nphi)
+    sinth = sqrt(max(zero(T), one(T) - T(cost)^2))
+    local_qst_kernel!(CUDABackend())(
+        Vr, Vt, Vp, Q, S, Tlm, tables.Plm, tables.dtheta,
+        tables.over_sin, tables.scales, T(phi), step,
+        cfg.lmax, cfg.mmax, cfg.mres, ltr, mtr,
+        has_q, has_s, has_t, cfg.robert_form, sinth; ndrange=nphi,
+    )
+    return nphi == 1 ? (reshape(Vr, ()), reshape(Vt, ()), reshape(Vp, ())) :
+                        (Vr, Vt, Vp)
+end
+
+synthesis_point(::SHTnsKit.GPU, cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,2}, cost::Real, phi::Real) =
+    _cuda_local_scalar(cfg, coefficients, cost, phi)
+synthesis_point(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,2}, cost::Real, phi::Real) =
+    synthesis_point(SHTnsKit.GPU(), cfg, coefficients, cost, phi)
+synthesis_point_cplx(::SHTnsKit.GPU, cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,1}, cost::Real, phi::Real) =
+    _cuda_local_scalar(cfg, coefficients, cost, phi; complex_layout=true)
+synthesis_point_cplx(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,1}, cost::Real, phi::Real) =
+    synthesis_point_cplx(SHTnsKit.GPU(), cfg, coefficients, cost, phi)
+
+SH_to_lat(::SHTnsKit.GPU, cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,1}, cost::Real;
+          nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax) =
+    _cuda_local_qst(cfg, coefficients, coefficients, coefficients, cost, zero(cost);
+                    nphi, ltr, mtr, has_s=false, has_t=false)[1]
+SH_to_lat(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,1}, cost::Real; kwargs...) =
+    SH_to_lat(SHTnsKit.GPU(), cfg, coefficients, cost; kwargs...)
+SH_to_lat_cplx(::SHTnsKit.GPU, cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,1}, cost::Real;
+               nphi::Int=cfg.nlon, ltr::Int=cfg.lmax) =
+    _cuda_local_scalar(cfg, coefficients, cost, zero(cost); nphi, ltr, complex_layout=true)
+SH_to_lat_cplx(cfg::SHTConfig, coefficients::CUDA.AnyCuArray{<:Complex,1}, cost::Real; kwargs...) =
+    SH_to_lat_cplx(SHTnsKit.GPU(), cfg, coefficients, cost; kwargs...)
+SHqst_to_point(::SHTnsKit.GPU, cfg::SHTConfig, Q::CUDA.AnyCuArray{<:Complex,1}, S::CUDA.AnyCuArray{<:Complex,1}, Tlm::CUDA.AnyCuArray{<:Complex,1}, cost::Real, phi::Real) =
+    _cuda_local_qst(cfg, Q, S, Tlm, cost, phi)
+SHqst_to_point(cfg::SHTConfig, Q::CUDA.AnyCuArray{<:Complex,1}, S::CUDA.AnyCuArray{<:Complex,1}, Tlm::CUDA.AnyCuArray{<:Complex,1}, cost::Real, phi::Real) =
+    SHqst_to_point(SHTnsKit.GPU(), cfg, Q, S, Tlm, cost, phi)
+SHqst_to_lat(::SHTnsKit.GPU, cfg::SHTConfig, Q::CUDA.AnyCuArray{<:Complex,1}, S::CUDA.AnyCuArray{<:Complex,1}, Tlm::CUDA.AnyCuArray{<:Complex,1}, cost::Real;
+             nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax) =
+    _cuda_local_qst(cfg, Q, S, Tlm, cost, zero(cost); nphi, ltr, mtr)
+SHqst_to_lat(cfg::SHTConfig, Q::CUDA.AnyCuArray{<:Complex,1}, S::CUDA.AnyCuArray{<:Complex,1}, Tlm::CUDA.AnyCuArray{<:Complex,1}, cost::Real; kwargs...) =
+    SHqst_to_lat(SHTnsKit.GPU(), cfg, Q, S, Tlm, cost; kwargs...)
+SH_to_grad_point(::SHTnsKit.GPU, cfg::SHTConfig, Dr::CUDA.AnyCuArray{<:Complex,1}, S::CUDA.AnyCuArray{<:Complex,1}, cost::Real, phi::Real) =
+    _cuda_local_qst(cfg, Dr, S, S, cost, phi; has_t=false)
+SH_to_grad_point(cfg::SHTConfig, Dr::CUDA.AnyCuArray{<:Complex,1}, S::CUDA.AnyCuArray{<:Complex,1}, cost::Real, phi::Real) =
+    SH_to_grad_point(SHTnsKit.GPU(), cfg, Dr, S, cost, phi)
 
 function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
     device = CUDA.deviceid(CUDA.device())
@@ -182,6 +343,7 @@ end
 function _cuda_clear_scalar_cache!(; device=nothing)
     scalar_cache_clear!(_CUDA_SCALAR_CACHE; device)
     scalar_cache_clear!(_CUDA_VECTOR_CACHE; device)
+    scalar_cache_clear!(_CUDA_LOCAL_CACHE; device)
     scalar_workspace_clear!(_CUDA_WORKSPACE_CACHE; device)
     return nothing
 end

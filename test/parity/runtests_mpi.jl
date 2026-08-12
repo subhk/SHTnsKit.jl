@@ -11,6 +11,7 @@ include("scalar_variants.jl")
 include("sphtor_full.jl")
 include("qst_full.jl")
 include("vector_variants.jl")
+include("local_evaluation.jl")
 
 struct MPIScalarAdapter <: ScalarParityAdapter
     comm
@@ -2034,6 +2035,117 @@ if isempty(ARGS) || "vector_variants" in ARGS
             analysis_sphtor_batch(cfg, empty_spatial, empty_spatial)
         end
         MPI.Barrier(MPI.COMM_WORLD)
+    end
+end
+
+if isempty(ARGS) || "local_evaluation" in ARGS
+    @testset "MPI local evaluation parity" begin
+        extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+        comm = MPI.COMM_WORLD
+        rank = MPI.Comm_rank(comm)
+        for T in (Float32, Float64), mres in (1, 2), convention in (
+            (norm=:orthonormal, real_norm=false, cs_phase=true),
+            (norm=:schmidt, real_norm=true, cs_phase=false),
+        ), robert_form in (false, true)
+            cfg = _local_config(
+                :regular_poles, T; mres, convention..., robert_form,
+            )
+            Qcan, Scan, Tcan, Drcan = _local_canonical_modes(cfg, T)
+            Q = _local_external(cfg, Qcan)
+            S = _local_external(cfg, Scan)
+            Tlm = _local_external(cfg, Tcan)
+            Dr = _local_external(cfg, Drcan)
+            if mres == 2
+                Q[2, 2] = Complex{T}(T(91), T(-37))
+                S[2, 2] = Complex{T}(T(-42), T(18))
+            end
+            Qp = matrix_to_spectral_pencil(cfg, Q; comm)
+            Sp = matrix_to_spectral_pencil(cfg, S; comm)
+            Tp = matrix_to_spectral_pencil(cfg, Tlm; comm)
+            Drp = matrix_to_spectral_pencil(cfg, Dr; comm)
+            tol = _local_tol(T)
+            for (cost, phi) in ((T(0.37), T(0.61)), (one(T), T(2pi)),
+                                (-one(T), T(-2pi)))
+                @test synthesis_point(cfg, Qp, cost, phi) ≈
+                      _local_direct_scalar(Qcan, cost, phi) atol=tol.atol rtol=tol.rtol
+                qst = SHqst_to_point(cfg, Qp, Sp, Tp, cost, phi)
+                @test all(value -> value isa T, qst)
+                @test collect(qst) ≈
+                      collect(_local_direct_qst(cfg, Qcan, Scan, Tcan, cost, phi)) atol=tol.atol rtol=tol.rtol
+                grad = SH_to_grad_point(cfg, Drp, Sp, cost, phi)
+                @test collect(grad) ≈
+                      collect(_local_direct_qst(cfg, Drcan, Scan, zero(Tcan), cost, phi)) atol=tol.atol rtol=tol.rtol
+            end
+            nphi = 7
+            cost = T(-0.28)
+            lat = SH_to_lat(cfg, Qp, cost; nphi)
+            @test eltype(lat) === T
+            @test lat ≈ [_local_direct_scalar(Qcan, cost, T(2pi * j / nphi))
+                         for j in 0:(nphi - 1)] atol=tol.atol rtol=tol.rtol
+            qst_lat = SHqst_to_lat(cfg, Qp, Sp, Tp, cost; nphi)
+            refs = [_local_direct_qst(
+                        cfg, Qcan, Scan, Tcan, cost, T(2pi * j / nphi),
+                    ) for j in 0:(nphi - 1)]
+            for component in 1:3
+                @test eltype(qst_lat[component]) === T
+                @test qst_lat[component] ≈ getindex.(refs, component) atol=tol.atol rtol=tol.rtol
+            end
+        end
+
+        cfg = _local_config(
+            :gauss, Float64; norm=:fourpi, real_norm=true, cs_phase=false,
+        )
+        canonical, external = _local_complex_modes(cfg, Float64)
+        distributed = _place_distributed_vector(external, comm)
+        @test synthesis_point_cplx(cfg, distributed, -0.28, 0.77) ≈
+              _local_direct_complex(canonical, -0.28, 0.77) atol=3e-13 rtol=3e-13
+        complex_lat = SH_to_lat_cplx(cfg, distributed, -0.28; nphi=7)
+        @test eltype(complex_lat) === ComplexF64
+        @test complex_lat ≈ [_local_direct_complex(canonical, -0.28, 2pi*j/7)
+                             for j in 0:6] atol=3e-13 rtol=3e-13
+
+        # Four ranks over three spectral columns exercises an empty local owner.
+        Qcan, Scan, Tcan, _ = _local_canonical_modes(cfg, Float64)
+        Qp = matrix_to_spectral_pencil(cfg, _local_external(cfg, Qcan); comm)
+        Sp = matrix_to_spectral_pencil(cfg, _local_external(cfg, Scan); comm)
+        Tp = matrix_to_spectral_pencil(cfg, _local_external(cfg, Tcan); comm)
+        minimum_owned = MPI.Allreduce(length(parent(Qp)), min, comm)
+        MPI.Comm_size(comm) < 4 || @test minimum_owned == 0
+
+        extension._reset_local_evaluation_stats!()
+        got = SHqst_to_lat(cfg, Qp, Sp, Tp, 0.2; nphi=5)
+        stats = extension._local_evaluation_stats()
+        @test stats.payload_reductions == 1
+        @test stats.payload_elements == 15
+        @test stats.max_payload_elements == 15
+        @test all(length(value) == 5 for value in got)
+
+        extension._reset_local_evaluation_stats!()
+        rank_cost = rank == 0 ? 0.3 : 0.2
+        @test _all_ranks_catch(comm; message_contains="rank-varying cost") do
+            synthesis_point(cfg, Qp, rank_cost, 0.7)
+        end
+        @test extension._local_evaluation_stats().payload_reductions == 0
+        MPI.Barrier(comm)
+
+        extension._reset_local_evaluation_stats!()
+        rank_nphi = rank == 0 ? 6 : 5
+        @test _all_ranks_catch(comm; message_contains="rank-varying nphi") do
+            SH_to_lat(cfg, Qp, 0.2; nphi=rank_nphi)
+        end
+        @test extension._local_evaluation_stats().payload_reductions == 0
+        MPI.Barrier(comm)
+
+        S32 = matrix_to_spectral_pencil(
+            cfg, ComplexF32.(_local_external(cfg, Scan)); comm,
+        )
+        badS = rank == 0 ? S32 : Sp
+        extension._reset_local_evaluation_stats!()
+        @test _all_ranks_catch(comm; message_contains="precision") do
+            SHqst_to_point(cfg, Qp, badS, Tp, 0.2, 0.7)
+        end
+        @test extension._local_evaluation_stats().payload_reductions == 0
+        MPI.Barrier(comm)
     end
 end
 

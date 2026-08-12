@@ -246,18 +246,25 @@ function synthesis_packed_cplx_l(::CPU, cfg::SHTConfig,
 end
 
 """
-    synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real) -> ComplexF64
+    synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real) -> Complex
 
 Evaluate a complex field represented by packed `alm` at a single point.
 """
 function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    on_device(alm) isa CPU || throw(ArgumentError(
+        "synthesis_point_cplx with GPU storage requires GPU() dispatch",
+    ))
     expected = nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     length(alm) == expected || throw(DimensionMismatch("alm length mismatch"))
+    cfg.mres == 1 || throw(ArgumentError("synthesis_point_cplx supports mres==1 only; got mres=$(cfg.mres)"))
+    _validate_local_coordinates(cost, phi, :synthesis_point_cplx)
     alm_int = _internal_coefficients(alm, cfg)
-    x = float(cost)
-    lmax, mmax = cfg.lmax, cfg.mmax
     CT = eltype(alm_int)
-    P = Vector{Float64}(undef, lmax + 1)
+    PT = promote_type(typeof(float(cost)), typeof(float(phi)))
+    x = convert(PT, cost)
+    ph = convert(PT, phi)
+    lmax, mmax = cfg.lmax, cfg.mmax
+    P = Vector{PT}(undef, lmax + 1)
     acc = zero(CT)
     # Loop over |m| once (P̄_l^{|m|}, CS-phase and norm scale depend only on |m|)
     # and accumulate the +m and -m contributions from the shared Legendre row.
@@ -273,8 +280,18 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
                 gn += Pl * an
             end
         end
-        acc += gp * cis(am * phi)
-        am > 0 && (acc += gn * cis(-am * phi))
+        acc += gp * cis(convert(PT, am) * ph)
+        am > 0 && (acc += gn * cis(-convert(PT, am) * ph))
     end
     return acc
 end
+
+
+function synthesis_point_cplx(::CPU, cfg::SHTConfig,
+                              alm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    _require_cpu_storage(:synthesis_point_cplx, alm)
+    return synthesis_point_cplx(cfg, alm, cost, phi)
+end
+
+synthesis_point_cplx(::GPU, ::SHTConfig, ::AbstractVector{<:Complex}, ::Real, ::Real) =
+    throw(ArgumentError("synthesis_point_cplx(GPU(), ...) requires one supported GPU vendor's storage"))

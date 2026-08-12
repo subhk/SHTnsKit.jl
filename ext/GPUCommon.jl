@@ -830,6 +830,113 @@ end
     end
 end
 
+@inline function _real_packed_device_index(l, m, lmax, mres)
+    im = m ÷ mres
+    base = (im * (2lmax + 2 - (im + 1) * mres)) >>> 1
+    return base + l
+end
+
+"""Evaluate a dense non-negative-m real spectrum at one or more longitudes."""
+@kernel function local_scalar_kernel!(output, coefficients, Plm, scales,
+                                      phi0, phi_step, lmax, mmax, mres,
+                                      lcap, mcap)
+    j = @index(Global)
+    if j <= length(output)
+        phi = phi0 + (j - 1) * phi_step
+        value = zero(eltype(output))
+        @inbounds for m in 0:mcap
+            if m % mres == 0
+                radial = zero(eltype(coefficients))
+                for l in m:lcap
+                    radial += Plm[1, l + 1, m + 1] *
+                              scales[l + 1, m + 1] * coefficients[l + 1, m + 1]
+                end
+                wave = radial * cis(m * phi)
+                value += m == 0 ? real(wave) : 2real(wave)
+            end
+        end
+        output[j] = value
+    end
+end
+
+"""Evaluate SHTns LM_cplx storage at one or more longitudes."""
+@kernel function local_complex_kernel!(output, coefficients, Plm, scales,
+                                       phi0, phi_step, lmax, mmax, lcap)
+    j = @index(Global)
+    if j <= length(output)
+        phi = phi0 + (j - 1) * phi_step
+        value = zero(eltype(output))
+        @inbounds for m in -mmax:mmax
+            am = abs(m)
+            radial = zero(eltype(output))
+            for l in am:lcap
+                index = _lm_cplx_device_index(l, m, mmax) + 1
+                radial += Plm[1, l + 1, am + 1] *
+                          scales[l + 1, am + 1] * coefficients[index]
+            end
+            value += radial * cis(m * phi)
+        end
+        output[j] = value
+    end
+end
+
+"""
+Evaluate packed real Q/S/T spectra at one or more longitudes. Boolean component
+flags let the scalar-gradient path reuse this kernel without allocating zero
+spectra on the device.
+"""
+@kernel function local_qst_kernel!(Vr, Vt, Vp, Q, S, Tlm,
+                                   Plm, dtheta, over_sin, scales,
+                                   phi0, phi_step, lmax, mmax, mres,
+                                   lcap, mcap, has_q, has_s, has_t,
+                                   robert_form, sinth)
+    j = @index(Global)
+    if j <= length(Vr)
+        phi = phi0 + (j - 1) * phi_step
+        vr = zero(eltype(Vr))
+        vt = zero(eltype(Vt))
+        vp = zero(eltype(Vp))
+        imagunit = complex(zero(eltype(Vr)), one(eltype(Vr)))
+        @inbounds for m in 0:mcap
+            if m % mres == 0
+                qmode = zero(eltype(Q))
+                smode_t = zero(eltype(S))
+                smode_p = zero(eltype(S))
+                tmode_t = zero(eltype(Tlm))
+                tmode_p = zero(eltype(Tlm))
+                for l in m:lcap
+                    index = _real_packed_device_index(l, m, lmax, mres) + 1
+                    scale = scales[l + 1, m + 1]
+                    has_q && (qmode += Plm[1, l + 1, m + 1] * scale * Q[index])
+                    if has_s
+                        coefficient = scale * S[index]
+                        smode_t += dtheta[1, l + 1, m + 1] * coefficient
+                        smode_p += imagunit * m * over_sin[1, l + 1, m + 1] * coefficient
+                    end
+                    if has_t
+                        coefficient = scale * Tlm[index]
+                        tmode_t -= imagunit * m * over_sin[1, l + 1, m + 1] * coefficient
+                        tmode_p += dtheta[1, l + 1, m + 1] * coefficient
+                    end
+                end
+                phase = cis(m * phi)
+                if m == 0
+                    vr += real(qmode)
+                    vt += real(smode_t + tmode_t)
+                    vp += real(smode_p + tmode_p)
+                else
+                    vr += 2real(qmode * phase)
+                    vt += 2real((smode_t + tmode_t) * phase)
+                    vp += 2real((smode_p + tmode_p) * phase)
+                end
+            end
+        end
+        Vr[j] = vr
+        Vt[j] = robert_form ? sinth * vt : vt
+        Vp[j] = robert_form ? sinth * vp : vp
+    end
+end
+
 # Device-neutral kernels live here. Vendor extensions own array placement,
 # FFT libraries, synchronization, device selection, and runtime inspection.
 @kernel function laplacian_kernel!(output, input, lmax, mmax)

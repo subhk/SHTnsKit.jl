@@ -444,7 +444,7 @@ function synthesis_packed_ml(::CPU, cfg::SHTConfig, im::Int,
 end
 
 """
-    synthesis_point(cfg, Qlm, cost, phi) -> Float64
+    synthesis_point(cfg, Qlm, cost, phi) -> Real
 
 Evaluate spherical harmonic expansion at a single point (θ,φ) for a real-valued field.
 `cost` = cos(θ), `phi` is the azimuthal angle.
@@ -452,27 +452,61 @@ Evaluate spherical harmonic expansion at a single point (θ,φ) for a real-value
 (only m ≥ 0 stored; negative-m reconstructed via Hermitian symmetry).
 Returns the real field value at the specified point.
 """
+@inline function _validate_local_cost(cost::Real, operation::Symbol)
+    isfinite(cost) && -one(cost) <= cost <= one(cost) || throw(ArgumentError(
+        "$operation requires a finite cost in [-1, 1]",
+    ))
+    return nothing
+end
+
+@inline function _validate_local_phi(phi::Real, operation::Symbol)
+    isfinite(phi) || throw(ArgumentError("$operation requires a finite phi"))
+    return nothing
+end
+
+@inline function _validate_local_coordinates(cost::Real, phi::Real,
+                                             operation::Symbol)
+    _validate_local_cost(cost, operation)
+    _validate_local_phi(phi, operation)
+    return nothing
+end
+
+@inline function _validate_local_nphi(nphi::Int, operation::Symbol)
+    nphi > 0 || throw(ArgumentError("$operation requires nphi > 0"))
+    return nothing
+end
+
 function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
+    on_device(Qlm) isa CPU || throw(ArgumentError(
+        "synthesis_point with GPU storage requires GPU() dispatch",
+    ))
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Qlm, 1) == lmax + 1 || throw(DimensionMismatch("Qlm first dim must be lmax+1"))
     size(Qlm, 2) == mmax + 1 || throw(DimensionMismatch("Qlm second dim must be mmax+1"))
+    _validate_local_coordinates(cost, phi, :synthesis_point)
     Qlm_int = _internal_coefficients(Qlm, cfg)
 
-    # Accumulator eltype follows the input so AD types propagate.
-    CT = promote_type(eltype(Qlm), ComplexF64)
-    result = zero(real(CT))
-    P = Vector{Float64}(undef, lmax + 1)
+    # The coefficient precision owns local-evaluation precision. This keeps
+    # Float32 evaluations in Float32 while preserving Dual coefficient types.
+    CT = eltype(Qlm_int)
+    RT = typeof(real(zero(CT)))
+    PT = promote_type(typeof(float(cost)), typeof(float(phi)))
+    x = convert(PT, cost)
+    ph = convert(PT, phi)
+    result = zero(RT)
+    P = Vector{PT}(undef, lmax + 1)
 
     # m = 0 contribution (no conjugate partner)
-    Plm_norm_row!(P, cost, lmax, 0)  # P̄ already orthonormal-normalized
+    Plm_norm_row!(P, x, lmax, 0)  # P̄ already orthonormal-normalized
     @inbounds for l in 0:lmax
         result += real(Qlm_int[l+1, 1]) * P[l+1]
     end
 
     # m > 0 contributions: add both +m and -m via 2*real(...)
     for m in 1:mmax
-        Plm_norm_row!(P, cost, lmax, m)  # P̄ already orthonormal-normalized
-        phase = cis(m * phi)  # e^(imφ)
+        (m % cfg.mres == 0) || continue
+        Plm_norm_row!(P, x, lmax, m)  # P̄ already orthonormal-normalized
+        phase = cis(convert(PT, m) * ph)  # e^(imφ)
         gm = zero(CT)
         @inbounds for l in m:lmax
             gm += Qlm_int[l+1, m+1] * P[l+1]
@@ -480,5 +514,14 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
         result += 2 * real(gm * phase)
     end
 
-    return result
+    return convert(RT, result)
 end
+
+function synthesis_point(::CPU, cfg::SHTConfig,
+                         Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
+    _require_cpu_storage(:synthesis_point, Qlm)
+    return synthesis_point(cfg, Qlm, cost, phi)
+end
+
+synthesis_point(::GPU, ::SHTConfig, ::AbstractMatrix{<:Complex}, ::Real, ::Real) =
+    throw(ArgumentError("synthesis_point(GPU(), ...) requires one supported GPU vendor's storage"))

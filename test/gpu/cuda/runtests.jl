@@ -10,6 +10,7 @@ include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
+include("../../parity/local_evaluation.jl")
 
 struct CUDAScalarAdapter <: ScalarParityAdapter end
 function place(::CUDAScalarAdapter, ::SHTConfig, value, ::Symbol)
@@ -74,6 +75,43 @@ qst_synthesis_inferred(::CUDAQSTAdapter, cfg, Q, S, Tlm, prototype) =
     synthesis_qst(cfg, Q, S, Tlm; prototype)
 qst_synthesis_cplx_inferred(::CUDAQSTAdapter, cfg, Q, S, Tlm, _prototype) =
     synthesis_qst_cplx(cfg, Q, S, Tlm)
+
+struct CUDALocalEvaluationAdapter <: LocalEvaluationAdapter end
+function local_place(::CUDALocalEvaluationAdapter, value)
+    if value isa SubArray
+        if ndims(value) == 1
+            padded = zeros(eltype(value), 2length(value))
+            @views padded[1:2:end] .= value
+            storage = CuArray(padded)
+            return @view storage[1:2:end]
+        end
+        padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
+        @views padded[:, 1:2:end] .= value
+        storage = CuArray(padded)
+        return @view storage[:, 1:2:end]
+    end
+    return CuArray(value)
+end
+function local_collect(::CUDALocalEvaluationAdapter, value)
+    host = Array(value)
+    return ndims(host) == 0 ? host[] : host
+end
+local_scalar(::CUDALocalEvaluationAdapter, cfg, coefficients, cost, phi) =
+    synthesis_point(GPU(), cfg, coefficients, cost, phi)
+local_scalar_cplx(::CUDALocalEvaluationAdapter, cfg, coefficients, cost, phi) =
+    synthesis_point_cplx(GPU(), cfg, coefficients, cost, phi)
+local_lat(::CUDALocalEvaluationAdapter, cfg, coefficients, cost; kwargs...) =
+    SH_to_lat(GPU(), cfg, coefficients, cost; kwargs...)
+local_lat_cplx(::CUDALocalEvaluationAdapter, cfg, coefficients, cost; kwargs...) =
+    SH_to_lat_cplx(GPU(), cfg, coefficients, cost; kwargs...)
+local_qst_point(::CUDALocalEvaluationAdapter, cfg, Q, S, Tlm, cost, phi) =
+    SHqst_to_point(GPU(), cfg, Q, S, Tlm, cost, phi)
+local_qst_lat(::CUDALocalEvaluationAdapter, cfg, Q, S, Tlm, cost; kwargs...) =
+    SHqst_to_lat(GPU(), cfg, Q, S, Tlm, cost; kwargs...)
+local_grad_point(::CUDALocalEvaluationAdapter, cfg, Dr, S, cost, phi) =
+    SH_to_grad_point(GPU(), cfg, Dr, S, cost, phi)
+local_assert_resident(::CUDALocalEvaluationAdapter, value) =
+    @test value isa CUDA.AnyCuArray
 qst_supports_strided_views(::CUDAQSTAdapter) = true
 function qst_strided_place(::CUDAQSTAdapter, ::SHTConfig, value, ::Symbol)
     padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
@@ -121,6 +159,9 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension.GPUCommon, :vector_analysis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_synthesis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_diagonal_kernel!)
+    @test isdefined(extension.GPUCommon, :local_scalar_kernel!)
+    @test isdefined(extension.GPUCommon, :local_complex_kernel!)
+    @test isdefined(extension.GPUCommon, :local_qst_kernel!)
     @test isdefined(extension, :_cuda_scalar_analysis)
     @test isdefined(extension, :_cuda_scalar_synthesis)
     @test isdefined(extension, :_cuda_clear_scalar_cache!)
@@ -130,6 +171,12 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test isdefined(extension, :_cuda_vector_synthesis)
     @test isdefined(extension, :_cuda_vector_analysis_direct!)
     @test isdefined(extension, :_cuda_vector_synthesis_direct!)
+    @test isdefined(extension, :_cuda_local_tables)
+    @test extension._CUDA_LOCAL_CACHE.max_per_device == 8
+    @test which(synthesis_point,
+                Tuple{SHTnsKit.GPU,SHTConfig,CuArray{ComplexF32,2},Float32,Float32}).module === extension
+    @test which(SHqst_to_point,
+                Tuple{SHTnsKit.GPU,SHTConfig,CuArray{ComplexF32,1},CuArray{ComplexF32,1},CuArray{ComplexF32,1},Float32,Float32}).module === extension
     @test fieldnames(extension.CUDAScalarTables) == (:x, :weights, :Plm, :scales)
     @test isdefined(extension, :CUDAVectorTables)
     @test isdefined(extension, :_CUDA_VECTOR_CACHE)
@@ -601,5 +648,6 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         run_sphtor_full_parity(CUDAVectorAdapter())
         run_qst_full_parity(CUDAQSTAdapter())
         run_gpu_vector_mode_edge_parity(CUDAVectorAdapter())
+        run_local_evaluation_parity(CUDALocalEvaluationAdapter())
     end
 end

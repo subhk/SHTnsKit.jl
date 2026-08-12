@@ -247,6 +247,281 @@ function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S
            real.(@view combined[2nphi+1:3nphi])
 end
 
+const _LOCAL_EVALUATION_STATS = Dict{Symbol,Int}(
+    :payload_reductions => 0,
+    :payload_elements => 0,
+    :max_payload_elements => 0,
+)
+const _LOCAL_EVALUATION_STATS_LOCK = ReentrantLock()
+
+function _reset_local_evaluation_stats!()
+    lock(_LOCAL_EVALUATION_STATS_LOCK) do
+        for key in keys(_LOCAL_EVALUATION_STATS)
+            _LOCAL_EVALUATION_STATS[key] = 0
+        end
+    end
+    return nothing
+end
+
+function _local_evaluation_stats()
+    return lock(_LOCAL_EVALUATION_STATS_LOCK) do
+        (; (key => value for (key, value) in _LOCAL_EVALUATION_STATS)...)
+    end
+end
+
+function _record_local_payload!(elements::Int)
+    lock(_LOCAL_EVALUATION_STATS_LOCK) do
+        _LOCAL_EVALUATION_STATS[:payload_reductions] += 1
+        _LOCAL_EVALUATION_STATS[:payload_elements] += elements
+        _LOCAL_EVALUATION_STATS[:max_payload_elements] = max(
+            _LOCAL_EVALUATION_STATS[:max_payload_elements], elements,
+        )
+    end
+    return nothing
+end
+
+function _collective_local_real(comm, value::Real, lower::Real, upper::Real,
+                                name::Symbol, operation::Symbol)
+    valid = isfinite(value) && lower <= value <= upper
+    candidate = valid ? Float64(value) : 0.0
+    minimum = MPI.Allreduce(candidate, min, comm)
+    maximum = MPI.Allreduce(candidate, max, comm)
+    invalid = MPI.Allreduce(!valid || minimum != maximum, |, comm)
+    invalid && throw(ArgumentError(
+        "$operation collective validation failed: invalid or rank-varying $name",
+    ))
+    return value
+end
+
+function _collective_local_integer(comm, value::Integer, lower::Int, upper::Int,
+                                   name::Symbol, operation::Symbol)
+    candidate, representable = SHTnsKit._degree_limit_candidate(value)
+    valid = representable && lower <= candidate <= upper
+    safe = valid ? candidate : lower
+    minimum = MPI.Allreduce(safe, min, comm)
+    maximum = MPI.Allreduce(safe, max, comm)
+    invalid = MPI.Allreduce(!valid || minimum != maximum, |, comm)
+    invalid && throw(ArgumentError(
+        "$operation collective validation failed: invalid or rank-varying $name",
+    ))
+    return candidate
+end
+
+function _validate_local_spectral_pencils!(cfg, values::Tuple,
+                                           operation::Symbol)
+    reference = first(values)
+    comm = communicator(reference)
+    _validate_cfg_replicated(cfg, comm)
+    for value in values
+        _validate_scalar_pencil!(
+            cfg, value, (cfg.lmax + 1, cfg.mmax + 1), operation;
+            comm, require_complex_input=true,
+        )
+    end
+    for value in Base.tail(values)
+        _validate_identical_pencil_layout!(reference, value, operation; comm)
+    end
+    reference_code = _scalar_precision_code(eltype(reference))
+    local_flags = any(value -> _scalar_precision_code(eltype(value)) != reference_code,
+                      Base.tail(values)) ? UInt32(0x0004) : UInt32(0)
+    _collective_validation_error(comm, local_flags, operation)
+    return comm
+end
+
+function _collective_local_options(comm, cfg, cost, phi, nphi, ltr, mtr,
+                                   operation)
+    _collective_local_real(comm, cost, -1, 1, :cost, operation)
+    _collective_local_real(
+        comm, phi, -floatmax(Float64), floatmax(Float64), :phi, operation,
+    )
+    count = _collective_local_integer(comm, nphi, 1, typemax(Int), :nphi, operation)
+    lcap = _collective_local_integer(comm, ltr, 0, cfg.lmax, :ltr, operation)
+    mcap = _collective_local_integer(comm, mtr, 0, cfg.mmax, :mtr, operation)
+    return count, lcap, mcap
+end
+
+function _pencil_local_qst(cfg, Q::PencilArray, S::PencilArray,
+                           Tlm::PencilArray, cost::Real, phi::Real;
+                           nphi::Integer=1, ltr::Integer=cfg.lmax,
+                           mtr::Integer=cfg.mmax,
+                           has_q::Bool=true, has_s::Bool=true, has_t::Bool=true,
+                           operation::Symbol=:SHqst_to_point)
+    active = has_t ? (Q, S, Tlm) : has_s ? (Q, S) : (Q,)
+    comm = _validate_local_spectral_pencils!(cfg, active, operation)
+    count, lcap, mcap = _collective_local_options(
+        comm, cfg, cost, phi, nphi, ltr, mtr, operation,
+    )
+    CT = eltype(Q)
+    RT = typeof(real(zero(CT)))
+    x = RT(cost)
+    P = Vector{RT}(undef, cfg.lmax + 1)
+    dtheta = similar(P)
+    over_sin = similar(P)
+    scratch = Vector{RT}(undef, cfg.lmax + 2)
+    Vr = zeros(RT, count); Vt = zeros(RT, count); Vp = zeros(RT, count)
+    local_l = collect(Int, globalindices(Q, 1))
+    local_m = collect(Int, globalindices(Q, 2))
+    Qdata = parent(Q); Sdata = parent(S); Tdata = parent(Tlm)
+    imagunit = complex(zero(RT), one(RT))
+    for (jlocal, mindex) in pairs(local_m)
+        m = mindex - 1
+        (m <= mcap && m % cfg.mres == 0) || continue
+        SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
+            P, dtheta, over_sin, x, cfg.lmax, m, scratch,
+        )
+        qmode = zero(CT); stheta = zero(CT); sphi = zero(CT)
+        ttheta = zero(CT); tphi = zero(CT)
+        @inbounds for (ilocal, lindex) in pairs(local_l)
+            l = lindex - 1
+            (m <= l <= lcap) || continue
+            scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+            has_q && (qmode += P[l + 1] * scale * Qdata[ilocal, jlocal])
+            if has_s
+                coefficient = scale * Sdata[ilocal, jlocal]
+                stheta += dtheta[l + 1] * coefficient
+                sphi += imagunit * m * over_sin[l + 1] * coefficient
+            end
+            if has_t
+                coefficient = scale * Tdata[ilocal, jlocal]
+                ttheta -= imagunit * m * over_sin[l + 1] * coefficient
+                tphi += dtheta[l + 1] * coefficient
+            end
+        end
+        @inbounds for j in 1:count
+            phase = cis(RT(m) * (RT(phi) + RT(2pi * (j - 1) / count)))
+            factor = m == 0 ? one(RT) : RT(2)
+            Vr[j] += factor * real(qmode * phase)
+            Vt[j] += factor * real((stheta + ttheta) * phase)
+            Vp[j] += factor * real((sphi + tphi) * phase)
+        end
+    end
+    if cfg.robert_form
+        sinth = sqrt(max(zero(RT), one(RT) - x*x))
+        Vt .*= sinth
+        Vp .*= sinth
+    end
+    combined = vcat(Vr, Vt, Vp)
+    _record_local_payload!(length(combined))
+    MPI.Allreduce!(combined, +, comm)
+    return count == 1 ? (combined[1], combined[2], combined[3]) :
+        (combined[1:count], combined[(count + 1):(2count)],
+         combined[(2count + 1):(3count)])
+end
+
+function SHTnsKit.synthesis_point(cfg::SHTnsKit.SHTConfig,
+                                  coefficients::PencilArray,
+                                  cost::Real, phi::Real)
+    return _pencil_local_qst(
+        cfg, coefficients, coefficients, coefficients, cost, phi;
+        has_s=false, has_t=false, operation=:synthesis_point,
+    )[1]
+end
+
+function SHTnsKit.SH_to_lat(cfg::SHTnsKit.SHTConfig,
+                            coefficients::PencilArray, cost::Real;
+                            nphi::Integer=cfg.nlon,
+                            ltr::Integer=cfg.lmax,
+                            mtr::Integer=cfg.mmax)
+    return _pencil_local_qst(
+        cfg, coefficients, coefficients, coefficients, cost, zero(cost);
+        nphi, ltr, mtr, has_s=false, has_t=false, operation=:SH_to_lat,
+    )[1]
+end
+
+function SHTnsKit.SHqst_to_point(cfg::SHTnsKit.SHTConfig,
+                                 Q::PencilArray, S::PencilArray,
+                                 Tlm::PencilArray, cost::Real, phi::Real)
+    return _pencil_local_qst(
+        cfg, Q, S, Tlm, cost, phi; operation=:SHqst_to_point,
+    )
+end
+
+function SHTnsKit.SHqst_to_lat(cfg::SHTnsKit.SHTConfig,
+                               Q::PencilArray, S::PencilArray,
+                               Tlm::PencilArray, cost::Real;
+                               nphi::Integer=cfg.nlon,
+                               ltr::Integer=cfg.lmax,
+                               mtr::Integer=cfg.mmax)
+    return _pencil_local_qst(
+        cfg, Q, S, Tlm, cost, zero(cost); nphi, ltr, mtr,
+        operation=:SHqst_to_lat,
+    )
+end
+
+function SHTnsKit.SH_to_grad_point(cfg::SHTnsKit.SHTConfig,
+                                   Dr::PencilArray, S::PencilArray,
+                                   cost::Real, phi::Real)
+    return _pencil_local_qst(
+        cfg, Dr, S, S, cost, phi; has_t=false,
+        operation=:SH_to_grad_point,
+    )
+end
+
+function _validate_local_complex_pencil!(cfg, coefficients::PencilArray,
+                                         operation::Symbol)
+    comm = communicator(coefficients)
+    _validate_cfg_replicated(cfg, comm)
+    _validate_scalar_pencil!(
+        cfg, coefficients, (SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1), 1),
+        operation; comm, require_complex_input=true,
+    )
+    flags = cfg.mres == 1 ? UInt32(0) : UInt32(0x0200)
+    _collective_validation_error(comm, flags, operation)
+    return comm
+end
+
+function _pencil_local_complex(cfg, coefficients::PencilArray,
+                               cost::Real, phi::Real;
+                               nphi::Integer=1, ltr::Integer=cfg.lmax,
+                               operation::Symbol=:synthesis_point_cplx)
+    comm = _validate_local_complex_pencil!(cfg, coefficients, operation)
+    count, lcap, _ = _collective_local_options(
+        comm, cfg, cost, phi, nphi, ltr, cfg.mmax, operation,
+    )
+    CT = eltype(coefficients)
+    RT = typeof(real(zero(CT)))
+    P = Vector{RT}(undef, cfg.lmax + 1)
+    output = zeros(CT, count)
+    global_rows = collect(Int, globalindices(coefficients, 1))
+    local_by_global = Dict(global_index => local_index
+                           for (local_index, global_index) in pairs(global_rows))
+    data = parent(coefficients)
+    for m in -cfg.mmax:cfg.mmax
+        am = abs(m)
+        SHTnsKit.Plm_norm_row!(P, RT(cost), cfg.lmax, am)
+        radial = zero(CT)
+        @inbounds for l in am:lcap
+            global_index = SHTnsKit.LM_cplx_index(cfg.lmax, cfg.mmax, l, m) + 1
+            local_index = get(local_by_global, global_index, 0)
+            iszero(local_index) && continue
+            scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, am))
+            radial += P[l + 1] * scale * data[local_index, 1]
+        end
+        @inbounds for j in 1:count
+            angle = RT(phi) + RT(2pi * (j - 1) / count)
+            output[j] += radial * cis(RT(m) * angle)
+        end
+    end
+    _record_local_payload!(length(output))
+    MPI.Allreduce!(output, +, comm)
+    return count == 1 ? output[1] : output
+end
+
+SHTnsKit.synthesis_point_cplx(cfg::SHTnsKit.SHTConfig,
+                              coefficients::PencilArray,
+                              cost::Real, phi::Real) =
+    _pencil_local_complex(cfg, coefficients, cost, phi)
+
+function SHTnsKit.SH_to_lat_cplx(cfg::SHTnsKit.SHTConfig,
+                                 coefficients::PencilArray, cost::Real;
+                                 nphi::Integer=cfg.nlon,
+                                 ltr::Integer=cfg.lmax)
+    return _pencil_local_complex(
+        cfg, coefficients, cost, zero(cost); nphi, ltr,
+        operation=:SH_to_lat_cplx,
+    )
+end
+
 """
     dist_analysis_packed(cfg, fθφ::PencilArray) -> Qlm packed
 """

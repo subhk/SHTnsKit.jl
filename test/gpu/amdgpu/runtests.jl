@@ -10,6 +10,7 @@ include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
+include("../../parity/local_evaluation.jl")
 
 struct AMDGPUScalarAdapter <: ScalarParityAdapter end
 function place(::AMDGPUScalarAdapter, ::SHTConfig, value, ::Symbol)
@@ -74,6 +75,43 @@ qst_synthesis_inferred(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, prototype) =
     synthesis_qst(cfg, Q, S, Tlm; prototype)
 qst_synthesis_cplx_inferred(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, _prototype) =
     synthesis_qst_cplx(cfg, Q, S, Tlm)
+
+struct AMDGPULocalEvaluationAdapter <: LocalEvaluationAdapter end
+function local_place(::AMDGPULocalEvaluationAdapter, value)
+    if value isa SubArray
+        if ndims(value) == 1
+            padded = zeros(eltype(value), 2length(value))
+            @views padded[1:2:end] .= value
+            storage = ROCArray(padded)
+            return @view storage[1:2:end]
+        end
+        padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
+        @views padded[:, 1:2:end] .= value
+        storage = ROCArray(padded)
+        return @view storage[:, 1:2:end]
+    end
+    return ROCArray(value)
+end
+function local_collect(::AMDGPULocalEvaluationAdapter, value)
+    host = Array(value)
+    return ndims(host) == 0 ? host[] : host
+end
+local_scalar(::AMDGPULocalEvaluationAdapter, cfg, coefficients, cost, phi) =
+    synthesis_point(GPU(), cfg, coefficients, cost, phi)
+local_scalar_cplx(::AMDGPULocalEvaluationAdapter, cfg, coefficients, cost, phi) =
+    synthesis_point_cplx(GPU(), cfg, coefficients, cost, phi)
+local_lat(::AMDGPULocalEvaluationAdapter, cfg, coefficients, cost; kwargs...) =
+    SH_to_lat(GPU(), cfg, coefficients, cost; kwargs...)
+local_lat_cplx(::AMDGPULocalEvaluationAdapter, cfg, coefficients, cost; kwargs...) =
+    SH_to_lat_cplx(GPU(), cfg, coefficients, cost; kwargs...)
+local_qst_point(::AMDGPULocalEvaluationAdapter, cfg, Q, S, Tlm, cost, phi) =
+    SHqst_to_point(GPU(), cfg, Q, S, Tlm, cost, phi)
+local_qst_lat(::AMDGPULocalEvaluationAdapter, cfg, Q, S, Tlm, cost; kwargs...) =
+    SHqst_to_lat(GPU(), cfg, Q, S, Tlm, cost; kwargs...)
+local_grad_point(::AMDGPULocalEvaluationAdapter, cfg, Dr, S, cost, phi) =
+    SH_to_grad_point(GPU(), cfg, Dr, S, cost, phi)
+local_assert_resident(::AMDGPULocalEvaluationAdapter, value) =
+    @test value isa AMDGPU.AnyROCArray
 qst_supports_strided_views(::AMDGPUQSTAdapter) = true
 function qst_strided_place(::AMDGPUQSTAdapter, ::SHTConfig, value, ::Symbol)
     padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
@@ -107,6 +145,9 @@ end
     @test isdefined(extension.GPUCommon, :vector_analysis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_synthesis_kernel!)
     @test isdefined(extension.GPUCommon, :vector_diagonal_kernel!)
+    @test isdefined(extension.GPUCommon, :local_scalar_kernel!)
+    @test isdefined(extension.GPUCommon, :local_complex_kernel!)
+    @test isdefined(extension.GPUCommon, :local_qst_kernel!)
     @test isdefined(extension, :_amdgpu_scalar_analysis)
     @test isdefined(extension, :_amdgpu_scalar_synthesis)
     @test isdefined(extension, :_amdgpu_clear_scalar_cache!)
@@ -116,6 +157,12 @@ end
     @test isdefined(extension, :_amdgpu_vector_synthesis)
     @test isdefined(extension, :_amdgpu_vector_analysis_direct!)
     @test isdefined(extension, :_amdgpu_vector_synthesis_direct!)
+    @test isdefined(extension, :_amdgpu_local_tables)
+    @test extension._AMDGPU_LOCAL_CACHE.max_per_device == 8
+    @test which(synthesis_point,
+                Tuple{SHTnsKit.GPU,SHTConfig,ROCArray{ComplexF32,2},Float32,Float32}).module === extension
+    @test which(SHqst_to_point,
+                Tuple{SHTnsKit.GPU,SHTConfig,ROCArray{ComplexF32,1},ROCArray{ComplexF32,1},ROCArray{ComplexF32,1},Float32,Float32}).module === extension
     @test fieldnames(extension.AMDGPUScalarTables) == (:x, :weights, :Plm, :scales)
     @test isdefined(extension, :AMDGPUVectorTables)
     @test isdefined(extension, :_AMDGPU_VECTOR_CACHE)
@@ -462,5 +509,6 @@ end
         run_sphtor_full_parity(AMDGPUVectorAdapter())
         run_qst_full_parity(AMDGPUQSTAdapter())
         run_gpu_vector_mode_edge_parity(AMDGPUVectorAdapter())
+        run_local_evaluation_parity(AMDGPULocalEvaluationAdapter())
     end
 end

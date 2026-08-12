@@ -12,9 +12,22 @@ include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
 include("../../parity/local_evaluation.jl")
 include("../../parity/operators.jl")
+include("../../parity/rotations.jl")
 
 struct AMDGPUScalarAdapter <: ScalarParityAdapter end
 struct AMDGPUOperatorAdapter <: GPUOperatorAdapter end
+struct AMDGPURotationAdapter <: RotationParityAdapter end
+rotation_place(::AMDGPURotationAdapter, value) = ROCArray(value)
+rotation_collect(::AMDGPURotationAdapter, value) = Array(value)
+rotation_resident(::AMDGPURotationAdapter, value) = @test value isa AMDGPU.AnyROCArray
+rotation_z(::AMDGPURotationAdapter, cfg, input, angle, output) =
+    SH_Zrotate(GPU(), cfg, input, angle, output)
+rotation_y(::AMDGPURotationAdapter, cfg, input, angle, output) =
+    SH_Yrotate(GPU(), cfg, input, angle, output)
+rotation_apply_real(::AMDGPURotationAdapter, rotation, input, output) =
+    shtns_rotation_apply_real(GPU(), rotation, input, output)
+rotation_apply_cplx(::AMDGPURotationAdapter, rotation, input, output) =
+    shtns_rotation_apply_cplx(GPU(), rotation, input, output)
 operator_place(::AMDGPUOperatorAdapter, value) = ROCArray(value)
 function operator_strided_place(::AMDGPUOperatorAdapter, value::AbstractVector)
     storage = AMDGPU.zeros(eltype(value), 2length(value))
@@ -150,6 +163,17 @@ end
 @testset "AMDGPU backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitAMDGPUExt)
     @test extension !== nothing
+    test_gpu_rotation_contract(
+        extension, ROCArray{ComplexF32,1}, ROCArray{ComplexF32,1},
+    )
+    run_shared_rotation_kernel_reference(
+        extension.GPUCommon, KernelAbstractions.CPU(),
+    )
+    if AMDGPU.functional()
+        run_rotation_parity(AMDGPURotationAdapter())
+    else
+        @test_skip AMDGPU.functional()
+    end
     test_gpu_vector_variant_contract(
         extension, ROCArray{Float32,2}, ROCArray{ComplexF32,2},
         ROCArray{ComplexF32,1}, ROCArray{Float32,3}, ROCArray{ComplexF32,3},

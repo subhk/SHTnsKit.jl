@@ -74,7 +74,13 @@ using SHTnsKit
         @test r.lmax == 4
         @test r.mmax == 4
         @test shtns_rotation_destroy(r) === nothing
-        @test_throws ArgumentError shtns_rotation_create(4, 4, 1)  # non-orthonormal not supported
+        fourpi = shtns_rotation_create(4, 4, 1)
+        @test fourpi.norm === :fourpi
+        schmidt = shtns_rotation_create(4, 4, 2 | (256 * 4) | (256 * 8))
+        @test schmidt.norm === :schmidt
+        @test !schmidt.cs_phase
+        @test schmidt.real_norm
+        @test_throws ArgumentError shtns_rotation_create(4, 4, 3)
     end
 
     @testset "ZYZ vs ZXZ: 90° x-rotation consistency" begin

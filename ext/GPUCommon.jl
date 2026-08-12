@@ -22,12 +22,93 @@ export laplacian_kernel!, operator_matrix_kernel!, packed_operator_kernel!,
        scalar_cache_clear!, scalar_cache_size,
        ScalarWorkspaceCache, scalar_workspace_use!,
        scalar_workspace_clear!, scalar_workspace_size
+export RotationBlockCache, rotation_cache_lookup, rotation_cache_insert!,
+       rotation_cache_publish!, rotation_cache_clear!, rotation_cache_size,
+       rotation_z_real_kernel!, rotation_real_kernel!, rotation_cplx_kernel!
 
 """One cached table set plus its mutable-configuration signature and LRU tick."""
 struct ScalarTableCacheEntry
     signature::UInt
     tick::UInt64
     value::Any
+end
+
+"""Immutable rotation-block cache entry with LRU publication tick."""
+struct RotationBlockCacheEntry
+    tick::UInt64
+    value::Any
+end
+
+"""Thread-safe bounded cache keyed by device, precision, and rotation inputs."""
+mutable struct RotationBlockCache
+    entries::Dict{Tuple,RotationBlockCacheEntry}
+    tick::UInt64
+    max_per_device::Int
+    lock::ReentrantLock
+end
+
+function RotationBlockCache(max_per_device::Integer=8)
+    max_per_device > 0 || throw(ArgumentError("max_per_device must be positive"))
+    return RotationBlockCache(Dict{Tuple,RotationBlockCacheEntry}(), 0,
+                              Int(max_per_device), ReentrantLock())
+end
+
+@inline _rotation_device(key::Tuple) = key[1]
+
+function rotation_cache_lookup(cache::RotationBlockCache, key::Tuple)
+    return lock(cache.lock) do
+        entry = get(cache.entries, key, nothing)
+        entry === nothing && return nothing
+        cache.tick += 1
+        cache.entries[key] = RotationBlockCacheEntry(cache.tick, entry.value)
+        return entry.value
+    end
+end
+
+function rotation_cache_insert!(cache::RotationBlockCache, key::Tuple, value)
+    return lock(cache.lock) do
+        existing = get(cache.entries, key, nothing)
+        if existing !== nothing
+            cache.tick += 1
+            cache.entries[key] = RotationBlockCacheEntry(cache.tick, existing.value)
+            return existing.value
+        end
+        device_keys = [candidate for candidate in keys(cache.entries)
+                       if _rotation_device(candidate) == _rotation_device(key)]
+        if length(device_keys) >= cache.max_per_device
+            oldest = argmin(candidate -> cache.entries[candidate].tick, device_keys)
+            delete!(cache.entries, oldest)
+        end
+        cache.tick += 1
+        cache.entries[key] = RotationBlockCacheEntry(cache.tick, value)
+        return value
+    end
+end
+
+function rotation_cache_publish!(complete, cache::RotationBlockCache,
+                                 key::Tuple, value)
+    complete()
+    return rotation_cache_insert!(cache, key, value)
+end
+
+function rotation_cache_clear!(cache::RotationBlockCache; device=nothing)
+    lock(cache.lock) do
+        if device === nothing
+            empty!(cache.entries)
+        else
+            for key in collect(keys(cache.entries))
+                _rotation_device(key) == device && delete!(cache.entries, key)
+            end
+        end
+    end
+    return nothing
+end
+
+function rotation_cache_size(cache::RotationBlockCache; device=nothing)
+    return lock(cache.lock) do
+        device === nothing && return length(cache.entries)
+        return count(key -> _rotation_device(key) == device, keys(cache.entries))
+    end
 end
 
 """Batched form of coefficient conversion without broadcast temporaries."""
@@ -853,6 +934,90 @@ end
     im = m ÷ mres
     base = (im * (2lmax + 2 - (im + 1) * mres)) >>> 1
     return base + l
+end
+
+@inline function _rotation_lm_from_packed(k, lmax, mmax)
+    cursor = 0
+    for m in 0:mmax
+        block = lmax - m + 1
+        if k < cursor + block
+            return m + (k - cursor), m
+        end
+        cursor += block
+    end
+    return 0, 0
+end
+
+@inline function _rotation_lm_from_cplx(k, lmax, mmax)
+    for l in 0:lmax
+        mm = min(l, mmax)
+        first_index = _lm_cplx_device_index(l, -mm, mmax)
+        count = 2mm + 1
+        if first_index <= k < first_index + count
+            return l, -mm + (k - first_index)
+        end
+    end
+    return 0, 0
+end
+
+@inline function _rotation_block_value(values, offset, l, m, mp)
+    n = 2l + 1
+    return values[offset + (m + l) * n + (mp + l)]
+end
+
+"""Local diagonal Z rotation for packed real-field coefficients."""
+@kernel function rotation_z_real_kernel!(output, input, angle, orders)
+    k = @index(Global, Linear)
+    if k <= length(input)
+        output[k] = input[k] * cis(typeof(angle)(orders[k]) * angle)
+    end
+end
+
+"""Apply one general rotation to SHTns real-packed device coefficients."""
+@kernel function rotation_real_kernel!(output, input, offsets, values,
+                                       input_scales, output_scales,
+                                       alpha, gamma, lmax, mmax)
+    index = @index(Global, Linear)
+    if index <= length(output)
+        l, m = _rotation_lm_from_packed(index - 1, lmax, mmax)
+        RT = typeof(alpha)
+        offset = Int(offsets[l + 1])
+        acc = zero(eltype(output))
+        @inbounds for mp in -min(l, mmax):min(l, mmax)
+            packed_index = _real_packed_device_index(l, abs(mp), lmax, 1) + 1
+            value = mp < 0 ? conj(input[packed_index]) : input[packed_index]
+            cplx_index = _lm_cplx_device_index(l, mp, mmax) + 1
+            scale = input_scales[cplx_index]
+            epsilon = mp < 0 && isodd(mp) ? -one(RT) : one(RT)
+            value *= scale * epsilon * cis(-RT(mp) * gamma)
+            acc += _rotation_block_value(values, offset, l, m, mp) * value
+        end
+        cplx_index = _lm_cplx_device_index(l, m, mmax) + 1
+        output[index] = acc * cis(-RT(m) * alpha) * output_scales[cplx_index]
+    end
+end
+
+"""Apply one general rotation to full LM_cplx device coefficients."""
+@kernel function rotation_cplx_kernel!(output, input, offsets, values,
+                                       input_scales, output_scales,
+                                       alpha, gamma, lmax, mmax)
+    index = @index(Global, Linear)
+    if index <= length(output)
+        l, m = _rotation_lm_from_cplx(index - 1, lmax, mmax)
+        RT = typeof(alpha)
+        offset = Int(offsets[l + 1])
+        acc = zero(eltype(output))
+        @inbounds for mp in -min(l, mmax):min(l, mmax)
+            source_index = _lm_cplx_device_index(l, mp, mmax) + 1
+            epsilon = mp < 0 && isodd(mp) ? -one(RT) : one(RT)
+            value = input[source_index] * input_scales[source_index] * epsilon *
+                    cis(-RT(mp) * gamma)
+            acc += _rotation_block_value(values, offset, l, m, mp) * value
+        end
+        epsilon = m < 0 && isodd(m) ? -one(RT) : one(RT)
+        output[index] = epsilon * acc * cis(-RT(m) * alpha) *
+                        output_scales[index]
+    end
 end
 
 """Evaluate a dense non-negative-m real spectrum at one or more longitudes."""

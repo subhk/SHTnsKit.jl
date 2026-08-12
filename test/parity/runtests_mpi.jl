@@ -13,6 +13,7 @@ include("qst_full.jl")
 include("vector_variants.jl")
 include("local_evaluation.jl")
 include("operators.jl")
+include("rotations.jl")
 
 struct MPIScalarAdapter <: ScalarParityAdapter
     comm
@@ -369,7 +370,7 @@ adapter = MPIScalarAdapter(MPI.COMM_WORLD)
 vector_adapter = MPIVectorAdapter(MPI.COMM_WORLD)
 qst_adapter = MPIQSTAdapter(MPI.COMM_WORLD)
 if isempty(ARGS) || (!("sphtor_full" in ARGS) && !("qst_full" in ARGS) &&
-                     !("operators" in ARGS))
+                     !("operators" in ARGS) && !("rotations" in ARGS))
 # Exercise every mathematical axis without taking their full Cartesian product:
 # each Pencil construction owns an MPI Cartesian communicator, and a giant
 # product needlessly exhausts MPI implementations with a 2048-context limit.
@@ -2299,6 +2300,132 @@ if isempty(ARGS) || "operators" in ARGS
             divergence_from_spheroidal(cfg, bad_comm_source)
         end
         @test extension._operator_stats().diagonal_payload_sent_elements == 0
+        MPI.Barrier(comm)
+    end
+end
+
+if isempty(ARGS) || "rotations" in ARGS
+    @testset "distributed rotation parity" begin
+        comm = MPI.COMM_WORLD
+        extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+        rank = MPI.Comm_rank(comm)
+        for RT in (Float32, Float64)
+            tol = RT === Float32 ? RT(1e-4) : RT(3e-12)
+            cfg = create_gauss_config(
+                4, 7; nlon=12, norm=:schmidt,
+                real_norm=true, cs_phase=false,
+            )
+            dense = zeros(Complex{RT}, cfg.lmax + 1, cfg.mmax + 1)
+            rng = MersenneTwister(0xD071 + sizeof(RT))
+            for m in 0:cfg.mmax, l in m:cfg.lmax
+                dense[l + 1, m + 1] = randn(rng, Complex{RT})
+            end
+            dense[:, 1] .= real.(dense[:, 1])
+            source = matrix_to_spectral_pencil(cfg, dense; comm)
+            output = PencilArray{Complex{RT}}(undef, pencil(source))
+
+            extension._reset_rotation_stats!()
+            @test SHTnsKit.dist_SH_Zrotate(cfg, source, RT(0.27), output) === output
+            expected_z = zeros(Complex{RT}, size(dense))
+            SHTnsKit.dist_SH_Zrotate(cfg, dense, RT(0.27), expected_z)
+            @test spectral_pencil_to_matrix(cfg, output) ≈ expected_z atol=tol rtol=tol
+            @test extension._rotation_stats().z_payload_sent_elements == 0
+
+            extension._reset_rotation_stats!()
+            @test SHTnsKit.dist_SH_Yrotate(cfg, source, RT(-0.36), output) === output
+            expected_y = zeros(Complex{RT}, size(dense))
+            SHTnsKit.dist_SH_Yrotate(cfg, dense, RT(-0.36), expected_y)
+            @test spectral_pencil_to_matrix(cfg, output) ≈ expected_y atol=tol rtol=tol
+            stats = extension._rotation_stats()
+            @test stats.general_payload_sent_elements > 0
+            @test stats.general_max_message_elements <= cfg.lmax + 1
+
+            y90 = similar(output); x90 = similar(output)
+            SHTnsKit.dist_SH_Yrotate90(cfg, source, y90)
+            SHTnsKit.dist_SH_Xrotate90(cfg, source, x90)
+            expected_y90 = zeros(Complex{RT}, size(dense))
+            expected_x90 = zeros(Complex{RT}, size(dense))
+            packed_dense = SHTnsKit.pack_lm(cfg, dense)
+            qy = similar(packed_dense); qx = similar(qy)
+            SH_Yrotate90(CPU(), cfg, packed_dense, qy)
+            SH_Xrotate90(CPU(), cfg, packed_dense, qx)
+            SHTnsKit.unpack_lm!(expected_y90, cfg, qy)
+            SHTnsKit.unpack_lm!(expected_x90, cfg, qx)
+            @test spectral_pencil_to_matrix(cfg, y90) ≈ expected_y90 atol=tol rtol=tol
+            @test spectral_pencil_to_matrix(cfg, x90) ≈ expected_x90 atol=tol rtol=tol
+
+            euler = similar(output)
+            SHTnsKit.dist_SH_rotate_euler(
+                cfg, source, RT(0.13), RT(-0.28), RT(0.41), euler,
+            )
+            t1 = zeros(Complex{RT}, size(dense))
+            t2 = zeros(Complex{RT}, size(dense))
+            expected_euler = zeros(Complex{RT}, size(dense))
+            SHTnsKit.dist_SH_Zrotate(cfg, dense, RT(0.13), t1)
+            SHTnsKit.dist_SH_Yrotate(cfg, t1, RT(-0.28), t2)
+            SHTnsKit.dist_SH_Zrotate(cfg, t2, RT(0.41), expected_euler)
+            @test spectral_pencil_to_matrix(cfg, euler) ≈ expected_euler atol=tol rtol=tol
+
+            packed = SHTnsKit.pack_lm(cfg, dense)
+            @test SHTnsKit.dist_SH_Zrotate_packed(
+                cfg, packed, RT(0.27); prototype_lm=source,
+            ) ≈ SHTnsKit.pack_lm(cfg, expected_z) atol=tol rtol=tol
+            @test SHTnsKit.dist_SH_Yrotate_packed(
+                cfg, packed, RT(-0.36); prototype_lm=source,
+            ) ≈ SHTnsKit.pack_lm(cfg, expected_y) atol=tol rtol=tol
+            @test SHTnsKit.dist_SH_Yrotate90_packed(
+                cfg, packed; prototype_lm=source,
+            ) ≈ qy atol=tol rtol=tol
+            @test SHTnsKit.dist_SH_Xrotate90_packed(
+                cfg, packed; prototype_lm=source,
+            ) ≈ qx atol=tol rtol=tol
+        end
+
+        cfg = create_gauss_config(4, 7; nlon=12)
+        dense = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+        dense[3, 2] = 0.4 - 0.2im
+        source = matrix_to_spectral_pencil(cfg, dense; comm)
+        output = PencilArray{ComplexF64}(undef, pencil(source))
+        sentinel = ComplexF64(91, -17)
+        fill!(parent(output), sentinel)
+        extension._reset_rotation_stats!()
+        varying_angle = rank == 0 ? 0.2 : 0.3
+        @test _all_ranks_catch(comm; message_contains="rotation inputs") do
+            SHTnsKit.dist_SH_Zrotate(cfg, source, varying_angle, output)
+        end
+        @test all(==(sentinel), parent(output))
+        @test extension._rotation_stats().z_payload_sent_elements == 0
+        MPI.Barrier(comm)
+
+        cfg2 = create_gauss_config(4, 7; nlon=12, mres=2)
+        source2 = matrix_to_spectral_pencil(
+            cfg2, zeros(ComplexF64, cfg2.lmax + 1, cfg2.mmax + 1); comm,
+        )
+        output2 = PencilArray{ComplexF64}(undef, pencil(source2))
+        fill!(parent(output2), sentinel)
+        extension._reset_rotation_stats!()
+        @test _all_ranks_catch(comm; message_contains="mres==1") do
+            SHTnsKit.dist_SH_Yrotate(cfg2, source2, 0.2, output2)
+        end
+        @test all(==(sentinel), parent(output2))
+        @test extension._rotation_stats().general_payload_sent_elements == 0
+        MPI.Barrier(comm)
+
+        wrong_type = PencilArray{ComplexF32}(undef, pencil(source))
+        fill!(parent(wrong_type), ComplexF32(91, -17))
+        @test _all_ranks_catch(comm; message_contains="precision") do
+            SHTnsKit.dist_SH_Yrotate(cfg, source, 0.2, wrong_type)
+        end
+        @test all(==(ComplexF32(91, -17)), parent(wrong_type))
+        MPI.Barrier(comm)
+
+        varying_precision = rank == 0 ? ComplexF32.(SHTnsKit.pack_lm(cfg, dense)) :
+                            SHTnsKit.pack_lm(cfg, dense)
+        @test _all_ranks_catch(comm; message_contains="precision") do
+            SHTnsKit.dist_SH_Zrotate_packed(
+                cfg, varying_precision, 0.2; prototype_lm=source,
+            )
+        end
         MPI.Barrier(comm)
     end
 end

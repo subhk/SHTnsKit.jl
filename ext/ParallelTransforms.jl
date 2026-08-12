@@ -185,6 +185,8 @@ function _collective_validation_error(comm, local_flags::UInt32, operation::Symb
     flags & 0x1000 != 0 && push!(descriptions, "rank-varying return_pencil")
     flags & 0x2000 != 0 && push!(descriptions, "input/output alias is unsupported")
     flags & 0x4000 != 0 && push!(descriptions, "rank-varying operator matrix")
+    flags & 0x8000 != 0 && push!(descriptions, "invalid or rank-varying rotation inputs")
+    flags & 0x10000 != 0 && push!(descriptions, "rotation requires mres==1")
     throw(ArgumentError("$operation collective validation failed: $(join(descriptions, ", "))"))
 end
 

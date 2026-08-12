@@ -29,6 +29,10 @@ using .GPUCommon: vector_derivative_table_kernel!, vector_analysis_kernel!,
                   vector_mode_analysis_kernel!, vector_mode_synthesis_kernel!,
                   vector_batch_analysis_kernel!, vector_batch_synthesis_kernel!
 using .GPUCommon: local_scalar_kernel!, local_complex_kernel!, local_qst_kernel!
+using .GPUCommon: RotationBlockCache, rotation_cache_lookup,
+                  rotation_cache_publish!, rotation_cache_clear!,
+                  rotation_z_real_kernel!, rotation_real_kernel!,
+                  rotation_cplx_kernel!
 
 import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  analysis_packed, synthesis_packed,
@@ -67,6 +71,8 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  synthesis_point, synthesis_point_cplx,
                  SH_to_lat, SH_to_lat_cplx, SHqst_to_point, SHqst_to_lat,
                  SH_to_grad_point,
+                 SH_Zrotate, SH_Yrotate, SH_Yrotate90, SH_Xrotate90,
+                 shtns_rotation_apply_real, shtns_rotation_apply_cplx,
                  _register_gpu_adapter!, _gpu_adapter_functional,
                  _gpu_adapter_matches, _gpu_adapter_adapt,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
@@ -125,6 +131,165 @@ const _AMDGPU_SCALAR_CACHE = ScalarTableCache(8)
 const _AMDGPU_VECTOR_CACHE = ScalarTableCache(8)
 const _AMDGPU_LOCAL_CACHE = ScalarTableCache(8)
 const _AMDGPU_WORKSPACE_CACHE = ScalarWorkspaceCache(8)
+const _rotation_cache = RotationBlockCache(8)
+
+struct AMDGPURotationBlocks{TO,TV,TS,T}
+    offsets::TO
+    values::TV
+    input_scales::TS
+    output_scales::TS
+    alpha::T
+    gamma::T
+end
+
+function _require_amdgpu_rotation(operation::Symbol)
+    AMDGPU.functional() || throw(SHTnsKit.BackendUnavailableError(
+        operation, "AMDGPU.jl is loaded but AMDGPU.functional() is false",
+    ))
+    return nothing
+end
+
+function _amdgpu_rotation_blocks(r::SHTRotation,
+                                 ::Type{T}) where {T<:AbstractFloat}
+    device = AMDGPU.device_id()
+    key = (device, T, r.lmax, r.mmax, r.α, r.β, r.γ, r.conv,
+           r.norm, r.cs_phase, r.real_norm)
+    cached = rotation_cache_lookup(_rotation_cache, key)
+    cached === nothing || return cached::AMDGPURotationBlocks
+    host = SHTnsKit._rotation_host_blocks(r, T)
+    built = AMDGPURotationBlocks(
+        ROCArray(host.offsets), ROCArray(host.values),
+        ROCArray(host.input_scales), ROCArray(host.output_scales),
+        host.alpha, host.gamma,
+    )
+    return rotation_cache_publish!(AMDGPU.synchronize, _rotation_cache, key, built)
+end
+
+function _amdgpu_validate_rotation(operation::Symbol,
+                                   input::AMDGPU.AnyROCArray{<:Complex,1},
+                                   output::AMDGPU.AnyROCArray{<:Complex,1},
+                                   expected::Int)
+    _require_amdgpu_rotation(operation)
+    length(input) == expected || throw(DimensionMismatch(
+        "rotation input length must be $expected",
+    ))
+    length(output) == expected || throw(DimensionMismatch(
+        "rotation output length must be $expected",
+    ))
+    eltype(input) === eltype(output) || throw(ArgumentError(
+        "rotation input and output element types must match",
+    ))
+    RT = typeof(real(zero(eltype(input))))
+    RT in (Float32, Float64) || throw(ArgumentError(
+        "GPU rotations support ComplexF32 and ComplexF64 coefficients",
+    ))
+    return RT
+end
+
+function SH_Zrotate(::SHTnsKit.GPU, cfg::SHTConfig,
+                    input::AMDGPU.AnyROCArray{<:Complex,1}, angle::Real,
+                    output::AMDGPU.AnyROCArray{<:Complex,1})
+    RT = _amdgpu_validate_rotation(:SH_Zrotate, input, output, cfg.nlm)
+    isfinite(angle) || throw(ArgumentError("rotation angle must be finite"))
+    source = Base.mightalias(input, output) ? copy(input) : input
+    orders = ROCArray(Int32.(cfg.mi))
+    rotation_z_real_kernel!(ROCBackend())(
+        output, source, RT(angle), orders; ndrange=cfg.nlm,
+    )
+    AMDGPU.synchronize()
+    return output
+end
+
+SH_Zrotate(cfg::SHTConfig, input::AMDGPU.AnyROCArray{<:Complex,1}, angle::Real,
+           output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    SH_Zrotate(SHTnsKit.GPU(), cfg, input, angle, output)
+
+function shtns_rotation_apply_real(::SHTnsKit.GPU, r::SHTRotation,
+                                   input::AMDGPU.AnyROCArray{<:Complex,1},
+                                   output::AMDGPU.AnyROCArray{<:Complex,1})
+    expected = SHTnsKit.nlm_calc(r.lmax, r.mmax, 1)
+    RT = _amdgpu_validate_rotation(
+        :shtns_rotation_apply_real, input, output, expected,
+    )
+    source = Base.mightalias(input, output) ? copy(input) : input
+    blocks = _amdgpu_rotation_blocks(r, RT)
+    rotation_real_kernel!(ROCBackend())(
+        output, source, blocks.offsets, blocks.values,
+        blocks.input_scales, blocks.output_scales,
+        blocks.alpha, blocks.gamma, r.lmax, r.mmax; ndrange=expected,
+    )
+    AMDGPU.synchronize()
+    return output
+end
+
+shtns_rotation_apply_real(r::SHTRotation,
+                          input::AMDGPU.AnyROCArray{<:Complex,1},
+                          output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    shtns_rotation_apply_real(SHTnsKit.GPU(), r, input, output)
+
+function shtns_rotation_apply_cplx(::SHTnsKit.GPU, r::SHTRotation,
+                                   input::AMDGPU.AnyROCArray{<:Complex,1},
+                                   output::AMDGPU.AnyROCArray{<:Complex,1})
+    expected = SHTnsKit.nlm_cplx_calc(r.lmax, r.mmax, 1)
+    RT = _amdgpu_validate_rotation(
+        :shtns_rotation_apply_cplx, input, output, expected,
+    )
+    source = Base.mightalias(input, output) ? copy(input) : input
+    blocks = _amdgpu_rotation_blocks(r, RT)
+    rotation_cplx_kernel!(ROCBackend())(
+        output, source, blocks.offsets, blocks.values,
+        blocks.input_scales, blocks.output_scales,
+        blocks.alpha, blocks.gamma, r.lmax, r.mmax; ndrange=expected,
+    )
+    AMDGPU.synchronize()
+    return output
+end
+
+shtns_rotation_apply_cplx(r::SHTRotation,
+                          input::AMDGPU.AnyROCArray{<:Complex,1},
+                          output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    shtns_rotation_apply_cplx(SHTnsKit.GPU(), r, input, output)
+
+function SH_Yrotate(::SHTnsKit.GPU, cfg::SHTConfig,
+                    input::AMDGPU.AnyROCArray{<:Complex,1}, angle::Real,
+                    output::AMDGPU.AnyROCArray{<:Complex,1})
+    cfg.mres == 1 || throw(ArgumentError(
+        "SH_Yrotate requires mres==1 (got mres=$(cfg.mres)); a Y-rotation mixes orders and cannot be represented in an mres-strided layout",
+    ))
+    r = SHTRotation(
+        cfg.lmax, cfg.mmax; β=angle, norm=cfg.norm,
+        cs_phase=cfg.cs_phase, real_norm=cfg.real_norm,
+    )
+    return shtns_rotation_apply_real(SHTnsKit.GPU(), r, input, output)
+end
+
+SH_Yrotate(cfg::SHTConfig, input::AMDGPU.AnyROCArray{<:Complex,1}, angle::Real,
+           output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    SH_Yrotate(SHTnsKit.GPU(), cfg, input, angle, output)
+SH_Yrotate90(::SHTnsKit.GPU, cfg::SHTConfig,
+             input::AMDGPU.AnyROCArray{<:Complex,1},
+             output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    SH_Yrotate(SHTnsKit.GPU(), cfg, input, pi / 2, output)
+SH_Yrotate90(cfg::SHTConfig, input::AMDGPU.AnyROCArray{<:Complex,1},
+             output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    SH_Yrotate90(SHTnsKit.GPU(), cfg, input, output)
+
+function SH_Xrotate90(::SHTnsKit.GPU, cfg::SHTConfig,
+                      input::AMDGPU.AnyROCArray{<:Complex,1},
+                      output::AMDGPU.AnyROCArray{<:Complex,1})
+    cfg.mres == 1 || throw(ArgumentError(
+        "SH_Xrotate90 requires mres==1 (got mres=$(cfg.mres)); an X-rotation mixes orders and cannot be represented in an mres-strided layout",
+    ))
+    r = SHTRotation(
+        cfg.lmax, cfg.mmax; α=pi / 2, β=pi / 2, γ=-pi / 2,
+        norm=cfg.norm, cs_phase=cfg.cs_phase, real_norm=cfg.real_norm,
+    )
+    return shtns_rotation_apply_real(SHTnsKit.GPU(), r, input, output)
+end
+
+SH_Xrotate90(cfg::SHTConfig, input::AMDGPU.AnyROCArray{<:Complex,1},
+             output::AMDGPU.AnyROCArray{<:Complex,1}) =
+    SH_Xrotate90(SHTnsKit.GPU(), cfg, input, output)
 
 struct AMDGPULocalTables{TP,TD,TO,TS}
     Plm::TP
@@ -336,6 +501,7 @@ function _amdgpu_clear_scalar_cache!(; device=nothing)
     scalar_cache_clear!(_AMDGPU_VECTOR_CACHE; device)
     scalar_cache_clear!(_AMDGPU_LOCAL_CACHE; device)
     scalar_workspace_clear!(_AMDGPU_WORKSPACE_CACHE; device)
+    rotation_cache_clear!(_rotation_cache; device)
     return nothing
 end
 

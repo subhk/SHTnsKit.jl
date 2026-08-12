@@ -12,9 +12,22 @@ include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
 include("../../parity/local_evaluation.jl")
 include("../../parity/operators.jl")
+include("../../parity/rotations.jl")
 
 struct CUDAScalarAdapter <: ScalarParityAdapter end
 struct CUDAOperatorAdapter <: GPUOperatorAdapter end
+struct CUDARotationAdapter <: RotationParityAdapter end
+rotation_place(::CUDARotationAdapter, value) = CuArray(value)
+rotation_collect(::CUDARotationAdapter, value) = Array(value)
+rotation_resident(::CUDARotationAdapter, value) = @test value isa CUDA.AnyCuArray
+rotation_z(::CUDARotationAdapter, cfg, input, angle, output) =
+    SH_Zrotate(GPU(), cfg, input, angle, output)
+rotation_y(::CUDARotationAdapter, cfg, input, angle, output) =
+    SH_Yrotate(GPU(), cfg, input, angle, output)
+rotation_apply_real(::CUDARotationAdapter, rotation, input, output) =
+    shtns_rotation_apply_real(GPU(), rotation, input, output)
+rotation_apply_cplx(::CUDARotationAdapter, rotation, input, output) =
+    shtns_rotation_apply_cplx(GPU(), rotation, input, output)
 operator_place(::CUDAOperatorAdapter, value) = CuArray(value)
 function operator_strided_place(::CUDAOperatorAdapter, value::AbstractVector)
     storage = CUDA.zeros(eltype(value), 2length(value))
@@ -164,6 +177,17 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
 @testset "CUDA backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitGPUExt)
     @test extension !== nothing
+    test_gpu_rotation_contract(
+        extension, CuArray{ComplexF32,1}, CuArray{ComplexF32,1},
+    )
+    run_shared_rotation_kernel_reference(
+        extension.GPUCommon, KernelAbstractions.CPU(),
+    )
+    if CUDA.functional()
+        run_rotation_parity(CUDARotationAdapter())
+    else
+        @test_skip CUDA.functional()
+    end
     test_gpu_vector_variant_contract(
         extension, CuArray{Float32,2}, CuArray{ComplexF32,2},
         CuArray{ComplexF32,1}, CuArray{Float32,3}, CuArray{ComplexF32,3},

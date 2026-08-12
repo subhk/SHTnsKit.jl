@@ -65,6 +65,21 @@ qst_synthesis(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, prototype;
     synthesis_qst(GPU(), cfg, Q, S, Tlm; prototype, real_output, use_rfft)
 qst_synthesis_cplx(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, prototype) =
     synthesis_qst_cplx(GPU(), cfg, Q, S, Tlm; prototype)
+qst_analysis_inferred(::AMDGPUQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst(cfg, Vr, Vt, Vp)
+qst_analysis_cplx_inferred(::AMDGPUQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst_cplx(cfg, Vr, Vt, Vp)
+qst_synthesis_inferred(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, prototype) =
+    synthesis_qst(cfg, Q, S, Tlm; prototype)
+qst_synthesis_cplx_inferred(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, _prototype) =
+    synthesis_qst_cplx(cfg, Q, S, Tlm)
+qst_supports_strided_views(::AMDGPUQSTAdapter) = true
+function qst_strided_place(::AMDGPUQSTAdapter, ::SHTConfig, value, ::Symbol)
+    padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
+    @views padded[:, 1:2:end] .= value
+    storage = ROCArray(padded)
+    return @view storage[:, 1:2:end]
+end
 function assert_warm_device_noalloc(::AMDGPUScalarAdapter, call)
     call()
     AMDGPU.synchronize()

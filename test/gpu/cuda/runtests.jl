@@ -65,6 +65,21 @@ qst_synthesis(::CUDAQSTAdapter, cfg, Q, S, Tlm, prototype;
     synthesis_qst(GPU(), cfg, Q, S, Tlm; prototype, real_output, use_rfft)
 qst_synthesis_cplx(::CUDAQSTAdapter, cfg, Q, S, Tlm, prototype) =
     synthesis_qst_cplx(GPU(), cfg, Q, S, Tlm; prototype)
+qst_analysis_inferred(::CUDAQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst(cfg, Vr, Vt, Vp)
+qst_analysis_cplx_inferred(::CUDAQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst_cplx(cfg, Vr, Vt, Vp)
+qst_synthesis_inferred(::CUDAQSTAdapter, cfg, Q, S, Tlm, prototype) =
+    synthesis_qst(cfg, Q, S, Tlm; prototype)
+qst_synthesis_cplx_inferred(::CUDAQSTAdapter, cfg, Q, S, Tlm, _prototype) =
+    synthesis_qst_cplx(cfg, Q, S, Tlm)
+qst_supports_strided_views(::CUDAQSTAdapter) = true
+function qst_strided_place(::CUDAQSTAdapter, ::SHTConfig, value, ::Symbol)
+    padded = zeros(eltype(value), size(value, 1), 2size(value, 2))
+    @views padded[:, 1:2:end] .= value
+    storage = CuArray(padded)
+    return @view storage[:, 1:2:end]
+end
 function assert_warm_device_noalloc(::CUDAScalarAdapter, call)
     call()
     CUDA.synchronize()

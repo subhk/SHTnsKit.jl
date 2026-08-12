@@ -20,6 +20,24 @@ qst_synthesis(::CPUQSTAdapter, cfg, Q, S, Tlm, _prototype;
     synthesis_qst(CPU(), cfg, Q, S, Tlm; real_output, use_rfft)
 qst_synthesis_cplx(::CPUQSTAdapter, cfg, Q, S, Tlm, _prototype) =
     synthesis_qst_cplx(CPU(), cfg, Q, S, Tlm)
+qst_analysis_inferred(::CPUQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst(cfg, Vr, Vt, Vp)
+qst_analysis_cplx_inferred(::CPUQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst_cplx(cfg, Vr, Vt, Vp)
+qst_synthesis_inferred(::CPUQSTAdapter, cfg, Q, S, Tlm, _prototype) =
+    synthesis_qst(cfg, Q, S, Tlm)
+qst_synthesis_cplx_inferred(::CPUQSTAdapter, cfg, Q, S, Tlm, _prototype) =
+    synthesis_qst_cplx(cfg, Q, S, Tlm)
+
+qst_supports_strided_views(::QSTParityAdapter) = false
+qst_supports_strided_views(::CPUQSTAdapter) = true
+
+function qst_strided_place(::CPUQSTAdapter, ::SHTConfig, value, ::Symbol)
+    storage = zeros(eltype(value), size(value, 1), 2size(value, 2))
+    result = @view storage[:, 1:2:end]
+    copyto!(result, value)
+    return result
+end
 
 function _qst_modes(cfg, ::Type{T}) where {T<:AbstractFloat}
     CT = Complex{T}
@@ -180,6 +198,111 @@ function _test_qst_mres_leakage(adapter::QSTParityAdapter)
     return nothing
 end
 
+function _test_qst_strided_tuple(adapter::QSTParityAdapter, got,
+                                 expected, ::Type{T}, tol,
+                                 cfg::SHTConfig) where {T}
+    @test got isa Tuple
+    @test length(got) == 3
+    for index in 1:3
+        qst_resident(adapter, got[index])
+        host = qst_collect(adapter, got[index], cfg)
+        @test eltype(host) === T
+        @test host ≈ expected[index] atol=tol.atol rtol=tol.rtol
+    end
+    return nothing
+end
+
+function _test_qst_strided_views(adapter::QSTParityAdapter)
+    qst_supports_strided_views(adapter) || return nothing
+    @testset "strided QST views" begin
+        for T in (Float32, Float64)
+            cfg = _vector_config(
+                :regular, 3, 8; norm=:schmidt, real_norm=true,
+                cs_phase=false,
+            )
+            tol = _vector_tol(T)
+            Qcan, Scan, Tcan = _qst_modes(cfg, T)
+            Q = _qst_external(cfg, Qcan)
+            S = _qst_external(cfg, Scan)
+            Tlm = _qst_external(cfg, Tcan)
+            real_fields = _qst_references(
+                cfg, Q, Scan, Tcan; real_output=true,
+            )
+            complex_Q = copy(Q)
+            complex_Q[1, 1] += Complex{T}(0, T(0.08))
+            complex_fields = _qst_references(
+                cfg, complex_Q, Scan, Tcan; real_output=false,
+            )
+
+            real_views = map(real_fields) do value
+                qst_strided_place(adapter, cfg, value, :spatial)
+            end
+            complex_views = map(complex_fields) do value
+                qst_strided_place(adapter, cfg, value, :spatial)
+            end
+            spectral_views = map((Q, S, Tlm)) do value
+                qst_strided_place(adapter, cfg, value, :spectral)
+            end
+            complex_spectral_views = (
+                qst_strided_place(adapter, cfg, complex_Q, :spectral),
+                spectral_views[2], spectral_views[3],
+            )
+            for value in (real_views..., complex_views...,
+                          spectral_views..., complex_spectral_views[1])
+                @test stride(value, 2) > size(value, 1)
+            end
+            prototype = real_views[1]
+
+            for analyzed in (
+                qst_analysis(adapter, cfg, real_views...),
+                qst_analysis_inferred(adapter, cfg, real_views...),
+            )
+                _test_qst_strided_tuple(
+                    adapter, analyzed, (Q, S, Tlm), Complex{T}, tol,
+                    cfg,
+                )
+            end
+            for synthesized in (
+                qst_synthesis(
+                    adapter, cfg, spectral_views..., prototype;
+                    real_output=true,
+                ),
+                qst_synthesis_inferred(
+                    adapter, cfg, spectral_views..., prototype,
+                ),
+            )
+                _test_qst_strided_tuple(
+                    adapter, synthesized, real_fields, T, tol,
+                    cfg,
+                )
+            end
+            for analyzed in (
+                qst_analysis_cplx(adapter, cfg, complex_views...),
+                qst_analysis_cplx_inferred(adapter, cfg, complex_views...),
+            )
+                _test_qst_strided_tuple(
+                    adapter, analyzed, (complex_Q, S, Tlm), Complex{T}, tol,
+                    cfg,
+                )
+            end
+            for synthesized in (
+                qst_synthesis_cplx(
+                    adapter, cfg, complex_spectral_views..., prototype,
+                ),
+                qst_synthesis_cplx_inferred(
+                    adapter, cfg, complex_spectral_views..., prototype,
+                ),
+            )
+                _test_qst_strided_tuple(
+                    adapter, synthesized, complex_fields, Complex{T}, tol,
+                    cfg,
+                )
+            end
+        end
+    end
+    return nothing
+end
+
 function run_qst_full_parity(adapter::QSTParityAdapter;
                              grid_kinds=_VECTOR_GRID_KINDS,
                              precisions=(Float32, Float64),
@@ -200,6 +323,7 @@ function run_qst_full_parity(adapter::QSTParityAdapter;
             )
             _test_qst_case(adapter, cfg, T)
         end
+        _test_qst_strided_views(adapter)
         _test_qst_isolated_components(adapter)
         _test_qst_mres_leakage(adapter)
     end
@@ -210,6 +334,7 @@ function run_cpu_qst_full_parity()
     @testset "QST public contract" begin
         @test :dist_analysis_qst in names(SHTnsKit)
         @test :dist_synthesis_qst in names(SHTnsKit)
+        @test isdefined(@__MODULE__, :_test_qst_strided_views)
     end
     run_qst_full_parity(CPUQSTAdapter())
     return nothing

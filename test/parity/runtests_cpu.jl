@@ -3,11 +3,15 @@ using SHTnsKit
 
 include("scalar_full.jl")
 include("scalar_variants.jl")
+include("sphtor_full.jl")
+include("qst_full.jl")
 
 run_scalar_full_parity(CPUScalarAdapter())
 @testset "scalar mres adjoint parity" begin
     test_mres_scalar_adjoints()
 end
+
+run_cpu_qst_full_parity()
 
 @testset "typed explicit complex synthesis" begin
     cfg = _scalar_config(:gauss, 3, 8)

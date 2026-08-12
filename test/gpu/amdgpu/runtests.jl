@@ -8,6 +8,7 @@ using KernelAbstractions
 include("../../parity/scalar_full.jl")
 include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
+include("../../parity/qst_full.jl")
 
 struct AMDGPUScalarAdapter <: ScalarParityAdapter end
 function place(::AMDGPUScalarAdapter, ::SHTConfig, value, ::Symbol)
@@ -50,6 +51,20 @@ vector_tor(::AMDGPUVectorAdapter, cfg, T, _prototype; real_output=true) =
     synthesis_tor(GPU(), cfg, T; real_output)
 vector_tor_cplx(::AMDGPUVectorAdapter, cfg, T, _prototype) =
     synthesis_tor_cplx(GPU(), cfg, T)
+
+struct AMDGPUQSTAdapter <: QSTParityAdapter end
+qst_place(::AMDGPUQSTAdapter, ::SHTConfig, value, ::Symbol) = ROCArray(value)
+qst_collect(::AMDGPUQSTAdapter, value, ::SHTConfig) = Array(value)
+qst_resident(::AMDGPUQSTAdapter, value) = @test value isa AMDGPU.AnyROCArray
+qst_analysis(::AMDGPUQSTAdapter, cfg, Vr, Vt, Vp; use_rfft=false) =
+    analysis_qst(GPU(), cfg, Vr, Vt, Vp; use_rfft)
+qst_analysis_cplx(::AMDGPUQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst_cplx(GPU(), cfg, Vr, Vt, Vp)
+qst_synthesis(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, prototype;
+              real_output=true, use_rfft=false) =
+    synthesis_qst(GPU(), cfg, Q, S, Tlm; prototype, real_output, use_rfft)
+qst_synthesis_cplx(::AMDGPUQSTAdapter, cfg, Q, S, Tlm, prototype) =
+    synthesis_qst_cplx(GPU(), cfg, Q, S, Tlm; prototype)
 function assert_warm_device_noalloc(::AMDGPUScalarAdapter, call)
     call()
     AMDGPU.synchronize()
@@ -94,6 +109,14 @@ end
     @test which(
         synthesis_sphtor,
         Tuple{SHTConfig,ROCArray{ComplexF32,2},ROCArray{ComplexF32,2}},
+    ).module === extension
+    @test which(
+        analysis_qst,
+        Tuple{SHTConfig,ROCArray{Float32,2},ROCArray{Float32,2},ROCArray{Float32,2}},
+    ).module === extension
+    @test which(
+        synthesis_qst,
+        Tuple{SHTConfig,ROCArray{ComplexF32,2},ROCArray{ComplexF32,2},ROCArray{ComplexF32,2}},
     ).module === extension
     @test which(
         analysis_sphtor,
@@ -417,5 +440,6 @@ end
             pole_orders=(false, true),
         )
         run_sphtor_full_parity(AMDGPUVectorAdapter())
+        run_qst_full_parity(AMDGPUQSTAdapter())
     end
 end

@@ -45,6 +45,8 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  synthesis_batch, synthesis_batch!, synthesis_batch_cplx,
                  analysis_sphtor, analysis_sphtor_cplx,
                  synthesis_sphtor, synthesis_sphtor_cplx,
+                 analysis_qst, analysis_qst_cplx,
+                 synthesis_qst, synthesis_qst_cplx,
                  synthesis_sph, synthesis_sph_cplx,
                  synthesis_tor, synthesis_tor_cplx,
                  divergence_from_spheroidal, divergence_from_spheroidal!,
@@ -610,6 +612,22 @@ synthesis_tor(cfg::SHTConfig, Tlm::CUDA.AnyCuArray{T,2}; kwargs...) where {T} =
     synthesis_tor(SHTnsKit.GPU(), cfg, Tlm; kwargs...)
 synthesis_tor_cplx(cfg::SHTConfig, Tlm::CUDA.AnyCuArray{T,2}) where {T} =
     synthesis_tor_cplx(SHTnsKit.GPU(), cfg, Tlm)
+analysis_qst(cfg::SHTConfig, Vr::CUDA.AnyCuArray{T,2},
+             Vt::CUDA.AnyCuArray{R,2}, Vp::CUDA.AnyCuArray{S,2};
+             kwargs...) where {T,R,S} =
+    analysis_qst(SHTnsKit.GPU(), cfg, Vr, Vt, Vp; kwargs...)
+analysis_qst_cplx(cfg::SHTConfig, Vr::CUDA.AnyCuArray{T,2},
+                  Vt::CUDA.AnyCuArray{R,2},
+                  Vp::CUDA.AnyCuArray{S,2}) where {T<:Complex,R<:Complex,S<:Complex} =
+    analysis_qst_cplx(SHTnsKit.GPU(), cfg, Vr, Vt, Vp)
+synthesis_qst(cfg::SHTConfig, Qlm::CUDA.AnyCuArray{T,2},
+              Slm::CUDA.AnyCuArray{R,2}, Tlm::CUDA.AnyCuArray{S,2};
+              kwargs...) where {T,R,S} =
+    synthesis_qst(SHTnsKit.GPU(), cfg, Qlm, Slm, Tlm; kwargs...)
+synthesis_qst_cplx(cfg::SHTConfig, Qlm::CUDA.AnyCuArray{T,2},
+                   Slm::CUDA.AnyCuArray{R,2},
+                   Tlm::CUDA.AnyCuArray{S,2}) where {T,R,S} =
+    synthesis_qst_cplx(SHTnsKit.GPU(), cfg, Qlm, Slm, Tlm)
 
 function analysis_sphtor!(plan::SHTPlan, Sout::CUDA.AnyCuArray,
                            Tout::CUDA.AnyCuArray, Vt::CUDA.AnyCuArray,

@@ -93,27 +93,37 @@ velocity fields in spherical coordinates (Vr, Vt, Vp).
 """
 
 """
-    synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true) -> (Vr, Vt, Vp)
+    synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true, use_rfft=false) -> (Vr, Vt, Vp)
 
 Transform QST spectral coefficients to 3D spatial vector field components.
 Returns radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
-Base.@constprop :aggressive function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+Base.@constprop :aggressive function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                                                   real_output::Bool=true,
+                                                   use_rfft::Bool=false)
+    any(value -> on_device(value) isa GPU, (Qlm, Slm, Tlm)) &&
+        return synthesis_qst(GPU(), cfg, Qlm, Slm, Tlm; real_output, use_rfft)
     # QST synthesis is scalar Q plus horizontal S/T synthesis. Use a Val
     # barrier so all returned component arrays have concrete element types.
-    return _synthesis_qst(cfg, Qlm, Slm, Tlm, Val(real_output))
+    return _synthesis_qst(cfg, Qlm, Slm, Tlm, Val(real_output), Val(use_rfft))
 end
 
 function _synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
-                        ::Val{real_output}) where {real_output}
+                        ::Val{real_output}, ::Val{use_rfft}) where {real_output,use_rfft}
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
     # Reuse the scalar and sphtor public-boundary implementations. Each converts
     # exactly its own component from the configured coefficient convention.
-    Vr = _synthesis(cfg, Qlm, Val(real_output), nothing, Val(false))
-    Vt, Vp = _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(false))
+    Vr = _synthesis(cfg, Qlm, Val(real_output), nothing, Val(use_rfft))
+    Vt, Vp = _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(use_rfft))
 
     return Vr, Vt, Vp
 end
+
+# Internal compatibility for the batch implementation; full-grid QST used the
+# complex FFT path before the `use_rfft` keyword became part of this boundary.
+_synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix,
+               Tlm::AbstractMatrix, real_output::Val) =
+    _synthesis_qst(cfg, Qlm, Slm, Tlm, real_output, Val(false))
 
 """
     analysis_qst(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
@@ -121,17 +131,85 @@ end
 Transform 3D spatial vector field to QST spectral coefficients.
 Input: radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
-function analysis_qst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
-    nlat, nlon = cfg.nlat, cfg.nlon
-
+function analysis_qst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix,
+                      Vp::AbstractMatrix; use_rfft::Bool=false)
+    any(value -> on_device(value) isa GPU, (Vr, Vt, Vp)) &&
+        return analysis_qst(GPU(), cfg, Vr, Vt, Vp; use_rfft)
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
 
     # Each sub-transform returns configured coefficients exactly once.
-    Qlm = analysis(cfg, Vr)
-    Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
+    Qlm = use_rfft ? analysis(cfg, Vr; use_rfft=true) : analysis(cfg, Vr)
+    Slm, Tlm = use_rfft ?
+        analysis_sphtor(cfg, Vt, Vp; use_rfft=true) :
+        analysis_sphtor(cfg, Vt, Vp)
 
     return Qlm, Slm, Tlm
+end
+
+function _qst_gpu_operands(operation::Symbol, prototype, values::Tuple)
+    selection = prototype
+    if selection === nothing
+        index = findfirst(value -> on_device(value) isa GPU, values)
+        index === nothing || (selection = values[index])
+    end
+    adapter = _gpu_adapter(selection; operation)
+    for value in values
+        if on_device(value) isa GPU && !_gpu_adapter_matches(adapter, value)
+            throw(ArgumentError("$operation operands and GPU prototype use different vendors"))
+        end
+    end
+    operands = map(values) do value
+        _gpu_adapter_matches(adapter, value) ? value : _gpu_adapter_adapt(adapter, value)
+    end
+    return adapter, operands
+end
+
+function synthesis_qst(::GPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                       Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                       prototype=nothing, real_output::Bool=true,
+                       use_rfft::Bool=false)
+    validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
+    adapter, (Qd, Sd, Td) = _qst_gpu_operands(
+        :synthesis_qst, prototype, (Qlm, Slm, Tlm),
+    )
+    Vr = _gpu_adapter_synthesis(
+        adapter, cfg, Qd; real_output, use_rfft,
+    )
+    Vt, Vp = _gpu_adapter_synthesis_sphtor(
+        adapter, cfg, Sd, Td; real_output, use_rfft,
+    )
+    return Vr, Vt, Vp
+end
+
+function analysis_qst(::GPU, cfg::SHTConfig, Vr::AbstractMatrix,
+                      Vt::AbstractMatrix, Vp::AbstractMatrix;
+                      prototype=nothing, use_rfft::Bool=false)
+    validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
+    adapter, (Vrd, Vtd, Vpd) = _qst_gpu_operands(
+        :analysis_qst, prototype, (Vr, Vt, Vp),
+    )
+    Qlm = _gpu_adapter_analysis(adapter, cfg, Vrd; use_rfft)
+    Slm, Tlm = _gpu_adapter_analysis_sphtor(
+        adapter, cfg, Vtd, Vpd; use_rfft,
+    )
+    return Qlm, Slm, Tlm
+end
+
+function synthesis_qst(::CPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                       Slm::AbstractMatrix, Tlm::AbstractMatrix; kwargs...)
+    for value in (Qlm, Slm, Tlm)
+        _require_cpu_storage(:synthesis_qst, value)
+    end
+    return synthesis_qst(cfg, Qlm, Slm, Tlm; kwargs...)
+end
+
+function analysis_qst(::CPU, cfg::SHTConfig, Vr::AbstractMatrix,
+                      Vt::AbstractMatrix, Vp::AbstractMatrix; kwargs...)
+    for value in (Vr, Vt, Vp)
+        _require_cpu_storage(:analysis_qst, value)
+    end
+    return analysis_qst(cfg, Vr, Vt, Vp; kwargs...)
 end
 
 """
@@ -140,6 +218,8 @@ end
 Complex version of QST to spatial transform, preserving complex values.
 """
 function synthesis_qst_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
+    any(value -> on_device(value) isa GPU, (Qlm, Slm, Tlm)) &&
+        return synthesis_qst_cplx(GPU(), cfg, Qlm, Slm, Tlm)
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
     # Each component delegates to the same converting boundary as the real path.
     Vr = synthesis_cplx(cfg, Qlm)
@@ -148,13 +228,23 @@ function synthesis_qst_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMa
     return Vr, Vt, Vp
 end
 
+synthesis_qst_cplx(::CPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                   Slm::AbstractMatrix, Tlm::AbstractMatrix) =
+    synthesis_qst(CPU(), cfg, Qlm, Slm, Tlm; real_output=false)
+
+synthesis_qst_cplx(::GPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                   Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                   prototype=nothing) =
+    synthesis_qst(GPU(), cfg, Qlm, Slm, Tlm; prototype, real_output=false)
+
 """
     analysis_qst_cplx(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
 
 Transform complex spatial vector field to QST coefficients.
 """
 function analysis_qst_cplx(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex})
-    nlat, nlon = cfg.nlat, cfg.nlon
+    any(value -> on_device(value) isa GPU, (Vr, Vt, Vp)) &&
+        return analysis_qst_cplx(GPU(), cfg, Vr, Vt, Vp)
 
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
@@ -165,6 +255,16 @@ function analysis_qst_cplx(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::Ab
 
     return Qlm, Slm, Tlm
 end
+
+
+analysis_qst_cplx(::CPU, cfg::SHTConfig, Vr::AbstractMatrix{<:Complex},
+                  Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex}) =
+    analysis_qst(CPU(), cfg, Vr, Vt, Vp)
+
+analysis_qst_cplx(::GPU, cfg::SHTConfig, Vr::AbstractMatrix{<:Complex},
+                  Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex};
+                  prototype=nothing) =
+    analysis_qst(GPU(), cfg, Vr, Vt, Vp; prototype)
 
 """
     analysis_qst_l(cfg, Vr, Vt, Vp, ltr) -> (Qlm, Slm, Tlm)

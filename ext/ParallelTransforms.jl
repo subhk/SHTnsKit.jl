@@ -1494,18 +1494,8 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; p
         SHTnsKitParallelExt.ifft_along_dim2!(fθφ_local, Fθm)
     end
 
-    # Apply Robert form scaling if enabled
-    if cfg.robert_form
-        @inbounds for (ii, iglob) in enumerate(θ_globals)
-            x = xv[iglob]
-            sθ = sqrt(max(0.0, 1 - x*x))
-            if sθ > 0
-                for j in 1:nlon
-                    fθφ_local[ii, j] *= sθ
-                end
-            end
-        end
-    end
+    # Robert form applies only to tangential vector components.  QST's radial
+    # Q component is an ordinary scalar and must remain unchanged.
 
     # If φ is distributed, we need to scatter results back
     if φ_is_local
@@ -1673,13 +1663,6 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
                 slab .= FFTW.irfft(receive, cfg.nlon, 2)
             else
                 SHTnsKitParallelExt.ifft_along_dim2!(slab, receive)
-            end
-            if cfg.robert_form
-                @inbounds for i in axes(slab, 1)
-                    x = cfg.x[θ_first + i - 1]
-                    sθ = sqrt(max(0.0, 1 - x*x))
-                    @views slab[i, :] .*= sθ
-                end
             end
             for destination in 0:(nranks - 1)
                 same_slab = descriptors.θ_starts[destination + 1] == θ_first &&
@@ -2639,22 +2622,152 @@ function _dist_synthesis_sphtor_with_scratch!(cfg::SHTnsKit.SHTConfig, Slm::Abst
 end
 
 # QST distributed implementations by composition
-function SHTnsKit.dist_analysis_qst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray)
-    Qlm = SHTnsKit.dist_analysis(cfg, Vrθφ)
-    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ)
+function _validate_qst_spatial_inputs!(cfg::SHTnsKit.SHTConfig,
+                                       Vr::PencilArray,
+                                       Vt::PencilArray,
+                                       Vp::PencilArray;
+                                       use_rfft::Bool)
+    comm = communicator(Vr)
+    _validate_cfg_replicated(cfg, comm)
+    for (value, peer) in ((Vr, Vt), (Vt, Vr), (Vp, Vr))
+        _validate_scalar_pencil!(
+            cfg, value, (cfg.nlat, cfg.nlon), :analysis_qst;
+            comm, peer, use_rfft, require_real_input=true,
+        )
+    end
+    _validate_identical_pencil_layout!(Vr, Vt, :analysis_qst; comm)
+    _validate_identical_pencil_layout!(Vr, Vp, :analysis_qst; comm)
+    flags = eltype(Vr) === eltype(Vt) === eltype(Vp) ?
+        UInt32(0) : UInt32(0x0004)
+    _collective_validation_error(comm, flags, :analysis_qst)
+    return comm
+end
+
+function _validate_qst_synthesis_inputs!(cfg::SHTnsKit.SHTConfig,
+                                         Qlm::PencilArray,
+                                         Slm::PencilArray,
+                                         Tlm::PencilArray,
+                                         prototype::PencilArray;
+                                         real_output::Bool,
+    use_rfft::Bool)
+    comm = communicator(Qlm)
+    _validate_cfg_replicated(cfg, comm)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    for (value, peer) in ((Qlm, prototype), (Slm, Qlm), (Tlm, Qlm))
+        _validate_scalar_pencil!(
+            cfg, value, expected, :synthesis_qst;
+            comm, peer, require_full_first_dim=true,
+            required_decomposition=(2,), use_rfft, real_output,
+            require_complex_input=true,
+        )
+    end
+    _validate_identical_pencil_layout!(Qlm, Slm, :synthesis_qst; comm)
+    _validate_identical_pencil_layout!(Qlm, Tlm, :synthesis_qst; comm)
+    _validate_scalar_pencil!(
+        cfg, prototype, (cfg.nlat, cfg.nlon), :synthesis_qst_prototype;
+        comm, peer=Qlm, use_rfft, real_output,
+    )
+    coefficient_rt = typeof(real(zero(eltype(Qlm))))
+    prototype_rt = typeof(real(zero(eltype(prototype))))
+    flags = eltype(Qlm) === eltype(Slm) === eltype(Tlm) ?
+        UInt32(0) : UInt32(0x0004)
+    coefficient_rt === prototype_rt || (flags |= 0x0004)
+    _collective_validation_error(comm, flags, :synthesis_qst)
+    return comm
+end
+
+function _validate_qst_analysis_plan!(
+    plan::DistQstPlan, Qout::AbstractMatrix,
+    Sout::AbstractMatrix, Tout::AbstractMatrix,
+    Vr::PencilArray, Vt::PencilArray, Vp::PencilArray,
+)
+    _validate_qst_spatial_inputs!(
+        plan.cfg, Vr, Vt, Vp; use_rfft=plan.use_rfft,
+    )
+    _validate_identical_pencil_layout!(
+        plan.prototype_θφ, Vr, :dist_analysis_qst_plan_input;
+        comm=communicator(plan.prototype_θφ),
+    )
+    _validate_dense_plan_output!(
+        plan.scalar_plan, Qout, :dist_analysis_qst_plan,
+    )
+    _validate_sphtor_analysis_plan!(
+        plan.sphtor_plan, Sout, Tout, Vt, Vp,
+        plan.cfg.use_plm_tables,
+    )
+    return nothing
+end
+
+function _validate_qst_synthesis_plan!(
+    plan::DistQstPlan, Vr::PencilArray,
+    Vt::PencilArray, Vp::PencilArray,
+    Q::AbstractMatrix, S::AbstractMatrix, Tlm::AbstractMatrix,
+    real_output::Bool,
+)
+    comm = communicator(plan.prototype_θφ)
+    _validate_sphtor_synthesis_plan!(
+        plan.sphtor_plan, Vt, Vp, S, Tlm, real_output,
+    )
+    _validate_identical_pencil_layout!(
+        plan.prototype_θφ, Vr, :dist_synthesis_qst_plan_output; comm,
+    )
+    _validate_dense_synthesis!(
+        plan.cfg, Q, plan.prototype_θφ;
+        real_output, use_rfft=plan.use_rfft,
+    )
+    CT = eltype(plan.scalar_plan.Alm_work)
+    RT = typeof(real(zero(CT)))
+    expected_output = real_output ? RT : CT
+    flags = eltype(Vr) === expected_output ? UInt32(0) : UInt32(0x0004)
+    _collective_validation_error(comm, flags, :dist_synthesis_qst_plan)
+    return nothing
+end
+
+function SHTnsKit.dist_analysis_qst(cfg::SHTnsKit.SHTConfig,
+                                    Vrθφ::PencilArray,
+                                    Vtθφ::PencilArray,
+                                    Vpθφ::PencilArray;
+                                    use_rfft::Bool=false)
+    _validate_qst_spatial_inputs!(
+        cfg, Vrθφ, Vtθφ, Vpθφ; use_rfft,
+    )
+    Qlm = SHTnsKit.dist_analysis(cfg, Vrθφ; use_rfft)
+    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(
+        cfg, Vtθφ, Vpθφ; use_rfft,
+    )
     return Qlm, Slm, Tlm
 end
 
 function SHTnsKit.dist_analysis_qst!(plan::DistQstPlan, Qlm_out::AbstractMatrix, Slm_out::AbstractMatrix, Tlm_out::AbstractMatrix,
                                       Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray)
+    _validate_qst_analysis_plan!(
+        plan, Qlm_out, Slm_out, Tlm_out, Vrθφ, Vtθφ, Vpθφ,
+    )
     # Delegate to the planned scalar + sphtor paths (all scratch in sub-plans).
     SHTnsKit.dist_analysis!(plan.scalar_plan, Qlm_out, Vrθφ)
     SHTnsKit.dist_analysis_sphtor!(plan.sphtor_plan, Slm_out, Tlm_out, Vtθφ, Vpθφ)
     return Qlm_out, Slm_out, Tlm_out
 end
 
+function SHTnsKit.analysis_qst!(plan::DistQstPlan,
+                                Qlm_out::AbstractMatrix,
+                                Slm_out::AbstractMatrix,
+                                Tlm_out::AbstractMatrix,
+                                Vrθφ::PencilArray,
+                                Vtθφ::PencilArray,
+                                Vpθφ::PencilArray)
+    return SHTnsKit.dist_analysis_qst!(
+        plan, Qlm_out, Slm_out, Tlm_out, Vrθφ, Vtθφ, Vpθφ,
+    )
+end
+
 # Synthesis to distributed fields from dense spectra
 function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+    for value in (Qlm, Slm, Tlm)
+        _validate_dense_synthesis!(
+            cfg, value, prototype_θφ; real_output, use_rfft,
+        )
+    end
     Vr = SHTnsKit.dist_synthesis(cfg, Qlm; prototype_θφ, real_output, use_rfft)
     Vt, Vp = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft)
     return Vr, Vt, Vp
@@ -2666,6 +2779,44 @@ function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::PencilArray, 
     Tlm_dense = SHTnsKit.spectral_pencil_to_matrix(cfg, Tlm)
     Vr, Vt, Vp = SHTnsKit.dist_synthesis_qst(cfg, Qlm_dense, Slm_dense, Tlm_dense; prototype_θφ, real_output, use_rfft)
     return Vr, Vt, Vp
+end
+
+
+function SHTnsKit.dist_synthesis_qst!(
+    plan::DistQstPlan, Vrθφ_out::PencilArray,
+    Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
+    Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix;
+    real_output::Bool=true,
+)
+    _validate_qst_synthesis_plan!(
+        plan, Vrθφ_out, Vtθφ_out, Vpθφ_out,
+        Qlm, Slm, Tlm, real_output,
+    )
+    Qpencil = SHTnsKit.matrix_to_spectral_pencil(
+        plan.cfg, Qlm; comm=communicator(plan.prototype_θφ),
+    )
+    Vr_local = SHTnsKit.dist_synthesis(
+        plan.cfg, Qpencil; prototype_θφ=plan.prototype_θφ,
+        real_output, use_rfft=plan.use_rfft,
+    )
+    copyto!(parent(Vrθφ_out), Vr_local)
+    SHTnsKit.dist_synthesis_sphtor!(
+        plan.sphtor_plan, Vtθφ_out, Vpθφ_out, Slm, Tlm;
+        real_output,
+    )
+    return Vrθφ_out, Vtθφ_out, Vpθφ_out
+end
+
+function SHTnsKit.synthesis_qst!(
+    plan::DistQstPlan, Vrθφ_out::PencilArray,
+    Vtθφ_out::PencilArray, Vpθφ_out::PencilArray,
+    Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix;
+    real_output::Bool=true,
+)
+    return SHTnsKit.dist_synthesis_qst!(
+        plan, Vrθφ_out, Vtθφ_out, Vpθφ_out, Qlm, Slm, Tlm;
+        real_output,
+    )
 end
 
 ##########

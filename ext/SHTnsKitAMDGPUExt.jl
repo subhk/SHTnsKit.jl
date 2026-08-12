@@ -36,6 +36,8 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  synthesis_batch, synthesis_batch!, synthesis_batch_cplx,
                  analysis_sphtor, analysis_sphtor_cplx,
                  synthesis_sphtor, synthesis_sphtor_cplx,
+                 analysis_qst, analysis_qst_cplx,
+                 synthesis_qst, synthesis_qst_cplx,
                  synthesis_sph, synthesis_sph_cplx,
                  synthesis_tor, synthesis_tor_cplx,
                  divergence_from_spheroidal, divergence_from_spheroidal!,
@@ -603,6 +605,22 @@ synthesis_tor(cfg::SHTConfig, Tlm::AMDGPU.AnyROCArray{T,2}; kwargs...) where {T}
     synthesis_tor(SHTnsKit.GPU(), cfg, Tlm; kwargs...)
 synthesis_tor_cplx(cfg::SHTConfig, Tlm::AMDGPU.AnyROCArray{T,2}) where {T} =
     synthesis_tor_cplx(SHTnsKit.GPU(), cfg, Tlm)
+analysis_qst(cfg::SHTConfig, Vr::AMDGPU.AnyROCArray{T,2},
+             Vt::AMDGPU.AnyROCArray{R,2}, Vp::AMDGPU.AnyROCArray{S,2};
+             kwargs...) where {T,R,S} =
+    analysis_qst(SHTnsKit.GPU(), cfg, Vr, Vt, Vp; kwargs...)
+analysis_qst_cplx(cfg::SHTConfig, Vr::AMDGPU.AnyROCArray{T,2},
+                  Vt::AMDGPU.AnyROCArray{R,2},
+                  Vp::AMDGPU.AnyROCArray{S,2}) where {T<:Complex,R<:Complex,S<:Complex} =
+    analysis_qst_cplx(SHTnsKit.GPU(), cfg, Vr, Vt, Vp)
+synthesis_qst(cfg::SHTConfig, Qlm::AMDGPU.AnyROCArray{T,2},
+              Slm::AMDGPU.AnyROCArray{R,2}, Tlm::AMDGPU.AnyROCArray{S,2};
+              kwargs...) where {T,R,S} =
+    synthesis_qst(SHTnsKit.GPU(), cfg, Qlm, Slm, Tlm; kwargs...)
+synthesis_qst_cplx(cfg::SHTConfig, Qlm::AMDGPU.AnyROCArray{T,2},
+                   Slm::AMDGPU.AnyROCArray{R,2},
+                   Tlm::AMDGPU.AnyROCArray{S,2}) where {T,R,S} =
+    synthesis_qst_cplx(SHTnsKit.GPU(), cfg, Qlm, Slm, Tlm)
 
 function analysis_sphtor!(plan::SHTPlan, Sout::AMDGPU.AnyROCArray,
                            Tout::AMDGPU.AnyROCArray,

@@ -367,16 +367,68 @@ SHTnsKit.toroidal_from_vorticity!(cfg::SHTnsKit.SHTConfig,
         inverse=true, operation=:toroidal_from_vorticity!,
     )
 
-function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray;
-                                return_pencil::Bool=false)
-    Qlm, Slm, Tlm = SHTnsKit.dist_analysis_qst(cfg, Vrθφ, Vtθφ, Vpθφ)
-
+function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig,
+                               Vrθφ::PencilArray,
+                               Vtθφ::PencilArray,
+                               Vpθφ::PencilArray;
+                               use_rfft::Bool=false,
+                               return_pencil::Bool=true)
+    comm = communicator(Vrθφ)
+    return_pencil = _validate_collective_bool_option!(
+        comm, return_pencil, :analysis_qst, UInt32(0x1000),
+    )
     if return_pencil
-        comm = communicator(Vrθφ)
-        return SHTnsKit.matrix_to_spectral_pencil(cfg, Qlm; comm),
-               SHTnsKit.matrix_to_spectral_pencil(cfg, Slm; comm),
-               SHTnsKit.matrix_to_spectral_pencil(cfg, Tlm; comm)
-    else
-        return Qlm, Slm, Tlm
+        _validate_qst_spatial_inputs!(
+            cfg, Vrθφ, Vtθφ, Vpθφ; use_rfft,
+        )
+        return dist_analysis_pencil(cfg, Vrθφ; use_rfft),
+               dist_analysis_sphtor_pencil(cfg, Vtθφ, Vpθφ; use_rfft)...
     end
+    return SHTnsKit.dist_analysis_qst(
+        cfg, Vrθφ, Vtθφ, Vpθφ; use_rfft,
+    )
+end
+
+function SHTnsKit.analysis_qst_cplx(cfg::SHTnsKit.SHTConfig,
+                                    Vrθφ::PencilArray,
+                                    Vtθφ::PencilArray,
+                                    Vpθφ::PencilArray;
+                                    return_pencil::Bool=true)
+    return SHTnsKit.analysis_qst(
+        cfg, Vrθφ, Vtθφ, Vpθφ; return_pencil,
+    )
+end
+
+function SHTnsKit.synthesis_qst(cfg::SHTnsKit.SHTConfig,
+                                Qlm::PencilArray,
+                                Slm::PencilArray,
+                                Tlm::PencilArray;
+                                prototype_θφ::PencilArray,
+                                real_output::Bool=true,
+                                use_rfft::Bool=false)
+    _validate_qst_synthesis_inputs!(
+        cfg, Qlm, Slm, Tlm, prototype_θφ; real_output, use_rfft,
+    )
+    Vr_local = SHTnsKit.dist_synthesis(
+        cfg, Qlm; prototype_θφ, real_output, use_rfft,
+    )
+    Vt_local, Vp_local = dist_synthesis_sphtor_pencil(
+        cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft,
+    )
+    outputs = map((Vr_local, Vt_local, Vp_local)) do local_value
+        result = PencilArray{eltype(local_value)}(undef, pencil(prototype_θφ))
+        copyto!(parent(result), local_value)
+        result
+    end
+    return outputs
+end
+
+function SHTnsKit.synthesis_qst_cplx(cfg::SHTnsKit.SHTConfig,
+                                     Qlm::PencilArray,
+                                     Slm::PencilArray,
+                                     Tlm::PencilArray;
+                                     prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_qst(
+        cfg, Qlm, Slm, Tlm; prototype_θφ, real_output=false,
+    )
 end

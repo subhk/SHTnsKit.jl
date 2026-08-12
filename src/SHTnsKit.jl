@@ -220,6 +220,7 @@ export synthesis_grad, synthesis_grad_l, synthesis_grad_ml
 export divergence_from_spheroidal, divergence_from_spheroidal!, spheroidal_from_divergence, spheroidal_from_divergence!
 export vorticity_from_toroidal, vorticity_from_toroidal!, toroidal_from_vorticity, toroidal_from_vorticity!
 export analysis_qst, synthesis_qst, analysis_qst_cplx, synthesis_qst_cplx  # Q,S,T decomposition
+export analysis_qst!, synthesis_qst!                         # Planned Q,S,T transforms
 
 # ===== LATITUDE-BAND AND M-MODE SPECIFIC TRANSFORMS =====
 # `_l` variants truncate by degree; `_ml` variants operate on one Fourier mode.
@@ -299,7 +300,8 @@ export DistPlan, dist_synthesis!                         # Distributed plans
 export DistAnalysisPlan, dist_analysis!                  
 export DistSphtorPlan, dist_analysis_sphtor, dist_synthesis_sphtor,
        dist_analysis_sphtor!, dist_synthesis_sphtor!   # Distributed vector transforms
-export DistQstPlan, dist_analysis_qst!, dist_synthesis_qst!            # Distributed Q,S,T transforms
+export DistQstPlan, dist_analysis_qst, dist_synthesis_qst,
+       dist_analysis_qst!, dist_synthesis_qst!            # Distributed Q,S,T transforms
 export dist_SH_to_lat, dist_SH_to_point, dist_SHqst_to_point           # Distributed evaluation
 export dist_analysis_packed, dist_synthesis_packed                   # Distributed packed transforms
 export dist_analysis_packed_cplx, dist_synthesis_packed_cplx                      # Distributed complex transforms
@@ -315,6 +317,9 @@ export matrix_to_spectral_pencil, spectral_pencil_to_matrix                 # Di
 # ===== EXTENSION FALLBACK FUNCTIONS =====
 # These provide informative error messages when extension packages are not loaded
 
+function analysis_qst! end
+function synthesis_qst! end
+
 @inline _parallel_ext_module() = Base.get_extension(@__MODULE__, :SHTnsKitParallelExt)
 
 """Construct the parallel extension's concrete distributed vector plan."""
@@ -324,6 +329,15 @@ function DistSphtorPlan(args...; kwargs...)
         "Parallel extension not loaded. Load MPI, PencilArrays, and PencilFFTs first",
     )
     return getproperty(ext, :DistSphtorPlan)(args...; kwargs...)
+end
+
+"""Construct the parallel extension's concrete distributed QST plan."""
+function DistQstPlan(args...; kwargs...)
+    ext = _parallel_ext_module()
+    ext === nothing && error(
+        "Parallel extension not loaded. Load MPI, PencilArrays, and PencilFFTs first",
+    )
+    return getproperty(ext, :DistQstPlan)(args...; kwargs...)
 end
 
 function fft_plan_cache_enabled()

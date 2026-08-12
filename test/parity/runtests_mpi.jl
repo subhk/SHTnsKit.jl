@@ -9,12 +9,17 @@ MPI.Init()
 include("scalar_full.jl")
 include("scalar_variants.jl")
 include("sphtor_full.jl")
+include("qst_full.jl")
 
 struct MPIScalarAdapter <: ScalarParityAdapter
     comm
 end
 
 struct MPIVectorAdapter <: VectorParityAdapter
+    comm
+end
+
+struct MPIQSTAdapter <: QSTParityAdapter
     comm
 end
 
@@ -54,6 +59,24 @@ vector_tor(::MPIVectorAdapter, cfg, T, prototype; real_output=true) =
     synthesis_tor(cfg, T; prototype_θφ=prototype, real_output)
 vector_tor_cplx(::MPIVectorAdapter, cfg, T, prototype) =
     synthesis_tor_cplx(cfg, T; prototype_θφ=prototype)
+
+qst_place(adapter::MPIQSTAdapter, cfg, value, kind) =
+    vector_place(MPIVectorAdapter(adapter.comm), cfg, value, kind)
+qst_collect(::MPIQSTAdapter, value::PencilArray, cfg) =
+    size_global(value) == (cfg.lmax + 1, cfg.mmax + 1) ?
+        spectral_pencil_to_matrix(cfg, value) : _collect_spatial(value, cfg)
+qst_resident(::MPIQSTAdapter, value) = @test value isa PencilArray
+qst_analysis(::MPIQSTAdapter, cfg, Vr, Vt, Vp; use_rfft=false) =
+    analysis_qst(cfg, Vr, Vt, Vp; use_rfft)
+qst_analysis_cplx(::MPIQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst_cplx(cfg, Vr, Vt, Vp)
+qst_synthesis(::MPIQSTAdapter, cfg, Q, S, Tlm, prototype;
+              real_output=true, use_rfft=false) =
+    synthesis_qst(
+        cfg, Q, S, Tlm; prototype_θφ=prototype, real_output, use_rfft,
+    )
+qst_synthesis_cplx(::MPIQSTAdapter, cfg, Q, S, Tlm, prototype) =
+    synthesis_qst_cplx(cfg, Q, S, Tlm; prototype_θφ=prototype)
 
 function place(adapter::MPIScalarAdapter, cfg::SHTConfig, value::AbstractMatrix, kind::Symbol)
     if kind === :spectral
@@ -318,7 +341,8 @@ end
 
 adapter = MPIScalarAdapter(MPI.COMM_WORLD)
 vector_adapter = MPIVectorAdapter(MPI.COMM_WORLD)
-if isempty(ARGS) || !("sphtor_full" in ARGS)
+qst_adapter = MPIQSTAdapter(MPI.COMM_WORLD)
+if isempty(ARGS) || (!("sphtor_full" in ARGS) && !("qst_full" in ARGS))
 # Exercise every mathematical axis without taking their full Cartesian product:
 # each Pencil construction owns an MPI Cartesian communicator, and a giant
 # product needlessly exhausts MPI implementations with a 2048-context limit.
@@ -1511,6 +1535,122 @@ if isempty(ARGS) || "sphtor_full" in ARGS
             )
         end
         MPI.Barrier(vector_adapter.comm)
+    end
+end
+
+
+if isempty(ARGS) || "qst_full" in ARGS
+    run_qst_full_parity(
+        qst_adapter;
+        grid_kinds=_VECTOR_GRID_KINDS,
+        precisions=(Float32, Float64),
+        mres_values=(1, 2),
+        norms=(:orthonormal,), real_norm_values=(false,),
+        cs_phase_values=(true,), robert_values=(false, true),
+        pole_orders=(false,),
+    )
+    run_qst_full_parity(
+        qst_adapter;
+        grid_kinds=(:gauss,), precisions=(Float64,), mres_values=(1,),
+        norms=(:orthonormal, :fourpi, :schmidt),
+        real_norm_values=(false, true), cs_phase_values=(false, true),
+        robert_values=(false,), pole_orders=(false, true),
+    )
+
+    @testset "Pencil-native QST path and compatibility" begin
+        cfg = _vector_config(
+            :gauss, 3, 8; norm=:schmidt, real_norm=true, cs_phase=false,
+        )
+        Qcan, Scan, Tcan = _qst_modes(cfg, Float32)
+        Q = _qst_external(cfg, Qcan)
+        S = _qst_external(cfg, Scan)
+        Tlm = _qst_external(cfg, Tcan)
+        Vr, Vt, Vp = _qst_references(
+            cfg, Q, Scan, Tcan; real_output=true,
+        )
+        Vrd = qst_place(qst_adapter, cfg, Vr, :spatial)
+        Vtd = qst_place(qst_adapter, cfg, Vt, :spatial)
+        Vpd = qst_place(qst_adapter, cfg, Vp, :spatial)
+        Qd = qst_place(qst_adapter, cfg, Q, :spectral)
+        Sd = qst_place(qst_adapter, cfg, S, :spectral)
+        Td = qst_place(qst_adapter, cfg, Tlm, :spectral)
+        extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+
+        extension._reset_pencil_scalar_stats!()
+        analyzed = analysis_qst(cfg, Vrd, Vtd, Vpd)
+        @test all(value -> value isa PencilArray, analyzed)
+        @test all(value -> eltype(value) === ComplexF32, analyzed)
+        @test extension._pencil_scalar_stats().full_matrix_helper_calls == 0
+        extension._reset_pencil_scalar_stats!()
+        synthesized = synthesis_qst(
+            cfg, Qd, Sd, Td; prototype_θφ=Vrd,
+        )
+        @test all(value -> value isa PencilArray, synthesized)
+        @test all(value -> eltype(value) === Float32, synthesized)
+        @test extension._pencil_scalar_stats().full_matrix_helper_calls == 0
+
+        dense = dist_analysis_qst(cfg, Vrd, Vtd, Vpd)
+        @test dense[1] isa Matrix{ComplexF32}
+        @test dense[1] ≈ Q atol=4f-4 rtol=4f-4
+        @test dense[2] ≈ S atol=4f-4 rtol=4f-4
+        @test dense[3] ≈ Tlm atol=4f-4 rtol=4f-4
+        local_fields = dist_synthesis_qst(
+            cfg, dense...; prototype_θφ=Vrd,
+        )
+        @test all(value -> value isa AbstractMatrix, local_fields)
+
+        @test isdefined(SHTnsKit, :DistQstPlan)
+        plan = SHTnsKit.DistQstPlan(
+            cfg, Vrd; with_spatial_scratch=true,
+        )
+        @test eltype(plan.scalar_plan.Alm_work) === ComplexF32
+        @test eltype(plan.sphtor_plan.Slm_work) === ComplexF32
+        Qout = zeros(ComplexF32, size(Q)); Sout = similar(Qout); Tout = similar(Qout)
+        analysis_qst!(plan, Qout, Sout, Tout, Vrd, Vtd, Vpd)
+        @test Qout ≈ Q atol=4f-4 rtol=4f-4
+        @test Sout ≈ S atol=4f-4 rtol=4f-4
+        @test Tout ≈ Tlm atol=4f-4 rtol=4f-4
+        Qcompat = similar(Qout); Scompat = similar(Sout); Tcompat = similar(Tout)
+        dist_analysis_qst!(
+            plan, Qcompat, Scompat, Tcompat, Vrd, Vtd, Vpd,
+        )
+        @test (Qcompat, Scompat, Tcompat) == (Qout, Sout, Tout)
+
+        Vrout = PencilArray{Float32}(undef, pencil(Vrd))
+        Vtout = PencilArray{Float32}(undef, pencil(Vtd))
+        Vpout = PencilArray{Float32}(undef, pencil(Vpd))
+        synthesis_qst!(
+            plan, Vrout, Vtout, Vpout, Qout, Sout, Tout;
+            real_output=true,
+        )
+        @test _collect_spatial(Vrout, cfg) ≈ Vr atol=4f-4 rtol=4f-4
+        @test _collect_spatial(Vtout, cfg) ≈ Vt atol=4f-4 rtol=4f-4
+        @test _collect_spatial(Vpout, cfg) ≈ Vp atol=4f-4 rtol=4f-4
+        Vrcompat = similar(Vrout); Vtcompat = similar(Vtout); Vpcompat = similar(Vpout)
+        dist_synthesis_qst!(
+            plan, Vrcompat, Vtcompat, Vpcompat, Qout, Sout, Tout;
+            real_output=true,
+        )
+        @test parent(Vrcompat) == parent(Vrout)
+        @test parent(Vtcompat) == parent(Vtout)
+        @test parent(Vpcompat) == parent(Vpout)
+
+        rank = MPI.Comm_rank(qst_adapter.comm)
+        bad_vp = rank == 0 ?
+            PencilArray{Float64}(undef, pencil(Vpd)) :
+            PencilArray{Float32}(undef, pencil(Vpd))
+        fill!(parent(bad_vp), 0)
+        @test _all_ranks_catch(qst_adapter.comm) do
+            analysis_qst(cfg, Vrd, Vtd, bad_vp)
+        end
+        rank_real_output = iszero(rank % 2)
+        @test _all_ranks_catch(qst_adapter.comm) do
+            synthesis_qst(
+                cfg, Qd, Sd, Td; prototype_θφ=Vrd,
+                real_output=rank_real_output,
+            )
+        end
+        MPI.Barrier(qst_adapter.comm)
     end
 end
 

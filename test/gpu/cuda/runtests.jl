@@ -8,6 +8,7 @@ using KernelAbstractions
 include("../../parity/scalar_full.jl")
 include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
+include("../../parity/qst_full.jl")
 
 struct CUDAScalarAdapter <: ScalarParityAdapter end
 function place(::CUDAScalarAdapter, ::SHTConfig, value, ::Symbol)
@@ -50,6 +51,20 @@ vector_tor(::CUDAVectorAdapter, cfg, T, _prototype; real_output=true) =
     synthesis_tor(GPU(), cfg, T; real_output)
 vector_tor_cplx(::CUDAVectorAdapter, cfg, T, _prototype) =
     synthesis_tor_cplx(GPU(), cfg, T)
+
+struct CUDAQSTAdapter <: QSTParityAdapter end
+qst_place(::CUDAQSTAdapter, ::SHTConfig, value, ::Symbol) = CuArray(value)
+qst_collect(::CUDAQSTAdapter, value, ::SHTConfig) = Array(value)
+qst_resident(::CUDAQSTAdapter, value) = @test value isa CUDA.AnyCuArray
+qst_analysis(::CUDAQSTAdapter, cfg, Vr, Vt, Vp; use_rfft=false) =
+    analysis_qst(GPU(), cfg, Vr, Vt, Vp; use_rfft)
+qst_analysis_cplx(::CUDAQSTAdapter, cfg, Vr, Vt, Vp) =
+    analysis_qst_cplx(GPU(), cfg, Vr, Vt, Vp)
+qst_synthesis(::CUDAQSTAdapter, cfg, Q, S, Tlm, prototype;
+              real_output=true, use_rfft=false) =
+    synthesis_qst(GPU(), cfg, Q, S, Tlm; prototype, real_output, use_rfft)
+qst_synthesis_cplx(::CUDAQSTAdapter, cfg, Q, S, Tlm, prototype) =
+    synthesis_qst_cplx(GPU(), cfg, Q, S, Tlm; prototype)
 function assert_warm_device_noalloc(::CUDAScalarAdapter, call)
     call()
     CUDA.synchronize()
@@ -108,6 +123,14 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     @test which(
         synthesis_sphtor,
         Tuple{SHTConfig,CuArray{ComplexF32,2},CuArray{ComplexF32,2}},
+    ).module === extension
+    @test which(
+        analysis_qst,
+        Tuple{SHTConfig,CuArray{Float32,2},CuArray{Float32,2},CuArray{Float32,2}},
+    ).module === extension
+    @test which(
+        synthesis_qst,
+        Tuple{SHTConfig,CuArray{ComplexF32,2},CuArray{ComplexF32,2},CuArray{ComplexF32,2}},
     ).module === extension
     @test which(
         analysis_sphtor,
@@ -269,6 +292,20 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     host_view = @view zeros(Float32, 3, 4)[:, 1:2]
     @test on_device(host_view) isa SHTnsKit.CPU
     @test !SHTnsKit._gpu_adapter_matches(extension.CUDA_ADAPTER, host_view)
+
+    cfg_qst_routing = create_gauss_config(2, 3; nlon=6)
+    qst_field = SafeFallbackArray(zeros(ComplexF32, cfg_qst_routing.nlat,
+                                        cfg_qst_routing.nlon))
+    qst_coefficients = SafeFallbackArray(zeros(ComplexF32,
+                                               cfg_qst_routing.lmax + 1,
+                                               cfg_qst_routing.mmax + 1))
+    @test_throws SHTnsKit.BackendUnavailableError analysis_qst_cplx(
+        cfg_qst_routing, qst_field, qst_field, qst_field,
+    )
+    @test_throws SHTnsKit.BackendUnavailableError synthesis_qst_cplx(
+        cfg_qst_routing, qst_coefficients, qst_coefficients,
+        qst_coefficients,
+    )
 
     if !CUDA.functional()
         @test_skip CUDA.functional()
@@ -542,5 +579,6 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
             pole_orders=(false, true),
         )
         run_sphtor_full_parity(CUDAVectorAdapter())
+        run_qst_full_parity(CUDAQSTAdapter())
     end
 end

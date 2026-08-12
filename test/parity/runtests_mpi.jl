@@ -1831,18 +1831,85 @@ if isempty(ARGS) || "vector_variants" in ARGS
         extension._reset_pencil_scalar_stats!()
         got_m = synthesis_sphtor_ml(cfg, stored_im, Smd, Tmd, ltr)
         mode_stats = extension._pencil_scalar_stats()
-        @test mode_stats.vector_mode_max_message_elements == length(Sm)
-        @test mode_stats.vector_mode_sent_elements == 2length(Sm)
+        max_owned_theta = MPI.Allreduce(
+            size(parent(got_m[1]), 1), max, MPI.COMM_WORLD,
+        )
+        @test mode_stats.vector_mode_synthesis_max_message_elements ==
+              max_owned_theta
+        @test mode_stats.vector_mode_synthesis_sent_elements == 2cfg.nlat
+        @test mode_stats.vector_mode_max_message_elements == max_owned_theta
+        @test mode_stats.vector_mode_sent_elements == 2cfg.nlat
+        extension._reset_pencil_scalar_stats!()
         got_qm = synthesis_qst_ml(cfg, stored_im, Qmd, Smd, Tmd, ltr)
+        qst_synthesis_stats = extension._pencil_scalar_stats()
+        @test qst_synthesis_stats.vector_mode_synthesis_max_message_elements ==
+              max_owned_theta
+        @test qst_synthesis_stats.vector_mode_synthesis_sent_elements == 2cfg.nlat
+        @test qst_synthesis_stats.scalar_mode_synthesis_max_message_elements ==
+              max_owned_theta
+        @test qst_synthesis_stats.scalar_mode_synthesis_sent_elements == cfg.nlat
         @test _collect_distributed_vector(got_m[1]) ≈ expected_m[1] atol=5f-4 rtol=5f-4
         @test _collect_distributed_vector(got_m[2]) ≈ expected_m[2] atol=5f-4 rtol=5f-4
         @test _collect_distributed_vector(got_qm[1]) ≈ expected_qm[1] atol=5f-4 rtol=5f-4
+        extension._reset_pencil_scalar_stats!()
         back_m = analysis_sphtor_ml(cfg, stored_im, got_m..., ltr)
+        mode_analysis_stats = extension._pencil_scalar_stats()
+        max_owned_coefficients = MPI.Allreduce(
+            size(parent(Smd), 1), max, MPI.COMM_WORLD,
+        )
+        @test mode_analysis_stats.vector_mode_analysis_max_message_elements ==
+              max_owned_coefficients
+        @test mode_analysis_stats.vector_mode_analysis_sent_elements == 2length(Sm)
+        @test mode_analysis_stats.vector_mode_max_message_elements ==
+              max_owned_coefficients
+        @test mode_analysis_stats.vector_mode_sent_elements == 2length(Sm)
+        if MPI.Comm_size(MPI.COMM_WORLD) >= 4
+            min_owned_coefficients = MPI.Allreduce(
+                size(parent(Smd), 1), min, MPI.COMM_WORLD,
+            )
+            @test min_owned_coefficients == 0
+        end
+        extension._reset_pencil_scalar_stats!()
         back_qm = analysis_qst_ml(cfg, stored_im, got_qm..., ltr)
+        qst_analysis_stats = extension._pencil_scalar_stats()
+        @test qst_analysis_stats.vector_mode_analysis_max_message_elements ==
+              max_owned_coefficients
+        @test qst_analysis_stats.vector_mode_analysis_sent_elements == 2length(Sm)
+        @test qst_analysis_stats.scalar_mode_analysis_max_message_elements ==
+              max_owned_coefficients
+        @test qst_analysis_stats.scalar_mode_analysis_sent_elements == length(Qm)
         @test _collect_distributed_vector(back_m[1]) ≈ Sm atol=5f-4 rtol=5f-4
         @test _collect_distributed_vector(back_m[2]) ≈ Tm atol=5f-4 rtol=5f-4
         @test _collect_distributed_vector(back_qm[1]) ≈ Qm atol=5f-4 rtol=5f-4
-        @test synthesis_grad_ml(cfg, stored_im, Smd, ltr)[1] isa PencilArray
+        expected_grad = synthesis_grad_ml(CPU(), cfg, stored_im, Sm, ltr)
+        extension._reset_pencil_scalar_stats!()
+        got_grad = synthesis_grad_ml(cfg, stored_im, Smd, ltr)
+        gradient_stats = extension._pencil_scalar_stats()
+        @test gradient_stats.vector_mode_synthesis_max_message_elements ==
+              max_owned_theta
+        @test gradient_stats.vector_mode_synthesis_sent_elements == 2cfg.nlat
+        @test _collect_distributed_vector(got_grad[1]) ≈ expected_grad[1] atol=5f-4 rtol=5f-4
+        @test _collect_distributed_vector(got_grad[2]) ≈ expected_grad[2] atol=5f-4 rtol=5f-4
+
+        cfg64 = _variant_cfg(Float64; mres=2, norm=:schmidt,
+                             real_norm=true, cs_phase=false)
+        Qm64 = ComplexF64.(Qm); Sm64 = ComplexF64.(Sm); Tm64 = ComplexF64.(Tm)
+        expected_qm64 = synthesis_qst_ml(
+            CPU(), cfg64, stored_im, Qm64, Sm64, Tm64, ltr,
+        )
+        Qmd64 = _place_distributed_vector(Qm64, MPI.COMM_WORLD)
+        Smd64 = _place_distributed_vector(Sm64, MPI.COMM_WORLD)
+        Tmd64 = _place_distributed_vector(Tm64, MPI.COMM_WORLD)
+        got_qm64 = synthesis_qst_ml(
+            cfg64, stored_im, Qmd64, Smd64, Tmd64, ltr,
+        )
+        for (got, expected) in zip(got_qm64, expected_qm64)
+            @test _collect_distributed_vector(got) ≈ expected atol=2e-11 rtol=2e-11
+        end
+        back_qm64 = analysis_qst_ml(cfg64, stored_im, got_qm64..., ltr)
+        for (got, expected) in zip(back_qm64, (Qm64, Sm64, Tm64))
+            @test _collect_distributed_vector(got) ≈ expected atol=2e-11 rtol=2e-11
+        end
 
         for nfields in (1, 2, 5)
             Qbatch = repeat(reshape(Q, size(Q)..., 1), 1, 1, nfields)
@@ -1918,6 +1985,24 @@ if isempty(ARGS) || "vector_variants" in ARGS
         end
         @test parent(Smd) == mode_sentinel
         @test extension._pencil_scalar_stats().vector_mode_sent_elements == 0
+        MPI.Barrier(MPI.COMM_WORLD)
+
+        q_mode_sentinel = copy(parent(Qmd))
+        s_mode_sentinel = copy(parent(Smd))
+        t_mode_sentinel = copy(parent(Tmd))
+        extension._reset_pencil_scalar_stats!()
+        @test _all_ranks_catch(
+            MPI.COMM_WORLD; message_contains="degree truncation",
+        ) do
+            synthesis_qst_ml(cfg, rank_im, Qmd, Smd, Tmd, ltr)
+        end
+        @test parent(Qmd) == q_mode_sentinel
+        @test parent(Smd) == s_mode_sentinel
+        @test parent(Tmd) == t_mode_sentinel
+        rejected_mode_stats = extension._pencil_scalar_stats()
+        @test rejected_mode_stats.scalar_mode_synthesis_sent_elements == 0
+        @test rejected_mode_stats.vector_mode_synthesis_sent_elements == 0
+        @test rejected_mode_stats.vector_mode_sent_elements == 0
         MPI.Barrier(MPI.COMM_WORLD)
 
         empty_spatial = _place_distributed_batch(

@@ -568,13 +568,9 @@ function SHTnsKit.analysis_qst_ml(cfg::SHTnsKit.SHTConfig,
         comm, cfg, stored_im, ltr, :analysis_qst_ml,
     )
     _validate_mode_pencils!(comm, (Vr, Vt, Vp), cfg.nlat, :analysis_qst_ml)
-    Q, S, Tlm = SHTnsKit.analysis_qst_ml(
-        SHTnsKit.CPU(), cfg, stored,
-        _collect_mode_vector(Vr, cfg.nlat, comm),
-        _collect_mode_vector(Vt, cfg.nlat, comm),
-        _collect_mode_vector(Vp, cfg.nlat, comm), lcap,
-    )
-    return _mode_pencil(Q, comm), _mode_pencil(S, comm), _mode_pencil(Tlm, comm)
+    Q = SHTnsKit.analysis_packed_ml(cfg, stored, Vr, lcap)
+    S, Tlm = _analysis_sphtor_mode_pencil(cfg, stored, Vt, Vp, lcap)
+    return Q, S, Tlm
 end
 
 function SHTnsKit.synthesis_qst_ml(cfg::SHTnsKit.SHTConfig,
@@ -590,13 +586,9 @@ function SHTnsKit.synthesis_qst_ml(cfg::SHTnsKit.SHTConfig,
     _validate_mode_pencils!(
         comm, (Q, S, Tlm), active_length, :synthesis_qst_ml,
     )
-    Vr, Vt, Vp = SHTnsKit.synthesis_qst_ml(
-        SHTnsKit.CPU(), cfg, stored,
-        _collect_mode_vector(Q, active_length, comm),
-        _collect_mode_vector(S, active_length, comm),
-        _collect_mode_vector(Tlm, active_length, comm), lcap,
-    )
-    return _mode_pencil(Vr, comm), _mode_pencil(Vt, comm), _mode_pencil(Vp, comm)
+    Vr = SHTnsKit.synthesis_packed_ml(cfg, stored, Q, lcap)
+    Vt, Vp = _synthesis_sphtor_mode_pencil(cfg, stored, S, Tlm, lcap)
+    return Vr, Vt, Vp
 end
 
 function _validate_pencil_batch!(cfg::SHTnsKit.SHTConfig, values::Tuple,

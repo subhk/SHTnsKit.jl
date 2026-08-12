@@ -87,6 +87,14 @@ const _PENCIL_SCALAR_STATS = Dict{Symbol,Int}(
     :vector_synthesis_sent_elements => 0,
     :vector_mode_max_message_elements => 0,
     :vector_mode_sent_elements => 0,
+    :vector_mode_analysis_max_message_elements => 0,
+    :vector_mode_analysis_sent_elements => 0,
+    :vector_mode_synthesis_max_message_elements => 0,
+    :vector_mode_synthesis_sent_elements => 0,
+    :scalar_mode_analysis_max_message_elements => 0,
+    :scalar_mode_analysis_sent_elements => 0,
+    :scalar_mode_synthesis_max_message_elements => 0,
+    :scalar_mode_synthesis_sent_elements => 0,
 )
 
 function _reset_pencil_scalar_stats!()
@@ -132,6 +140,22 @@ function _pencil_scalar_stats()
                 _PENCIL_SCALAR_STATS[:vector_mode_max_message_elements],
             vector_mode_sent_elements=
                 _PENCIL_SCALAR_STATS[:vector_mode_sent_elements],
+            vector_mode_analysis_max_message_elements=
+                _PENCIL_SCALAR_STATS[:vector_mode_analysis_max_message_elements],
+            vector_mode_analysis_sent_elements=
+                _PENCIL_SCALAR_STATS[:vector_mode_analysis_sent_elements],
+            vector_mode_synthesis_max_message_elements=
+                _PENCIL_SCALAR_STATS[:vector_mode_synthesis_max_message_elements],
+            vector_mode_synthesis_sent_elements=
+                _PENCIL_SCALAR_STATS[:vector_mode_synthesis_sent_elements],
+            scalar_mode_analysis_max_message_elements=
+                _PENCIL_SCALAR_STATS[:scalar_mode_analysis_max_message_elements],
+            scalar_mode_analysis_sent_elements=
+                _PENCIL_SCALAR_STATS[:scalar_mode_analysis_sent_elements],
+            scalar_mode_synthesis_max_message_elements=
+                _PENCIL_SCALAR_STATS[:scalar_mode_synthesis_max_message_elements],
+            scalar_mode_synthesis_sent_elements=
+                _PENCIL_SCALAR_STATS[:scalar_mode_synthesis_sent_elements],
         )
     end
 end
@@ -2091,30 +2115,31 @@ function _validate_mode_pencils!(comm, values::Tuple, expected_length::Int,
     return nothing
 end
 
-function _collect_mode_vector(value::PencilArray, expected_length::Int, comm)
-    result = zeros(eltype(value), expected_length)
-    globals = collect(Int, globalindices(value, 1))
-    source = parent(value)
-    @inbounds for (local_i, global_i) in pairs(globals)
-        result[global_i] = source[local_i, 1]
-    end
-    _record_pencil_scalar_stat!(
-        :vector_mode_max_message_elements, length(result); maximum=true,
+function _mode_pencil(::Type{T}, logical_length::Int, comm) where {T}
+    result = PencilArray{T}(
+        undef, Pencil((logical_length, 1), (1,), comm),
     )
-    _record_pencil_scalar_stat!(:vector_mode_sent_elements, length(result))
-    MPI.Allreduce!(result, +, comm)
+    fill!(parent(result), zero(T))
     return result
 end
 
-function _mode_pencil(values::AbstractVector, comm)
-    result = PencilArray{eltype(values)}(
-        undef, Pencil((length(values), 1), (1,), comm),
-    )
-    globals = collect(Int, globalindices(result, 1))
-    @inbounds for (local_i, global_i) in pairs(globals)
-        parent(result)[local_i, 1] = values[global_i]
-    end
-    return result
+function _mode_rank_ranges(value::PencilArray, comm)
+    globals = collect(Int, globalindices(value, 1))
+    first_index = isempty(globals) ? 1 : first(globals)
+    return MPI.Allgather(first_index, comm), MPI.Allgather(length(globals), comm)
+end
+
+function _record_vector_mode_message!(kind::Symbol, count::Int)
+    max_key, sent_key = kind === :analysis ?
+        (:vector_mode_analysis_max_message_elements,
+         :vector_mode_analysis_sent_elements) :
+        (:vector_mode_synthesis_max_message_elements,
+         :vector_mode_synthesis_sent_elements)
+    _record_pencil_scalar_stat!(max_key, count; maximum=true)
+    _record_pencil_scalar_stat!(sent_key, 2count)
+    _record_pencil_scalar_stat!(:vector_mode_max_message_elements, count; maximum=true)
+    _record_pencil_scalar_stat!(:vector_mode_sent_elements, 2count)
+    return nothing
 end
 
 function _analysis_sphtor_mode_pencil(cfg::SHTnsKit.SHTConfig,
@@ -2127,13 +2152,64 @@ function _analysis_sphtor_mode_pencil(cfg::SHTnsKit.SHTConfig,
         comm, cfg, stored_im, ltr, :analysis_sphtor_ml,
     )
     _validate_mode_pencils!(comm, (Vt, Vp), cfg.nlat, :analysis_sphtor_ml)
-    Vt_host = _collect_mode_vector(Vt, cfg.nlat, comm)
-    Vp_host = _collect_mode_vector(Vp, cfg.nlat, comm)
-    S, Tlm = SHTnsKit.analysis_sphtor_ml(
-        SHTnsKit.CPU(), cfg, stored, Vt_host, Vp_host, lcap,
-    )
-    length(S) == lcap - physical_m + 1 || error("fixed-order length invariant")
-    return _mode_pencil(S, comm), _mode_pencil(Tlm, comm)
+    CT = complex(float(real(eltype(Vt))))
+    RT = typeof(real(zero(CT)))
+    active_length = lcap - physical_m + 1
+    S = _mode_pencil(CT, active_length, comm)
+    Tlm = _mode_pencil(CT, active_length, comm)
+    starts, counts = _mode_rank_ranges(S, comm)
+    theta_globals = collect(Int, globalindices(Vt, 1))
+    Vt_local = parent(Vt); Vp_local = parent(Vp)
+    P = Vector{Float64}(undef, lcap + 1)
+    dtheta = similar(P); over_sin = similar(P)
+    scratch = Vector{Float64}(undef, lcap + 2)
+    rank = MPI.Comm_rank(comm)
+    for root in 0:(MPI.Comm_size(comm) - 1)
+        count = counts[root + 1]
+        Ssend = zeros(CT, count); Tsend = similar(Ssend)
+        fill!(Tsend, zero(CT))
+        @inbounds for (local_theta, theta_index) in pairs(theta_globals)
+            SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
+                P, dtheta, over_sin, cfg.x[theta_index], lcap, physical_m,
+                scratch,
+            )
+            Ftheta = CT(Vt_local[local_theta, 1])
+            Fphi = CT(Vp_local[local_theta, 1])
+            sin_theta = sqrt(max(0.0, 1 - cfg.x[theta_index]^2))
+            if cfg.robert_form && sin_theta > 0
+                Ftheta /= RT(sin_theta); Fphi /= RT(sin_theta)
+            end
+            weight = RT(cfg.w[theta_index])
+            for k in eachindex(Ssend)
+                qindex = starts[root + 1] + k - 1
+                l = physical_m + qindex - 1
+                l >= max(1, physical_m) || continue
+                derivative = RT(dtheta[l + 1])
+                term = complex(zero(RT), RT(physical_m * over_sin[l + 1]))
+                coefficient = weight * RT(cfg.cphi) / RT(l * (l + 1))
+                Ssend[k] += coefficient *
+                    (Ftheta * derivative + conj(term) * Fphi)
+                Tsend[k] += coefficient *
+                    (-conj(term) * Ftheta + derivative * Fphi)
+            end
+        end
+        Sreceive = similar(Ssend); Treceive = similar(Tsend)
+        _record_vector_mode_message!(:analysis, count)
+        MPI.Reduce!(Ssend, Sreceive, +, root, comm)
+        MPI.Reduce!(Tsend, Treceive, +, root, comm)
+        if rank == root
+            @inbounds for k in eachindex(Sreceive)
+                qindex = starts[root + 1] + k - 1
+                l = physical_m + qindex - 1
+                scale = RT(SHTnsKit.coefficient_scale_to_canonical(
+                    cfg, l, physical_m,
+                ))
+                parent(S)[k, 1] = Sreceive[k] / scale
+                parent(Tlm)[k, 1] = Treceive[k] / scale
+            end
+        end
+    end
+    return S, Tlm
 end
 
 function _synthesis_sphtor_mode_pencil(cfg::SHTnsKit.SHTConfig,
@@ -2148,12 +2224,59 @@ function _synthesis_sphtor_mode_pencil(cfg::SHTnsKit.SHTConfig,
     active_length = lcap - physical_m + 1
     _validate_mode_pencils!(comm, (S, Tlm), active_length,
                             :synthesis_sphtor_ml)
-    S_host = _collect_mode_vector(S, active_length, comm)
-    T_host = _collect_mode_vector(Tlm, active_length, comm)
-    Vt, Vp = SHTnsKit.synthesis_sphtor_ml(
-        SHTnsKit.CPU(), cfg, stored, S_host, T_host, lcap,
-    )
-    return _mode_pencil(Vt, comm), _mode_pencil(Vp, comm)
+    CT = eltype(S)
+    RT = typeof(real(zero(CT)))
+    Vt = _mode_pencil(CT, cfg.nlat, comm)
+    Vp = _mode_pencil(CT, cfg.nlat, comm)
+    theta_starts, theta_counts = _mode_rank_ranges(Vt, comm)
+    qglobals = collect(Int, globalindices(S, 1))
+    Slocal = parent(S); Tlocal = parent(Tlm)
+    P = Vector{Float64}(undef, lcap + 1)
+    dtheta = similar(P); over_sin = similar(P)
+    scratch = Vector{Float64}(undef, lcap + 2)
+    inverse_scale = RT(SHTnsKit.phi_inv_scale(cfg))
+    rank = MPI.Comm_rank(comm)
+    for root in 0:(MPI.Comm_size(comm) - 1)
+        count = theta_counts[root + 1]
+        Vtsend = zeros(CT, count); Vpsend = similar(Vtsend)
+        fill!(Vpsend, zero(CT))
+        @inbounds for k in eachindex(Vtsend)
+            theta_index = theta_starts[root + 1] + k - 1
+            SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
+                P, dtheta, over_sin, cfg.x[theta_index], lcap, physical_m,
+                scratch,
+            )
+            gtheta = zero(CT); gphi = zero(CT)
+            for (local_q, qindex) in pairs(qglobals)
+                l = physical_m + qindex - 1
+                l >= max(1, physical_m) || continue
+                scale = RT(SHTnsKit.coefficient_scale_to_canonical(
+                    cfg, l, physical_m,
+                ))
+                spheroidal = scale * Slocal[local_q, 1]
+                toroidal = scale * Tlocal[local_q, 1]
+                derivative = RT(dtheta[l + 1])
+                term = complex(zero(RT), RT(physical_m * over_sin[l + 1]))
+                gtheta += derivative * spheroidal - term * toroidal
+                gphi += term * spheroidal + derivative * toroidal
+            end
+            if cfg.robert_form
+                sin_theta = RT(sqrt(max(0.0, 1 - cfg.x[theta_index]^2)))
+                gtheta *= sin_theta; gphi *= sin_theta
+            end
+            Vtsend[k] = inverse_scale * gtheta
+            Vpsend[k] = inverse_scale * gphi
+        end
+        Vtreceive = similar(Vtsend); Vpreceive = similar(Vpsend)
+        _record_vector_mode_message!(:synthesis, count)
+        MPI.Reduce!(Vtsend, Vtreceive, +, root, comm)
+        MPI.Reduce!(Vpsend, Vpreceive, +, root, comm)
+        if rank == root
+            copyto!(@view(parent(Vt)[:, 1]), Vtreceive)
+            copyto!(@view(parent(Vp)[:, 1]), Vpreceive)
+        end
+    end
+    return Vt, Vp
 end
 
 # Distributed vector analysis (spheroidal/toroidal)

@@ -929,6 +929,13 @@ function _analysis_mode_pencil(cfg::SHTnsKit.SHTConfig, im::Int,
         end
         send .*= RT(phi_scale)
         receive = similar(send)
+        _record_pencil_scalar_stat!(
+            :scalar_mode_analysis_max_message_elements, length(send);
+            maximum=true,
+        )
+        _record_pencil_scalar_stat!(
+            :scalar_mode_analysis_sent_elements, length(send),
+        )
         MPI.Reduce!(send, receive, +, root, comm)
         if rank == root
             @inbounds for k in eachindex(receive)
@@ -985,6 +992,13 @@ function _synthesis_mode_pencil(cfg::SHTnsKit.SHTConfig, im::Int,
             send[k] *= inverse_scale
         end
         receive = similar(send)
+        _record_pencil_scalar_stat!(
+            :scalar_mode_synthesis_max_message_elements, length(send);
+            maximum=true,
+        )
+        _record_pencil_scalar_stat!(
+            :scalar_mode_synthesis_sent_elements, length(send),
+        )
         MPI.Reduce!(send, receive, +, root, comm)
         if rank == root
             @inbounds for k in eachindex(receive)

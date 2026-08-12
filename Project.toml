@@ -28,6 +28,8 @@ SHTnsKitForwardDiffExt = ["ForwardDiff"]
 SHTnsKitGPUExt = ["CUDA", "GPUArrays", "GPUArraysCore", "KernelAbstractions"]
 SHTnsKitLoopVecExt = ["LoopVectorization"]
 SHTnsKitParallelExt = ["MPI", "PencilArrays", "PencilFFTs"]
+SHTnsKitParallelCUDAExt = ["MPI", "PencilArrays", "PencilFFTs", "CUDA", "GPUArrays", "GPUArraysCore", "KernelAbstractions"]
+SHTnsKitParallelAMDGPUExt = ["MPI", "PencilArrays", "PencilFFTs", "AMDGPU", "GPUArrays", "GPUArraysCore", "KernelAbstractions"]
 SHTnsKitParallelADExt = ["ChainRulesCore", "MPI", "PencilArrays", "PencilFFTs"]
 SHTnsKitZygoteExt = ["Zygote"]
 

@@ -784,6 +784,118 @@ end
     end
 end
 
+"""MPI-pencil scalar analysis for an owned contiguous band of Fourier orders."""
+@kernel function distributed_scalar_analysis_kernel!(output, fourier, Plm,
+                                                       weights, cphi,
+                                                       first_m, lmax, mmax,
+                                                       mres, lcap)
+    l_idx, local_m_idx, batch_idx = @index(Global, NTuple)
+    m = first_m + local_m_idx - 1
+    if l_idx <= size(output, 1) && local_m_idx <= size(output, 2) &&
+       batch_idx <= size(output, 3)
+        l = l_idx - 1
+        if m <= mmax && l <= lcap && l >= m && m % mres == 0
+            value = zero(eltype(output))
+            @inbounds for i in 1:length(weights)
+                value += weights[i] * Plm[i, l_idx, m + 1] *
+                         fourier[i, local_m_idx, batch_idx]
+            end
+            output[l_idx, local_m_idx, batch_idx] = cphi * value
+        else
+            output[l_idx, local_m_idx, batch_idx] = zero(eltype(output))
+        end
+    end
+end
+
+"""MPI-pencil scalar synthesis for an owned contiguous band of Fourier orders."""
+@kernel function distributed_scalar_synthesis_kernel!(fourier, input, Plm,
+                                                        inv_scale, first_m,
+                                                        lmax, mmax, mres)
+    i, local_m_idx, batch_idx = @index(Global, NTuple)
+    m = first_m + local_m_idx - 1
+    if i <= size(fourier, 1) && local_m_idx <= size(fourier, 2) &&
+       batch_idx <= size(fourier, 3)
+        value = zero(eltype(fourier))
+        if m <= mmax && m % mres == 0
+            @inbounds for l in m:lmax
+                value += Plm[i, l + 1, m + 1] *
+                         input[l + 1, local_m_idx, batch_idx]
+            end
+        end
+        fourier[i, local_m_idx, batch_idx] = inv_scale * value
+    end
+end
+
+"""MPI-pencil vector analysis for an owned contiguous Fourier-order band."""
+@kernel function distributed_vector_analysis_kernel!(Sout, Tout, Ftheta,
+                                                       Fphi, dtheta, over_sin,
+                                                       weights, x, cphi,
+                                                       first_m, lmax, mmax,
+                                                       mres, robert_form)
+    l_idx, local_m_idx, batch_idx = @index(Global, NTuple)
+    m = first_m + local_m_idx - 1
+    if l_idx <= size(Sout, 1) && local_m_idx <= size(Sout, 2) &&
+       batch_idx <= size(Sout, 3)
+        l = l_idx - 1
+        if m <= mmax && l >= max(1, m) && m % mres == 0
+            Svalue = zero(eltype(Sout))
+            Tvalue = zero(eltype(Tout))
+            @inbounds for i in 1:length(weights)
+                s = sqrt(max(zero(eltype(x)), one(eltype(x)) - x[i] * x[i]))
+                Ft = Ftheta[i, local_m_idx, batch_idx]
+                Fp = Fphi[i, local_m_idx, batch_idx]
+                if robert_form && !iszero(s)
+                    Ft /= s
+                    Fp /= s
+                end
+                d = dtheta[i, l_idx, m + 1]
+                term = complex(zero(d), typeof(d)(m) * over_sin[i, l_idx, m + 1])
+                factor = weights[i] * cphi / typeof(d)(l * (l + 1))
+                Svalue += factor * (Ft * d + conj(term) * Fp)
+                Tvalue += factor * (-conj(term) * Ft + d * Fp)
+            end
+            Sout[l_idx, local_m_idx, batch_idx] = Svalue
+            Tout[l_idx, local_m_idx, batch_idx] = Tvalue
+        else
+            Sout[l_idx, local_m_idx, batch_idx] = zero(eltype(Sout))
+            Tout[l_idx, local_m_idx, batch_idx] = zero(eltype(Tout))
+        end
+    end
+end
+
+"""MPI-pencil vector synthesis for an owned contiguous Fourier-order band."""
+@kernel function distributed_vector_synthesis_kernel!(Ftheta, Fphi, Sin, Tin,
+                                                        dtheta, over_sin, x,
+                                                        inv_scale, first_m,
+                                                        lmax, mmax, mres,
+                                                        robert_form)
+    i, local_m_idx, batch_idx = @index(Global, NTuple)
+    m = first_m + local_m_idx - 1
+    if i <= size(Ftheta, 1) && local_m_idx <= size(Ftheta, 2) &&
+       batch_idx <= size(Ftheta, 3)
+        gt = zero(eltype(Ftheta))
+        gp = zero(eltype(Fphi))
+        if m <= mmax && m % mres == 0
+            @inbounds for l in max(1, m):lmax
+                S = Sin[l + 1, local_m_idx, batch_idx]
+                Tvalue = Tin[l + 1, local_m_idx, batch_idx]
+                d = dtheta[i, l + 1, m + 1]
+                term = complex(zero(d), typeof(d)(m) *
+                               over_sin[i, l + 1, m + 1])
+                gt += d * S - term * Tvalue
+                gp += term * S + d * Tvalue
+            end
+            if robert_form
+                s = sqrt(max(zero(eltype(x)), one(eltype(x)) - x[i] * x[i]))
+                gt *= s
+                gp *= s
+            end
+        end
+        Ftheta[i, local_m_idx, batch_idx] = inv_scale * gt
+        Fphi[i, local_m_idx, batch_idx] = inv_scale * gp
+    end
+end
+
 """Pack a dense non-negative-order spectrum, optionally truncating in degree."""
 @kernel function real_pack_kernel!(packed, dense, lmax, mmax, mres, lcap)
     l_idx, im_idx = @index(Global, NTuple)

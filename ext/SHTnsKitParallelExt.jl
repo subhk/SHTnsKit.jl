@@ -765,6 +765,7 @@ end
 
 # ===== PARALLEL EXTENSION MODULES =====
 # Include specialized modules for different aspects of parallel spherical harmonic transforms
+include("ParallelGPU.jl")              # Vendor-neutral GPU storage/communication policy
 include("ParallelDiagnostics.jl")      # Diagnostic and profiling tools for parallel operations
 include("ParallelDispatch.jl")         # Function dispatch and interface definitions
 include("ParallelPlans.jl")            # Distributed transform planning and setup

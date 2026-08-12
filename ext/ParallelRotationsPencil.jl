@@ -62,8 +62,11 @@ end
 function _validate_rotation_pencils!(cfg, input::PencilArray,
                                      output::PencilArray, angles::Tuple,
                                      operation::Symbol; general::Bool)
-    comm = MPI.COMM_WORLD
-    _validate_qst_pencil_communicators!(comm, (input, output), operation)
+    # The first input is the communicator root of trust. Every rank in that
+    # communicator must enter with a compatible input; candidate outputs are
+    # then preflighted collectively before any mutation or data movement.
+    comm = communicator(input)
+    _validate_qst_pencil_communicators!(comm, (output,), operation)
     _validate_cfg_replicated(cfg, comm)
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     _validate_scalar_pencil!(
@@ -217,13 +220,13 @@ function SHTnsKit.dist_SH_rotate_euler(cfg::SHTnsKit.SHTConfig,
                                       input::PencilArray,
                                       alpha::Real, beta::Real, gamma::Real,
                                       output::PencilArray)
-    _validate_rotation_pencils!(
+    comm = _validate_rotation_pencils!(
         cfg, input, output, (alpha, beta, gamma),
         :dist_SH_rotate_euler; general=true,
     )
     first = similar(input); second = similar(input)
     _dist_zrotate_local!(cfg, input, alpha, first)
-    _dist_yrotate_rows!(cfg, first, beta, second, MPI.COMM_WORLD)
+    _dist_yrotate_rows!(cfg, first, beta, second, comm)
     return _dist_zrotate_local!(cfg, second, gamma, output)
 end
 
@@ -235,8 +238,9 @@ SHTnsKit.dist_SH_Xrotate90(cfg::SHTnsKit.SHTConfig,
 
 function _validate_packed_rotation!(cfg, coefficients, angles, prototype,
                                     operation; general)
-    comm = MPI.COMM_WORLD
-    _validate_qst_pencil_communicators!(comm, (prototype,), operation)
+    # Packed coefficients have no communicator, so the prototype is their
+    # trusted communicator anchor. All replication checks stay within it.
+    comm = communicator(prototype)
     _validate_cfg_replicated(cfg, comm)
     flags = length(coefficients) == cfg.nlm ? UInt32(0) : UInt32(0x0001)
     code = _scalar_precision_code(eltype(coefficients))

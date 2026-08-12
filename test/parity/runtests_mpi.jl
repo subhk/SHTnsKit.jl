@@ -2428,6 +2428,94 @@ if isempty(ARGS) || "rotations" in ARGS
         end
         MPI.Barrier(comm)
     end
+
+    if MPI.Comm_size(MPI.COMM_WORLD) == 4
+        @testset "rotation subgroup communicator contract" begin
+            world = MPI.COMM_WORLD
+            world_rank = MPI.Comm_rank(world)
+            color = world_rank ÷ 2
+            subgroup = MPI.Comm_split(world, color, world_rank)
+            subgroup_rank = MPI.Comm_rank(subgroup)
+            cfg = create_gauss_config(4, 7; nlon=12)
+            dense = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+            rng = MersenneTwister(0x5B60 + color)
+            for m in 0:cfg.mmax, l in m:cfg.lmax
+                dense[l + 1, m + 1] = randn(rng, ComplexF64)
+            end
+            dense[:, 1] .= real.(dense[:, 1])
+            source = matrix_to_spectral_pencil(cfg, dense; comm=subgroup)
+            output = similar(source)
+
+            # The first input is the trusted communicator anchor. Both disjoint
+            # subgroups execute independently; no WORLD collective is permitted.
+            expected_z = zeros(ComplexF64, size(dense))
+            SHTnsKit.dist_SH_Zrotate(cfg, dense, 0.17, expected_z)
+            SHTnsKit.dist_SH_Zrotate(cfg, source, 0.17, output)
+            @test spectral_pencil_to_matrix(cfg, output) ≈ expected_z atol=3e-12 rtol=3e-12
+            MPI.Barrier(subgroup)
+
+            expected_y = zeros(ComplexF64, size(dense))
+            SHTnsKit.dist_SH_Yrotate(cfg, dense, -0.29, expected_y)
+            SHTnsKit.dist_SH_Yrotate(cfg, source, -0.29, output)
+            @test spectral_pencil_to_matrix(cfg, output) ≈ expected_y atol=3e-12 rtol=3e-12
+            MPI.Barrier(subgroup)
+
+            euler = similar(source)
+            SHTnsKit.dist_SH_rotate_euler(cfg, source, 0.11, -0.23, 0.31, euler)
+            first = zeros(ComplexF64, size(dense))
+            second = zeros(ComplexF64, size(dense))
+            expected_euler = zeros(ComplexF64, size(dense))
+            SHTnsKit.dist_SH_Zrotate(cfg, dense, 0.11, first)
+            SHTnsKit.dist_SH_Yrotate(cfg, first, -0.23, second)
+            SHTnsKit.dist_SH_Zrotate(cfg, second, 0.31, expected_euler)
+            @test spectral_pencil_to_matrix(cfg, euler) ≈
+                  expected_euler atol=3e-12 rtol=3e-12
+            MPI.Barrier(subgroup)
+
+            packed = SHTnsKit.pack_lm(cfg, dense)
+            expected_packed_y = similar(packed)
+            expected_packed_y90 = similar(packed)
+            expected_packed_x90 = similar(packed)
+            SH_Yrotate(CPU(), cfg, packed, -0.29, expected_packed_y)
+            SH_Yrotate90(CPU(), cfg, packed, expected_packed_y90)
+            SH_Xrotate90(CPU(), cfg, packed, expected_packed_x90)
+            @test SHTnsKit.dist_SH_Zrotate_packed(
+                cfg, packed, 0.17; prototype_lm=source,
+            ) ≈ SHTnsKit.pack_lm(cfg, expected_z) atol=3e-12 rtol=3e-12
+            @test SHTnsKit.dist_SH_Yrotate_packed(
+                cfg, packed, -0.29; prototype_lm=source,
+            ) ≈ expected_packed_y atol=3e-12 rtol=3e-12
+            @test SHTnsKit.dist_SH_Yrotate90_packed(
+                cfg, packed; prototype_lm=source,
+            ) ≈ expected_packed_y90 atol=3e-12 rtol=3e-12
+            @test SHTnsKit.dist_SH_Xrotate90_packed(
+                cfg, packed; prototype_lm=source,
+            ) ≈ expected_packed_x90 atol=3e-12 rtol=3e-12
+            MPI.Barrier(subgroup)
+
+            sentinel = ComplexF64(73, -19)
+            good_output = similar(source)
+            fill!(parent(good_output), sentinel)
+            wrong_output = if subgroup_rank == 0
+                candidate = PencilArray{ComplexF64}(
+                    undef,
+                    Pencil(
+                        (cfg.lmax + 1, cfg.mmax + 1), (2,), MPI.COMM_SELF,
+                    ),
+                )
+                fill!(parent(candidate), sentinel)
+                candidate
+            else
+                good_output
+            end
+            @test _all_ranks_catch(subgroup; message_contains="communicator mismatch") do
+                SHTnsKit.dist_SH_Yrotate(cfg, source, -0.29, wrong_output)
+            end
+            @test all(==(sentinel), parent(wrong_output))
+            MPI.Barrier(subgroup)
+            Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)._safe_comm_free(subgroup)
+        end
+    end
 end
 
 MPI.Barrier(MPI.COMM_WORLD)

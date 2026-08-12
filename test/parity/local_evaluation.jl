@@ -307,6 +307,22 @@ function _test_local_views_and_filtering(adapter::LocalEvaluationAdapter)
     return nothing
 end
 
+"""Exercise racing first-use table builds on hardware-backed task streams."""
+function run_concurrent_local_first_use(adapter::LocalEvaluationAdapter, clear_cache!)
+    cfg = _local_config(:gauss, Float32)
+    Qcan = first(_local_canonical_modes(cfg, Float32))
+    coefficients = local_place(adapter, _local_external(cfg, Qcan))
+    cost, phi = 0.37f0, 0.61f0
+    expected = _local_direct_scalar(Qcan, cost, phi)
+    clear_cache!()
+    tasks = [Threads.@spawn local_scalar(
+        adapter, cfg, coefficients, cost, phi,
+    ) for _ in 1:8]
+    values = map(task -> local_collect(adapter, fetch(task)), tasks)
+    @test values ≈ fill(expected, length(values)) atol=4f-5 rtol=4f-5
+    return nothing
+end
+
 function run_local_evaluation_parity(adapter::LocalEvaluationAdapter;
                                      exhaustive::Bool=true)
     @testset "local evaluation parity $(nameof(typeof(adapter)))" begin

@@ -345,6 +345,28 @@ function run_shared_scalar_kernel_reference(common, backend)
         common.scalar_cache_lookup(threaded, 0, id, Float32, id)
     end
     @test common.scalar_cache_size(threaded; device=0) <= 4
+
+    # A device table may only become visible after its asynchronous build has
+    # completed. Completion must happen outside the cache lock so concurrent
+    # lookups and independent builds cannot deadlock.
+    publication = common.ScalarTableCache(1)
+    completed = Ref(false)
+    built = :immutable_device_tables
+    published = common.scalar_cache_publish!(
+        publication, 0, UInt(99), Float32, UInt(101), built,
+    ) do
+        @test common.scalar_cache_lookup(
+            publication, 0, UInt(99), Float32, UInt(101),
+        ) === nothing
+        @test trylock(publication.lock)
+        unlock(publication.lock)
+        completed[] = true
+    end
+    @test completed[]
+    @test published === built
+    @test common.scalar_cache_lookup(
+        publication, 0, UInt(99), Float32, UInt(101),
+    ) === built
     cfg.norm = :schmidt
 
     x, weights, scales = common.scalar_host_tables(cfg, T)

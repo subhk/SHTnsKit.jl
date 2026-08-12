@@ -17,6 +17,7 @@ export laplacian_kernel!, legendre_table_kernel!, scalar_analysis_kernel!,
        vector_host_tables,
        scalar_config_signature, vector_config_signature, scalar_host_tables,
        ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
+       scalar_cache_publish!,
        scalar_cache_clear!, scalar_cache_size,
        ScalarWorkspaceCache, scalar_workspace_use!,
        scalar_workspace_clear!, scalar_workspace_size
@@ -112,6 +113,23 @@ function scalar_cache_insert!(cache::ScalarTableCache, device, identity::UInt,
         cache.entries[key] = ScalarTableCacheEntry(signature, cache.tick, value)
         return value
     end
+end
+
+"""
+    scalar_cache_publish!(complete, cache, device, identity, precision, signature, value)
+
+Wait for an asynchronous immutable-table build to complete before making the
+value visible to cache readers. `complete` deliberately runs before
+`scalar_cache_insert!`, outside the cache lock. The insertion retains the
+cache's double-checked behavior when concurrent builders race for one key.
+"""
+function scalar_cache_publish!(complete, cache::ScalarTableCache, device,
+                               identity::UInt, precision::DataType,
+                               signature::UInt, value)
+    complete()
+    return scalar_cache_insert!(
+        cache, device, identity, precision, signature, value,
+    )
 end
 
 function scalar_cache_clear!(cache::ScalarTableCache; device=nothing)

@@ -262,16 +262,17 @@ function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, co
     CT = eltype(alm_int)
     RT = typeof(real(zero(CT)))
     PT = _local_basis_type(RT, cost, phi)
+    _, ACT = _local_accumulator_types(CT, PT)
     x = convert(PT, cost)
     ph = convert(PT, phi)
     lmax, mmax = cfg.lmax, cfg.mmax
     P = Vector{PT}(undef, lmax + 1)
-    acc = zero(CT)
+    acc = zero(ACT)
     # Loop over |m| once (P̄_l^{|m|}, CS-phase and norm scale depend only on |m|)
     # and accumulate the +m and -m contributions from the shared Legendre row.
     for am in 0:mmax
         Plm_norm_row!(P, x, lmax, am)
-        gp = zero(CT); gn = zero(CT)
+        gp = zero(ACT); gn = zero(ACT)
         @inbounds for l in am:lmax
             Pl = P[l+1]
             ap = alm_int[LM_cplx_index(lmax, mmax, l, am) + 1]

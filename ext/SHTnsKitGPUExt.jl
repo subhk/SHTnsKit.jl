@@ -19,7 +19,8 @@ using .GPUCommon: laplacian_kernel!, legendre_table_kernel!,
                   scalar_batch_analysis_kernel!, scalar_batch_synthesis_kernel!,
                   complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
                   scalar_host_tables, ScalarTableCache, scalar_cache_lookup,
-                  scalar_cache_insert!, scalar_cache_clear!, scalar_cache_size
+                  scalar_cache_publish!,
+                  scalar_cache_clear!, scalar_cache_size
 using .GPUCommon: ScalarWorkspaceCache, scalar_workspace_use!,
                   scalar_workspace_clear!, scalar_workspace_size
 using .GPUCommon: vector_derivative_table_kernel!, vector_analysis_kernel!,
@@ -160,7 +161,7 @@ function _cuda_local_tables(cfg::SHTConfig, ::Type{T}, cost::Real) where {T<:Abs
     )
     scales = _cuda_scalar_tables(cfg, T).scales
     built = CUDALocalTables(Plm, dtheta, over_sin, scales)
-    return scalar_cache_insert!(
+    return scalar_cache_publish!(CUDA.synchronize,
         _CUDA_LOCAL_CACHE, device, identity, T, signature, built,
     )
 end
@@ -306,10 +307,9 @@ function _cuda_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
     kernel! = legendre_table_kernel!(backend)
     kernel!(Plm, x, cfg.lmax, cfg.mmax;
             ndrange=(cfg.nlat, cfg.mmax + 1))
-    CUDA.synchronize()
     built = CUDAScalarTables(x, weights, Plm, scales)
 
-    return scalar_cache_insert!(
+    return scalar_cache_publish!(CUDA.synchronize,
         _CUDA_SCALAR_CACHE, device, identity, T, signature, built,
     )
 end
@@ -331,11 +331,10 @@ function _cuda_vector_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloat}
     kernel! = vector_derivative_table_kernel!(CUDABackend())
     kernel!(Plm, dtheta, over_sin, scalar.x, Nlm, cfg.lmax, cfg.mmax;
             ndrange=(cfg.nlat, cfg.mmax + 1))
-    CUDA.synchronize()
     built = CUDAVectorTables(
         scalar.x, scalar.weights, scalar.scales, dtheta, over_sin,
     )
-    return scalar_cache_insert!(
+    return scalar_cache_publish!(CUDA.synchronize,
         _CUDA_VECTOR_CACHE, device, identity, T, signature, built,
     )
 end

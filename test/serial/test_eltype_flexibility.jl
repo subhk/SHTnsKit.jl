@@ -7,6 +7,8 @@ using Test
 using SHTnsKit
 using ForwardDiff: Dual, value, partials
 
+include(joinpath(@__DIR__, "..", "parity", "local_evaluation.jl"))
+
 @isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 # Complex Dual vector carrying d/dt of (t * base) at t = 1
@@ -18,6 +20,44 @@ _dualize(base::AbstractMatrix{<:Complex}) =
 _value(x::Dual) = value(x)
 _value(z::Complex{<:Dual}) = Complex(value(real(z)), value(imag(z)))
 _partial(x::Dual) = partials(x, 1)
+
+_coordinate_dual(x::T) where {T<:AbstractFloat} = Dual(x, one(T))
+_central_difference(f, x::T) where {T<:AbstractFloat} = begin
+    h = cbrt(eps(T))
+    above, below = f(x + h), f(x - h)
+    above isa Tuple ? map((a, b) -> (a - b) / (2h), above, below) :
+                       (above - below) / (2h)
+end
+
+function _test_coordinate_derivative(f, reference, cost, phi)
+    cost_dual = _coordinate_dual(cost)
+    phi_dual = _coordinate_dual(phi)
+    by_cost = f(cost_dual, phi)
+    by_phi = f(cost, phi_dual)
+    @test typeof(by_cost) === typeof(cost_dual)
+    @test typeof(by_phi) === typeof(phi_dual)
+    @test value(by_cost) ≈ reference(cost, phi) atol=3e-13 rtol=3e-13
+    @test value(by_phi) ≈ reference(cost, phi) atol=3e-13 rtol=3e-13
+    @test partials(by_cost, 1) ≈ _central_difference(c -> reference(c, phi), cost) atol=2e-8 rtol=2e-8
+    @test partials(by_phi, 1) ≈ _central_difference(p -> reference(cost, p), phi) atol=2e-8 rtol=2e-8
+end
+
+function _test_complex_coordinate_derivative(f, reference, cost, phi)
+    cost_dual = _coordinate_dual(cost)
+    phi_dual = _coordinate_dual(phi)
+    by_cost = f(cost_dual, phi)
+    by_phi = f(cost, phi_dual)
+    @test typeof(by_cost) === Complex{typeof(cost_dual)}
+    @test typeof(by_phi) === Complex{typeof(phi_dual)}
+    for (got, expected) in ((by_cost, reference(cost, phi)),
+                            (by_phi, reference(cost, phi)))
+        @test Complex(value(real(got)), value(imag(got))) ≈ expected atol=3e-13 rtol=3e-13
+    end
+    expected_cost = _central_difference(c -> reference(c, phi), cost)
+    expected_phi = _central_difference(p -> reference(cost, p), phi)
+    @test Complex(partials(real(by_cost), 1), partials(imag(by_cost), 1)) ≈ expected_cost atol=2e-8 rtol=2e-8
+    @test Complex(partials(real(by_phi), 1), partials(imag(by_phi), 1)) ≈ expected_phi atol=2e-8 rtol=2e-8
+end
 
 @testset "Eltype flexibility (Dual propagation)" begin
     lmax = 8
@@ -75,6 +115,98 @@ _partial(x::Dual) = partials(x, 1)
         point_cplx_d = synthesis_point_cplx(cfg, _dualize(alm), cost, 0.7)
         @test _value(point_cplx_d) ≈ point_cplx
         @test _partial(real(point_cplx_d)) ≈ real(point_cplx)
+    end
+
+    @testset "all local evaluators propagate coordinate derivatives" begin
+        cfg_ad = _local_config(:gauss, Float64)
+        Qcan, Scan, Tcan, Drcan = _local_canonical_modes(cfg_ad, Float64)
+        Q = _local_external(cfg_ad, Qcan)
+        Qp, Sp, Tp, Drp = map(x -> _local_packed(cfg_ad, x),
+                              (Qcan, Scan, Tcan, Drcan))
+        complex_can, complex_external = _local_complex_modes(cfg_ad, Float64)
+        c, p = 0.37, 0.61
+
+        _test_coordinate_derivative(
+            (x, y) -> synthesis_point(cfg_ad, Q, x, y),
+            (x, y) -> _local_direct_scalar(Qcan, x, y), c, p,
+        )
+        _test_complex_coordinate_derivative(
+            (x, y) -> synthesis_point_cplx(cfg_ad, complex_external, x, y),
+            (x, y) -> _local_direct_complex(complex_can, x, y), c, p,
+        )
+        @test synthesis_point(CPU(), cfg_ad, Q, _coordinate_dual(c), p) ===
+              synthesis_point(cfg_ad, Q, _coordinate_dual(c), p)
+        @test synthesis_point_cplx(
+            CPU(), cfg_ad, complex_external, _coordinate_dual(c), p,
+        ) === synthesis_point_cplx(cfg_ad, complex_external, _coordinate_dual(c), p)
+
+        nphi = 5
+        lat = SH_to_lat(cfg_ad, Qp, _coordinate_dual(c); nphi)
+        lat_cplx = SH_to_lat_cplx(cfg_ad, complex_external, _coordinate_dual(c); nphi)
+        @test eltype(lat) === typeof(_coordinate_dual(c))
+        @test eltype(lat_cplx) === Complex{typeof(_coordinate_dual(c))}
+        @test SH_to_lat(CPU(), cfg_ad, Qp, _coordinate_dual(c); nphi) == lat
+        @test SH_to_lat_cplx(
+            CPU(), cfg_ad, complex_external, _coordinate_dual(c); nphi,
+        ) == lat_cplx
+        for j in 0:(nphi - 1)
+            angle = 2pi * j / nphi
+            scalar_ref = x -> _local_direct_scalar(Qcan, x, angle)
+            complex_ref = x -> _local_direct_complex(complex_can, x, angle)
+            @test value(lat[j + 1]) ≈ scalar_ref(c) atol=3e-13 rtol=3e-13
+            @test partials(lat[j + 1], 1) ≈ _central_difference(scalar_ref, c) atol=2e-8 rtol=2e-8
+            @test Complex(value(real(lat_cplx[j + 1])), value(imag(lat_cplx[j + 1]))) ≈ complex_ref(c) atol=3e-13 rtol=3e-13
+            expected = _central_difference(complex_ref, c)
+            @test Complex(partials(real(lat_cplx[j + 1]), 1),
+                          partials(imag(lat_cplx[j + 1]), 1)) ≈ expected atol=2e-8 rtol=2e-8
+        end
+
+        qst_ref = (x, y) -> _local_direct_qst(cfg_ad, Qcan, Scan, Tcan, x, y)
+        grad_ref = (x, y) -> _local_direct_qst(cfg_ad, Drcan, Scan, zero(Tcan), x, y)
+        for (f, reference) in (
+            ((x, y) -> SHqst_to_point(cfg_ad, Qp, Sp, Tp, x, y), qst_ref),
+            ((x, y) -> SH_to_grad_point(cfg_ad, Drp, Sp, x, y), grad_ref),
+        )
+            for coordinate in (:cost, :phi)
+                got = coordinate === :cost ? f(_coordinate_dual(c), p) : f(c, _coordinate_dual(p))
+                @test all(x -> typeof(x) === typeof(_coordinate_dual(c)), got)
+                expected = reference(c, p)
+                derivative = coordinate === :cost ?
+                    _central_difference(x -> reference(x, p), c) :
+                    _central_difference(x -> reference(c, x), p)
+                @test collect(value.(got)) ≈ collect(expected) atol=3e-13 rtol=3e-13
+                @test collect(partials.(got, 1)) ≈ collect(derivative) atol=2e-8 rtol=2e-8
+            end
+        end
+        @test SHqst_to_point(
+            CPU(), cfg_ad, Qp, Sp, Tp, _coordinate_dual(c), p,
+        ) == SHqst_to_point(cfg_ad, Qp, Sp, Tp, _coordinate_dual(c), p)
+        @test SH_to_grad_point(
+            CPU(), cfg_ad, Drp, Sp, _coordinate_dual(c), p,
+        ) == SH_to_grad_point(cfg_ad, Drp, Sp, _coordinate_dual(c), p)
+
+        qst_lat = SHqst_to_lat(cfg_ad, Qp, Sp, Tp, _coordinate_dual(c); nphi)
+        @test all(values -> eltype(values) === typeof(_coordinate_dual(c)), qst_lat)
+        @test SHqst_to_lat(
+            CPU(), cfg_ad, Qp, Sp, Tp, _coordinate_dual(c); nphi,
+        ) == qst_lat
+        for j in 0:(nphi - 1)
+            angle = 2pi * j / nphi
+            reference = x -> qst_ref(x, angle)
+            @test collect(map(v -> value(v[j + 1]), qst_lat)) ≈
+                  collect(reference(c)) atol=3e-13 rtol=3e-13
+            @test collect(map(v -> partials(v[j + 1], 1), qst_lat)) ≈
+                  collect(_central_difference(reference, c)) atol=2e-8 rtol=2e-8
+        end
+
+        # Ordinary mixed coordinates remain coefficient-owned, and coefficient
+        # Duals still use an ordinary basis and retain linearity.
+        cfg32 = _local_config(:gauss, Float32)
+        Q32 = _local_external(cfg32, first(_local_canonical_modes(cfg32, Float32)))
+        @test synthesis_point(cfg32, Q32, Float64(c), Float64(p)) isa Float32
+        Qd = _dualize(Q)
+        @test _partial(synthesis_point(cfg_ad, Qd, c, p)) ≈
+              synthesis_point(cfg_ad, Q, c, p)
     end
 
     @testset "synthesis_packed_ml accepts Dual coefficients" begin

@@ -489,6 +489,16 @@ end
     return promote_type(coordinate_types...)
 end
 
+# Local values follow the coefficient precision for ordinary floating-point
+# coordinates.  When the basis itself carries coordinate AD information, the
+# accumulator must also carry that type or assignment/final conversion would
+# erase the derivative.  Coefficient Duals remain represented by `RT` here and
+# therefore keep their existing linear propagation with an ordinary basis.
+@inline function _local_accumulator_types(::Type{CT}, ::Type{PT}) where {CT<:Complex,PT<:Real}
+    AT = promote_type(typeof(real(zero(CT))), PT)
+    return AT, Complex{AT}
+end
+
 function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::Real, phi::Real)
     on_device(Qlm) isa CPU || throw(ArgumentError(
         "synthesis_point with GPU storage requires GPU() dispatch",
@@ -504,9 +514,10 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
     CT = eltype(Qlm_int)
     RT = typeof(real(zero(CT)))
     PT = _local_basis_type(RT, cost, phi)
+    AT, ACT = _local_accumulator_types(CT, PT)
     x = convert(PT, cost)
     ph = convert(PT, phi)
-    result = zero(RT)
+    result = zero(AT)
     P = Vector{PT}(undef, lmax + 1)
 
     # m = 0 contribution (no conjugate partner)
@@ -520,14 +531,14 @@ function synthesis_point(cfg::SHTConfig, Qlm::AbstractMatrix{<:Complex}, cost::R
         (m % cfg.mres == 0) || continue
         Plm_norm_row!(P, x, lmax, m)  # P̄ already orthonormal-normalized
         phase = cis(convert(PT, m) * ph)  # e^(imφ)
-        gm = zero(CT)
+        gm = zero(ACT)
         @inbounds for l in m:lmax
             gm += Qlm_int[l+1, m+1] * P[l+1]
         end
         result += 2 * real(gm * phase)
     end
 
-    return convert(RT, result)
+    return result
 end
 
 function synthesis_point(::CPU, cfg::SHTConfig,

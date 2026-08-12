@@ -290,7 +290,10 @@ function Plm_norm_and_dPdtheta_row!(P::AbstractVector{T}, dPdtheta::AbstractVect
         for l in m:lmax
             dl1m = (l + 1 == 0) ? zero(T) :
                    sqrt(max(zero(T), T((l+1)^2 - m^2) / T(4*(l+1)^2 - 1)))
-            dlm  = (l   == 0) ? zero(T) :
+            # d(l,m) is analytically zero at l=m.  Branch before sqrt so
+            # coordinate Duals do not evaluate sqrt(Dual(0, 0)), whose
+            # undefined generic derivative would contaminate the row with NaN.
+            dlm  = (l == 0 || l == m) ? zero(T) :
                    sqrt(max(zero(T), T(l^2      - m^2) / T(4*l^2      - 1)))
             # sinθ · dP̄_l/dθ = l*d(l+1,m)*P̄_{l+1} - (l+1)*d(l,m)*P̄_{l-1}
             Pm1 = l > 0 ? Pbuf[l] : zero(T)   # P̄_{l-1}^m (index l, 1-based)
@@ -366,7 +369,9 @@ function Plm_norm_dPdtheta_over_sinth_row!(P::AbstractVector{T}, dPdtheta::Abstr
 
         for l in m:lmax
             dl1m = sqrt(max(zero(T), T((l+1)^2 - m^2) / T(4*(l+1)^2 - 1)))
-            dlm  = (l == 0) ? zero(T) :
+            # See the allocating derivative-row form above: d(m,m) is exactly
+            # zero and must not pass through sqrt for coordinate AD numbers.
+            dlm  = (l == 0 || l == m) ? zero(T) :
                    sqrt(max(zero(T), T(l^2 - m^2) / T(4*l^2 - 1)))
             Pm1 = l > 0 ? Pbuf[l] : zero(T)
             Pp1 = Pbuf[l + 2]

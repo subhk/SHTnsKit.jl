@@ -296,6 +296,12 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     run_shared_vector_kernel_reference(extension.GPUCommon, KernelAbstractions.CPU())
     run_scalar_workspace_cache_reference(extension.GPUCommon)
     source = read(joinpath(@__DIR__, "../../../ext/SHTnsKitGPUExt.jl"), String)
+    local_table_builder = split(
+        split(source, "function _cuda_local_tables"; limit=2)[2],
+        "@inline function _cuda_local_precision"; limit=2,
+    )[1]
+    @test occursin("scalar_cache_publish!(CUDA.synchronize", local_table_builder)
+    @test !occursin("scalar_cache_insert!", local_table_builder)
     @test occursin("function _cuda_vector_tables", source)
     if occursin("function _cuda_vector_tables", source)
         scalar_table_builder = split(
@@ -648,6 +654,9 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
         run_sphtor_full_parity(CUDAVectorAdapter())
         run_qst_full_parity(CUDAQSTAdapter())
         run_gpu_vector_mode_edge_parity(CUDAVectorAdapter())
+        run_concurrent_local_first_use(
+            CUDALocalEvaluationAdapter(), extension._cuda_clear_scalar_cache!,
+        )
         run_local_evaluation_parity(CUDALocalEvaluationAdapter())
     end
 end

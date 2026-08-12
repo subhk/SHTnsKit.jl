@@ -17,7 +17,8 @@ using .GPUCommon: legendre_table_kernel!, scalar_analysis_kernel!,
                   complex_packed_analysis_kernel!, complex_packed_synthesis_kernel!,
                   scalar_config_signature, vector_config_signature,
                   scalar_host_tables,
-                  ScalarTableCache, scalar_cache_lookup, scalar_cache_insert!,
+                  ScalarTableCache, scalar_cache_lookup,
+                  scalar_cache_publish!,
                   scalar_cache_clear!, scalar_cache_size
 using .GPUCommon: ScalarWorkspaceCache, scalar_workspace_use!,
                   scalar_workspace_clear!, scalar_workspace_size
@@ -148,7 +149,7 @@ function _amdgpu_local_tables(cfg::SHTConfig, ::Type{T}, cost::Real) where {T<:A
     )
     scales = _amdgpu_scalar_tables(cfg, T).scales
     built = AMDGPULocalTables(Plm, dtheta, over_sin, scales)
-    return scalar_cache_insert!(
+    return scalar_cache_publish!(AMDGPU.synchronize,
         _AMDGPU_LOCAL_CACHE, device, identity, T, signature, built,
     )
 end
@@ -293,10 +294,9 @@ function _amdgpu_scalar_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloa
     kernel! = legendre_table_kernel!(backend)
     kernel!(Plm, x, cfg.lmax, cfg.mmax;
             ndrange=(cfg.nlat, cfg.mmax + 1))
-    AMDGPU.synchronize()
     built = AMDGPUScalarTables(x, weights, Plm, scales)
 
-    return scalar_cache_insert!(
+    return scalar_cache_publish!(AMDGPU.synchronize,
         _AMDGPU_SCALAR_CACHE, device, identity, T, signature, built,
     )
 end
@@ -318,11 +318,10 @@ function _amdgpu_vector_tables(cfg::SHTConfig, ::Type{T}) where {T<:AbstractFloa
     kernel! = vector_derivative_table_kernel!(ROCBackend())
     kernel!(Plm, dtheta, over_sin, scalar.x, Nlm, cfg.lmax, cfg.mmax;
             ndrange=(cfg.nlat, cfg.mmax + 1))
-    AMDGPU.synchronize()
     built = AMDGPUVectorTables(
         scalar.x, scalar.weights, scalar.scales, dtheta, over_sin,
     )
-    return scalar_cache_insert!(
+    return scalar_cache_publish!(AMDGPU.synchronize,
         _AMDGPU_VECTOR_CACHE, device, identity, T, signature, built,
     )
 end

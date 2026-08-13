@@ -15,7 +15,7 @@ LDFLAGS += -Wl,-rpath,$(SHTNS_PREFIX)/lib -Wl,-rpath,$(FFTW_PREFIX)/lib
 POST_LINK = true
 endif
 
-.PHONY: all clean
+.PHONY: all clean check-reproducible
 all: generate
 
 generate: generate.c
@@ -24,3 +24,6 @@ generate: generate.c
 
 clean:
 	$(RM) generate
+
+check-reproducible: generate
+	cd ../.. && reference/shtns37/check_reproducible.sh reference/shtns37/generate

@@ -303,6 +303,31 @@ qst_synthesis_inferred(::MPIGPUQSTAdapter, cfg, Q, S, T, prototype) =
 qst_synthesis_cplx_inferred(::MPIGPUQSTAdapter, cfg, Q, S, T, prototype) =
     SHTnsKit.synthesis_qst_cplx(cfg, Q, S, T; prototype_θφ=prototype)
 
+function _test_shtns37_analysis_fixture_mpi_gpu(f,p,cfg,place_values,check)
+    cap=Symbol(f["capability"]);a=f["atol"];r=f["rtol"]
+    if cap===:scalar_real_full
+        got=analysis_batch(cfg,place_values(p["field"],:spatial));check(got,_shtns37_batch_dense(cfg,p,"coefficients"),a,r)
+    elseif cap===:scalar_complex_full
+        check(dist_analysis_packed_cplx(cfg,place_values(p["field"],:spatial)),reshape(vec(p["coefficients"]),:,1),a,r)
+    elseif cap===:scalar_l
+        check(analysis_packed_l(cfg,place_values(p["field"],:spatial),f["ltr"]),reshape(vec(p["coefficients"]),:,1),a,r)
+    elseif cap===:scalar_ml
+        sc=f["fixed_mode_scale"];check(analysis_packed_ml(cfg,f["stored_im"],place_values(reshape(sc.*vec(p["field"]),:,1),:spatial),f["ltr"]),reshape(vec(p["coefficients"]),:,1),a,r)
+    elseif cap===:sphtor_full
+        got=analysis_sphtor_batch(cfg,place_values(p["Vt"],:spatial),place_values(p["Vp"],:spatial));for(i,n)in enumerate(("S","T"));check(got[i],_shtns37_batch_dense(cfg,p,n),a,r);end
+    elseif cap===:sphtor_l
+        got=analysis_sphtor_l(cfg,place_values(p["Vt"],:spatial),place_values(p["Vp"],:spatial),f["ltr"]);for(i,n)in enumerate(("S","T"));check(got[i],_shtns37_dense(cfg,p[n]),a,r);end
+    elseif cap===:sphtor_ml
+        sc=f["fixed_mode_scale"];got=analysis_sphtor_ml(cfg,f["stored_im"],place_values(reshape(sc.*vec(p["Vt"]),:,1),:spatial),place_values(reshape(sc.*vec(p["Vp"]),:,1),:spatial),f["ltr"]);for(i,n)in enumerate(("S","T"));check(got[i],reshape(vec(p[n]),:,1),a,r);end
+    elseif cap===:qst_full
+        got=analysis_qst_batch(cfg,(place_values(p[n],:spatial) for n in ("Vr","Vt","Vp"))...);for(i,n)in enumerate(("Q","S","T"));check(got[i],_shtns37_batch_dense(cfg,p,n),a,r);end
+    elseif cap===:qst_l
+        got=analysis_qst_l(cfg,(place_values(p[n],:spatial) for n in ("Vr","Vt","Vp"))...,f["ltr"]);for(i,n)in enumerate(("Q","S","T"));check(got[i],_shtns37_dense(cfg,p[n]),a,r);end
+    elseif cap===:qst_ml
+        sc=f["fixed_mode_scale"];got=analysis_qst_ml(cfg,f["stored_im"],(place_values(reshape(sc.*vec(p[n]),:,1),:spatial) for n in ("Vr","Vt","Vp"))...,f["ltr"]);for(i,n)in enumerate(("Q","S","T"));check(got[i],reshape(vec(p[n]),:,1),a,r);end
+    end
+end
+
 """Compare every SHTns 3.7 payload on GPU-backed distributed storage."""
 function test_shtns37_mpi_gpu_fixtures(array_type, is_vendor, comm)
     manifest = TOML.parsefile(SHTNS37_MANIFEST_PATH)
@@ -324,7 +349,9 @@ function test_shtns37_mpi_gpu_fixtures(array_type, is_vendor, comm)
             prototype = place_values(zeros(RT, cfg.nlat, cfg.nlon), :spatial)
             id = f["id"]
             @testset "$id" begin
-                if cap === :scalar_real_full
+                if get(f,"direction","")=="analysis"
+                    _test_shtns37_analysis_fixture_mpi_gpu(f,p,cfg,place_values,check)
+                elseif cap === :scalar_real_full
                     Q = place_values(_shtns37_dense(cfg, p["coefficients"]), :spectral)
                     check(synthesis(cfg, Q; prototype_θφ=prototype), p["field"], atol, rtol)
                 elseif cap === :scalar_complex_full
@@ -384,9 +411,10 @@ function test_shtns37_mpi_gpu_fixtures(array_type, is_vendor, comm)
                     SH_mul_mx(CPU(), cfg, vec(p["ct_matrix"]), Q, rct); SH_mul_mx(CPU(), cfg, vec(p["dt_matrix"]), Q, rdt)
                     check(rct, _shtns37_dense(cfg, p["ct_result"]), atol, rtol); check(rdt, _shtns37_dense(cfg, p["dt_result"]), atol, rtol)
                 elseif cap === :rotations
-                    Q = place_values(_shtns37_dense(cfg, p["Q"]), :spectral); z = similar(Q); y = similar(Q)
+                    Q = place_values(_shtns37_dense(cfg, p["Q"]), :spectral); z = similar(Q); y = similar(Q); y90=similar(Q);x90=similar(Q)
                     dist_SH_Zrotate(cfg, Q, f["z_angle"], z); dist_SH_Yrotate(cfg, Q, f["y_angle"], y)
-                    check(z, _shtns37_dense(cfg, p["Z"]), atol, rtol); check(y, _shtns37_dense(cfg, p["Y"]), atol, rtol)
+                    dist_SH_Yrotate90(cfg,Q,y90);dist_SH_Xrotate90(cfg,Q,x90)
+                    check(z, _shtns37_dense(cfg, p["Z"]), atol, rtol); check(y, _shtns37_dense(cfg, p["Y"]), atol, rtol);check(y90,_shtns37_dense(cfg,p["Y90"]),atol,rtol);check(x90,_shtns37_dense(cfg,p["X90"]),atol,rtol)
                 end
             end
         end

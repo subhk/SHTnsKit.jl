@@ -10,6 +10,7 @@ const SHTNS37_FIXTURE_ROOT = normpath(joinpath(@__DIR__, "..", "fixtures", "shtn
 const SHTNS37_MANIFEST_PATH = joinpath(SHTNS37_FIXTURE_ROOT, "manifest.toml")
 const SHTNS37_GENERATOR_PATH = normpath(joinpath(@__DIR__, "..", "..", "reference",
                                                   "shtns37", "generate.c"))
+const SHTNS37_MPI_GPU_PATH = joinpath(@__DIR__, "mpi_gpu.jl")
 
 _shtns37_sha256(path) = bytes2hex(open(SHA.sha256, path))
 
@@ -118,6 +119,7 @@ function test_shtns37_scalar_fixtures()
     manifest=TOML.parsefile(SHTNS37_MANIFEST_PATH)
     @testset "SHTns 3.7 scalar fixtures" begin
         for fixture in manifest["fixture"]
+            get(fixture,"direction","synthesis") == "analysis" && continue
             Symbol(fixture["capability"]) in (:scalar_real_full,:scalar_complex_full,
                 :scalar_l,:scalar_ml,:scalar_batch,:packed_storage) || continue
             fixture_id = fixture["id"]
@@ -180,6 +182,7 @@ function test_shtns37_vector_fixtures()
     manifest=TOML.parsefile(SHTNS37_MANIFEST_PATH)
     @testset "SHTns 3.7 vector fixtures" begin
         for fixture in manifest["fixture"]
+            get(fixture,"direction","synthesis") == "analysis" && continue
             Symbol(fixture["capability"]) in (:sphtor_full,:sphtor_l,:sphtor_ml,:sphtor_batch) || continue
             fixture_id=fixture["id"]
             @testset "$fixture_id" begin @test _test_shtns37_vector_fixture(fixture) end
@@ -221,8 +224,43 @@ function test_shtns37_qst_fixtures()
     manifest=TOML.parsefile(SHTNS37_MANIFEST_PATH)
     @testset "SHTns 3.7 QST fixtures" begin
         for f in manifest["fixture"]
+            get(f,"direction","synthesis") == "analysis" && continue
             Symbol(f["capability"]) in (:qst_full,:qst_l,:qst_ml,:qst_batch)||continue
             id=f["id"];@testset "$id" begin @test _test_shtns37_qst_fixture(f) end
+        end
+    end
+end
+
+function test_shtns37_analysis_fixtures_cpu()
+    fixtures=filter(f->get(f,"direction","")=="analysis",TOML.parsefile(SHTNS37_MANIFEST_PATH)["fixture"])
+    @testset "SHTns 3.7 explicit analysis oracles" begin
+        for f in fixtures
+            cfg=_shtns37_config(f);p=_shtns37_payloads(f);cap=Symbol(f["capability"]);a=f["atol"];r=f["rtol"]
+            @testset "$(f["id"])" begin
+                if cap===:scalar_real_full
+                    got=analysis_batch(CPU(),cfg,p["field"])
+                    for k in axes(p["coefficients"],2);@test SHTnsKit.pack_lm(cfg,got[:,:,k]) ≈ p["coefficients"][:,k] atol=a rtol=r;end
+                elseif cap===:scalar_complex_full
+                    @test analysis_packed_cplx(CPU(),cfg,p["field"]) ≈ vec(p["coefficients"]) atol=a rtol=r
+                elseif cap===:scalar_l
+                    @test analysis_packed_l(CPU(),cfg,vec(p["field"]),f["ltr"]) ≈ vec(p["coefficients"]) atol=a rtol=r
+                elseif cap===:scalar_ml
+                    @test analysis_packed_ml(CPU(),cfg,f["stored_im"],f["fixed_mode_scale"].*vec(p["field"]),f["ltr"]) ≈ vec(p["coefficients"]) atol=a rtol=r
+                elseif cap===:sphtor_full
+                    got=analysis_sphtor_batch(CPU(),cfg,p["Vt"],p["Vp"])
+                    for k in axes(p["S"],2);@test SHTnsKit.pack_lm(cfg,got[1][:,:,k]) ≈ p["S"][:,k] atol=a rtol=r;@test SHTnsKit.pack_lm(cfg,got[2][:,:,k]) ≈ p["T"][:,k] atol=a rtol=r;end
+                elseif cap===:sphtor_l
+                    got=analysis_sphtor_l(CPU(),cfg,p["Vt"],p["Vp"],f["ltr"]);@test SHTnsKit.pack_lm(cfg,got[1]) ≈ vec(p["S"]) atol=a rtol=r;@test SHTnsKit.pack_lm(cfg,got[2]) ≈ vec(p["T"]) atol=a rtol=r
+                elseif cap===:sphtor_ml
+                    sc=f["fixed_mode_scale"];got=analysis_sphtor_ml(CPU(),cfg,f["stored_im"],sc.*vec(p["Vt"]),sc.*vec(p["Vp"]),f["ltr"]);@test got[1] ≈ vec(p["S"]) atol=a rtol=r;@test got[2] ≈ vec(p["T"]) atol=a rtol=r
+                elseif cap===:qst_full
+                    got=analysis_qst_batch(CPU(),cfg,p["Vr"],p["Vt"],p["Vp"]);for k in axes(p["Q"],2),(i,n) in enumerate(("Q","S","T"));@test SHTnsKit.pack_lm(cfg,got[i][:,:,k]) ≈ p[n][:,k] atol=a rtol=r;end
+                elseif cap===:qst_l
+                    got=analysis_qst_l(CPU(),cfg,p["Vr"],p["Vt"],p["Vp"],f["ltr"]);for(i,n)in enumerate(("Q","S","T"));@test SHTnsKit.pack_lm(cfg,got[i]) ≈ vec(p[n]) atol=a rtol=r;end
+                elseif cap===:qst_ml
+                    sc=f["fixed_mode_scale"];got=analysis_qst_ml(CPU(),cfg,f["stored_im"],sc.*vec(p["Vr"]),sc.*vec(p["Vt"]),sc.*vec(p["Vp"]),f["ltr"]);for(i,n)in enumerate(("Q","S","T"));@test got[i] ≈ vec(p[n]) atol=a rtol=r;end
+                end
+            end
         end
     end
 end
@@ -270,8 +308,24 @@ function test_shtns37_operator_rotation_fixtures()
         rct=zeros(ComplexF64,cfg.nlm);rdt=similar(rct);SH_mul_mx(CPU(),cfg,ct,vec(p["Q"]),rct);SH_mul_mx(CPU(),cfg,dt,vec(p["Q"]),rdt)
         @test rct ≈ vec(p["ct_result"]) atol=a rtol=r;@test rdt ≈ vec(p["dt_result"]) atol=a rtol=r
         rot=only(filter(f->f["capability"]=="rotations",manifest["fixture"]));cfg=_shtns37_config(rot);p=_shtns37_payloads(rot);a=rot["atol"];r=rot["rtol"]
-        z=similar(vec(p["Q"]));y=similar(z);SH_Zrotate(CPU(),cfg,vec(p["Q"]),rot["z_angle"],z);SH_Yrotate(CPU(),cfg,vec(p["Q"]),rot["y_angle"],y)
+        z=similar(vec(p["Q"]));y=similar(z);y90=similar(z);x90=similar(z)
+        SH_Zrotate(CPU(),cfg,vec(p["Q"]),rot["z_angle"],z);SH_Yrotate(CPU(),cfg,vec(p["Q"]),rot["y_angle"],y)
+        SH_Yrotate90(CPU(),cfg,vec(p["Q"]),y90);SH_Xrotate90(CPU(),cfg,vec(p["Q"]),x90)
         @test z ≈ vec(p["Z"]) atol=a rtol=r;@test y ≈ vec(p["Y"]) atol=a rtol=r
+        @test y90 ≈ vec(p["Y90"]) atol=a rtol=r;@test x90 ≈ vec(p["X90"]) atol=a rtol=r
+        angles=rot["euler_angles"];rotation=shtns_rotation_create(cfg.lmax,cfg.mmax,0)
+        shtns_rotation_set_angles_ZYZ(rotation,angles...)
+        zyz=similar(z);shtns_rotation_apply_real(CPU(),rotation,vec(p["Q"]),zyz)
+        @test zyz ≈ vec(p["ZYZ_real"]) atol=a rtol=r
+        complex_result=similar(vec(p["A"]));shtns_rotation_apply_cplx(CPU(),rotation,vec(p["A"]),complex_result)
+        @test complex_result ≈ vec(p["ZYZ_complex"]) atol=a rtol=r
+        wigner=zeros(Float64,length(p["wigner_d"]));@test shtns_rotation_wigner_d_matrix(rotation,rot["wigner_l"],wigner)==2rot["wigner_l"]+1
+        @test wigner ≈ vec(p["wigner_d"]) atol=a rtol=r
+        shtns_rotation_set_angles_ZXZ(rotation,angles...);zxz=similar(z);shtns_rotation_apply_real(CPU(),rotation,vec(p["Q"]),zxz)
+        @test zxz ≈ vec(p["ZXZ_real"]) atol=a rtol=r
+        axis=rot["angle_axis"];shtns_rotation_set_angle_axis(rotation,axis...);axis_result=similar(z);shtns_rotation_apply_real(CPU(),rotation,vec(p["Q"]),axis_result)
+        @test axis_result ≈ vec(p["axis_real"]) atol=a rtol=r
+        shtns_rotation_destroy(rotation)
     end
 end
 
@@ -282,11 +336,37 @@ function test_shtns37_fixtures_cpu()
     test_shtns37_qst_fixtures()
     test_shtns37_local_fixtures()
     test_shtns37_operator_rotation_fixtures()
+    test_shtns37_analysis_fixtures_cpu()
     return nothing
 end
 
 _shtns37_host(x::Tuple)=map(_shtns37_host,x)
 _shtns37_host(x)=Array(x)
+
+function _test_shtns37_analysis_fixture_gpu(f,p,cfg,to_device)
+    cap=Symbol(f["capability"]);a=f["atol"];r=f["rtol"]
+    if cap===:scalar_real_full
+        got=analysis_batch(GPU(),cfg,to_device(p["field"]));for k in axes(p["coefficients"],2);@test SHTnsKit.pack_lm(cfg,Array(got)[:,:,k]) ≈ p["coefficients"][:,k] atol=a rtol=r;end
+    elseif cap===:scalar_complex_full
+        @test Array(analysis_packed_cplx(GPU(),cfg,to_device(p["field"]))) ≈ vec(p["coefficients"]) atol=a rtol=r
+    elseif cap===:scalar_l
+        @test Array(analysis_packed_l(GPU(),cfg,to_device(vec(p["field"])),f["ltr"])) ≈ vec(p["coefficients"]) atol=a rtol=r
+    elseif cap===:scalar_ml
+        @test Array(analysis_packed_ml(GPU(),cfg,f["stored_im"],to_device(f["fixed_mode_scale"].*vec(p["field"])),f["ltr"])) ≈ vec(p["coefficients"]) atol=a rtol=r
+    elseif cap===:sphtor_full
+        got=analysis_sphtor_batch(GPU(),cfg,to_device(p["Vt"]),to_device(p["Vp"]));for k in axes(p["S"],2),(i,n) in enumerate(("S","T"));@test SHTnsKit.pack_lm(cfg,Array(got[i])[:,:,k]) ≈ p[n][:,k] atol=a rtol=r;end
+    elseif cap===:sphtor_l
+        got=analysis_sphtor_l(GPU(),cfg,to_device(p["Vt"]),to_device(p["Vp"]),f["ltr"]);for(i,n)in enumerate(("S","T"));@test SHTnsKit.pack_lm(cfg,Array(got[i])) ≈ vec(p[n]) atol=a rtol=r;end
+    elseif cap===:sphtor_ml
+        sc=f["fixed_mode_scale"];got=analysis_sphtor_ml(GPU(),cfg,f["stored_im"],to_device(sc.*vec(p["Vt"])),to_device(sc.*vec(p["Vp"])),f["ltr"]);for(i,n)in enumerate(("S","T"));@test Array(got[i]) ≈ vec(p[n]) atol=a rtol=r;end
+    elseif cap===:qst_full
+        got=analysis_qst_batch(GPU(),cfg,to_device(p["Vr"]),to_device(p["Vt"]),to_device(p["Vp"]));for k in axes(p["Q"],2),(i,n)in enumerate(("Q","S","T"));@test SHTnsKit.pack_lm(cfg,Array(got[i])[:,:,k]) ≈ p[n][:,k] atol=a rtol=r;end
+    elseif cap===:qst_l
+        got=analysis_qst_l(GPU(),cfg,to_device(p["Vr"]),to_device(p["Vt"]),to_device(p["Vp"]),f["ltr"]);for(i,n)in enumerate(("Q","S","T"));@test SHTnsKit.pack_lm(cfg,Array(got[i])) ≈ vec(p[n]) atol=a rtol=r;end
+    elseif cap===:qst_ml
+        sc=f["fixed_mode_scale"];got=analysis_qst_ml(GPU(),cfg,f["stored_im"],to_device(sc.*vec(p["Vr"])),to_device(sc.*vec(p["Vt"])),to_device(sc.*vec(p["Vp"])),f["ltr"]);for(i,n)in enumerate(("Q","S","T"));@test Array(got[i]) ≈ vec(p[n]) atol=a rtol=r;end
+    end
+end
 
 """Run every generated oracle through one functional vendor GPU backend."""
 function test_shtns37_gpu_fixtures(to_device)
@@ -296,7 +376,9 @@ function test_shtns37_gpu_fixtures(to_device)
             cfg=_shtns37_config(f);p=_shtns37_payloads(f);cap=Symbol(f["capability"]);a=f["atol"];r=f["rtol"]
             id=f["id"]
             @testset "$id" begin
-                if cap===:scalar_real_full
+                if get(f,"direction","")=="analysis"
+                    _test_shtns37_analysis_fixture_gpu(f,p,cfg,to_device)
+                elseif cap===:scalar_real_full
                     got=synthesis(GPU(),cfg,to_device(_shtns37_dense(cfg,p["coefficients"])))
                     @test Array(got) ≈ p["field"] atol=a rtol=r
                 elseif cap===:scalar_complex_full
@@ -356,8 +438,10 @@ function test_shtns37_gpu_fixtures(to_device)
                     rct=to_device(zeros(ComplexF64,cfg.nlm));rdt=to_device(zeros(ComplexF64,cfg.nlm));Q=to_device(vec(p["Q"]));SH_mul_mx(GPU(),cfg,ct,Q,rct);SH_mul_mx(GPU(),cfg,dt,Q,rdt)
                     @test Array(rct) ≈ vec(p["ct_result"]) atol=a rtol=r;@test Array(rdt) ≈ vec(p["dt_result"]) atol=a rtol=r
                 elseif cap===:rotations
-                    z=to_device(zeros(ComplexF64,cfg.nlm));y=to_device(zeros(ComplexF64,cfg.nlm));Q=to_device(vec(p["Q"]));SH_Zrotate(GPU(),cfg,Q,f["z_angle"],z);SH_Yrotate(GPU(),cfg,Q,f["y_angle"],y)
-                    @test Array(z) ≈ vec(p["Z"]) atol=a rtol=r;@test Array(y) ≈ vec(p["Y"]) atol=a rtol=r
+                    z=to_device(zeros(ComplexF64,cfg.nlm));y=similar(z);y90=similar(z);x90=similar(z);Q=to_device(vec(p["Q"]));SH_Zrotate(GPU(),cfg,Q,f["z_angle"],z);SH_Yrotate(GPU(),cfg,Q,f["y_angle"],y);SH_Yrotate90(GPU(),cfg,Q,y90);SH_Xrotate90(GPU(),cfg,Q,x90)
+                    @test Array(z) ≈ vec(p["Z"]) atol=a rtol=r;@test Array(y) ≈ vec(p["Y"]) atol=a rtol=r;@test Array(y90) ≈ vec(p["Y90"]) atol=a rtol=r;@test Array(x90) ≈ vec(p["X90"]) atol=a rtol=r
+                    angles=f["euler_angles"];rot=shtns_rotation_create(cfg.lmax,cfg.mmax,0);shtns_rotation_set_angles_ZYZ(rot,angles...);rr=similar(z);shtns_rotation_apply_real(GPU(),rot,Q,rr);@test Array(rr) ≈ vec(p["ZYZ_real"]) atol=a rtol=r
+                    rc=to_device(zeros(ComplexF64,length(vec(p["A"]))));shtns_rotation_apply_cplx(GPU(),rot,to_device(vec(p["A"])),rc);@test Array(rc) ≈ vec(p["ZYZ_complex"]) atol=a rtol=r
                 end
             end
         end
@@ -377,6 +461,34 @@ function _shtns37_place_scalar_batch(cfg, values, kind, comm)
     return result
 end
 
+
+function _test_shtns37_analysis_fixture_mpi(f,p,cfg,comm)
+    cap=Symbol(f["capability"]);a=f["atol"];r=f["rtol"]
+    spatial(x)=place(MPIScalarAdapter(comm),cfg,x,:spatial)
+    if cap===:scalar_real_full
+        got=analysis_batch(cfg,_shtns37_place_scalar_batch(cfg,p["field"],:spatial,comm));for k in axes(p["coefficients"],2);@test SHTnsKit.pack_lm(cfg,_collect_distributed_batch(got,comm)[:,:,k]) ≈ p["coefficients"][:,k] atol=a rtol=r;end
+    elseif cap===:scalar_complex_full
+        got=dist_analysis_packed_cplx(cfg,spatial(p["field"]));host=got isa PencilArray ? _collect_distributed_vector(got) : got
+        @test host ≈ vec(p["coefficients"]) atol=a rtol=r
+    elseif cap===:scalar_l
+        @test _collect_distributed_vector(analysis_packed_l(cfg,spatial(p["field"]),f["ltr"])) ≈ vec(p["coefficients"]) atol=a rtol=r
+    elseif cap===:scalar_ml
+        got=analysis_packed_ml(cfg,f["stored_im"],_place_distributed_vector(f["fixed_mode_scale"].*vec(p["field"]),comm),f["ltr"]);@test _collect_distributed_vector(got) ≈ vec(p["coefficients"]) atol=a rtol=r
+    elseif cap===:sphtor_full
+        got=analysis_sphtor_batch(cfg,_place_distributed_batch(cfg,p["Vt"],:spatial,comm),_place_distributed_batch(cfg,p["Vp"],:spatial,comm));for k in axes(p["S"],2),(i,n)in enumerate(("S","T"));@test SHTnsKit.pack_lm(cfg,_collect_distributed_batch(got[i],comm)[:,:,k]) ≈ p[n][:,k] atol=a rtol=r;end
+    elseif cap===:sphtor_l
+        got=analysis_sphtor_l(cfg,spatial(p["Vt"]),spatial(p["Vp"]),f["ltr"]);for(i,n)in enumerate(("S","T"));@test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,got[i])) ≈ vec(p[n]) atol=a rtol=r;end
+    elseif cap===:sphtor_ml
+        sc=f["fixed_mode_scale"];got=analysis_sphtor_ml(cfg,f["stored_im"],_place_distributed_vector(sc.*vec(p["Vt"]),comm),_place_distributed_vector(sc.*vec(p["Vp"]),comm),f["ltr"]);for(i,n)in enumerate(("S","T"));@test _collect_distributed_vector(got[i]) ≈ vec(p[n]) atol=a rtol=r;end
+    elseif cap===:qst_full
+        got=analysis_qst_batch(cfg,(_place_distributed_batch(cfg,p[n],:spatial,comm) for n in ("Vr","Vt","Vp"))...);for k in axes(p["Q"],2),(i,n)in enumerate(("Q","S","T"));@test SHTnsKit.pack_lm(cfg,_collect_distributed_batch(got[i],comm)[:,:,k]) ≈ p[n][:,k] atol=a rtol=r;end
+    elseif cap===:qst_l
+        got=analysis_qst_l(cfg,(spatial(p[n]) for n in ("Vr","Vt","Vp"))...,f["ltr"]);for(i,n)in enumerate(("Q","S","T"));@test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,got[i])) ≈ vec(p[n]) atol=a rtol=r;end
+    elseif cap===:qst_ml
+        sc=f["fixed_mode_scale"];got=analysis_qst_ml(cfg,f["stored_im"],(_place_distributed_vector(sc.*vec(p[n]),comm) for n in ("Vr","Vt","Vp"))...,f["ltr"]);for(i,n)in enumerate(("Q","S","T"));@test _collect_distributed_vector(got[i]) ≈ vec(p[n]) atol=a rtol=r;end
+    end
+end
+
 function test_shtns37_mpi_fixtures(comm)
     manifest=TOML.parsefile(SHTNS37_MANIFEST_PATH)
     @testset "SHTns 3.7 MPI fixtures" begin
@@ -385,7 +497,9 @@ function test_shtns37_mpi_fixtures(comm)
             RT=f["precision"] == "float32" ? Float32 : Float64
             prototype=place(MPIScalarAdapter(comm),cfg,zeros(RT,cfg.nlat,cfg.nlon),:spatial);id=f["id"]
             @testset "$id" begin
-                if cap===:scalar_real_full
+                if get(f,"direction","")=="analysis"
+                    _test_shtns37_analysis_fixture_mpi(f,p,cfg,comm)
+                elseif cap===:scalar_real_full
                     q=matrix_to_spectral_pencil(cfg,_shtns37_dense(cfg,p["coefficients"]);comm);got=synthesis(cfg,q;prototype_θφ=prototype);@test _collect_spatial(got,cfg) ≈ p["field"] atol=a rtol=r
                 elseif cap===:scalar_complex_full
                     q=_place_distributed_vector(vec(p["coefficients"]),comm);cp=place(MPIScalarAdapter(comm),cfg,zeros(ComplexF64,cfg.nlat,cfg.nlon),:spatial);got=synthesis_packed_cplx(cfg,q;prototype_θφ=cp);@test _collect_spatial(got,cfg) ≈ p["field"] atol=a rtol=r
@@ -425,8 +539,8 @@ function test_shtns37_mpi_fixtures(comm)
                     Q=matrix_to_spectral_pencil(cfg,_shtns37_dense(cfg,p["Q"]);comm);rct=similar(Q);rdt=similar(Q);SH_mul_mx(CPU(),cfg,vec(p["ct_matrix"]),Q,rct);SH_mul_mx(CPU(),cfg,vec(p["dt_matrix"]),Q,rdt)
                     @test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,rct)) ≈ vec(p["ct_result"]) atol=a rtol=r;@test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,rdt)) ≈ vec(p["dt_result"]) atol=a rtol=r
                 elseif cap===:rotations
-                    Q=matrix_to_spectral_pencil(cfg,_shtns37_dense(cfg,p["Q"]);comm);z=similar(Q);y=similar(Q);SHTnsKit.dist_SH_Zrotate(cfg,Q,f["z_angle"],z);SHTnsKit.dist_SH_Yrotate(cfg,Q,f["y_angle"],y)
-                    @test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,z)) ≈ vec(p["Z"]) atol=a rtol=r;@test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,y)) ≈ vec(p["Y"]) atol=a rtol=r
+                    Q=matrix_to_spectral_pencil(cfg,_shtns37_dense(cfg,p["Q"]);comm);z=similar(Q);y=similar(Q);y90=similar(Q);x90=similar(Q);SHTnsKit.dist_SH_Zrotate(cfg,Q,f["z_angle"],z);SHTnsKit.dist_SH_Yrotate(cfg,Q,f["y_angle"],y);SHTnsKit.dist_SH_Yrotate90(cfg,Q,y90);SHTnsKit.dist_SH_Xrotate90(cfg,Q,x90)
+                    @test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,z)) ≈ vec(p["Z"]) atol=a rtol=r;@test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,y)) ≈ vec(p["Y"]) atol=a rtol=r;@test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,y90)) ≈ vec(p["Y90"]) atol=a rtol=r;@test SHTnsKit.pack_lm(cfg,spectral_pencil_to_matrix(cfg,x90)) ≈ vec(p["X90"]) atol=a rtol=r
                 end
             end
         end
@@ -452,6 +566,35 @@ function test_shtns37_fixture_manifest()
 
         fixtures = manifest["fixture"]
         @test !isempty(fixtures)
+
+        rotation = only(filter(f -> f["capability"] == "rotations", fixtures))
+        expected_rotation_operations = Set((
+            "z", "y", "y90", "x90", "zyz", "zxz", "angle_axis",
+            "wigner_d", "apply_real", "apply_complex",
+        ))
+        @test Set(get(rotation, "rotation_operations", String[])) ==
+              expected_rotation_operations
+
+        expected_analysis_apis = Set((
+            "spat_to_SH", "spat_cplx_to_SH", "spat_to_SH_l", "spat_to_SH_ml",
+            "spat_to_SHsphtor", "spat_to_SHsphtor_l", "spat_to_SHsphtor_ml",
+            "spat_to_SHqst", "spat_to_SHqst_l", "spat_to_SHqst_ml",
+        ))
+        analysis_fixtures = filter(f -> get(f, "direction", "") == "analysis", fixtures)
+        @test Set(f["analysis_api"] for f in analysis_fixtures) == expected_analysis_apis
+        @test count(f -> get(f, "batch", 1) > 1, analysis_fixtures) == 3
+        @test all(analysis_fixtures) do fixture
+            roles = Set(get(payload, "role", "") for payload in fixture["payload"])
+            "analysis_input" in roles && "analysis_oracle" in roles
+        end
+        generator_source=read(SHTNS37_GENERATOR_PATH,String)
+        for api in expected_analysis_apis
+            @test occursin("$api(",generator_source)
+        end
+        runner_source=read(@__FILE__,String)
+        @test occursin("_test_shtns37_analysis_fixture_gpu",runner_source)
+        @test occursin("_test_shtns37_analysis_fixture_mpi",runner_source)
+        @test occursin("_test_shtns37_analysis_fixture_mpi_gpu",read(SHTNS37_MPI_GPU_PATH,String))
         @test Set(Symbol(f["capability"]) for f in fixtures) ==
               Set(SHTns37TestCapabilities.CAPABILITIES)
         @test Set(f["grid"] for f in fixtures) ==

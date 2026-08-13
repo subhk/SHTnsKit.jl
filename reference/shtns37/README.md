@@ -15,6 +15,11 @@ make -C reference/shtns37 \
   SHTNS_PREFIX=/path/to/shtns-3.7 \
   FFTW_PREFIX=/path/to/fftw
 reference/shtns37/generate test/fixtures/shtns37
+
+# Generate three clean directories and require byte-for-byte identity.
+make -C reference/shtns37 check-reproducible \
+  SHTNS_PREFIX=/path/to/shtns-3.7 \
+  FFTW_PREFIX=/path/to/fftw
 ```
 
 The generator uses `SHT_PHI_CONTIGUOUS`, converts every number explicitly to
@@ -22,6 +27,28 @@ little-endian byte order, and writes SHA-256 checksums to `manifest.toml`.
 SHTns 3.7 CPU transforms are FP64-only. Any Float32 fixtures are produced by
 an explicitly recorded downcast of an independently computed FP64 SHTns
 oracle, never by SHTnsKit.jl.
+
+SHTns' `sht_gauss` and `sht_reg_dct` selectors benchmark multiple equivalent
+kernels, so their chosen kernel can vary between fresh processes. The
+generator uses the public same-node deterministic selectors `sht_quick_init`
+and `sht_reg_fast` for those grids. Exact `sht_gauss_fly` is intentionally
+self-tuning; its FP64 spatial results are canonicalized to an absolute 2^-40
+lattice before serialization. That lattice is more than eight times finer
+than the fixed `8e-12` comparison tolerance. Checksums and tolerances are never
+relaxed. `check-reproducible` proves three clean generations are byte-identical.
+
+Analysis fixtures use deterministic spatial inputs and call SHTns' public
+`spat_to_SH`, `spat_cplx_to_SH`, `_l`, `_ml`, spheroidal/toroidal, and QST
+analysis functions directly. Full scalar, vector, and QST batches are repeated
+public SHTns calls. Manifest payload roles distinguish `analysis_input` from
+`analysis_oracle`; no expected coefficient is derived with SHTnsKit.
+
+The rotation fixture calls the complete public SHTns 3.7 surface: Z, Y, Y90,
+X90, ZYZ, ZXZ, angle-axis, Wigner-d extraction, and real/complex apply. Serial
+CPU and GPU APIs compare every applicable value. Distributed backends compare
+Z, Y, Y90, and X90; SHTnsKit has no public distributed rotation-object or
+distributed complex-rotation-object apply API, so the general real/complex
+objects and Wigner-d values are consumed by the serial CPU/GPU paths.
 
 The payload convention is SHTnsKit's public convention. The generator records
 physical `mmax` (while SHTns receives its stored-order count), converts the

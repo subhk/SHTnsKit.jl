@@ -4,7 +4,7 @@ shtns_interface = 0x307A0
 upstream_tag = "v3.7"
 upstream_commit = "4e04fba84ea156974df5edaf4ee856c0f4f86e77"
 upstream_archive_sha256 = "5c6a2d585211232a030c6fbbb08f6a794dd1aab987d31511ef53deea12138d97"
-generator_source_sha256 = "ba767f3f543a70a02201517e203970363b6999588cfdf68709c6586b942bc3f6"
+generator_source_sha256 = "672b5a5f83d6a2deb9e449c54ead6942c4d31d64e2fd0ecffc88373106d37ea0"
 
 [[fixture]]
 id = "scalar_real_full_gauss_f64"
@@ -109,7 +109,7 @@ endian = "little"
 eltype = "float64"
 shape = [8, 10]
 bytes = 640
-sha256 = "b404fd7c47ee8e9b3867d6b726f8b4a1a7b18fda918707813d8416255b7c900a"
+sha256 = "8039529b771a963d5e2e91eeac514c39f5849c67adba48e3bd8c978a5ec8216a"
 
 [[fixture]]
 id = "scalar_ml"
@@ -422,7 +422,7 @@ endian = "little"
 eltype = "float64"
 shape = [8, 10, 2]
 bytes = 1280
-sha256 = "09a6c75f58808300f9fd7c7ac7e415124e65e3d20fe258a08a6654ce0652d954"
+sha256 = "29b8f76e2e33e52b6be1f5520502fba364a941ba93ac9867e716a8da08929d5f"
 
 [[fixture.payload]]
 name = "Vp"
@@ -431,7 +431,7 @@ endian = "little"
 eltype = "float64"
 shape = [8, 10, 2]
 bytes = 1280
-sha256 = "74a3620d7af9f2de3d25589268f5fa71af9a2c1cb8b689734eef656ec7d232c2"
+sha256 = "071907ba2a1eeb4af8a9b1af5eb434c1b08caed006af2c5f882261d27f985c28"
 
 [[fixture]]
 id = "qst_full"
@@ -555,7 +555,7 @@ endian = "little"
 eltype = "float64"
 shape = [10, 12]
 bytes = 960
-sha256 = "7d6cbbe07590fd59fd59da2a13cc5607494e53ab3cfdaa6176432c902a1aaf8a"
+sha256 = "e97a8778ca59020fff5a86aab729e7a81d61eded1714826dc8cd0be43e3380c3"
 
 [[fixture.payload]]
 name = "Vt"
@@ -564,7 +564,7 @@ endian = "little"
 eltype = "float64"
 shape = [10, 12]
 bytes = 960
-sha256 = "2944fcd456e8e663a74f63ecb73b5b2a09e87fa55a25d1f5ed7ff5af5c8c689f"
+sha256 = "59866ea75ee259b305d876bdcc6533e3e836f07155b46d1bfadd2b1e9709f150"
 
 [[fixture.payload]]
 name = "Vp"
@@ -573,7 +573,7 @@ endian = "little"
 eltype = "float64"
 shape = [10, 12]
 bytes = 960
-sha256 = "018be7d46b416ecdc21a48c0a87f0a26aea64532b5e324ee18025dc23233f794"
+sha256 = "3e0bce186c0dcb74e1981cfff185ee521b0330554f4acd9d5c91497bf8c80397"
 
 [[fixture]]
 id = "qst_ml"
@@ -1116,8 +1116,12 @@ nlat = 10
 nphi = 12
 atol = 8.0e-12
 rtol = 8.0e-12
+rotation_operations = ["z", "y", "y90", "x90", "zyz", "zxz", "angle_axis", "wigner_d", "apply_real", "apply_complex"]
 z_angle = 0.37
 y_angle = 0.40999999999999998
+euler_angles = [0.23000000000000001, 0.40999999999999998, -0.17000000000000001]
+angle_axis = [0.52000000000000002, 0.20000000000000001, -0.29999999999999999, 0.69999999999999996]
+wigner_l = 3
 
 [[fixture.payload]]
 name = "Q"
@@ -1145,3 +1149,661 @@ eltype = "complex64"
 shape = [15]
 bytes = 240
 sha256 = "e13033c02fa8dad24e7fbffa465f1e934e2144e172f20ead23c394493f7712e0"
+
+[[fixture.payload]]
+name = "Y90"
+file = "rotations_Y90.bin"
+endian = "little"
+eltype = "complex64"
+shape = [15]
+bytes = 240
+sha256 = "ff4c00128ac4fed977f3b2d272650800d7128fad3552b4b05c260f65eabb8a60"
+
+[[fixture.payload]]
+name = "X90"
+file = "rotations_X90.bin"
+endian = "little"
+eltype = "complex64"
+shape = [15]
+bytes = 240
+sha256 = "d958035e05c61407e4f78f1f92e53baeb963b26213bd1f93798930dc2e2c284c"
+
+[[fixture.payload]]
+name = "ZYZ_real"
+file = "rotations_ZYZ_real.bin"
+endian = "little"
+eltype = "complex64"
+shape = [15]
+bytes = 240
+sha256 = "024f06dca439eceadcf8b1352be18d8e52f1024abd338f0c320ac495c6ec9ae9"
+
+[[fixture.payload]]
+name = "ZXZ_real"
+file = "rotations_ZXZ_real.bin"
+endian = "little"
+eltype = "complex64"
+shape = [15]
+bytes = 240
+sha256 = "a16ac954da764bb341669500afa92a7e195d815b7d8aefa14b1c48f9c6c62bd5"
+
+[[fixture.payload]]
+name = "axis_real"
+file = "rotations_axis_real.bin"
+endian = "little"
+eltype = "complex64"
+shape = [15]
+bytes = 240
+sha256 = "52adbbb37a75319b11e369c7ef14208453b39d96e9b5513a172e4cc0cfad8fc8"
+
+[[fixture.payload]]
+name = "A"
+file = "rotations_A.bin"
+endian = "little"
+eltype = "complex64"
+shape = [25]
+bytes = 400
+sha256 = "d5ef3c3d8e72a4b238a12a7fec48ac1032be1392201fbdb8ed022ab23eed951a"
+
+[[fixture.payload]]
+name = "ZYZ_complex"
+file = "rotations_ZYZ_complex.bin"
+endian = "little"
+eltype = "complex64"
+shape = [25]
+bytes = 400
+sha256 = "3b29e679d6f12ee1f21b34b83bdac5d564f1be92331305dd6ce495cffc1f1647"
+
+[[fixture.payload]]
+name = "wigner_d"
+file = "rotations_wigner_d.bin"
+endian = "little"
+eltype = "float64"
+shape = [49]
+bytes = 392
+sha256 = "c399df86f89e5b109be0ed3f79b4dcd7271d1ca236c0950e2dc851cb90b3c777"
+
+[[fixture]]
+id = "analysis_scalar_full"
+capability = "scalar_real_full"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 3
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SH"
+batch = 2
+
+[[fixture.payload]]
+name = "field"
+file = "analysis_scalar_full_field.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10, 2]
+bytes = 1280
+sha256 = "11db5131b6b0e43873e92b30a5f250d8bfa28f10a77bf9b8b98b0ba380d005ae"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "coefficients"
+file = "analysis_scalar_full_coefficients.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10, 2]
+bytes = 320
+sha256 = "374a277be77cada00058cca2662affd40f5b456519bdbca775ff59dd56a423c7"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_scalar_complex"
+capability = "scalar_complex_full"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 3
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_cplx_to_SH"
+batch = 1
+
+[[fixture.payload]]
+name = "field"
+file = "analysis_scalar_complex_field.bin"
+endian = "little"
+eltype = "complex64"
+shape = [8, 10]
+bytes = 1280
+sha256 = "3ffcec9bcaf90b1aecfb40f8cfbfcfeae7cf5b104b0a33f76f86041dfee46351"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "coefficients"
+file = "analysis_scalar_complex_coefficients.bin"
+endian = "little"
+eltype = "complex64"
+shape = [16]
+bytes = 256
+sha256 = "b84a424a7bac5994115aa79979c33d727c05c84a16c26c1ff47b1cd9f46470eb"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_scalar_l"
+capability = "scalar_l"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 2
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SH_l"
+batch = 1
+
+[[fixture.payload]]
+name = "field"
+file = "analysis_scalar_l_field.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10]
+bytes = 640
+sha256 = "21aea45d84b11427c5480476086398049daa5a34a75b218bf0b5638256e13696"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "coefficients"
+file = "analysis_scalar_l_coefficients.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10]
+bytes = 160
+sha256 = "38a54df7cde7634057b1a12ac1fb83c5f28a2b2fe53ebb7f19ba2424c5950206"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_scalar_ml"
+capability = "scalar_ml"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 3
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SH_ml"
+batch = 1
+stored_im = 1
+fixed_mode_scale = 10
+
+[[fixture.payload]]
+name = "field"
+file = "analysis_scalar_ml_field.bin"
+endian = "little"
+eltype = "complex64"
+shape = [8]
+bytes = 128
+sha256 = "fc1cdd8008f84ef3445ef710d5eff1ff9c503f16ebaff82715e3de33eff2f809"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "coefficients"
+file = "analysis_scalar_ml_coefficients.bin"
+endian = "little"
+eltype = "complex64"
+shape = [3]
+bytes = 48
+sha256 = "9da89835c680aecfd55f806c8ef46881e4c1d5c50f43edf3ef40b22c8d7e3d32"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_sphtor_full"
+capability = "sphtor_full"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 3
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SHsphtor"
+batch = 2
+
+[[fixture.payload]]
+name = "Vt"
+file = "analysis_sphtor_full_Vt.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10, 2]
+bytes = 1280
+sha256 = "8220153a39a867f468ccb89f8d3585a50d07e82cb1276cf142318eaace3832a4"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vp"
+file = "analysis_sphtor_full_Vp.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10, 2]
+bytes = 1280
+sha256 = "0ee75380eb9a17f2372d72e9401f191f6d62519b03d3b7dc11d5b361f7e99bed"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "S"
+file = "analysis_sphtor_full_S.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10, 2]
+bytes = 320
+sha256 = "1ce979850292b4fe438ce2409d36254ad96a919599b161d5277bf95600b4d695"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "T"
+file = "analysis_sphtor_full_T.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10, 2]
+bytes = 320
+sha256 = "741d5b0edeeb68601fbb70639f2d19dc9adaf5fb841d2fa951439f1de923de8d"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_sphtor_l"
+capability = "sphtor_l"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 2
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SHsphtor_l"
+batch = 1
+
+[[fixture.payload]]
+name = "Vt"
+file = "analysis_sphtor_l_Vt.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10]
+bytes = 640
+sha256 = "aa114c6e8a43c5340d55c012156cfe041632afc421dd1535fe05634d9ba8fe51"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vp"
+file = "analysis_sphtor_l_Vp.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10]
+bytes = 640
+sha256 = "ebe908ea19f597a924b0762ad207e6702336f723323d6e1196e5225e7db67de3"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "S"
+file = "analysis_sphtor_l_S.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10]
+bytes = 160
+sha256 = "e68c9247baf5e51b2074904aeabb02651845db9efd14668017fff86b5044ab55"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "T"
+file = "analysis_sphtor_l_T.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10]
+bytes = 160
+sha256 = "2462996314da0431a0602158486995866041693c54e4a052527d200faadcb48d"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_sphtor_ml"
+capability = "sphtor_ml"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 3
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SHsphtor_ml"
+batch = 1
+stored_im = 1
+fixed_mode_scale = 10
+
+[[fixture.payload]]
+name = "Vt"
+file = "analysis_sphtor_ml_Vt.bin"
+endian = "little"
+eltype = "complex64"
+shape = [8]
+bytes = 128
+sha256 = "086bba459241260d5bd36448cb0893c241f1bb1e6039f5dcc9c0c77bf8e497c5"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vp"
+file = "analysis_sphtor_ml_Vp.bin"
+endian = "little"
+eltype = "complex64"
+shape = [8]
+bytes = 128
+sha256 = "125492ece894a25c247c7fdd31e8fd4c152dd2315da931e2ee07a5968216ce43"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "S"
+file = "analysis_sphtor_ml_S.bin"
+endian = "little"
+eltype = "complex64"
+shape = [3]
+bytes = 48
+sha256 = "7720e069d68a67057fcb9dfc0c097d1421f413267cd5b159658d0a9da070ed5e"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "T"
+file = "analysis_sphtor_ml_T.bin"
+endian = "little"
+eltype = "complex64"
+shape = [3]
+bytes = 48
+sha256 = "0fcc0a90aa5b9e34478458167d89160a6cb996a32f0e90bfaa46e43bb77e4c6e"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_qst_full"
+capability = "qst_full"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 3
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SHqst"
+batch = 2
+
+[[fixture.payload]]
+name = "Vr"
+file = "analysis_qst_full_Vr.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10, 2]
+bytes = 1280
+sha256 = "89f36654ca1e30d9a26fb11a08ab29cb74117c99d21f15e4cb9d14333dd1c7c1"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vt"
+file = "analysis_qst_full_Vt.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10, 2]
+bytes = 1280
+sha256 = "2522dd8e06f18630bccb9e80b6d4362402552da909861a5e995dba84e1adf643"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vp"
+file = "analysis_qst_full_Vp.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10, 2]
+bytes = 1280
+sha256 = "375d625213af02f7938ed579888618d5607d19bee2e74b4a1eacd659c47e9d1b"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Q"
+file = "analysis_qst_full_Q.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10, 2]
+bytes = 320
+sha256 = "308a6676ad8c99a45c807c6698d79dd1a9d47fc7ecc63f80db574891dd7fe8fe"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "S"
+file = "analysis_qst_full_S.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10, 2]
+bytes = 320
+sha256 = "734c6d691bfd4041ec9f35067fed7bddbc41d4b3dc1a706210be7553823596b4"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "T"
+file = "analysis_qst_full_T.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10, 2]
+bytes = 320
+sha256 = "b3ecc7aee2f0d7ca4caa17ac25e302f643b4ca1666ba391c3aacfb49706a569f"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_qst_l"
+capability = "qst_l"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 2
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SHqst_l"
+batch = 1
+
+[[fixture.payload]]
+name = "Vr"
+file = "analysis_qst_l_Vr.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10]
+bytes = 640
+sha256 = "4753e410b860d7f9c9d676fb79b79bb0486f6225e9cc9d92197f7decef2e1b19"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vt"
+file = "analysis_qst_l_Vt.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10]
+bytes = 640
+sha256 = "156c05981d2fced86059b27c58fdc16a95390db64b69684472b409bb87c14c50"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vp"
+file = "analysis_qst_l_Vp.bin"
+endian = "little"
+eltype = "float64"
+shape = [8, 10]
+bytes = 640
+sha256 = "1de34691002188760856929b647622d3ad6da759bd886f97caabdecab2025280"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Q"
+file = "analysis_qst_l_Q.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10]
+bytes = 160
+sha256 = "a2537eeb2b42c28687ccfa9f6c42e1f01a29a6111d89be0e81a1ce3f50ecb441"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "S"
+file = "analysis_qst_l_S.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10]
+bytes = 160
+sha256 = "955fd39f45230a5f9dbd69e6fdc17836bf3d37c40d9664e7d34403c1eb536e55"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "T"
+file = "analysis_qst_l_T.bin"
+endian = "little"
+eltype = "complex64"
+shape = [10]
+bytes = 160
+sha256 = "803ceebb40468b740dca53ea82d670f0b4b425033d5eb9eb736de8b62270115d"
+role = "analysis_oracle"
+
+[[fixture]]
+id = "analysis_qst_ml"
+capability = "qst_ml"
+grid = "gauss"
+norm = "orthonormal"
+cs_phase = true
+real_norm = false
+precision = "float64"
+lmax = 3
+mmax = 3
+mres = 1
+ltr = 3
+nlat = 8
+nphi = 10
+atol = 8.0e-12
+rtol = 8.0e-12
+direction = "analysis"
+analysis_api = "spat_to_SHqst_ml"
+batch = 1
+stored_im = 1
+fixed_mode_scale = 10
+
+[[fixture.payload]]
+name = "Vr"
+file = "analysis_qst_ml_Vr.bin"
+endian = "little"
+eltype = "complex64"
+shape = [8]
+bytes = 128
+sha256 = "ad96e69959d248460ced70fb205aa922b3842f9ff235f8a4dc0b8e1f3570d7c9"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vt"
+file = "analysis_qst_ml_Vt.bin"
+endian = "little"
+eltype = "complex64"
+shape = [8]
+bytes = 128
+sha256 = "abc84fe030b4208384b0813d58c94043371305127d4eb025d77040d87d3ce986"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Vp"
+file = "analysis_qst_ml_Vp.bin"
+endian = "little"
+eltype = "complex64"
+shape = [8]
+bytes = 128
+sha256 = "06a9bdb25c09645bc4b32f2a38c5d718eebbe7d24b560393caef4946285b6b35"
+role = "analysis_input"
+
+[[fixture.payload]]
+name = "Q"
+file = "analysis_qst_ml_Q.bin"
+endian = "little"
+eltype = "complex64"
+shape = [3]
+bytes = 48
+sha256 = "f3f798f5e01936559dfcc215476b9784c862a59cd2e4d58af435b70dede65c1e"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "S"
+file = "analysis_qst_ml_S.bin"
+endian = "little"
+eltype = "complex64"
+shape = [3]
+bytes = 48
+sha256 = "86b785dabb8b67881dee606e5aa5345a234d630b2befda63f439730ba8ffc9b1"
+role = "analysis_oracle"
+
+[[fixture.payload]]
+name = "T"
+file = "analysis_qst_ml_T.bin"
+endian = "little"
+eltype = "complex64"
+shape = [3]
+bytes = 48
+sha256 = "de96a7a0f9b8a949279590e590d59fabee6888b064ede69b30c9cac1bd958b72"
+role = "analysis_oracle"

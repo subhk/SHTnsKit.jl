@@ -3,6 +3,7 @@
 
 #include <complex.h>
 #include <errno.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -220,6 +221,13 @@ static void payload_block(FILE *manifest, const char *output_dir, const char *na
     fprintf(manifest,"]\nbytes = %zu\nsha256 = \"%s\"\n",bytes,hash);
 }
 
+static void payload_role(FILE *manifest, const char *output_dir, const char *name,
+                         const char *file, const char *eltype, const int *shape,
+                         int ndims, size_t bytes, const char *role) {
+    payload_block(manifest,output_dir,name,file,eltype,shape,ndims,bytes);
+    fprintf(manifest,"role = \"%s\"\n",role);
+}
+
 static void fill_real_coefficients(shtns_cfg cfg, cplx *q, double factor) {
     for (unsigned lm=0; lm<cfg->nlm; ++lm) {
         int l=cfg->li[lm], m=cfg->mi[lm];
@@ -231,6 +239,18 @@ static void fill_real_coefficients(shtns_cfg cfg, cplx *q, double factor) {
 
 static void convert_toroidal_to_shtnskit(cplx *t,size_t count) {
     for(size_t i=0;i<count;++i) t[i] = -t[i];
+}
+
+/* Exact sht_gauss_fly initialization intentionally benchmarks public SHTns
+   kernels; equivalent kernels can differ in their last few FP64 bits.  Round
+   only those oracle results to a 2^-40 absolute lattice (well below the fixed
+   8e-12 comparison tolerance), and canonicalize signed zero. */
+static void canonicalize_fp64_noise(double *values,size_t count) {
+    const double quantum = 0x1p-40;
+    for(size_t i=0;i<count;++i) {
+        double rounded = nearbyint(values[i]/quantum)*quantum;
+        values[i] = rounded == 0.0 ? 0.0 : rounded;
+    }
 }
 
 static void fill_complex_coefficients(shtns_cfg cfg, cplx *a, double factor) {
@@ -246,6 +266,12 @@ static void fill_complex_coefficients(shtns_cfg cfg, cplx *a, double factor) {
 
 static shtns_cfg make_cfg(int lmax,int mmax,int mres,int norm,int grid,int nlat,int nphi,int layout) {
     if (mmax % mres != 0) { fputs("physical mmax must be divisible by mres\n",stderr); exit(1); }
+    /* The self-tuning grid selectors benchmark several mathematically equivalent
+       kernels and can choose a different kernel in separate processes.  The
+       public quick selectors use the same Gauss/Fejer nodes with a fixed FFTW
+       ESTIMATE plan, which makes an oracle generator reproducible. */
+    if (grid == sht_gauss) grid = sht_quick_init;
+    if (grid == sht_reg_dct) grid = sht_reg_fast;
     shtns_cfg cfg=shtns_create(lmax,mmax/mres,mres,(enum shtns_norm)norm);
     if (!cfg || shtns_set_grid(cfg,(enum shtns_type)(grid|layout),1e-12,nlat,nphi)<0) {
         fputs("SHTns configuration failed\n",stderr); exit(1);
@@ -275,6 +301,7 @@ static void generate_scalar_family(FILE *manifest, const char *output_dir) {
         shtns_cfg cfg=make_cfg(lmax,mmax,mres,sht_fourpi|SHT_NO_CS_PHASE,sht_gauss_fly,nlat,nphi,SHT_PHI_CONTIGUOUS);
         cplx *q=calloc(cfg->nlm,sizeof(*q)); double *v=calloc((size_t)nlat*nphi,sizeof(*v));
         fill_real_coefficients(cfg,q,1.0); SH_to_spat_l(cfg,q,v,ltr);
+        canonicalize_fp64_noise(v,(size_t)nlat*nphi);
         path_join(path,sizeof(path),output_dir,"scalar_l_coefficients.bin"); write_complex_file(path,q,cfg->nlm);
         path_join(path,sizeof(path),output_dir,"scalar_l_field.bin"); write_spatial_real_file(path,v,nlat,nphi);
         begin_fixture(manifest,"scalar_l","scalar_l","gauss_fly","fourpi",0,0,"float64",lmax,mmax,mres,ltr,nlat,nphi);
@@ -302,7 +329,7 @@ static void generate_scalar_family(FILE *manifest, const char *output_dir) {
     { /* two-field public batch */
         int lmax=3,mmax=3,mres=1,nlat=8,nphi=10,batch=2;
         shtns_cfg cfg=shtns_create(lmax,mmax,mres,sht_orthonormal|SHT_REAL_NORM);
-        if(!cfg || shtns_set_many(cfg,batch,0)!=batch || shtns_set_grid(cfg,sht_gauss|SHT_THETA_CONTIGUOUS,1e-12,nlat,nphi)<0) { fputs("batch setup failed\n",stderr); exit(1); }
+        if(!cfg || shtns_set_many(cfg,batch,0)!=batch || shtns_set_grid(cfg,sht_quick_init|SHT_THETA_CONTIGUOUS,1e-12,nlat,nphi)<0) { fputs("batch setup failed\n",stderr); exit(1); }
         cplx *q=calloc((size_t)cfg->nlm*batch,sizeof(*q)); double *v=calloc((size_t)nlat*nphi*batch,sizeof(*v));
         fill_real_coefficients(cfg,q,1.0); fill_real_coefficients(cfg,q+cfg->nlm,-0.7); SH_to_spat(cfg,q,v);
         path_join(path,sizeof(path),output_dir,"scalar_batch_coefficients.bin"); write_complex_file(path,q,(size_t)cfg->nlm*batch);
@@ -391,6 +418,7 @@ static void generate_vector_family(FILE *manifest,const char *out) {
         double *vt=calloc((size_t)nlat*nphi*batch,sizeof(*vt)),*vp=calloc((size_t)nlat*nphi*batch,sizeof(*vp));
         double *tmp1=calloc((size_t)nlat*nphi,sizeof(*tmp1)),*tmp2=calloc((size_t)nlat*nphi,sizeof(*tmp2));
         for(int k=0;k<batch;++k){fill_real_coefficients(cfg,s+(size_t)k*nlm,0.4+0.2*k);fill_real_coefficients(cfg,t+(size_t)k*nlm,-0.25-0.1*k);s[(size_t)k*nlm]=t[(size_t)k*nlm]=0;SHsphtor_to_spat(cfg,s+(size_t)k*nlm,t+(size_t)k*nlm,tmp1,tmp2);convert_toroidal_to_shtnskit(t+(size_t)k*nlm,nlm);for(int ip=0;ip<nphi;++ip)for(int it=0;it<nlat;++it){size_t dst=it+(size_t)nlat*ip+(size_t)nlat*nphi*k,src=(size_t)it*nphi+ip;vt[dst]=tmp1[src];vp[dst]=tmp2[src];}}
+        canonicalize_fp64_noise(vt,(size_t)nlat*nphi*batch);canonicalize_fp64_noise(vp,(size_t)nlat*nphi*batch);
         begin_fixture(manifest,"sphtor_batch","sphtor_batch","gauss_fly","orthonormal",1,1,"float64",lmax,mmax,mres,lmax,nlat,nphi);
         char path[4096];path_join(path,sizeof(path),out,"sphtor_batch_S.bin");write_complex_file(path,s,(size_t)nlm*batch);path_join(path,sizeof(path),out,"sphtor_batch_T.bin");write_complex_file(path,t,(size_t)nlm*batch);path_join(path,sizeof(path),out,"sphtor_batch_Vt.bin");write_real_file(path,vt,(size_t)nlat*nphi*batch);path_join(path,sizeof(path),out,"sphtor_batch_Vp.bin");write_real_file(path,vp,(size_t)nlat*nphi*batch);
         int ss[]={nlm,batch},sv[]={nlat,nphi,batch};payload_block(manifest,out,"S","sphtor_batch_S.bin","complex64",ss,2,(size_t)nlm*batch*16);payload_block(manifest,out,"T","sphtor_batch_T.bin","complex64",ss,2,(size_t)nlm*batch*16);payload_block(manifest,out,"Vt","sphtor_batch_Vt.bin","float64",sv,3,(size_t)nlat*nphi*batch*8);payload_block(manifest,out,"Vp","sphtor_batch_Vp.bin","float64",sv,3,(size_t)nlat*nphi*batch*8);
@@ -410,7 +438,7 @@ static void generate_qst_family(FILE *manifest,const char *out) {
     { int lmax=4,mmax=4,mres=1,ltr=2,nlat=10,nphi=12;
       shtns_cfg cfg=make_cfg(lmax,mmax,mres,sht_fourpi|SHT_NO_CS_PHASE,sht_gauss_fly,nlat,nphi,SHT_PHI_CONTIGUOUS);
       cplx *q=calloc(cfg->nlm,sizeof(*q)),*s=calloc(cfg->nlm,sizeof(*s)),*t=calloc(cfg->nlm,sizeof(*t));double *vr=calloc((size_t)nlat*nphi,sizeof(*vr)),*vt=calloc((size_t)nlat*nphi,sizeof(*vt)),*vp=calloc((size_t)nlat*nphi,sizeof(*vp));
-      fill_real_coefficients(cfg,q,0.8);fill_real_coefficients(cfg,s,0.45);fill_real_coefficients(cfg,t,-0.25);s[0]=t[0]=0;SHqst_to_spat_l(cfg,q,s,t,vr,vt,vp,ltr);convert_toroidal_to_shtnskit(t,cfg->nlm);
+      fill_real_coefficients(cfg,q,0.8);fill_real_coefficients(cfg,s,0.45);fill_real_coefficients(cfg,t,-0.25);s[0]=t[0]=0;SHqst_to_spat_l(cfg,q,s,t,vr,vt,vp,ltr);convert_toroidal_to_shtnskit(t,cfg->nlm);canonicalize_fp64_noise(vr,(size_t)nlat*nphi);canonicalize_fp64_noise(vt,(size_t)nlat*nphi);canonicalize_fp64_noise(vp,(size_t)nlat*nphi);
       begin_fixture(manifest,"qst_l","qst_l","gauss_fly","fourpi",0,0,"float64",lmax,mmax,mres,ltr,nlat,nphi);
       write_packed_payload(manifest,out,"Q","qst_l_Q.bin",q,cfg->nlm,0);write_packed_payload(manifest,out,"S","qst_l_S.bin",s,cfg->nlm,0);write_packed_payload(manifest,out,"T","qst_l_T.bin",t,cfg->nlm,0);write_spatial_payload(manifest,out,"Vr","qst_l_Vr.bin",vr,nlat,nphi,0);write_spatial_payload(manifest,out,"Vt","qst_l_Vt.bin",vt,nlat,nphi,0);write_spatial_payload(manifest,out,"Vp","qst_l_Vp.bin",vp,nlat,nphi,0);
       free(q);free(s);free(t);free(vr);free(vt);free(vp);shtns_destroy(cfg); }
@@ -459,9 +487,67 @@ static void generate_operator_rotation_family(FILE *manifest,const char *out) {
     cplx *q=calloc(cfg->nlm,sizeof(*q));fill_real_coefficients(cfg,q,0.75);
     { double *ct=calloc((size_t)2*cfg->nlm,sizeof(*ct)),*dt=calloc((size_t)2*cfg->nlm,sizeof(*dt)),*dt_source=calloc((size_t)2*cfg->nlm,sizeof(*dt_source));cplx *rct=calloc(cfg->nlm,sizeof(*rct)),*rdt=calloc(cfg->nlm,sizeof(*rdt));mul_ct_matrix(cfg,ct);st_dt_matrix(cfg,dt);SH_mul_mx(cfg,ct,q,rct);SH_mul_mx(cfg,dt,q,rdt);for(unsigned lm=0;lm<cfg->nlm;++lm){int l=cfg->li[lm],m=cfg->mi[lm];dt_source[2*lm]=(l>m)?dt[2*LM(cfg,l-1,m)+1]:0.0;dt_source[2*lm+1]=(l<lmax)?dt[2*LM(cfg,l+1,m)]:0.0;}
       begin_fixture(manifest,"operators","operators","gauss","orthonormal",1,0,"float64",lmax,mmax,mres,lmax,nlat,nphi);write_packed_payload(manifest,out,"Q","operators_Q.bin",q,cfg->nlm,0);write_values_payload(manifest,out,"ct_matrix","operators_ct_matrix.bin",ct,2*cfg->nlm);write_values_payload(manifest,out,"dt_matrix","operators_dt_matrix.bin",dt_source,2*cfg->nlm);write_packed_payload(manifest,out,"ct_result","operators_ct_result.bin",rct,cfg->nlm,0);write_packed_payload(manifest,out,"dt_result","operators_dt_result.bin",rdt,cfg->nlm,0);free(ct);free(dt);free(dt_source);free(rct);free(rdt); }
-    { double alpha=0.37,beta=0.41;cplx *z=calloc(cfg->nlm,sizeof(*z)),*y=calloc(cfg->nlm,sizeof(*y));SH_Zrotate(cfg,q,-alpha,z);SH_Yrotate(cfg,q,beta,y);
-      begin_fixture(manifest,"rotations","rotations","gauss","orthonormal",1,0,"float64",lmax,mmax,mres,lmax,nlat,nphi);fprintf(manifest,"z_angle = %.17g\ny_angle = %.17g\n",alpha,beta);write_packed_payload(manifest,out,"Q","rotations_Q.bin",q,cfg->nlm,0);write_packed_payload(manifest,out,"Z","rotations_Z.bin",z,cfg->nlm,0);write_packed_payload(manifest,out,"Y","rotations_Y.bin",y,cfg->nlm,0);free(z);free(y); }
+    { double alpha=0.37,beta=0.41,euler_alpha=0.23,euler_gamma=-0.17;
+      double axis_theta=0.52,axis_x=0.2,axis_y=-0.3,axis_z=0.7;int wigner_l=3,wigner_n=2*wigner_l+1;
+      cplx *z=calloc(cfg->nlm,sizeof(*z)),*y=calloc(cfg->nlm,sizeof(*y)),*y90=calloc(cfg->nlm,sizeof(*y90)),*x90=calloc(cfg->nlm,sizeof(*x90));
+      cplx *zyz=calloc(cfg->nlm,sizeof(*zyz)),*zxz=calloc(cfg->nlm,sizeof(*zxz)),*axis=calloc(cfg->nlm,sizeof(*axis));
+      cplx *a=calloc(cfg->nlm_cplx,sizeof(*a)),*ac=calloc(cfg->nlm_cplx,sizeof(*ac));double *wigner=calloc((size_t)wigner_n*wigner_n,sizeof(*wigner));
+      SH_Zrotate(cfg,q,-alpha,z);SH_Yrotate(cfg,q,beta,y);SH_Yrotate90(cfg,q,y90);SH_Xrotate90(cfg,q,x90);
+      shtns_rot rotation=shtns_rotation_create(lmax,mmax,sht_orthonormal);if(!rotation){fputs("rotation allocation failed\n",stderr);exit(1);}
+      shtns_rotation_set_angles_ZYZ(rotation,euler_alpha,beta,euler_gamma);shtns_rotation_apply_real(rotation,q,zyz);shtns_rotation_wigner_d_matrix(rotation,wigner_l,wigner);
+      fill_complex_coefficients(cfg,a,0.63);shtns_rotation_apply_cplx(rotation,a,ac);
+      for(int l=0;l<=lmax;++l)for(int m=-l;m<0;++m)if((-m)&1){a[LM_cplx(cfg,l,m)]=-a[LM_cplx(cfg,l,m)];ac[LM_cplx(cfg,l,m)]=-ac[LM_cplx(cfg,l,m)];}
+      shtns_rotation_set_angles_ZXZ(rotation,euler_alpha,beta,euler_gamma);shtns_rotation_apply_real(rotation,q,zxz);
+      shtns_rotation_set_angle_axis(rotation,axis_theta,axis_x,axis_y,axis_z);shtns_rotation_apply_real(rotation,q,axis);shtns_rotation_destroy(rotation);
+      begin_fixture(manifest,"rotations","rotations","gauss","orthonormal",1,0,"float64",lmax,mmax,mres,lmax,nlat,nphi);
+      fprintf(manifest,"rotation_operations = [\"z\", \"y\", \"y90\", \"x90\", \"zyz\", \"zxz\", \"angle_axis\", \"wigner_d\", \"apply_real\", \"apply_complex\"]\n");
+      fprintf(manifest,"z_angle = %.17g\ny_angle = %.17g\neuler_angles = [%.17g, %.17g, %.17g]\n",alpha,beta,euler_alpha,beta,euler_gamma);
+      fprintf(manifest,"angle_axis = [%.17g, %.17g, %.17g, %.17g]\nwigner_l = %d\n",axis_theta,axis_x,axis_y,axis_z,wigner_l);
+      write_packed_payload(manifest,out,"Q","rotations_Q.bin",q,cfg->nlm,0);write_packed_payload(manifest,out,"Z","rotations_Z.bin",z,cfg->nlm,0);write_packed_payload(manifest,out,"Y","rotations_Y.bin",y,cfg->nlm,0);
+      write_packed_payload(manifest,out,"Y90","rotations_Y90.bin",y90,cfg->nlm,0);write_packed_payload(manifest,out,"X90","rotations_X90.bin",x90,cfg->nlm,0);
+      write_packed_payload(manifest,out,"ZYZ_real","rotations_ZYZ_real.bin",zyz,cfg->nlm,0);write_packed_payload(manifest,out,"ZXZ_real","rotations_ZXZ_real.bin",zxz,cfg->nlm,0);write_packed_payload(manifest,out,"axis_real","rotations_axis_real.bin",axis,cfg->nlm,0);
+      write_packed_payload(manifest,out,"A","rotations_A.bin",a,cfg->nlm_cplx,0);write_packed_payload(manifest,out,"ZYZ_complex","rotations_ZYZ_complex.bin",ac,cfg->nlm_cplx,0);write_values_payload(manifest,out,"wigner_d","rotations_wigner_d.bin",wigner,wigner_n*wigner_n);
+      free(z);free(y);free(y90);free(x90);free(zyz);free(zxz);free(axis);free(a);free(ac);free(wigner); }
     free(q);shtns_destroy(cfg);
+}
+
+static void fill_spatial_real(double *v,int n,double seed) {
+    for(int i=0;i<n;++i)v[i]=seed+0.013*(i+1)-0.0007*(i+1)*(i+1);
+}
+static void fill_spatial_complex(cplx *v,int n,double seed) {
+    for(int i=0;i<n;++i)v[i]=(seed+0.011*(i+1))+I*(-0.3*seed+0.007*(i+1));
+}
+static void analysis_header(FILE *m,const char *id,const char *cap,const char *api,
+                            int lmax,int ltr,int nlat,int nphi,int batch) {
+    begin_fixture(m,id,cap,"gauss","orthonormal",1,0,"float64",lmax,lmax,1,ltr,nlat,nphi);
+    fprintf(m,"direction = \"analysis\"\nanalysis_api = \"%s\"\nbatch = %d\n",api,batch);
+}
+static void analysis_real_payload(FILE *m,const char *out,const char *name,const char *file,
+                                  const double *v,const int *shape,int ndims,size_t count,const char *role) {
+    char path[4096];path_join(path,sizeof(path),out,file);write_real_file(path,v,count);
+    payload_role(m,out,name,file,"float64",shape,ndims,count*8,role);
+}
+static void analysis_cplx_payload(FILE *m,const char *out,const char *name,const char *file,
+                                  const cplx *v,const int *shape,int ndims,size_t count,const char *role) {
+    char path[4096];path_join(path,sizeof(path),out,file);write_complex_file(path,v,count);
+    payload_role(m,out,name,file,"complex64",shape,ndims,count*16,role);
+}
+
+static void generate_analysis_family(FILE *m,const char *out) {
+    const int lmax=3,nlat=8,nphi=10,nsp=nlat*nphi,batch=2;
+    { shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);double *v=calloc((size_t)nsp*batch,sizeof(*v)),*tmp=calloc(nsp,sizeof(*tmp));cplx *q=calloc((size_t)c->nlm*batch,sizeof(*q));
+      for(int k=0;k<batch;++k){fill_spatial_real(tmp,nsp,0.2+0.1*k);spat_to_SH(c,tmp,q+(size_t)k*c->nlm);for(int ip=0;ip<nphi;++ip)for(int it=0;it<nlat;++it)v[it+(size_t)nlat*ip+(size_t)nsp*k]=tmp[it*nphi+ip];}
+      analysis_header(m,"analysis_scalar_full","scalar_real_full","spat_to_SH",lmax,lmax,nlat,nphi,batch);int sv[]={nlat,nphi,batch},sq[]={(int)c->nlm,batch};analysis_real_payload(m,out,"field","analysis_scalar_full_field.bin",v,sv,3,(size_t)nsp*batch,"analysis_input");analysis_cplx_payload(m,out,"coefficients","analysis_scalar_full_coefficients.bin",q,sq,2,(size_t)c->nlm*batch,"analysis_oracle");free(v);free(tmp);free(q);shtns_destroy(c); }
+    { shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);cplx *v=calloc(nsp,sizeof(*v)),*q=calloc(c->nlm_cplx,sizeof(*q));fill_spatial_complex(v,nsp,0.31);spat_cplx_to_SH(c,v,q);for(int l=0;l<=lmax;++l)for(int mm=-l;mm<0;++mm)if((-mm)&1)q[LM_cplx(c,l,mm)]=-q[LM_cplx(c,l,mm)];
+      analysis_header(m,"analysis_scalar_complex","scalar_complex_full","spat_cplx_to_SH",lmax,lmax,nlat,nphi,1);int sv[]={nlat,nphi},sq[]={(int)c->nlm_cplx};char path[4096];path_join(path,sizeof(path),out,"analysis_scalar_complex_field.bin");write_spatial_complex_file(path,v,nlat,nphi);payload_role(m,out,"field","analysis_scalar_complex_field.bin","complex64",sv,2,(size_t)nsp*16,"analysis_input");analysis_cplx_payload(m,out,"coefficients","analysis_scalar_complex_coefficients.bin",q,sq,1,c->nlm_cplx,"analysis_oracle");free(v);free(q);shtns_destroy(c); }
+    { int ltr=2;shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);double *v=calloc(nsp,sizeof(*v));cplx *q=calloc(c->nlm,sizeof(*q));fill_spatial_real(v,nsp,0.42);spat_to_SH_l(c,v,q,ltr);analysis_header(m,"analysis_scalar_l","scalar_l","spat_to_SH_l",lmax,ltr,nlat,nphi,1);int sv[]={nlat,nphi},sq[]={(int)c->nlm};char path[4096];path_join(path,sizeof(path),out,"analysis_scalar_l_field.bin");write_spatial_real_file(path,v,nlat,nphi);payload_role(m,out,"field","analysis_scalar_l_field.bin","float64",sv,2,(size_t)nsp*8,"analysis_input");analysis_cplx_payload(m,out,"coefficients","analysis_scalar_l_coefficients.bin",q,sq,1,c->nlm,"analysis_oracle");free(v);free(q);shtns_destroy(c); }
+    { int im=1,mval=1,ltr=3,count=ltr-mval+1;shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);cplx *v=calloc(nlat,sizeof(*v)),*q=calloc(count,sizeof(*q));fill_spatial_complex(v,nlat,0.27);spat_to_SH_ml(c,im,v,q,ltr);analysis_header(m,"analysis_scalar_ml","scalar_ml","spat_to_SH_ml",lmax,ltr,nlat,nphi,1);fprintf(m,"stored_im = %d\nfixed_mode_scale = %d\n",im,nphi);int sv[]={nlat},sq[]={count};analysis_cplx_payload(m,out,"field","analysis_scalar_ml_field.bin",v,sv,1,nlat,"analysis_input");analysis_cplx_payload(m,out,"coefficients","analysis_scalar_ml_coefficients.bin",q,sq,1,count,"analysis_oracle");free(v);free(q);shtns_destroy(c); }
+    { shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);double *vt=calloc((size_t)nsp*batch,sizeof(*vt)),*vp=calloc((size_t)nsp*batch,sizeof(*vp)),*a=calloc(nsp,sizeof(*a)),*b=calloc(nsp,sizeof(*b));cplx *s=calloc((size_t)c->nlm*batch,sizeof(*s)),*t=calloc((size_t)c->nlm*batch,sizeof(*t));for(int k=0;k<batch;++k){fill_spatial_real(a,nsp,0.12+0.1*k);fill_spatial_real(b,nsp,-0.16-0.1*k);spat_to_SHsphtor(c,a,b,s+(size_t)k*c->nlm,t+(size_t)k*c->nlm);convert_toroidal_to_shtnskit(t+(size_t)k*c->nlm,c->nlm);for(int ip=0;ip<nphi;++ip)for(int it=0;it<nlat;++it){size_t d=it+(size_t)nlat*ip+(size_t)nsp*k,src=it*nphi+ip;vt[d]=a[src];vp[d]=b[src];}}analysis_header(m,"analysis_sphtor_full","sphtor_full","spat_to_SHsphtor",lmax,lmax,nlat,nphi,batch);int sv[]={nlat,nphi,batch},sq[]={(int)c->nlm,batch};analysis_real_payload(m,out,"Vt","analysis_sphtor_full_Vt.bin",vt,sv,3,(size_t)nsp*batch,"analysis_input");analysis_real_payload(m,out,"Vp","analysis_sphtor_full_Vp.bin",vp,sv,3,(size_t)nsp*batch,"analysis_input");analysis_cplx_payload(m,out,"S","analysis_sphtor_full_S.bin",s,sq,2,(size_t)c->nlm*batch,"analysis_oracle");analysis_cplx_payload(m,out,"T","analysis_sphtor_full_T.bin",t,sq,2,(size_t)c->nlm*batch,"analysis_oracle");free(vt);free(vp);free(a);free(b);free(s);free(t);shtns_destroy(c); }
+    { int ltr=2;shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);double *a=calloc(nsp,sizeof(*a)),*b=calloc(nsp,sizeof(*b));cplx *s=calloc(c->nlm,sizeof(*s)),*t=calloc(c->nlm,sizeof(*t));fill_spatial_real(a,nsp,.14);fill_spatial_real(b,nsp,-.19);spat_to_SHsphtor_l(c,a,b,s,t,ltr);convert_toroidal_to_shtnskit(t,c->nlm);analysis_header(m,"analysis_sphtor_l","sphtor_l","spat_to_SHsphtor_l",lmax,ltr,nlat,nphi,1);int sv[]={nlat,nphi},sq[]={(int)c->nlm};char path[4096];path_join(path,sizeof(path),out,"analysis_sphtor_l_Vt.bin");write_spatial_real_file(path,a,nlat,nphi);payload_role(m,out,"Vt","analysis_sphtor_l_Vt.bin","float64",sv,2,(size_t)nsp*8,"analysis_input");path_join(path,sizeof(path),out,"analysis_sphtor_l_Vp.bin");write_spatial_real_file(path,b,nlat,nphi);payload_role(m,out,"Vp","analysis_sphtor_l_Vp.bin","float64",sv,2,(size_t)nsp*8,"analysis_input");analysis_cplx_payload(m,out,"S","analysis_sphtor_l_S.bin",s,sq,1,c->nlm,"analysis_oracle");analysis_cplx_payload(m,out,"T","analysis_sphtor_l_T.bin",t,sq,1,c->nlm,"analysis_oracle");free(a);free(b);free(s);free(t);shtns_destroy(c); }
+    { int im=1,ltr=3,count=3;shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);cplx *a=calloc(nlat,sizeof(*a)),*b=calloc(nlat,sizeof(*b)),*s=calloc(count,sizeof(*s)),*t=calloc(count,sizeof(*t));fill_spatial_complex(a,nlat,.17);fill_spatial_complex(b,nlat,-.21);spat_to_SHsphtor_ml(c,im,a,b,s,t,ltr);convert_toroidal_to_shtnskit(t,count);analysis_header(m,"analysis_sphtor_ml","sphtor_ml","spat_to_SHsphtor_ml",lmax,ltr,nlat,nphi,1);fprintf(m,"stored_im = %d\nfixed_mode_scale = %d\n",im,nphi);int sv[]={nlat},sq[]={count};analysis_cplx_payload(m,out,"Vt","analysis_sphtor_ml_Vt.bin",a,sv,1,nlat,"analysis_input");analysis_cplx_payload(m,out,"Vp","analysis_sphtor_ml_Vp.bin",b,sv,1,nlat,"analysis_input");analysis_cplx_payload(m,out,"S","analysis_sphtor_ml_S.bin",s,sq,1,count,"analysis_oracle");analysis_cplx_payload(m,out,"T","analysis_sphtor_ml_T.bin",t,sq,1,count,"analysis_oracle");free(a);free(b);free(s);free(t);shtns_destroy(c); }
+    { shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);double *vr=calloc((size_t)nsp*batch,sizeof(*vr)),*vt=calloc((size_t)nsp*batch,sizeof(*vt)),*vp=calloc((size_t)nsp*batch,sizeof(*vp)),*a=calloc(nsp,sizeof(*a)),*b=calloc(nsp,sizeof(*b)),*d=calloc(nsp,sizeof(*d));cplx *q=calloc((size_t)c->nlm*batch,sizeof(*q)),*s=calloc((size_t)c->nlm*batch,sizeof(*s)),*t=calloc((size_t)c->nlm*batch,sizeof(*t));for(int k=0;k<batch;++k){fill_spatial_real(a,nsp,.2+.1*k);fill_spatial_real(b,nsp,.1+.1*k);fill_spatial_real(d,nsp,-.2-.1*k);spat_to_SHqst(c,a,b,d,q+(size_t)k*c->nlm,s+(size_t)k*c->nlm,t+(size_t)k*c->nlm);convert_toroidal_to_shtnskit(t+(size_t)k*c->nlm,c->nlm);for(int ip=0;ip<nphi;++ip)for(int it=0;it<nlat;++it){size_t x=it+(size_t)nlat*ip+(size_t)nsp*k,src=it*nphi+ip;vr[x]=a[src];vt[x]=b[src];vp[x]=d[src];}}analysis_header(m,"analysis_qst_full","qst_full","spat_to_SHqst",lmax,lmax,nlat,nphi,batch);int sv[]={nlat,nphi,batch},sq[]={(int)c->nlm,batch};analysis_real_payload(m,out,"Vr","analysis_qst_full_Vr.bin",vr,sv,3,(size_t)nsp*batch,"analysis_input");analysis_real_payload(m,out,"Vt","analysis_qst_full_Vt.bin",vt,sv,3,(size_t)nsp*batch,"analysis_input");analysis_real_payload(m,out,"Vp","analysis_qst_full_Vp.bin",vp,sv,3,(size_t)nsp*batch,"analysis_input");analysis_cplx_payload(m,out,"Q","analysis_qst_full_Q.bin",q,sq,2,(size_t)c->nlm*batch,"analysis_oracle");analysis_cplx_payload(m,out,"S","analysis_qst_full_S.bin",s,sq,2,(size_t)c->nlm*batch,"analysis_oracle");analysis_cplx_payload(m,out,"T","analysis_qst_full_T.bin",t,sq,2,(size_t)c->nlm*batch,"analysis_oracle");free(vr);free(vt);free(vp);free(a);free(b);free(d);free(q);free(s);free(t);shtns_destroy(c); }
+    { int ltr=2;shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);double *a=calloc(nsp,sizeof(*a)),*b=calloc(nsp,sizeof(*b)),*d=calloc(nsp,sizeof(*d));cplx *q=calloc(c->nlm,sizeof(*q)),*s=calloc(c->nlm,sizeof(*s)),*t=calloc(c->nlm,sizeof(*t));fill_spatial_real(a,nsp,.22);fill_spatial_real(b,nsp,.13);fill_spatial_real(d,nsp,-.18);spat_to_SHqst_l(c,a,b,d,q,s,t,ltr);convert_toroidal_to_shtnskit(t,c->nlm);analysis_header(m,"analysis_qst_l","qst_l","spat_to_SHqst_l",lmax,ltr,nlat,nphi,1);int sv[]={nlat,nphi},sq[]={(int)c->nlm};char path[4096];double *vs[]={a,b,d};const char *ns[]={"Vr","Vt","Vp"},*fs[]={"analysis_qst_l_Vr.bin","analysis_qst_l_Vt.bin","analysis_qst_l_Vp.bin"};for(int i=0;i<3;++i){path_join(path,sizeof(path),out,fs[i]);write_spatial_real_file(path,vs[i],nlat,nphi);payload_role(m,out,ns[i],fs[i],"float64",sv,2,(size_t)nsp*8,"analysis_input");}cplx *cs[]={q,s,t};const char *cn[]={"Q","S","T"},*cf[]={"analysis_qst_l_Q.bin","analysis_qst_l_S.bin","analysis_qst_l_T.bin"};for(int i=0;i<3;++i)analysis_cplx_payload(m,out,cn[i],cf[i],cs[i],sq,1,c->nlm,"analysis_oracle");free(a);free(b);free(d);free(q);free(s);free(t);shtns_destroy(c); }
+    { int im=1,ltr=3,count=3;shtns_cfg c=make_cfg(lmax,lmax,1,sht_orthonormal,sht_gauss,nlat,nphi,SHT_PHI_CONTIGUOUS);cplx *a=calloc(nlat,sizeof(*a)),*b=calloc(nlat,sizeof(*b)),*d=calloc(nlat,sizeof(*d)),*q=calloc(count,sizeof(*q)),*s=calloc(count,sizeof(*s)),*t=calloc(count,sizeof(*t));fill_spatial_complex(a,nlat,.23);fill_spatial_complex(b,nlat,.11);fill_spatial_complex(d,nlat,-.2);spat_to_SHqst_ml(c,im,a,b,d,q,s,t,ltr);convert_toroidal_to_shtnskit(t,count);analysis_header(m,"analysis_qst_ml","qst_ml","spat_to_SHqst_ml",lmax,ltr,nlat,nphi,1);fprintf(m,"stored_im = %d\nfixed_mode_scale = %d\n",im,nphi);int sv[]={nlat},sq[]={count};cplx *vs[]={a,b,d},*cs[]={q,s,t};const char *ns[]={"Vr","Vt","Vp"},*cn[]={"Q","S","T"},*vf[]={"analysis_qst_ml_Vr.bin","analysis_qst_ml_Vt.bin","analysis_qst_ml_Vp.bin"},*cf[]={"analysis_qst_ml_Q.bin","analysis_qst_ml_S.bin","analysis_qst_ml_T.bin"};for(int i=0;i<3;++i)analysis_cplx_payload(m,out,ns[i],vf[i],vs[i],sv,1,nlat,"analysis_input");for(int i=0;i<3;++i)analysis_cplx_payload(m,out,cn[i],cf[i],cs[i],sq,1,count,"analysis_oracle");free(a);free(b);free(d);free(q);free(s);free(t);shtns_destroy(c); }
 }
 
 int main(int argc, char **argv) {
@@ -471,7 +557,7 @@ int main(int argc, char **argv) {
     const int lmax=2, mmax=2, mres=1, nlat=6, nphi=8;
     shtns_cfg cfg = shtns_create(lmax, mmax, mres, sht_orthonormal);
     if (!cfg) { fputs("shtns_create failed\n", stderr); return 1; }
-    if (shtns_set_grid(cfg, sht_gauss | SHT_PHI_CONTIGUOUS, 1e-12, nlat, nphi) < 0) {
+    if (shtns_set_grid(cfg, sht_quick_init | SHT_PHI_CONTIGUOUS, 1e-12, nlat, nphi) < 0) {
         fputs("shtns_set_grid failed\n", stderr); shtns_destroy(cfg); return 1;
     }
 
@@ -546,9 +632,10 @@ int main(int argc, char **argv) {
     generate_qst_family(manifest,argv[1]);
     generate_local_family(manifest,argv[1]);
     generate_operator_rotation_family(manifest,argv[1]);
+    generate_analysis_family(manifest,argv[1]);
     if (fclose(manifest)) { perror("manifest close"); return 1; }
 
     free(coefficients); free(field); shtns_destroy(cfg);
-    printf("wrote 23 SHTns 3.7 fixtures to %s\n",argv[1]);
+    printf("wrote 33 SHTns 3.7 fixtures to %s\n",argv[1]);
     return 0;
 }

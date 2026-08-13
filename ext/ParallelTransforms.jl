@@ -1788,6 +1788,7 @@ function _validate_sphtor_spatial_inputs!(cfg::SHTnsKit.SHTConfig,
                                           use_rfft::Bool,
                                           operation::Symbol=:analysis_sphtor)
     comm = communicator(Vt)
+    _validate_parallel_storage!(comm, operation, Vt, Vp)
     _validate_cfg_replicated(cfg, comm)
     _validate_scalar_pencil!(
         cfg, Vt, (cfg.nlat, cfg.nlon), operation;
@@ -1810,6 +1811,9 @@ function _validate_sphtor_synthesis_inputs!(cfg::SHTnsKit.SHTConfig,
                                             real_output::Bool,
                                             use_rfft::Bool)
     comm = communicator(Slm)
+    _validate_parallel_storage!(
+        comm, :synthesis_sphtor, Slm, Tlm, prototype,
+    )
     _validate_cfg_replicated(cfg, comm)
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     _validate_scalar_pencil!(
@@ -2917,6 +2921,7 @@ end
 function _validate_qst_pencil_communicators!(trusted_comm,
                                               candidates::Tuple,
                                               operation::Symbol)
+    _validate_parallel_storage!(trusted_comm, operation, candidates...)
     flags = UInt32(0)
     for candidate in candidates
         compatible = try

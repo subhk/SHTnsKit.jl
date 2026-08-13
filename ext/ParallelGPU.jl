@@ -249,11 +249,26 @@ function parallel_gpu_cache_sizes()
     return (; awareness, staging, native_host_plans)
 end
 
+function _trim_staging_cache_locked!()
+    limit = _GPU_STAGING_LIMIT[]
+    while length(_GPU_STAGING) + length(_GPU_STAGING_PENDING) > limit
+        idle = [pair for pair in _GPU_STAGING if pair.second.users == 0]
+        isempty(idle) && break
+        victim = first(sort!(idle; by=pair -> pair.second.tick))
+        delete!(_GPU_STAGING, first(victim))
+    end
+    return nothing
+end
+
 function parallel_gpu_cache_limit!(limit::Integer)
     limit >= 1 || throw(ArgumentError("MPI GPU staging cache limit must be positive"))
-    previous = _GPU_STAGING_LIMIT[]
-    _GPU_STAGING_LIMIT[] = Int(limit)
-    return previous
+    return lock(_GPU_STAGING_LOCK) do
+        previous = _GPU_STAGING_LIMIT[]
+        _GPU_STAGING_LIMIT[] = Int(limit)
+        _trim_staging_cache_locked!()
+        notify(_GPU_STAGING_AVAILABLE)
+        previous
+    end
 end
 
 function parallel_gpu_clear_caches!()
@@ -261,19 +276,14 @@ function parallel_gpu_clear_caches!()
         empty!(_GPU_AWARENESS)
     end
     lock(_GPU_STAGING_LOCK) do
-        empty!(_GPU_STAGING)
-        for pending in values(_GPU_STAGING_PENDING)
-            notify(pending)
-        end
-        empty!(_GPU_STAGING_PENDING)
+        # Pending builders and active users own their registry identities.
+        # Clear only completed idle entries; release/publication performs the
+        # eventual cleanup without allowing stale builders to overwrite peers.
+        filter!(pair -> pair.second.users > 0, _GPU_STAGING)
         notify(_GPU_STAGING_AVAILABLE)
     end
     lock(_GPU_TRANSPOSE_HOST_LOCK) do
-        empty!(_GPU_TRANSPOSE_HOST)
-        for pending in values(_GPU_TRANSPOSE_PENDING)
-            notify(pending)
-        end
-        empty!(_GPU_TRANSPOSE_PENDING)
+        filter!(pair -> pair.second.users > 0, _GPU_TRANSPOSE_HOST)
         notify(_GPU_TRANSPOSE_AVAILABLE)
     end
     _GPU_DIRECT_CALLS[] = 0
@@ -283,7 +293,7 @@ function parallel_gpu_clear_caches!()
     return nothing
 end
 
-function _build_gpu_transpose_host_entry(adapter, plan)
+function _build_gpu_transpose_host_entry(adapter, plan, device, plan_owner)
     # Pencil/PencilFFT construction may itself enter MPI, so it must never run
     # under the process-wide cache lock.
     input_pencil = Pencil(
@@ -298,12 +308,15 @@ function _build_gpu_transpose_host_entry(adapter, plan)
     )
     spatial_template = allocate_input(fft_plan)
     spectral_template = allocate_output(fft_plan)
-    spatial_parent = adapter.allocate_pinned(
-        eltype(spatial_template), length(parent(spatial_template)),
-    )
-    spectral_parent = adapter.allocate_pinned(
-        eltype(spectral_template), length(parent(spectral_template)),
-    )
+    spatial_parent, spectral_parent = adapter.with_device(device) do
+        spatial_parent = adapter.allocate_pinned(
+            eltype(spatial_template), length(parent(spatial_template)),
+        )
+        spectral_parent = adapter.allocate_pinned(
+            eltype(spectral_template), length(parent(spectral_template)),
+        )
+        spatial_parent, spectral_parent
+    end
     spatial = PencilArray(
         pencil(spatial_template),
         reshape(spatial_parent, size(parent(spatial_template))),
@@ -313,20 +326,24 @@ function _build_gpu_transpose_host_entry(adapter, plan)
         reshape(spectral_parent, size(parent(spectral_template))),
     )
     return _GPUTransposeHostEntry(
-        WeakRef(plan), fft_plan, spatial, spectral, ReentrantLock(), 0, 0,
+        WeakRef(plan_owner), fft_plan, spatial, spectral, ReentrantLock(), 0, 0,
     )
 end
 
 function _acquire_gpu_transpose_host_entry(adapter, plan, prototype)
     device = adapter.device(_parallel_root_buffer(_parallel_parent(prototype)))
-    key = (objectid(plan), adapter.name, device)
+    # DistTransposePlan is immutable, so WeakRef(plan) may refer to a transient
+    # box even while the logical plan remains live. Its mutable F_buf root has
+    # stable identity and exactly follows the plan/workspace lifetime.
+    plan_owner = _parallel_root_buffer(_parallel_parent(plan.F_buf))
+    key = (objectid(plan_owner), adapter.name, device)
     while true
         found, pending, builder, wait_for_slot = lock(
                 _GPU_TRANSPOSE_HOST_LOCK) do
             filter!(pair -> pair.second.plan_owner.value !== nothing ||
                             pair.second.users > 0, _GPU_TRANSPOSE_HOST)
             entry = get(_GPU_TRANSPOSE_HOST, key, nothing)
-            if entry !== nothing && entry.plan_owner.value === plan
+            if entry !== nothing && entry.plan_owner.value === plan_owner
                 entry.users += 1
                 _GPU_CACHE_TICK[] += 1
                 entry.tick = _GPU_CACHE_TICK[]
@@ -355,24 +372,30 @@ function _acquire_gpu_transpose_host_entry(adapter, plan, prototype)
             continue
         end
         candidate = try
-            _build_gpu_transpose_host_entry(adapter, plan)
+            _build_gpu_transpose_host_entry(adapter, plan, device, plan_owner)
         catch
             lock(_GPU_TRANSPOSE_HOST_LOCK) do
-                delete!(_GPU_TRANSPOSE_PENDING, key)
+                get(_GPU_TRANSPOSE_PENDING, key, nothing) === pending &&
+                    delete!(_GPU_TRANSPOSE_PENDING, key)
                 notify(pending)
                 notify(_GPU_TRANSPOSE_AVAILABLE)
             end
             rethrow()
         end
-        return lock(_GPU_TRANSPOSE_HOST_LOCK) do
-            candidate.users = 1
-            _GPU_CACHE_TICK[] += 1
-            candidate.tick = _GPU_CACHE_TICK[]
-            _GPU_TRANSPOSE_HOST[key] = candidate
-            delete!(_GPU_TRANSPOSE_PENDING, key)
+        published = lock(_GPU_TRANSPOSE_HOST_LOCK) do
+            if get(_GPU_TRANSPOSE_PENDING, key, nothing) === pending
+                candidate.users = 1
+                _GPU_CACHE_TICK[] += 1
+                candidate.tick = _GPU_CACHE_TICK[]
+                _GPU_TRANSPOSE_HOST[key] = candidate
+                delete!(_GPU_TRANSPOSE_PENDING, key)
+                notify(pending)
+                return candidate
+            end
             notify(pending)
-            candidate
+            nothing
         end
+        published === nothing || return published
     end
 end
 
@@ -556,10 +579,13 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
         end
 
         buffer = try
-            adapter.allocate_pinned(T, n)
+            adapter.with_device(device) do
+                adapter.allocate_pinned(T, n)
+            end
         catch
             lock(_GPU_STAGING_LOCK) do
-                delete!(_GPU_STAGING_PENDING, key)
+                get(_GPU_STAGING_PENDING, key, nothing) === pending &&
+                    delete!(_GPU_STAGING_PENDING, key)
                 notify(pending)
                 notify(_GPU_STAGING_AVAILABLE)
             end
@@ -569,21 +595,29 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
             WeakRef(root_owner), WeakRef(owner), logical_id, signature, buffer,
             ReentrantLock(), UInt64(0), acquire ? 1 : 0,
         )
-        return lock(_GPU_STAGING_LOCK) do
-            _GPU_CACHE_TICK[] += 1
-            candidate.tick = _GPU_CACHE_TICK[]
-            _GPU_STAGING[key] = candidate
-            delete!(_GPU_STAGING_PENDING, key)
+        published = lock(_GPU_STAGING_LOCK) do
+            if get(_GPU_STAGING_PENDING, key, nothing) === pending
+                _GPU_CACHE_TICK[] += 1
+                candidate.tick = _GPU_CACHE_TICK[]
+                _GPU_STAGING[key] = candidate
+                delete!(_GPU_STAGING_PENDING, key)
+                notify(pending)
+                return candidate
+            end
             notify(pending)
-            candidate
+            nothing
         end
+        published === nothing || return published
     end
 end
 
 function _release_staging_entry(entry)
     lock(_GPU_STAGING_LOCK) do
         entry.users -= 1
-        entry.users == 0 && notify(_GPU_STAGING_AVAILABLE)
+        if entry.users == 0
+            _trim_staging_cache_locked!()
+            notify(_GPU_STAGING_AVAILABLE)
+        end
     end
     return nothing
 end
@@ -700,6 +734,22 @@ _device_result(adapter::ParallelGPUAdapter, prototype, result,
     adapter, MPI.COMM_SELF, prototype, result, staged, originals,
 )
 
+function _materialize_staged_result(result, staged)
+    any(pair -> result === first(pair), staged) && return result
+    if result isa PencilArray
+        host_pen = similar(pencil(result), Array)
+        host_parent = copy(parent(result))
+        return PencilArray(host_pen, host_parent)
+    elseif result isa AbstractArray
+        return Array(result)
+    elseif result isa Tuple
+        return map(value -> _materialize_staged_result(value, staged), result)
+    elseif result isa NamedTuple
+        return map(value -> _materialize_staged_result(value, staged), result)
+    end
+    return result
+end
+
 """
     _staged_gpu_call(adapter, operation, comm, f, values...)
 
@@ -738,7 +788,7 @@ function _staged_gpu_call(adapter::ParallelGPUAdapter, operation::Symbol,
                                        if adapter.matches(_parallel_parent(value))))
     bytes = sum(_communication_bytes(_parallel_parent(value)) for value in values
                 if adapter.matches(_parallel_parent(value)))
-    result = try
+    cpu_result = try
         _with_entry_locks(entries) do
             for (value, pair) in zip(values, staged)
                 last(pair) === nothing && continue
@@ -746,7 +796,7 @@ function _staged_gpu_call(adapter::ParallelGPUAdapter, operation::Symbol,
                     adapter, _parallel_parent(first(pair)), value,
                 )
             end
-            cpu_result = f(hosts...)
+            computed = f(hosts...)
             for index in mutated
                 pair = staged[index]
                 last(pair) === nothing && continue
@@ -754,15 +804,19 @@ function _staged_gpu_call(adapter::ParallelGPUAdapter, operation::Symbol,
                     adapter, values[index], _parallel_parent(first(pair)),
                 )
             end
-            _device_result_with_comm(
-                adapter, comm, prototype, cpu_result, staged, values,
-            )
+            # Results may alias a pinned input snapshot. Materialize every
+            # non-bang array while its entry locks are held, then release all
+            # input reservations before acquiring result staging capacity.
+            _materialize_staged_result(computed, staged)
         end
     finally
         for pair in staged
             last(pair) === nothing || _release_staging_entry(last(pair))
         end
     end
+    result = _device_result_with_comm(
+        adapter, comm, prototype, cpu_result, staged, values,
+    )
     Threads.atomic_add!(_GPU_STAGED_CALLS, 1)
     Threads.atomic_add!(_GPU_STAGED_BYTES, bytes)
     return result

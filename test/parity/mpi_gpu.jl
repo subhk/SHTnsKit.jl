@@ -27,6 +27,27 @@ MockMPIArray{T}(::UndefInitializer, n::Integer) where {T} =
 Base.similar(array::MockMPIArray, ::Type{T}, dims::Dims) where {T} =
     MockMPIArray(Array{T}(undef, dims))
 
+"""A registry-isolated fake used only by mixed-storage dispatch tests."""
+mutable struct MockMixedVendorArray{T,N} <: AbstractArray{T,N}
+    data::Array{T,N}
+end
+
+Base.IndexStyle(::Type{<:MockMixedVendorArray}) = IndexLinear()
+Base.size(array::MockMixedVendorArray) = size(array.data)
+Base.getindex(array::MockMixedVendorArray, indices...) = array.data[indices...]
+Base.setindex!(array::MockMixedVendorArray, value, indices...) =
+    (array.data[indices...] = value)
+Base.copyto!(destination::MockMixedVendorArray, source::AbstractArray) =
+    (copyto!(destination.data, source); destination)
+Base.copyto!(destination::AbstractArray, source::MockMixedVendorArray) =
+    copyto!(destination, source.data)
+MockMixedVendorArray{T}(::UndefInitializer, dims::Tuple) where {T} =
+    MockMixedVendorArray(Array{T}(undef, dims))
+MockMixedVendorArray{T}(::UndefInitializer, n::Integer) where {T} =
+    MockMixedVendorArray(Vector{T}(undef, n))
+Base.similar(array::MockMixedVendorArray, ::Type{T}, dims::Dims) where {T} =
+    MockMixedVendorArray(Array{T}(undef, dims))
+
 """A fake allocation whose device may differ from the task's current device."""
 mutable struct MockMultiDeviceArray{T,N} <: AbstractArray{T,N}
     data::Array{T,N}
@@ -1398,6 +1419,58 @@ function test_mpi_gpu_policy(extension)
     @test count(==(2), pin_lengths) == 1
     @test count(==(0), pin_lengths) <= 2
 
+    # Out-of-place result restoration must not wait on staging reservations
+    # still held by the same call.  This includes one-slot caches and a full
+    # default-capacity wave of concurrent calls.
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(1)
+    one_slot_task = Threads.@spawn extension._staged_gpu_call(
+        result_adapter, :one_slot_result, comm,
+        host -> Float64.(host), MockMPIArray(Float32[2, 4]);
+        validate_storage=false,
+    )
+    one_slot_status = Base.timedwait(() -> istaskdone(one_slot_task), 2.0)
+    if one_slot_status !== :ok
+        extension.parallel_gpu_cache_limit!(2)
+        notify(extension._GPU_STAGING_AVAILABLE)
+    end
+    one_slot_result = fetch(one_slot_task)
+    @test one_slot_status === :ok
+    @test one_slot_result.data == Float64[2, 4]
+
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(8)
+    result_barrier_count = Threads.Atomic{Int}(0)
+    concurrent_result_inputs = [MockMPIArray(Float32[n, n + 1]) for n in 1:8]
+    concurrent_result_tasks = [Threads.@spawn extension._staged_gpu_call(
+        result_adapter, :full_cache_result, comm,
+        host -> begin
+            Threads.atomic_add!(result_barrier_count, 1)
+            while result_barrier_count[] < 8
+                yield()
+            end
+            Float64.(host)
+        end,
+        input; validate_storage=false,
+    ) for input in concurrent_result_inputs]
+    concurrent_result_status = Base.timedwait(
+        () -> all(istaskdone, concurrent_result_tasks), 2.0,
+    )
+    if concurrent_result_status !== :ok
+        extension.parallel_gpu_cache_limit!(16)
+        for _ in 1:16
+            notify(extension._GPU_STAGING_AVAILABLE)
+        end
+    end
+    concurrent_results = fetch.(concurrent_result_tasks)
+    @test concurrent_result_status === :ok
+    @test all(enumerate(concurrent_results)) do (n, result)
+        result.data == Float64[n, n + 1]
+    end
+    @test extension.parallel_gpu_cache_sizes().staging <= 8
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(8)
+
     # Device-aware cache keys follow the allocation behind views, not the
     # current task device.  Reusing an allocation after its fake device changes
     # must create independent awareness and pinned-staging entries.
@@ -1428,6 +1501,39 @@ function test_mpi_gpu_policy(extension)
     )
     multi_comm = Ref(:multidevice_subgroup)
 
+    # Pinned allocation is a device operation too: it must observe the
+    # allocation owner's device and restore the caller even when it throws.
+    pin_devices = Int[]
+    pin_failure = Ref(false)
+    pin_context_adapter = extension.ParallelGPUAdapter(
+        :mock_pin_context, multi_adapter.matches, multi_adapter.array_type,
+        multi_adapter.device, multi_adapter.with_device,
+        multi_adapter.gpu_aware, multi_adapter.synchronize,
+        (T, n) -> begin
+            push!(pin_devices, MOCK_CURRENT_DEVICE[])
+            pin_failure[] && error("pin allocation failed")
+            Vector{T}(undef, n)
+        end,
+        multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+    )
+    extension.parallel_gpu_clear_caches!()
+    MOCK_CURRENT_DEVICE[] = 99
+    extension.allreduce!(
+        multi, +, multi_comm; adapter=pin_context_adapter,
+        collective=(host, _op, _comm) -> host,
+    )
+    @test pin_devices == [1]
+    @test MOCK_CURRENT_DEVICE[] == 99
+    extension.parallel_gpu_clear_caches!()
+    pin_failure[] = true
+    @test_throws ErrorException extension.allreduce!(
+        multi, +, Ref(:pin_failure); adapter=pin_context_adapter,
+        collective=(host, _op, _comm) -> host,
+    )
+    @test last(pin_devices) == 1
+    @test MOCK_CURRENT_DEVICE[] == 99
+    pin_failure[] = false
+
     # Native CPU mirror plans are single-flight, pinned, bounded, observable,
     # and recover after a failed first construction without stranding waiters.
     @test isdefined(extension, :_with_gpu_transpose_host_entry)
@@ -1437,15 +1543,20 @@ function test_mpi_gpu_policy(extension)
             native_cfg; comm=MPI.COMM_SELF, nlev=1,
         )
         native_pins = Threads.Atomic{Int}(0)
+        native_pin_devices = Int[]
+        native_build_entered = Base.Event()
+        native_build_release = Base.Event()
         native_adapter = extension.ParallelGPUAdapter(
             :mock_native_host_plan, multi_adapter.matches,
             multi_adapter.array_type, multi_adapter.device,
             multi_adapter.with_device, multi_adapter.gpu_aware,
             multi_adapter.synchronize,
             (T, n) -> begin
-                Threads.atomic_add!(native_pins, 1)
-                for _ in 1:16
-                    yield()
+                allocation = Threads.atomic_add!(native_pins, 1)
+                push!(native_pin_devices, MOCK_CURRENT_DEVICE[])
+                if allocation == 0
+                    notify(native_build_entered)
+                    wait(native_build_release)
                 end
                 Vector{T}(undef, n)
             end,
@@ -1453,7 +1564,9 @@ function test_mpi_gpu_policy(extension)
         )
         extension.parallel_gpu_clear_caches!()
         start_native = Base.Event()
+        native_ready = Channel{Nothing}(8)
         native_tasks = [Threads.@spawn begin
+            put!(native_ready, nothing)
             wait(start_native)
             extension._with_gpu_transpose_host_entry(
                 native_adapter, native_plan, multi,
@@ -1462,10 +1575,36 @@ function test_mpi_gpu_policy(extension)
                  objectid(entry.spectral))
             end
         end for _ in 1:8]
+        foreach(_ -> take!(native_ready), 1:8)
         notify(start_native)
+        wait(native_build_entered)
+        for _ in 1:64
+            yield()
+        end
+        GC.gc(true)
+        notify(native_build_release)
         native_ids = fetch.(native_tasks)
+        # Repeated collection/concurrent acquisition must never invalidate the
+        # weak cache owner while this logical plan remains live.
+        for _ in 2:100
+            GC.gc(true)
+            round_start = Base.Event()
+            round_tasks = [Threads.@spawn begin
+                wait(round_start)
+                extension._with_gpu_transpose_host_entry(
+                    native_adapter, native_plan, multi,
+                ) do entry
+                    (objectid(entry.fft_plan), objectid(entry.spatial),
+                     objectid(entry.spectral))
+                end
+            end for _ in 1:8]
+            notify(round_start)
+            append!(native_ids, fetch.(round_tasks))
+        end
         @test all(==(first(native_ids)), native_ids)
         @test native_pins[] == 2
+        @test native_pin_devices == [1, 1]
+        @test MOCK_CURRENT_DEVICE[] == 99
         @test extension.parallel_gpu_cache_sizes().native_host_plans == 1
 
         fail_next_pin = Ref(true)
@@ -1503,6 +1642,58 @@ function test_mpi_gpu_policy(extension)
         end
         extension.parallel_gpu_clear_caches!()
         @test extension.parallel_gpu_cache_sizes().native_host_plans == 0
+
+        # Clear never drops active or in-progress native entries, and an
+        # in-progress builder remains the single publisher for its key.
+        extension.parallel_gpu_clear_caches!()
+        native_entered = Base.Event()
+        native_release = Base.Event()
+        active_native = Threads.@spawn extension._with_gpu_transpose_host_entry(
+            native_adapter, native_plan, multi,
+        ) do _entry
+            notify(native_entered)
+            wait(native_release)
+        end
+        wait(native_entered)
+        extension.parallel_gpu_clear_caches!()
+        @test length(extension._GPU_TRANSPOSE_HOST) == 1
+        notify(native_release)
+        fetch(active_native)
+        extension.parallel_gpu_clear_caches!()
+
+        pending_native_allocations = Threads.Atomic{Int}(0)
+        pending_native_entered = Base.Event()
+        pending_native_release = Base.Event()
+        pending_native_adapter = extension.ParallelGPUAdapter(
+            :mock_pending_native, multi_adapter.matches,
+            multi_adapter.array_type, multi_adapter.device,
+            multi_adapter.with_device, multi_adapter.gpu_aware,
+            multi_adapter.synchronize,
+            (T, n) -> begin
+                allocation = Threads.atomic_add!(pending_native_allocations, 1)
+                if allocation == 0
+                    notify(pending_native_entered)
+                    wait(pending_native_release)
+                end
+                Vector{T}(undef, n)
+            end,
+            multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+        )
+        first_pending_native = Threads.@spawn extension._with_gpu_transpose_host_entry(
+            _ -> :first, pending_native_adapter, native_plan, multi,
+        )
+        wait(pending_native_entered)
+        extension.parallel_gpu_clear_caches!()
+        second_pending_native = Threads.@spawn extension._with_gpu_transpose_host_entry(
+            _ -> :second, pending_native_adapter, native_plan, multi,
+        )
+        yield()
+        notify(pending_native_release)
+        @test fetch(first_pending_native) === :first
+        @test fetch(second_pending_native) === :second
+        @test pending_native_allocations[] == 2
+        @test length(extension._GPU_TRANSPOSE_HOST) == 1
+        extension.parallel_gpu_clear_caches!()
     end
 
     # Every sync/copy must run on the physical device owning that buffer while
@@ -1842,6 +2033,87 @@ function test_mpi_gpu_policy(extension)
     for (n, value) in enumerate(pool_values)
         @test value.data == Float32[n + 1, n + 2]
     end
+
+    # Lowering the limit trims idle entries immediately. Active entries may
+    # temporarily exceed the new limit, but releases must converge the raw
+    # registry to the requested cap before admitting another allocation.
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(3)
+    shrink_values = [MockMultiDeviceArray(Float32[n], 1) for n in 1:3]
+    for value in shrink_values
+        extension._staging_entry(
+            pool_adapter, multi_comm, value, length(value),
+        )
+    end
+    @test length(extension._GPU_STAGING) == 3
+    extension.parallel_gpu_cache_limit!(1)
+    @test length(extension._GPU_STAGING) == 1
+
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(2)
+    active_first = extension._staging_entry(
+        pool_adapter, multi_comm, shrink_values[1], 1; acquire=true,
+    )
+    active_second = extension._staging_entry(
+        pool_adapter, multi_comm, shrink_values[2], 1; acquire=true,
+    )
+    extension.parallel_gpu_cache_limit!(1)
+    @test length(extension._GPU_STAGING) == 2
+    extension._release_staging_entry(active_first)
+    @test length(extension._GPU_STAGING) == 1
+    extension._release_staging_entry(active_second)
+    @test length(extension._GPU_STAGING) == 1
+
+    # Clear preserves active staging ownership and pending single-flight state.
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(2)
+    active_stage_entered = Base.Event()
+    active_stage_release = Base.Event()
+    active_stage = Threads.@spawn extension._with_staging(
+        pool_adapter, multi_comm, shrink_values[1], Float32, 1,
+    ) do _host
+        notify(active_stage_entered)
+        wait(active_stage_release)
+    end
+    wait(active_stage_entered)
+    extension.parallel_gpu_clear_caches!()
+    @test length(extension._GPU_STAGING) == 1
+    notify(active_stage_release)
+    fetch(active_stage)
+    extension.parallel_gpu_clear_caches!()
+
+    pending_allocations = Threads.Atomic{Int}(0)
+    pending_entered = Base.Event()
+    pending_release = Base.Event()
+    pending_adapter = extension.ParallelGPUAdapter(
+        :mock_pending_stage, multi_adapter.matches, multi_adapter.array_type,
+        multi_adapter.device, multi_adapter.with_device,
+        multi_adapter.gpu_aware, multi_adapter.synchronize,
+        (T, n) -> begin
+            allocation = Threads.atomic_add!(pending_allocations, 1)
+            if allocation == 0
+                notify(pending_entered)
+                wait(pending_release)
+            end
+            Vector{T}(undef, n)
+        end,
+        multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+    )
+    first_pending = Threads.@spawn extension._staging_entry(
+        pending_adapter, multi_comm, shrink_values[1], 1,
+    )
+    wait(pending_entered)
+    extension.parallel_gpu_clear_caches!()
+    second_pending = Threads.@spawn extension._staging_entry(
+        pending_adapter, multi_comm, shrink_values[1], 1,
+    )
+    yield()
+    notify(pending_release)
+    first_pending_entry = fetch(first_pending)
+    second_pending_entry = fetch(second_pending)
+    @test pending_allocations[] == 1
+    @test first_pending_entry === second_pending_entry
+    @test length(extension._GPU_STAGING) == 1
     extension.parallel_gpu_cache_limit!(8)
 
     # Wrapper signatures must retain the wrapped logical region. Equal-shape
@@ -2050,6 +2322,9 @@ function test_mpi_gpu_policy(extension)
                          adapter=event_adapter,
                          collective=(host, _op, _comm) -> host)
     @test last(events) == :sync
+    lock(extension._PARALLEL_GPU_ADAPTER_LOCK) do
+        delete!(extension._PARALLEL_GPU_ADAPTERS, :mock_events)
+    end
     extension.parallel_gpu_clear_caches!()
     extension.parallel_gpu_cache_limit!(2)
 
@@ -2087,6 +2362,93 @@ function test_mpi_gpu_policy(extension)
     )
     @test pencil_result === device_pencil
     @test parent(device_pencil).data == 3 .* reshape(Float32.(1:6), 3, 2)
+
+    # A vendor-backed Pencil in any positional slot must reach collective
+    # storage preflight before generic CPU mathematics.
+    mixed_adapter = extension.ParallelGPUAdapter(
+        :mock_mixed,
+        value -> value isa MockMixedVendorArray,
+        _ -> MockMixedVendorArray,
+        _ -> 17,
+        _ -> false,
+        _ -> nothing,
+        (T, n) -> Vector{T}(undef, n),
+        (host, device) -> copyto!(host, device),
+        (device, host) -> copyto!(device, host),
+    )
+    extension._register_parallel_gpu_adapter!(mixed_adapter)
+    # ParallelGPUAdapter is immutable and the registry intentionally holds a
+    # WeakRef. Keep the exact boxed registry value (rather than a potentially
+    # re-boxed local copy) strongly reachable for this test's lifetime.
+    mixed_adapter_holder = lock(extension._PARALLEL_GPU_ADAPTER_LOCK) do
+        Ref{Any}(extension._PARALLEL_GPU_ADAPTERS[:mock_mixed].value)
+    end
+    GC.@preserve mixed_adapter_holder begin
+      try
+    mixed_cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
+    cpu_spatial_pen = SHTnsKit.create_spatial_pencil(
+        mixed_cfg; comm=MPI.COMM_SELF,
+    )
+    gpu_spatial_pen = similar(cpu_spatial_pen, MockMixedVendorArray)
+    cpu_spatial = PencilArrays.PencilArray{Float64}(undef, cpu_spatial_pen)
+    gpu_spatial = PencilArrays.PencilArray{Float64}(undef, gpu_spatial_pen)
+    fill!(parent(cpu_spatial), 0.25)
+    fill!(parent(gpu_spatial).data, 0.5)
+    spatial_sentinels = (copy(parent(cpu_spatial)), copy(parent(gpu_spatial).data))
+    mixed_before = extension.parallel_gpu_stats()
+    for values in ((cpu_spatial, gpu_spatial), (gpu_spatial, cpu_spatial))
+        error = try
+            SHTnsKit.analysis_sphtor(mixed_cfg, values...)
+            nothing
+        catch caught
+            caught
+        end
+        @test error isa ArgumentError
+        @test occursin("storage/vendor/device mismatch", sprint(showerror, error))
+    end
+    for vendor_position in 1:3
+        values = ntuple(index -> index == vendor_position ? gpu_spatial :
+                         cpu_spatial, 3)
+        error = try
+            SHTnsKit.analysis_qst(mixed_cfg, values...)
+            nothing
+        catch caught
+            caught
+        end
+        @test error isa ArgumentError
+        @test occursin("storage/vendor/device mismatch", sprint(showerror, error))
+    end
+    @test parent(cpu_spatial) == first(spatial_sentinels)
+    @test parent(gpu_spatial).data == last(spatial_sentinels)
+    @test extension.parallel_gpu_stats() == mixed_before
+
+    world_cpu_pen = SHTnsKit.create_spatial_pencil(
+        mixed_cfg; comm=MPI.COMM_WORLD,
+    )
+    world_gpu_pen = similar(world_cpu_pen, MockMixedVendorArray)
+    world_cpu = PencilArrays.PencilArray{Float64}(undef, world_cpu_pen)
+    world_gpu = PencilArrays.PencilArray{Float64}(undef, world_gpu_pen)
+    fill!(parent(world_cpu), 0.75)
+    fill!(parent(world_gpu).data, 1.25)
+    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    alternating = iseven(rank) ? (world_cpu, world_gpu) :
+                                 (world_gpu, world_cpu)
+    caught_mixed = false
+    try
+        SHTnsKit.analysis_sphtor(mixed_cfg, alternating...)
+    catch error
+        caught_mixed = error isa ArgumentError && occursin(
+            "storage/vendor/device mismatch", sprint(showerror, error),
+        )
+    end
+    @test MPI.Allreduce(caught_mixed ? 1 : 0, min, MPI.COMM_WORLD) == 1
+    MPI.Barrier(MPI.COMM_WORLD)
+      finally
+        lock(extension._PARALLEL_GPU_ADAPTER_LOCK) do
+            delete!(extension._PARALLEL_GPU_ADAPTERS, :mock_mixed)
+        end
+      end
+    end
 
     # Execute real staged mathematical callbacks on COMM_SELF while this test
     # normally runs under a two-rank WORLD. Before subgroup propagation was

@@ -263,6 +263,9 @@ function SHTnsKit.DistTransposePlan(
     )
 end
 
+@inline _transpose_spatial_reference(plan::DistTransposePlan) =
+    PencilFFTs.pencil_input(plan.fft_plan)
+
 function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
                                    spatial=(), spectral=())
     comm = plan.comm
@@ -274,9 +277,7 @@ function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
     flags = UInt32(0)
     spatial_type = Transforms.eltype_input(plan.fft_plan)
     spectral_type = eltype(plan.F_buf)
-    spatial_reference = Pencil(
-        Array, (plan.nlon, plan.nlat), (2,), comm,
-    )
+    spatial_reference = _transpose_spatial_reference(plan)
     layout_matches = function(reference, value)
         candidate = pencil(value)
         try

@@ -109,6 +109,23 @@ end
     plan = DistTransposePlan(cfg; comm, nlev=1)
     output = allocate_spectral(plan)
     input = allocate_spatial(plan)
+    @test isdefined(ParExt, :_transpose_spatial_reference)
+    if isdefined(ParExt, :_transpose_spatial_reference)
+        spatial_reference = ParExt._transpose_spatial_reference(plan)
+        @test spatial_reference === PencilFFTs.pencil_input(plan.fft_plan)
+        for _ in 1:8
+            ParExt._validate_transpose_call!(
+                plan, :reused_spatial_reference;
+                spatial=(input,), spectral=(output,),
+            )
+            @test ParExt._transpose_spatial_reference(plan) === spatial_reference
+        end
+    end
+    transpose_source = read(joinpath(
+        @__DIR__, "..", "..", "ext", "ParallelTransposeTransforms.jl",
+    ), String)
+    @test !occursin("spatial_reference = Pencil(", transpose_source)
+    @test occursin("PencilFFTs.pencil_input(plan.fft_plan)", transpose_source)
     wrong_spatial_pen = PencilArrays.Pencil(
         Array, (plan.nlon, plan.nlat), (1,), comm,
     )

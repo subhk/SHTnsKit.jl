@@ -279,6 +279,16 @@ function _delete_staging_entry_locked!(entry)
     return false
 end
 
+function _release_staging_entry_locked!(entry)
+    entry.users -= 1
+    if entry.users == 0
+        entry.cacheable || _delete_staging_entry_locked!(entry)
+        _trim_staging_cache_locked!()
+        notify(_GPU_STAGING_AVAILABLE)
+    end
+    return nothing
+end
+
 function parallel_gpu_cache_limit!(limit::Integer)
     limit >= 1 || throw(ArgumentError("MPI GPU staging cache limit must be positive"))
     return lock(_GPU_STAGING_LOCK) do
@@ -676,12 +686,7 @@ end
 
 function _release_staging_entry(entry)
     lock(_GPU_STAGING_LOCK) do
-        entry.users -= 1
-        if entry.users == 0
-            entry.cacheable || _delete_staging_entry_locked!(entry)
-            _trim_staging_cache_locked!()
-            notify(_GPU_STAGING_AVAILABLE)
-        end
+        _release_staging_entry_locked!(entry)
     end
     return nothing
 end
@@ -824,7 +829,7 @@ function _staging_entries(adapter::ParallelGPUAdapter, comm, owners...)
                     notify(build.pending.event)
                 end
                 for pair in reservation.acquired
-                    last(pair).users -= 1
+                    _release_staging_entry_locked!(last(pair))
                 end
                 _trim_staging_cache_locked!()
                 notify(_GPU_STAGING_AVAILABLE)
@@ -858,7 +863,7 @@ function _staging_entries(adapter::ParallelGPUAdapter, comm, owners...)
                 end
             else
                 for pair in reservation.acquired
-                    last(pair).users -= 1
+                    _release_staging_entry_locked!(last(pair))
                 end
             end
             foreach(candidate -> notify(candidate.build.pending.event), candidates)

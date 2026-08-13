@@ -453,6 +453,9 @@ function _validate_scalar_pencil!(cfg::SHTnsKit.SHTConfig, array::PencilArray,
                                   use_rfft::Bool=false, real_output::Bool=true,
                                   require_real_input::Bool=false,
                                   require_complex_input::Bool=false)
+    peer === nothing || _validate_parallel_storage!(
+        comm, operation, array, peer,
+    )
     _validate_collective_scalar_options!(
         comm, use_rfft, real_output, operation,
     )
@@ -559,6 +562,13 @@ function _validate_dense_synthesis!(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix
         ))
     end
     has_minus = minus_count == comm_size
+    if has_minus
+        _validate_parallel_storage!(
+            comm, :dist_synthesis, Alm, Aminus, prototype,
+        )
+    else
+        _validate_parallel_storage!(comm, :dist_synthesis, Alm, prototype)
+    end
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     flags = UInt32(0)
     size(Alm) == expected || (flags |= 0x0001)

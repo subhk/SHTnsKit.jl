@@ -241,6 +241,7 @@ function _validate_packed_rotation!(cfg, coefficients, angles, prototype,
     # Packed coefficients have no communicator, so the prototype is their
     # trusted communicator anchor. All replication checks stay within it.
     comm = communicator(prototype)
+    _validate_parallel_storage!(comm, operation, coefficients, prototype)
     _validate_cfg_replicated(cfg, comm)
     flags = length(coefficients) == cfg.nlm ? UInt32(0) : UInt32(0x0001)
     code = _scalar_precision_code(eltype(coefficients))

@@ -2205,6 +2205,55 @@ function test_mpi_gpu_policy(extension)
     @test pending_allocations[] == 1
     @test first_pending_entry == second_pending_entry
     @test length(extension._GPU_STAGING) == 0
+
+    # Rolling back a partially acquired working set must retire entries that
+    # were tombstoned by a concurrent cache clear.  A later allocation failure
+    # used to decrement `users` without removing the now-idle entry.
+    extension.parallel_gpu_clear_caches!()
+    rollback_allocations = Threads.Atomic{Int}(0)
+    rollback_entered = Base.Event()
+    rollback_release = Base.Event()
+    rollback_fail = Ref(true)
+    rollback_adapter = extension.ParallelGPUAdapter(
+        :mock_staging_rollback, multi_adapter.matches,
+        multi_adapter.array_type, multi_adapter.device,
+        multi_adapter.with_device, multi_adapter.gpu_aware,
+        multi_adapter.synchronize,
+        (T, n) -> begin
+            allocation = Threads.atomic_add!(rollback_allocations, 1)
+            if allocation == 1 && rollback_fail[]
+                notify(rollback_entered)
+                wait(rollback_release)
+                error("rollback pin allocation failed")
+            end
+            Vector{T}(undef, n)
+        end,
+        multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+    )
+    rollback_first = MockMultiDeviceArray(Float32[1], 1)
+    rollback_second = MockMultiDeviceArray(Float32[2], 1)
+    extension._staging_entry(
+        rollback_adapter, multi_comm, rollback_first, 1,
+    )
+    rollback_task = Threads.@spawn try
+        extension._staging_entries(
+            rollback_adapter, multi_comm, rollback_first, rollback_second,
+        )
+    catch error
+        error
+    end
+    wait(rollback_entered)
+    extension.parallel_gpu_clear_caches!()
+    @test length(extension._GPU_STAGING) == 1
+    notify(rollback_release)
+    @test fetch(rollback_task) isa ErrorException
+    @test length(extension._GPU_STAGING) == 0
+    rollback_fail[] = false
+    @test extension._staged_gpu_call(
+        rollback_adapter, :staging_rollback_retry, multi_comm,
+        (first, second) -> first[1] + second[1],
+        rollback_first, rollback_second; validate_storage=false,
+    ) == 3
     extension.parallel_gpu_cache_limit!(8)
 
     # Wrapper signatures must retain the wrapped logical region. Equal-shape
@@ -2529,6 +2578,24 @@ function test_mpi_gpu_policy(extension)
     fill!(parent(cpu_spectral), 0.0)
     fill!(parent(gpu_spectral).data, 0.0)
     mixed_cases = Pair{Symbol,Function}[]
+    append!(mixed_cases, (
+        :dist_synthesis_coefficients => (() -> SHTnsKit.dist_synthesis(
+            mixed_cfg, gpu_spectral; prototype_θφ=cpu_spatial,
+        )),
+        :dist_synthesis_prototype => (() -> SHTnsKit.dist_synthesis(
+            mixed_cfg, cpu_spectral; prototype_θφ=gpu_spatial,
+        )),
+        :dist_synthesis_dense_coefficients => (() -> SHTnsKit.dist_synthesis(
+            mixed_cfg, MockMixedVendorArray(zeros(
+                ComplexF64, mixed_cfg.lmax + 1, mixed_cfg.mmax + 1,
+            )); prototype_θφ=cpu_spatial,
+        )),
+        :dist_synthesis_dense_prototype => (() -> SHTnsKit.dist_synthesis(
+            mixed_cfg, zeros(
+                ComplexF64, mixed_cfg.lmax + 1, mixed_cfg.mmax + 1,
+            ); prototype_θφ=gpu_spatial,
+        )),
+    ))
     for name in (:energy_vector_l_spectrum, :energy_vector_m_spectrum)
         function_object = getfield(SHTnsKit, name)
         push!(mixed_cases,
@@ -2599,6 +2666,18 @@ function test_mpi_gpu_policy(extension)
                   prototype_θφ=gpu_spatial,
               )))
     end
+    cpu_packed_vector = zeros(ComplexF64, mixed_cfg.nlm)
+    gpu_packed_vector = MockMixedVendorArray(copy(cpu_packed_vector))
+    append!(mixed_cases, (
+        :dist_synthesis_packed_coefficients => (() ->
+            SHTnsKit.dist_synthesis_packed(
+                mixed_cfg, gpu_packed_vector; prototype_θφ=cpu_spatial,
+            )),
+        :dist_synthesis_packed_prototype => (() ->
+            SHTnsKit.dist_synthesis_packed(
+                mixed_cfg, cpu_packed_vector; prototype_θφ=gpu_spatial,
+            )),
+    ))
     complex_packed_length = SHTnsKit.nlm_cplx_calc(
         mixed_cfg.lmax, mixed_cfg.mmax, 1,
     )
@@ -2636,6 +2715,79 @@ function test_mpi_gpu_policy(extension)
               Symbol(name, :_prototype) => (() -> function_object(
                   mixed_cfg, cpu_complex_packed, suffix...;
                   prototype_θφ=gpu_complex_spatial,
+              )))
+    end
+    cpu_complex_packed_vector = zeros(ComplexF64, complex_packed_length)
+    gpu_complex_packed_vector = MockMixedVendorArray(
+        copy(cpu_complex_packed_vector),
+    )
+    append!(mixed_cases, (
+        :dist_synthesis_packed_cplx_coefficients => (() ->
+            SHTnsKit.dist_synthesis_packed_cplx(
+                mixed_cfg, gpu_complex_packed_vector;
+                prototype_θφ=cpu_complex_spatial,
+            )),
+        :dist_synthesis_packed_cplx_prototype => (() ->
+            SHTnsKit.dist_synthesis_packed_cplx(
+                mixed_cfg, cpu_complex_packed_vector;
+                prototype_θφ=gpu_complex_spatial,
+            )),
+    ))
+
+    for name in (:dist_SH_Zrotate, :dist_SH_Yrotate,
+                 :dist_SH_Yrotate_allgatherm!,
+                 :dist_SH_Yrotate_truncgatherm!)
+        function_object = getfield(SHTnsKit, name)
+        push!(mixed_cases,
+              Symbol(name, :_input) => (() -> function_object(
+                  mixed_cfg, gpu_spectral, 0.25, cpu_spectral,
+              )))
+        push!(mixed_cases,
+              Symbol(name, :_output) => (() -> function_object(
+                  mixed_cfg, cpu_spectral, 0.25, gpu_spectral,
+              )))
+    end
+    for name in (:dist_SH_Yrotate90, :dist_SH_Xrotate90)
+        function_object = getfield(SHTnsKit, name)
+        push!(mixed_cases,
+              Symbol(name, :_input) => (() -> function_object(
+                  mixed_cfg, gpu_spectral, cpu_spectral,
+              )))
+        push!(mixed_cases,
+              Symbol(name, :_output) => (() -> function_object(
+                  mixed_cfg, cpu_spectral, gpu_spectral,
+              )))
+    end
+    push!(mixed_cases,
+          :dist_SH_rotate_euler_input => (() -> SHTnsKit.dist_SH_rotate_euler(
+              mixed_cfg, gpu_spectral, 0.1, 0.2, 0.3, cpu_spectral,
+          )))
+    push!(mixed_cases,
+          :dist_SH_rotate_euler_output => (() -> SHTnsKit.dist_SH_rotate_euler(
+              mixed_cfg, cpu_spectral, 0.1, 0.2, 0.3, gpu_spectral,
+          )))
+    for name in (:dist_SH_Zrotate_packed, :dist_SH_Yrotate_packed)
+        function_object = getfield(SHTnsKit, name)
+        push!(mixed_cases,
+              Symbol(name, :_coefficients) => (() -> function_object(
+                  mixed_cfg, gpu_packed_vector, 0.25;
+                  prototype_lm=cpu_spectral,
+              )))
+        push!(mixed_cases,
+              Symbol(name, :_prototype) => (() -> function_object(
+                  mixed_cfg, cpu_packed_vector, 0.25;
+                  prototype_lm=gpu_spectral,
+              )))
+    end
+    for name in (:dist_SH_Yrotate90_packed, :dist_SH_Xrotate90_packed)
+        function_object = getfield(SHTnsKit, name)
+        push!(mixed_cases,
+              Symbol(name, :_coefficients) => (() -> function_object(
+                  mixed_cfg, gpu_packed_vector; prototype_lm=cpu_spectral,
+              )))
+        push!(mixed_cases,
+              Symbol(name, :_prototype) => (() -> function_object(
+                  mixed_cfg, cpu_packed_vector; prototype_lm=gpu_spectral,
               )))
     end
 
@@ -2750,6 +2902,37 @@ function test_mpi_gpu_policy(extension)
         )
     end
     @test MPI.Allreduce(caught_mixed ? 1 : 0, min, MPI.COMM_WORLD) == 1
+    MPI.Barrier(MPI.COMM_WORLD)
+
+    world_cpu_spectral_pen = SHTnsKit.create_spectral_pencil(
+        mixed_cfg; comm=MPI.COMM_WORLD,
+    )
+    world_gpu_spectral_pen = similar(
+        world_cpu_spectral_pen, MockMixedVendorArray,
+    )
+    world_cpu_spectral = PencilArrays.PencilArray{ComplexF64}(
+        undef, world_cpu_spectral_pen,
+    )
+    world_gpu_spectral = PencilArrays.PencilArray{ComplexF64}(
+        undef, world_gpu_spectral_pen,
+    )
+    fill!(parent(world_cpu_spectral), 0)
+    fill!(parent(world_gpu_spectral).data, 0)
+    alternating_synthesis = iseven(rank) ?
+        (world_cpu_spectral, world_gpu) :
+        (world_gpu_spectral, world_cpu)
+    caught_synthesis = false
+    try
+        SHTnsKit.dist_synthesis(
+            mixed_cfg, first(alternating_synthesis);
+            prototype_θφ=last(alternating_synthesis),
+        )
+    catch error
+        caught_synthesis = error isa ArgumentError && occursin(
+            "storage/vendor/device mismatch", sprint(showerror, error),
+        )
+    end
+    @test MPI.Allreduce(caught_synthesis ? 1 : 0, min, MPI.COMM_WORLD) == 1
     MPI.Barrier(MPI.COMM_WORLD)
       finally
         lock(extension._PARALLEL_GPU_ADAPTER_LOCK) do

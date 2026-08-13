@@ -585,6 +585,9 @@ function SHTnsKit.dist_synthesis_packed(cfg::SHTnsKit.SHTConfig,
                                         real_output::Bool=true,
                                         ltr::Integer=cfg.lmax)
     comm = communicator(prototype_θφ)
+    _validate_parallel_storage!(
+        comm, :dist_synthesis_packed, Qlm, prototype_θφ,
+    )
     _validate_cfg_replicated(cfg, comm)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :dist_synthesis_packed)
     flags = UInt32(0)
@@ -675,6 +678,9 @@ end
 """
 function SHTnsKit.dist_synthesis_packed_cplx(cfg::SHTnsKit.SHTConfig, alm_packed::AbstractVector{<:Complex}; prototype_θφ::PencilArray)
     comm = communicator(prototype_θφ)
+    _validate_parallel_storage!(
+        comm, :dist_synthesis_packed_cplx, alm_packed, prototype_θφ,
+    )
     _validate_cfg_replicated(cfg, comm)
     _validate_scalar_pencil!(
         cfg, prototype_θφ, (cfg.nlat, cfg.nlon), :dist_synthesis_packed_cplx;

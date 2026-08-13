@@ -18,16 +18,12 @@ include(joinpath(ROOT, "test", "parity", "mpi_gpu.jl"))
     test_mpi_gpu_policy(extension)
     compound = Base.get_extension(SHTnsKit, :SHTnsKitParallelCUDAExt)
     test_mpi_gpu_source_contract(ROOT, :cuda, compound)
-
-    if CUDA.functional() && MPI.Comm_size(MPI.COMM_WORLD) == 2
-        pen = Pencil(CuArray, (8, 8), (1,), MPI.COMM_WORLD)
-        field = PencilArray{Float32}(undef, pen)
-        @test parent(field) isa CUDA.AnyCuArray
-        extension.allreduce!(parent(field), +, MPI.COMM_WORLD)
-        @test parent(field) isa CUDA.AnyCuArray
-    else
-        @test_skip CUDA.functional() && MPI.Comm_size(MPI.COMM_WORLD) == 2
-    end
+    cuda_functional = CUDA.functional()
+    cuda_devices = cuda_functional ? collect(CUDA.devices()) : Any[]
+    run_mpi_gpu_full_parity(
+        :cuda, CUDA.CuArray, value -> value isa CUDA.AnyCuArray,
+        cuda_functional, cuda_devices, CUDA.device!, CUDA.device,
+    )
 end
 
 MPI.Barrier(MPI.COMM_WORLD)

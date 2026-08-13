@@ -55,6 +55,19 @@ end
 @inline _parallel_parent(value::PencilArray) = parent(value)
 @inline _parallel_parent(value) = value
 
+# Vendor device queries must inspect the allocation, not the task's current
+# device. Peel the array wrappers that can sit between a PencilArray/view and
+# the CUDA/ROCm allocation which owns its memory.
+@inline _parallel_root_buffer(value::PencilArray) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::SubArray) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::Base.ReshapedArray) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::Base.ReinterpretArray) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value) = value
+
 function _parallel_array_type(prototype)
     adapter = _parallel_gpu_adapter(_parallel_parent(prototype))
     return adapter === nothing ? Array : adapter.array_type(prototype)
@@ -162,15 +175,16 @@ function _gpu_awareness(adapter::ParallelGPUAdapter, comm, buffer)
 end
 
 function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int)
-    device = adapter.device(owner)
+    root_owner = _parallel_root_buffer(owner)
+    device = adapter.device(root_owner)
     signature = (objectid(comm), adapter.name, device, eltype(owner), n)
-    owner_id = objectid(owner)
+    owner_id = objectid(root_owner)
     key = (owner_id, signature)
 
     found = lock(_GPU_STAGING_LOCK) do
         filter!(pair -> pair.second.owner.value !== nothing, _GPU_STAGING)
         entry = get(_GPU_STAGING, key, nothing)
-        if entry !== nothing && entry.owner.value === owner
+        if entry !== nothing && entry.owner.value === root_owner
             _GPU_CACHE_TICK[] += 1
             entry.tick = _GPU_CACHE_TICK[]
             return entry
@@ -183,11 +197,11 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int)
     # global cache lock.
     buffer = adapter.allocate_pinned(eltype(owner), n)
     candidate = _GPUStagingEntry(
-        WeakRef(owner), signature, buffer, ReentrantLock(), UInt64(0),
+        WeakRef(root_owner), signature, buffer, ReentrantLock(), UInt64(0),
     )
     return lock(_GPU_STAGING_LOCK) do
         existing = get(_GPU_STAGING, key, nothing)
-        if existing !== nothing && existing.owner.value === owner
+        if existing !== nothing && existing.owner.value === root_owner
             return existing
         end
         filter!(pair -> pair.second.owner.value !== nothing, _GPU_STAGING)
@@ -345,6 +359,7 @@ function allreduce!(buffer, op, comm;
         adapter.synchronize(buffer)
         collective(host, op, comm)
         adapter.host_to_device!(buffer, host)
+        adapter.synchronize(buffer)
         buffer
     end
     Threads.atomic_add!(_GPU_STAGED_CALLS, 1)
@@ -366,7 +381,9 @@ function exchange!(send, receive, comm;
     if adapter === nothing && receive_adapter === nothing
         return collective(send, receive, comm)
     end
-    adapter === receive_adapter || throw(ArgumentError(
+    adapter !== nothing && adapter.matches(send) && adapter.matches(receive) &&
+        (receive_adapter === nothing || adapter.name === receive_adapter.name) ||
+        throw(ArgumentError(
         "MPI exchange send/receive buffers must use the same GPU vendor",
     ))
     bytes = _communication_bytes(send) + _communication_bytes(receive)
@@ -395,6 +412,7 @@ function exchange!(send, receive, comm;
             adapter.synchronize(send)
             collective(send_host, receive_host, comm)
             adapter.host_to_device!(receive, receive_host)
+            adapter.synchronize(receive)
             receive
         end
     end

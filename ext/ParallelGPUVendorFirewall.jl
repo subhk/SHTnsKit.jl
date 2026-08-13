@@ -658,6 +658,96 @@ function SHTnsKit.SHqst_to_lat(cfg::SHTnsKit.SHTConfig,
     )
 end
 
+# Preserved `dist_*` local-evaluation names. These must be intercepted before
+# `ParallelLocal.jl` indexes a GPU-backed PencilArray.
+function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig,
+                                 coefficients::VendorPencilArray,
+                                 cost::Real; kwargs...)
+    return _stage_vendor_call(:dist_SH_to_lat, coefficients) do host
+        SHTnsKit.dist_SH_to_lat(cfg, host, cost; kwargs...)
+    end
+end
+
+
+function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig,
+                                   coefficients::VendorPencilArray,
+                                   cost::Real, phi::Real)
+    return _stage_vendor_call(:dist_SH_to_point, coefficients) do host
+        SHTnsKit.dist_SH_to_point(cfg, host, cost, phi)
+    end
+end
+
+
+function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig,
+                                      Q::VendorPencilArray,
+                                      S::VendorPencilArray,
+                                      T::VendorPencilArray,
+                                      cost::Real, phi::Real)
+    return _stage_vendor_call(
+        :dist_SHqst_to_point,
+        (host_q, host_s, host_t) -> SHTnsKit.dist_SHqst_to_point(
+            cfg, host_q, host_s, host_t, cost, phi,
+        ), Q, S, T,
+    )
+end
+
+
+function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig,
+                                    Q::VendorPencilArray,
+                                    S::VendorPencilArray,
+                                    T::VendorPencilArray,
+                                    cost::Real; kwargs...)
+    return _stage_vendor_call(
+        :dist_SHqst_to_lat,
+        (host_q, host_s, host_t) -> SHTnsKit.dist_SHqst_to_lat(
+            cfg, host_q, host_s, host_t, cost; kwargs...,
+        ), Q, S, T,
+    )
+end
+
+
+function SHTnsKit.dist_analysis_packed(cfg::SHTnsKit.SHTConfig,
+                                       field::VendorPencilArray; kwargs...)
+    return _stage_vendor_call(:dist_analysis_packed, field) do host
+        SHTnsKit.dist_analysis_packed(cfg, host; kwargs...)
+    end
+end
+
+
+function SHTnsKit.dist_synthesis_packed(
+        cfg::SHTnsKit.SHTConfig, coefficients::VendorArray;
+        prototype_θφ::VendorPencilArray, kwargs...)
+    return _stage_vendor_call(
+        :dist_synthesis_packed,
+        (host_coefficients, host_prototype) ->
+            SHTnsKit.dist_synthesis_packed(
+                cfg, host_coefficients;
+                prototype_θφ=host_prototype, kwargs...,
+            ), coefficients, prototype_θφ,
+    )
+end
+
+
+function SHTnsKit.dist_analysis_packed_cplx(
+        cfg::SHTnsKit.SHTConfig, field::VendorPencilArray)
+    return _stage_vendor_call(:dist_analysis_packed_cplx, field) do host
+        SHTnsKit.dist_analysis_packed_cplx(cfg, host)
+    end
+end
+
+
+function SHTnsKit.dist_synthesis_packed_cplx(
+        cfg::SHTnsKit.SHTConfig, coefficients::VendorArray;
+        prototype_θφ::VendorPencilArray)
+    return _stage_vendor_call(
+        :dist_synthesis_packed_cplx,
+        (host_coefficients, host_prototype) ->
+            SHTnsKit.dist_synthesis_packed_cplx(
+                cfg, host_coefficients; prototype_θφ=host_prototype,
+            ), coefficients, prototype_θφ,
+    )
+end
+
 # Preserved `dist_*` aliases use the same staged boundary for cfg-form calls.
 function SHTnsKit.dist_analysis(cfg::SHTnsKit.SHTConfig,
                                 field::VendorPencilArray; kwargs...)

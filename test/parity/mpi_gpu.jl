@@ -5,6 +5,7 @@ using LinearAlgebra
 isdefined(@__MODULE__, :ScalarParityAdapter) || include("scalar_full.jl")
 isdefined(@__MODULE__, :VectorParityAdapter) || include("sphtor_full.jl")
 isdefined(@__MODULE__, :QSTParityAdapter) || include("qst_full.jl")
+isdefined(@__MODULE__, :SHTNS37_MANIFEST_PATH) || include("shtns37_fixtures.jl")
 
 """A CPU-backed stand-in that exercises the MPI/GPU policy without GPU hardware."""
 mutable struct MockMPIArray{T,N} <: AbstractArray{T,N}
@@ -302,6 +303,96 @@ qst_synthesis_inferred(::MPIGPUQSTAdapter, cfg, Q, S, T, prototype) =
 qst_synthesis_cplx_inferred(::MPIGPUQSTAdapter, cfg, Q, S, T, prototype) =
     SHTnsKit.synthesis_qst_cplx(cfg, Q, S, T; prototype_θφ=prototype)
 
+"""Compare every SHTns 3.7 payload on GPU-backed distributed storage."""
+function test_shtns37_mpi_gpu_fixtures(array_type, is_vendor, comm)
+    manifest = TOML.parsefile(SHTNS37_MANIFEST_PATH)
+    place_values(values, kind) = _mpi_gpu_place(
+        array_type, values, kind === :spectral ? (2,) : (1,), comm,
+    )
+    collect_values(value) = _mpi_gpu_collect_any(value, comm)
+    function check(value, expected, atol, rtol)
+        _mpi_gpu_assert_resident(value, is_vendor)
+        @test collect_values(value) ≈ expected atol=atol rtol=rtol
+    end
+    @testset "SHTns 3.7 MPI GPU fixtures" begin
+        for f in manifest["fixture"]
+            cfg = _shtns37_config(f)
+            p = _shtns37_payloads(f)
+            cap = Symbol(f["capability"])
+            atol, rtol = f["atol"], f["rtol"]
+            RT = f["precision"] == "float32" ? Float32 : Float64
+            prototype = place_values(zeros(RT, cfg.nlat, cfg.nlon), :spatial)
+            id = f["id"]
+            @testset "$id" begin
+                if cap === :scalar_real_full
+                    Q = place_values(_shtns37_dense(cfg, p["coefficients"]), :spectral)
+                    check(synthesis(cfg, Q; prototype_θφ=prototype), p["field"], atol, rtol)
+                elseif cap === :scalar_complex_full
+                    A = place_values(reshape(vec(p["coefficients"]), :, 1), :spatial)
+                    cp = place_values(zeros(Complex{RT}, cfg.nlat, cfg.nlon), :spatial)
+                    check(synthesis_packed_cplx(cfg, A; prototype_θφ=cp), p["field"], atol, rtol)
+                elseif cap in (:scalar_l, :packed_storage)
+                    Q = place_values(reshape(vec(p["coefficients"]), :, 1), :spatial)
+                    got = cap === :scalar_l ? synthesis_packed_l(cfg, Q, f["ltr"]; prototype_θφ=prototype) : synthesis_packed(cfg, Q; prototype_θφ=prototype)
+                    check(got, p["field"], atol, rtol)
+                elseif cap === :scalar_ml
+                    Q = place_values(reshape(vec(p["coefficients"]), :, 1), :spatial)
+                    check(synthesis_packed_ml(cfg, f["stored_im"], Q, f["ltr"]), f["fixed_mode_scale"] .* reshape(vec(p["field"]), :, 1), atol, rtol)
+                elseif cap === :scalar_batch
+                    dense = cat((_shtns37_dense(cfg, p["coefficients"][:, k]) for k in axes(p["coefficients"], 2))...; dims=3)
+                    Q = place_values(dense, :spectral)
+                    proto = place_values(zeros(eltype(p["field"]), size(p["field"])), :spatial)
+                    check(synthesis_batch(cfg, Q; prototype_θφ=proto), p["field"], atol, rtol)
+                elseif cap in (:sphtor_full, :sphtor_l)
+                    S = place_values(_shtns37_dense(cfg, p["S"]), :spectral)
+                    T = place_values(_shtns37_dense(cfg, p["T"]), :spectral)
+                    got = cap === :sphtor_full ? synthesis_sphtor(cfg, S, T; prototype_θφ=prototype) : synthesis_sphtor_l(cfg, S, T, f["ltr"]; prototype_θφ=prototype)
+                    check(got[1], p["Vt"], atol, rtol); check(got[2], p["Vp"], atol, rtol)
+                elseif cap === :sphtor_ml
+                    S = place_values(reshape(vec(p["S"]), :, 1), :spatial); T = place_values(reshape(vec(p["T"]), :, 1), :spatial)
+                    got = synthesis_sphtor_ml(cfg, f["stored_im"], S, T, f["ltr"]); scale = f["fixed_mode_scale"]
+                    check(got[1], scale .* reshape(vec(p["Vt"]), :, 1), atol, rtol); check(got[2], scale .* reshape(vec(p["Vp"]), :, 1), atol, rtol)
+                elseif cap === :sphtor_batch
+                    S = place_values(_shtns37_batch_dense(cfg, p, "S"), :spectral); T = place_values(_shtns37_batch_dense(cfg, p, "T"), :spectral)
+                    got = synthesis_sphtor_batch(cfg, S, T); check(got[1], p["Vt"], atol, rtol); check(got[2], p["Vp"], atol, rtol)
+                elseif cap in (:qst_full, :qst_l)
+                    Q = place_values(_shtns37_dense(cfg, p["Q"]), :spectral); S = place_values(_shtns37_dense(cfg, p["S"]), :spectral); T = place_values(_shtns37_dense(cfg, p["T"]), :spectral)
+                    got = cap === :qst_full ? synthesis_qst(cfg, Q, S, T; prototype_θφ=prototype) : synthesis_qst_l(cfg, Q, S, T, f["ltr"]; prototype_θφ=prototype)
+                    for (i, name) in enumerate(("Vr", "Vt", "Vp")); check(got[i], p[name], atol, rtol); end
+                elseif cap === :qst_ml
+                    Q = place_values(reshape(vec(p["Q"]), :, 1), :spatial); S = place_values(reshape(vec(p["S"]), :, 1), :spatial); T = place_values(reshape(vec(p["T"]), :, 1), :spatial)
+                    got = synthesis_qst_ml(cfg, f["stored_im"], Q, S, T, f["ltr"]); scale = f["fixed_mode_scale"]
+                    for (i, name) in enumerate(("Vr", "Vt", "Vp")); check(got[i], scale .* reshape(vec(p[name]), :, 1), atol, rtol); end
+                elseif cap === :qst_batch
+                    Q = place_values(_shtns37_batch_dense(cfg, p, "Q"), :spectral); S = place_values(_shtns37_batch_dense(cfg, p, "S"), :spectral); T = place_values(_shtns37_batch_dense(cfg, p, "T"), :spectral)
+                    got = synthesis_qst_batch(cfg, Q, S, T); for (i, name) in enumerate(("Vr", "Vt", "Vp")); check(got[i], p[name], atol, rtol); end
+                elseif cap === :point
+                    Q = place_values(_shtns37_dense(cfg, p["Q"]), :spectral); @test synthesis_point(cfg, Q, f["cost"], f["phi"]) ≈ p["value"][1] atol=atol rtol=rtol
+                elseif cap === :point_complex
+                    A = place_values(reshape(vec(p["A"]), :, 1), :spatial); @test synthesis_point_cplx(cfg, A, f["cost"], f["phi"]) ≈ p["value"][1] atol=atol rtol=rtol
+                elseif cap === :latitude
+                    Q = place_values(_shtns37_dense(cfg, p["Q"]), :spectral); check(SH_to_lat(cfg, Q, f["cost"]; nphi=f["nphi"], ltr=f["ltr"], mtr=f["mmax"]), vec(p["values"]), atol, rtol)
+                elseif cap === :latitude_complex
+                    A = place_values(reshape(vec(p["A"]), :, 1), :spatial); check(SH_to_lat_cplx(cfg, A, f["cost"]; nphi=f["nphi"], ltr=f["ltr"]), vec(p["values"]), atol, rtol)
+                elseif cap in (:qst_point, :qst_latitude, :gradient_point)
+                    names = cap === :gradient_point ? ("Dr", "S") : ("Q", "S", "T")
+                    arrays = map(name -> place_values(_shtns37_dense(cfg, p[name]), :spectral), names)
+                    got = cap === :gradient_point ? SH_to_grad_point(cfg, arrays..., f["cost"], f["phi"]) : cap === :qst_point ? SHqst_to_point(cfg, arrays..., f["cost"], f["phi"]) : SHqst_to_lat(cfg, arrays..., f["cost"]; nphi=f["nphi"], ltr=f["ltr"], mtr=f["mmax"])
+                    if cap === :qst_latitude; for (i, name) in enumerate(("Vr", "Vt", "Vp")); check(got[i], vec(p[name]), atol, rtol); end; else; @test collect(got) ≈ vec(p["value"]) atol=atol rtol=rtol; end
+                elseif cap === :operators
+                    Q = place_values(_shtns37_dense(cfg, p["Q"]), :spectral); rct = similar(Q); rdt = similar(Q)
+                    SH_mul_mx(CPU(), cfg, vec(p["ct_matrix"]), Q, rct); SH_mul_mx(CPU(), cfg, vec(p["dt_matrix"]), Q, rdt)
+                    check(rct, _shtns37_dense(cfg, p["ct_result"]), atol, rtol); check(rdt, _shtns37_dense(cfg, p["dt_result"]), atol, rtol)
+                elseif cap === :rotations
+                    Q = place_values(_shtns37_dense(cfg, p["Q"]), :spectral); z = similar(Q); y = similar(Q)
+                    dist_SH_Zrotate(cfg, Q, f["z_angle"], z); dist_SH_Yrotate(cfg, Q, f["y_angle"], y)
+                    check(z, _shtns37_dense(cfg, p["Z"]), atol, rtol); check(y, _shtns37_dense(cfg, p["Y"]), atol, rtol)
+                end
+            end
+        end
+    end
+end
+
 """
 Run the shared two-rank hardware matrix. This function is always parsed and its
 invocation is source-checked; on machines without a matching device per rank it
@@ -340,6 +431,7 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
         shared_axes..., robert_values=(false, true))
     run_qst_full_parity(MPIGPUQSTAdapter(array_type, is_vendor, comm);
         shared_axes..., robert_values=(false, true))
+    test_shtns37_mpi_gpu_fixtures(array_type, is_vendor, comm)
 
     @testset "actual allocation device cache key" begin
         # A buffer allocated on device 1 remains keyed to device 1 even while
@@ -3435,6 +3527,7 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
         @test occursin(family, read(@__FILE__, String))
     end
     matrix_source = read(@__FILE__, String)
+    @test length(findall("test_shtns37_mpi_gpu_fixtures", matrix_source)) >= 3
     for call_marker in (
         "run_scalar_full_parity(", "run_sphtor_full_parity(",
         "run_qst_full_parity(", "analysis_packed_cplx_l(",

@@ -13,6 +13,7 @@ include("../../parity/vector_variants.jl")
 include("../../parity/local_evaluation.jl")
 include("../../parity/operators.jl")
 include("../../parity/rotations.jl")
+include("../../parity/shtns37_fixtures.jl")
 
 struct CUDAScalarAdapter <: ScalarParityAdapter end
 struct CUDAOperatorAdapter <: GPUOperatorAdapter end
@@ -186,6 +187,7 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     test_angle_axis_pi_singularity()
     if CUDA.functional()
         run_rotation_parity(CUDARotationAdapter())
+        test_shtns37_gpu_fixtures(CuArray)
     else
         @test_skip CUDA.functional()
     end

@@ -13,6 +13,7 @@ include("../../parity/vector_variants.jl")
 include("../../parity/local_evaluation.jl")
 include("../../parity/operators.jl")
 include("../../parity/rotations.jl")
+include("../../parity/shtns37_fixtures.jl")
 
 struct AMDGPUScalarAdapter <: ScalarParityAdapter end
 struct AMDGPUOperatorAdapter <: GPUOperatorAdapter end
@@ -172,6 +173,7 @@ end
     test_angle_axis_pi_singularity()
     if AMDGPU.functional()
         run_rotation_parity(AMDGPURotationAdapter())
+        test_shtns37_gpu_fixtures(ROCArray)
     else
         @test_skip AMDGPU.functional()
     end

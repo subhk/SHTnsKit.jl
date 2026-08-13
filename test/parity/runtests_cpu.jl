@@ -9,7 +9,9 @@ include("vector_variants.jl")
 include("local_evaluation.jl")
 include("operators.jl")
 include("rotations.jl")
+include("shtns37_fixtures.jl")
 
+test_shtns37_fixtures_cpu()
 run_scalar_full_parity(CPUScalarAdapter())
 @testset "scalar mres adjoint parity" begin
     test_mres_scalar_adjoints()

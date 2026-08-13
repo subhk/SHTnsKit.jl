@@ -14,6 +14,7 @@ include("vector_variants.jl")
 include("local_evaluation.jl")
 include("operators.jl")
 include("rotations.jl")
+include("shtns37_fixtures.jl")
 
 struct MPIScalarAdapter <: ScalarParityAdapter
     comm
@@ -2594,6 +2595,10 @@ if isempty(ARGS) || "subgroup_firewall" in ARGS
     else
         @test_skip MPI.Comm_size(MPI.COMM_WORLD) == 4
     end
+end
+
+if isempty(ARGS) || "shtns37_fixtures" in ARGS
+    test_shtns37_mpi_fixtures(MPI.COMM_WORLD)
 end
 
 MPI.Barrier(MPI.COMM_WORLD)

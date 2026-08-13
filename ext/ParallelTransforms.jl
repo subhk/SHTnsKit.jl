@@ -3098,8 +3098,9 @@ end
 
 # Synthesis to distributed fields from dense spectra
 function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
+    comm = communicator(prototype_θφ)
     _validate_qst_pencil_communicators!(
-        MPI.COMM_WORLD, (prototype_θφ,), :dist_synthesis_qst,
+        comm, (prototype_θφ,), :dist_synthesis_qst,
     )
     for value in (Qlm, Slm, Tlm)
         _validate_dense_synthesis!(

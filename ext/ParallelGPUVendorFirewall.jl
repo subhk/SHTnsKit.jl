@@ -29,6 +29,13 @@ function _stage_vendor_call(operation::Symbol, f, values...;
     prototype = first(value for value in values if value isa VendorPencilArray)
     adapter = _vendor_adapter(prototype)
     comm = _vendor_comm(values...)
+    return _stage_vendor_call_with_adapter(
+        adapter, comm, operation, f, values...; mutated,
+    )
+end
+
+function _stage_vendor_call_with_adapter(
+        adapter, comm, operation::Symbol, f, values...; mutated::Tuple=())
     ParallelExt._validate_parallel_storage!(
         comm, operation, values...; adapter,
     )
@@ -799,6 +806,52 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig,
     )
 end
 
+# Dense compatibility analyses return replicated vendor matrices.  These
+# overloads are deliberately limited to a vendor coefficient array together
+# with a distributed Pencil prototype: serial GPU transforms have no such
+# prototype and distributed Pencil coefficients keep their more-specific
+# VendorPencilArray methods above.
+function SHTnsKit.dist_synthesis(
+        cfg::SHTnsKit.SHTConfig, coefficients::VendorArray;
+        prototype_θφ::PencilArrays.PencilArray, Aminus=nothing, kwargs...)
+    adapter = ParallelExt._parallel_gpu_adapter(coefficients)
+    comm = PencilArrays.communicator(prototype_θφ)
+    return _dist_synthesis_dense_vendor(
+        adapter, comm, cfg, coefficients, prototype_θφ;
+        Aminus, kwargs...,
+    )
+end
+
+function _dist_synthesis_dense_vendor(
+        adapter, comm, cfg, coefficients, prototype_θφ;
+        Aminus=nothing, kwargs...)
+    minus_count = MPI.Allreduce(Aminus === nothing ? 0 : 1, +, comm)
+    comm_size = MPI.Comm_size(comm)
+    ParallelExt._collective_validation_error(
+        comm, minus_count in (0, comm_size) ? UInt32(0) : UInt32(0x0080),
+        :dist_synthesis_dense,
+    )
+    if minus_count == 0
+        return _stage_vendor_call_with_adapter(
+            adapter, comm,
+            :dist_synthesis_dense,
+            (host_coefficients, host_prototype) -> SHTnsKit.dist_synthesis(
+                cfg, host_coefficients;
+                prototype_θφ=host_prototype, Aminus=nothing, kwargs...,
+            ), coefficients, prototype_θφ,
+        )
+    end
+    return _stage_vendor_call_with_adapter(
+        adapter, comm,
+        :dist_synthesis_dense,
+        (host_coefficients, host_aminus, host_prototype) ->
+            SHTnsKit.dist_synthesis(
+                cfg, host_coefficients;
+                prototype_θφ=host_prototype, Aminus=host_aminus, kwargs...,
+            ), coefficients, Aminus, prototype_θφ,
+    )
+end
+
 function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig,
                                        Vt::VendorPencilArray,
                                        Vp::PencilArrays.PencilArray; kwargs...)
@@ -817,6 +870,30 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
                                         kwargs...)
     return _stage_vendor_call(
         :dist_synthesis_sphtor,
+        (host_s, host_t, host_prototype) ->
+            SHTnsKit.dist_synthesis_sphtor(
+                cfg, host_s, host_t;
+                prototype_θφ=host_prototype, kwargs...,
+            ), S, T, prototype_θφ,
+    )
+end
+
+function SHTnsKit.dist_synthesis_sphtor(
+        cfg::SHTnsKit.SHTConfig, S::VendorArray, T::VendorArray;
+        prototype_θφ::PencilArrays.PencilArray, kwargs...)
+    adapter = ParallelExt._parallel_gpu_adapter(S)
+    comm = PencilArrays.communicator(prototype_θφ)
+    return _dist_synthesis_sphtor_dense_vendor(
+        adapter, comm, cfg, S, T, prototype_θφ; kwargs...,
+    )
+end
+
+
+function _dist_synthesis_sphtor_dense_vendor(
+        adapter, comm, cfg, S, T, prototype_θφ; kwargs...)
+    return _stage_vendor_call_with_adapter(
+        adapter, comm,
+        :dist_synthesis_sphtor_dense,
         (host_s, host_t, host_prototype) ->
             SHTnsKit.dist_synthesis_sphtor(
                 cfg, host_s, host_t;
@@ -845,6 +922,30 @@ function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig,
                                      kwargs...)
     return _stage_vendor_call(
         :dist_synthesis_qst,
+        (host_q, host_s, host_t, host_prototype) ->
+            SHTnsKit.dist_synthesis_qst(
+                cfg, host_q, host_s, host_t;
+                prototype_θφ=host_prototype, kwargs...,
+            ), Q, S, T, prototype_θφ,
+    )
+end
+
+function SHTnsKit.dist_synthesis_qst(
+        cfg::SHTnsKit.SHTConfig, Q::VendorArray, S::VendorArray,
+        T::VendorArray; prototype_θφ::PencilArrays.PencilArray, kwargs...)
+    adapter = ParallelExt._parallel_gpu_adapter(Q)
+    comm = PencilArrays.communicator(prototype_θφ)
+    return _dist_synthesis_qst_dense_vendor(
+        adapter, comm, cfg, Q, S, T, prototype_θφ; kwargs...,
+    )
+end
+
+
+function _dist_synthesis_qst_dense_vendor(
+        adapter, comm, cfg, Q, S, T, prototype_θφ; kwargs...)
+    return _stage_vendor_call_with_adapter(
+        adapter, comm,
+        :dist_synthesis_qst_dense,
         (host_q, host_s, host_t, host_prototype) ->
             SHTnsKit.dist_synthesis_qst(
                 cfg, host_q, host_s, host_t;

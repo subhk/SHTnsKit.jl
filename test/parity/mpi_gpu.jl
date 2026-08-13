@@ -579,6 +579,98 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
             _mpi_gpu_assert_resident(SHTnsKit.analysis_qst(cfg, qst...), is_vendor)
         end
 
+        @testset "dense compatibility analysis synthesis" begin
+            host_spatial = _mpi_gpu_place(Array, scalar, (1,), comm)
+            scalar_cpu = SHTnsKit.dist_analysis(cfg, host_spatial)
+            scalar_device = SHTnsKit.dist_analysis(cfg, spatial)
+            @test is_vendor(scalar_device)
+            @test Array(scalar_device) ≈ scalar_cpu atol=tol rtol=tol
+            scalar_cpu_field = SHTnsKit.dist_synthesis(
+                cfg, scalar_cpu; prototype_θφ=host_spatial,
+            )
+            scalar_device_field = SHTnsKit.dist_synthesis(
+                cfg, scalar_device; prototype_θφ=spatial,
+            )
+            @test is_vendor(scalar_device_field)
+            @test Array(scalar_device_field) ≈ scalar_cpu_field atol=tol rtol=tol
+
+            minus_cpu = CT.(scalar_cpu) .* CT(RT(0.1), RT(-0.05))
+            minus_cpu[:, 1] .= zero(CT)
+            minus_device = array_type(minus_cpu)
+            scalar_minus_cpu = SHTnsKit.dist_synthesis(
+                cfg, scalar_cpu; prototype_θφ=host_spatial,
+                real_output=false, Aminus=minus_cpu,
+            )
+            scalar_minus_device = SHTnsKit.dist_synthesis(
+                cfg, scalar_device; prototype_θφ=spatial,
+                real_output=false, Aminus=minus_device,
+            )
+            @test is_vendor(scalar_minus_device)
+            @test Array(scalar_minus_device) ≈ scalar_minus_cpu atol=4tol rtol=4tol
+
+            Sref = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+            Tref = similar(Sref); fill!(Tref, zero(CT))
+            Qref = similar(Sref); fill!(Qref, zero(CT))
+            Sref[2, 1] = RT(0.12)
+            Tref[3, 2] = CT(RT(-0.04), RT(0.02))
+            Qref[1, 1] = RT(0.18)
+            Vt_cpu, Vp_cpu = SHTnsKit.dist_synthesis_sphtor(
+                cfg, Sref, Tref; prototype_θφ=host_spatial,
+            )
+            Vt_device = _mpi_gpu_place(array_type, Vt_cpu, (1,), comm)
+            Vp_device = _mpi_gpu_place(array_type, Vp_cpu, (1,), comm)
+            S_cpu, T_cpu = SHTnsKit.dist_analysis_sphtor(
+                cfg, _mpi_gpu_place(Array, Vt_cpu, (1,), comm),
+                _mpi_gpu_place(Array, Vp_cpu, (1,), comm),
+            )
+            S_device, T_device = SHTnsKit.dist_analysis_sphtor(
+                cfg, Vt_device, Vp_device,
+            )
+            @test is_vendor(S_device) && is_vendor(T_device)
+            @test Array(S_device) ≈ S_cpu atol=4tol rtol=4tol
+            @test Array(T_device) ≈ T_cpu atol=4tol rtol=4tol
+            vector_cpu = SHTnsKit.dist_synthesis_sphtor(
+                cfg, S_cpu, T_cpu; prototype_θφ=host_spatial,
+            )
+            vector_device = SHTnsKit.dist_synthesis_sphtor(
+                cfg, S_device, T_device; prototype_θφ=spatial,
+            )
+            _mpi_gpu_assert_resident(vector_device, is_vendor)
+            @test Array(first(vector_device)) ≈ first(vector_cpu) atol=4tol rtol=4tol
+            @test Array(last(vector_device)) ≈ last(vector_cpu) atol=4tol rtol=4tol
+
+            qst_cpu_fields = SHTnsKit.dist_synthesis_qst(
+                cfg, Qref, Sref, Tref; prototype_θφ=host_spatial,
+            )
+            qst_device_fields = map(
+                field -> _mpi_gpu_place(array_type, field, (1,), comm),
+                qst_cpu_fields,
+            )
+            qst_cpu_dense = SHTnsKit.dist_analysis_qst(
+                cfg,
+                map(field -> _mpi_gpu_place(Array, field, (1,), comm),
+                    qst_cpu_fields)...,
+            )
+            qst_device_dense = SHTnsKit.dist_analysis_qst(
+                cfg, qst_device_fields...,
+            )
+            _mpi_gpu_assert_resident(qst_device_dense, is_vendor)
+            for (device_value, cpu_value) in zip(qst_device_dense, qst_cpu_dense)
+                @test Array(device_value) ≈ cpu_value atol=4tol rtol=4tol
+            end
+            qst_cpu_rebuilt = SHTnsKit.dist_synthesis_qst(
+                cfg, qst_cpu_dense...; prototype_θφ=host_spatial,
+            )
+            qst_device_rebuilt = SHTnsKit.dist_synthesis_qst(
+                cfg, qst_device_dense...; prototype_θφ=spatial,
+            )
+            _mpi_gpu_assert_resident(qst_device_rebuilt, is_vendor)
+            for (device_value, cpu_value) in zip(qst_device_rebuilt,
+                                                  qst_cpu_rebuilt)
+                @test Array(device_value) ≈ cpu_value atol=4tol rtol=4tol
+            end
+        end
+
         @testset "scalar packed complex axisym _l _ml compatibility" begin
             Q = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
             Q[1, 1] = RT(0.18)
@@ -2865,6 +2957,84 @@ function test_mpi_gpu_policy(extension)
     end
     @test extension.parallel_gpu_stats() == mixed_before
 
+    # Dense compatibility spectra returned by a vendor analysis are ordinary
+    # vendor matrices, not PencilArrays.  Their synthesis twins must therefore
+    # be owned and staged by the compound extension as well, including the
+    # optional negative-m scalar half.
+    dense_Q = zeros(ComplexF64, mixed_cfg.lmax + 1, mixed_cfg.mmax + 1)
+    dense_S = similar(dense_Q); fill!(dense_S, 0)
+    dense_T = similar(dense_Q); fill!(dense_T, 0)
+    dense_Aminus = similar(dense_Q); fill!(dense_Aminus, 0)
+    dense_Q[1, 1] = 0.2
+    dense_S[2, 1] = -0.08
+    dense_T[3, 2] = 0.03 - 0.02im
+    dense_Aminus[3, 2] = 0.01 + 0.04im
+    vendor_Q = MockMixedVendorArray(copy(dense_Q))
+    vendor_S = MockMixedVendorArray(copy(dense_S))
+    vendor_T = MockMixedVendorArray(copy(dense_T))
+    vendor_Aminus = MockMixedVendorArray(copy(dense_Aminus))
+    compound_extension = something(
+        Base.get_extension(SHTnsKit, :SHTnsKitParallelCUDAExt),
+        Base.get_extension(SHTnsKit, :SHTnsKitParallelAMDGPUExt),
+    )
+    staged_prototype_comm = compound_extension._stage_vendor_call_with_adapter(
+        mixed_adapter, MPI.COMM_SELF, :dense_prototype_comm,
+        host_prototype -> MPI.Comm_compare(
+            PencilArrays.get_comm(host_prototype), MPI.COMM_SELF,
+        ), gpu_spatial,
+    )
+    @test staged_prototype_comm in (MPI.IDENT, MPI.CONGRUENT)
+    dense_compat_cases = (
+        scalar_aminus=(
+            () -> SHTnsKit.dist_synthesis(
+                mixed_cfg, dense_Q; prototype_θφ=cpu_complex_spatial,
+                real_output=false, Aminus=dense_Aminus,
+            ),
+            () -> compound_extension._dist_synthesis_dense_vendor(
+                mixed_adapter, MPI.COMM_SELF, mixed_cfg, vendor_Q,
+                gpu_complex_spatial; real_output=false,
+                Aminus=vendor_Aminus,
+            ),
+        ),
+        vector=(
+            () -> SHTnsKit.dist_synthesis_sphtor(
+                mixed_cfg, dense_S, dense_T; prototype_θφ=cpu_spatial,
+            ),
+            () -> compound_extension._dist_synthesis_sphtor_dense_vendor(
+                mixed_adapter, MPI.COMM_SELF, mixed_cfg, vendor_S, vendor_T,
+                gpu_spatial,
+            ),
+        ),
+        qst=(
+            () -> SHTnsKit.dist_synthesis_qst(
+                mixed_cfg, dense_Q, dense_S, dense_T;
+                prototype_θφ=cpu_spatial,
+            ),
+            () -> compound_extension._dist_synthesis_qst_dense_vendor(
+                mixed_adapter, MPI.COMM_SELF, mixed_cfg, vendor_Q, vendor_S,
+                vendor_T, gpu_spatial,
+            ),
+        ),
+    )
+    for (name, calls) in pairs(dense_compat_cases)
+        expected = first(calls)()
+        actual = try
+            last(calls)()
+        catch error
+            error
+        end
+        valid = !(actual isa Exception)
+        if !(actual isa Exception)
+            actual_values = actual isa Tuple ? actual : (actual,)
+            expected_values = expected isa Tuple ? expected : (expected,)
+            valid &= all(value -> value isa MockMixedVendorArray, actual_values)
+            valid &= all(zip(actual_values, expected_values)) do pair
+                isapprox(Array(first(pair)), last(pair); atol=3e-12, rtol=3e-12)
+            end
+        end
+        @test valid
+    end
+
     diagnostic_source = read(joinpath(
         ROOT, "ext", "ParallelDiagnostics.jl",
     ), String)
@@ -3145,6 +3315,7 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     for family in (
         "native scalar/vector/QST transpose nonzero numerics",
         "scalar/vector/QST cfg parity",
+        "dense compatibility analysis synthesis",
         "scalar packed complex axisym _l _ml compatibility",
         "batch sizes 1/2/5 and bang identity",
         "fixed/local/operator/rotation staged parity",
@@ -3210,6 +3381,24 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test !occursin("prototype isa VendorPencilArray || throw", firewall)
     @test occursin("prototype_θφ::PencilArrays.PencilArray", firewall)
     @test occursin("_validate_parallel_storage!", firewall)
+    for marker in (
+        ":dist_synthesis_dense", ":dist_synthesis_sphtor_dense",
+        ":dist_synthesis_qst_dense", "host_aminus",
+    )
+        @test occursin(marker, firewall)
+    end
+    vendor_array = compound_extension.VendorArray
+    for api in (:dist_synthesis, :dist_synthesis_sphtor,
+                :dist_synthesis_qst)
+        owned = filter(method -> method.module === compound_extension,
+                       methods(getfield(SHTnsKit, api)))
+        @test any(owned) do method
+            parameters = Base.unwrap_unionall(method.sig).parameters
+            length(parameters) >= 3 &&
+                typeintersect(parameters[3], vendor_array) !== Union{} &&
+                typeintersect(parameters[3], PencilArrays.PencilArray) === Union{}
+        end
+    end
 
     transpose_source = read(
         joinpath(root, "ext", "ParallelTransposeTransforms.jl"), String,

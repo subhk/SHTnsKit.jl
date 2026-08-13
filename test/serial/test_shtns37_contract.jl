@@ -47,7 +47,7 @@ using .SHTns37TestCapabilities
             @test row isa SHTnsKit.SHTns37Capability
             @test row.testfile == SHTns37TestCapabilities.TESTFILES[row.backend]
             expected_status = row.backend in (:cpu, :mpi_cpu) ?
-                :required : :unverified_hardware
+                :verified : :unverified_hardware
             @test row.status == expected_status
         end
 

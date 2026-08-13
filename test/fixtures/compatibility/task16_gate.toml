@@ -1,0 +1,85 @@
+[gate]
+date = "2026-08-14"
+baseline_head = "015ab70ce4cbc5bdc59a908436824ddf26224b98"
+julia = "1.12.4"
+platform = "aarch64-apple-darwin"
+
+[local_gate]
+pkg_exit_code = 0
+serial_pass = 70253
+parallel_grid_pass = 1673
+jet_pass = 30
+aqua_pass = 3
+mpi_cpu_ranks = 4
+mpi_cpu_exit_code = 0
+mpi_cpu_fixture_pass_per_rank = 66
+
+[host_transfer_audit]
+command = "rg -n 'Array\\(|collect\\(|allowscalar|fallback|CPU\\(' ext src/device_utils.jl"
+exact_pattern_match_count = 196
+parent_copy_command = "rg -n '\\b(parent|copyto!|copy!)\\b' ext src/device_utils.jl"
+parent_copy_match_count = 204
+allowscalar_match_count = 0
+legacy_cuda_host_result_bridges = 2
+classification = [
+  "index and ownership metadata collection",
+  "small cached GPU setup tables",
+  "CPU-resident PencilArray algorithms",
+  "bounded pinned MPI staging",
+  "explicit gpu_analysis_safe and gpu_synthesis_safe fallback",
+  "isolated baseline-compatible gpu_analysis and gpu_synthesis host-result bridges",
+]
+conclusion = "No typed CUDA, AMDGPU, MPI/CUDA, or MPI/AMDGPU mathematical result is implicitly materialized on the host; parent and copy paths retain vendor storage except at the explicit pinned staging boundary."
+
+[[cell]]
+backend = "cpu"
+runner = "test/parity/runtests_cpu.jl"
+physical_hardware = true
+result = "passed"
+status = "verified"
+
+[[cell]]
+backend = "cuda"
+runner = "test/gpu/cuda/runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+pass = 450
+skip = 2
+
+[[cell]]
+backend = "amdgpu"
+runner = "test/gpu/amdgpu/runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+pass = 408
+skip = 2
+
+[[cell]]
+backend = "mpi_cpu"
+runner = "test/parity/runtests_mpi.jl"
+physical_hardware = true
+result = "passed"
+status = "verified"
+ranks = 4
+
+[[cell]]
+backend = "mpi_cuda"
+runner = "test/gpu/cuda/mpi_runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+ranks = 2
+pass_per_rank = 839
+skip_per_rank = 1
+
+[[cell]]
+backend = "mpi_amdgpu"
+runner = "test/gpu/amdgpu/mpi_runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+ranks = 2
+pass_per_rank = 839
+skip_per_rank = 1

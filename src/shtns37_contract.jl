@@ -36,7 +36,7 @@ const _SHTNS37_CAPABILITIES = SHTns37Capability[
     SHTns37Capability(
         feature,
         backend,
-        backend in (:cpu, :mpi_cpu) ? :required : :unverified_hardware,
+        backend in (:cpu, :mpi_cpu) ? :verified : :unverified_hardware,
         _SHTNS37_TESTFILES[backend],
     )
     for feature in SHTNS37_CAPABILITIES for backend in SHTNS37_BACKENDS
@@ -46,8 +46,9 @@ const _SHTNS37_CAPABILITIES = SHTns37Capability[
     shtns37_capabilities() -> Vector{SHTns37Capability}
 
 Return a copy of the executable SHTns 3.7 mathematical capability matrix.
-Required cells are obligations, not claims of verification; hardware-backed cells
-remain `:unverified_hardware` until their named runner has passed on that backend.
+CPU and MPI/CPU cells are verified by the final local parity gate. Accelerator
+cells remain `:unverified_hardware` until their named runner has passed on
+physical hardware for that backend.
 """
 shtns37_capabilities() = copy(_SHTNS37_CAPABILITIES)
 

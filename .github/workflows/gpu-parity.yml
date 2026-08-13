@@ -26,7 +26,7 @@ jobs:
       - name: Require CUDA hardware and run parity
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p logs
           {
             julia --project=test/gpu/cuda -e '
@@ -59,7 +59,7 @@ jobs:
       - name: Require AMDGPU hardware and run parity
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p logs
           {
             julia --project=test/gpu/amdgpu -e '
@@ -93,7 +93,7 @@ jobs:
       - name: Require two CUDA devices/ranks and run parity
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p logs
           {
             julia --project=test/gpu/cuda -e '
@@ -137,7 +137,7 @@ jobs:
       - name: Require two AMDGPU devices/ranks and run parity
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p logs
           {
             julia --project=test/gpu/amdgpu -e '

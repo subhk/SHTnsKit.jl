@@ -206,3 +206,35 @@ end
     @test count("julia --project=. -e", examples_body) >= 2
     @test count("\$(Base.julia_cmd()) --project=.", examples_body) == 2
 end
+
+@testset "SHTns 3.7 hardware preflights fail hard" begin
+    root = normpath(joinpath(@__DIR__, "..", ".."))
+    source = read(joinpath(root, ".github", "workflows", "gpu-parity.yml"), String)
+
+    for job in ("cuda-parity", "amdgpu-parity", "mpi-cuda-parity", "mpi-amdgpu-parity")
+        body = _shtns37_workflow_job(source, job)
+        @test occursin(r"(?m)^\s*set -euo pipefail\s*$", body)
+
+        flags_match = match(r"(?m)^\s*(set -[^\n]+)\s*$", body)
+        @test flags_match !== nothing
+        flags_match === nothing && continue
+
+        mktempdir() do temp
+            marker = joinpath(temp, "runner-ran")
+            log = joinpath(temp, "hardware.log")
+            script = """
+            $(only(flags_match.captures))
+            {
+              printf 'preflight failed\n'
+              false
+              touch '$marker'
+            } 2>&1 | tee '$log'
+            """
+            command = pipeline(ignorestatus(`bash -c $script`), stdout=devnull, stderr=devnull)
+            @test !success(command)
+            @test !isfile(marker)
+            @test isfile(log)
+            @test occursin("preflight failed", read(log, String))
+        end
+    end
+end

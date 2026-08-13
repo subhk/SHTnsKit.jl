@@ -233,7 +233,7 @@ end
 SHTnsKit.dist_SH_Xrotate90(cfg::SHTnsKit.SHTConfig,
                            input::PencilArray, output::PencilArray) =
     SHTnsKit.dist_SH_rotate_euler(
-        cfg, input, pi / 2, pi / 2, -pi / 2, output,
+        cfg, input, -pi / 2, pi / 2, pi / 2, output,
     )
 
 function _validate_packed_rotation!(cfg, coefficients, angles, prototype,

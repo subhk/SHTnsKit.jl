@@ -74,9 +74,11 @@ function test_angle_axis_pi_singularity()
                 @test _zyz_matrix(actual.α, actual.β, actual.γ) ≈
                       _angle_axis_matrix(T(pi), x, y, z) atol=tol rtol=tol
 
-                expected = SHTRotation(2, 2)
-                shtns_rotation_set_angles_ZYZ(
-                    expected, expected_delta, T(pi), zero(T),
+                # Direct constructors retain the matrix-order convention used
+                # by angle-axis. The SHTns-compatible setter deliberately
+                # reverses its two outer intrinsic-Z arguments on apply.
+                expected = SHTRotation(
+                    2, 2; α=expected_delta, β=T(pi), γ=zero(T),
                 )
                 actual_output = similar(input)
                 expected_output = similar(input)

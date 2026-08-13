@@ -105,6 +105,28 @@ using SHTnsKit
         @test isapprox(tmp4, Qlm; rtol=1e-8, atol=1e-10)
     end
 
+    @testset "SHTns setter outer-Z argument order" begin
+        lmax = 3
+        a, b, g = 0.23, 0.41, -0.17
+        setter = SHTRotation(lmax, lmax)
+        shtns_rotation_set_angles_ZYZ(setter, a, b, g)
+        matrix_order = SHTRotation(lmax, lmax; α=g, β=b, γ=a)
+        q = randn(MersenneTwister(405), ComplexF64, nlm_calc(lmax, lmax, 1))
+        q[1:lmax + 1] .= real.(q[1:lmax + 1])
+        got = similar(q)
+        expected = similar(q)
+        shtns_rotation_apply_real(setter, q, got)
+        shtns_rotation_apply_real(matrix_order, q, expected)
+        @test got ≈ expected atol=2e-12 rtol=2e-12
+
+        z = randn(MersenneTwister(406), ComplexF64, nlm_cplx_calc(lmax, lmax, 1))
+        zg = similar(z)
+        ze = similar(z)
+        shtns_rotation_apply_cplx(setter, z, zg)
+        shtns_rotation_apply_cplx(matrix_order, z, ze)
+        @test zg ≈ ze atol=2e-12 rtol=2e-12
+    end
+
     @testset "Composition: two Y-rotations = single Y-rotation" begin
         lmax = 4
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)

@@ -283,9 +283,10 @@ function SH_Xrotate90(::SHTnsKit.GPU, cfg::SHTConfig,
         "SH_Xrotate90 requires mres==1 (got mres=$(cfg.mres)); an X-rotation mixes orders and cannot be represented in an mres-strided layout",
     ))
     r = SHTRotation(
-        cfg.lmax, cfg.mmax; α=pi / 2, β=pi / 2, γ=-pi / 2,
+        cfg.lmax, cfg.mmax;
         norm=cfg.norm, cs_phase=cfg.cs_phase, real_norm=cfg.real_norm,
     )
+    SHTnsKit.shtns_rotation_set_angles_ZYZ(r, pi / 2, pi / 2, -pi / 2)
     return shtns_rotation_apply_real(SHTnsKit.GPU(), r, input, output)
 end
 

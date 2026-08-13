@@ -1438,6 +1438,93 @@ function test_mpi_gpu_policy(extension)
     @test one_slot_status === :ok
     @test one_slot_result.data == Float64[2, 4]
 
+    # The cache limit bounds retained idle buffers, not a call's live working
+    # set. Two distinct inputs and exchange send/receive must complete at limit
+    # one; duplicate inputs share one reservation.
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(1)
+    working_allocations = Threads.Atomic{Int}(0)
+    working_adapter = extension.ParallelGPUAdapter(
+        :mock_working_set, adapter.matches, adapter.array_type,
+        adapter.device, adapter.with_device, adapter.gpu_aware,
+        adapter.synchronize,
+        (T, n) -> begin
+            Threads.atomic_add!(working_allocations, 1)
+            Vector{T}(undef, n)
+        end,
+        adapter.device_to_host!, adapter.host_to_device!,
+    )
+    working_first = MockMPIArray(Float32[1, 2])
+    working_second = MockMPIArray(Float32[3, 4])
+    two_input_task = Threads.@spawn try
+        extension._staged_gpu_call(
+            working_adapter, :limit_one_two_inputs, comm,
+            (first, second) -> sum(first .+ second),
+            working_first, working_second; validate_storage=false,
+        )
+    catch error
+        error
+    end
+    two_input_status = Base.timedwait(() -> istaskdone(two_input_task), 2.0)
+    if two_input_status !== :ok
+        extension.parallel_gpu_cache_limit!(3)
+        notify(extension._GPU_STAGING_AVAILABLE)
+    end
+    two_input_result = fetch(two_input_task)
+    @test two_input_status === :ok
+    @test two_input_result == 10
+    @test working_allocations[] == 2
+    @test length(extension._GPU_STAGING) <= 1
+
+    extension.parallel_gpu_clear_caches!()
+    working_allocations[] = 0
+    extension.parallel_gpu_cache_limit!(1)
+    @test extension._staged_gpu_call(
+        working_adapter, :limit_one_duplicate_input, comm,
+        (first, duplicate) -> sum(first .+ duplicate),
+        working_first, working_first; validate_storage=false,
+    ) == 6
+    @test working_allocations[] == 1
+
+    extension.parallel_gpu_clear_caches!()
+    working_allocations[] = 0
+    exchange_result = try
+        extension.exchange!(
+            working_first, working_second, MPI.COMM_SELF;
+            adapter=working_adapter,
+            collective=(send, receive, _comm) -> copyto!(receive, send),
+        )
+    catch error
+        error
+    end
+    @test exchange_result === working_second
+    @test working_second.data == working_first.data
+    @test working_allocations[] == 2
+    @test length(extension._GPU_STAGING) <= 1
+
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(8)
+    working_allocations[] = 0
+    working_barrier = Threads.Atomic{Int}(0)
+    concurrent_working_values = [
+        (MockMPIArray(Float32[2n - 1]), MockMPIArray(Float32[2n]))
+        for n in 1:2
+    ]
+    concurrent_working_tasks = [Threads.@spawn extension._staged_gpu_call(
+        working_adapter, :concurrent_multi_input, comm,
+        (first, second) -> begin
+            Threads.atomic_add!(working_barrier, 1)
+            while working_barrier[] < 2
+                yield()
+            end
+            first[1] + second[1]
+        end,
+        values...; validate_storage=false,
+    ) for values in concurrent_working_values]
+    @test fetch.(concurrent_working_tasks) == Float32[3, 7]
+    @test working_allocations[] == 4
+    @test length(extension._GPU_STAGING) <= 8
+
     extension.parallel_gpu_clear_caches!()
     extension.parallel_gpu_cache_limit!(8)
     result_barrier_count = Threads.Atomic{Int}(0)
@@ -1659,7 +1746,7 @@ function test_mpi_gpu_policy(extension)
         @test length(extension._GPU_TRANSPOSE_HOST) == 1
         notify(native_release)
         fetch(active_native)
-        extension.parallel_gpu_clear_caches!()
+        @test length(extension._GPU_TRANSPOSE_HOST) == 0
 
         pending_native_allocations = Threads.Atomic{Int}(0)
         pending_native_entered = Base.Event()
@@ -1692,8 +1779,7 @@ function test_mpi_gpu_policy(extension)
         @test fetch(first_pending_native) === :first
         @test fetch(second_pending_native) === :second
         @test pending_native_allocations[] == 2
-        @test length(extension._GPU_TRANSPOSE_HOST) == 1
-        extension.parallel_gpu_clear_caches!()
+        @test length(extension._GPU_TRANSPOSE_HOST) == 0
     end
 
     # Every sync/copy must run on the physical device owning that buffer while
@@ -2064,7 +2150,8 @@ function test_mpi_gpu_policy(extension)
     extension._release_staging_entry(active_second)
     @test length(extension._GPU_STAGING) == 1
 
-    # Clear preserves active staging ownership and pending single-flight state.
+    # Clear preserves active/pending ownership only until current users finish;
+    # their retired entries must then disappear without a second clear.
     extension.parallel_gpu_clear_caches!()
     extension.parallel_gpu_cache_limit!(2)
     active_stage_entered = Base.Event()
@@ -2080,7 +2167,7 @@ function test_mpi_gpu_policy(extension)
     @test length(extension._GPU_STAGING) == 1
     notify(active_stage_release)
     fetch(active_stage)
-    extension.parallel_gpu_clear_caches!()
+    @test length(extension._GPU_STAGING) == 0
 
     pending_allocations = Threads.Atomic{Int}(0)
     pending_entered = Base.Event()
@@ -2099,21 +2186,25 @@ function test_mpi_gpu_policy(extension)
         end,
         multi_adapter.device_to_host!, multi_adapter.host_to_device!,
     )
-    first_pending = Threads.@spawn extension._staging_entry(
-        pending_adapter, multi_comm, shrink_values[1], 1,
-    )
+    first_pending = Threads.@spawn extension._with_staging(
+        pending_adapter, multi_comm, shrink_values[1], Float32, 1,
+    ) do host
+        objectid(parent(host))
+    end
     wait(pending_entered)
     extension.parallel_gpu_clear_caches!()
-    second_pending = Threads.@spawn extension._staging_entry(
-        pending_adapter, multi_comm, shrink_values[1], 1,
-    )
+    second_pending = Threads.@spawn extension._with_staging(
+        pending_adapter, multi_comm, shrink_values[1], Float32, 1,
+    ) do host
+        objectid(parent(host))
+    end
     yield()
     notify(pending_release)
     first_pending_entry = fetch(first_pending)
     second_pending_entry = fetch(second_pending)
     @test pending_allocations[] == 1
-    @test first_pending_entry === second_pending_entry
-    @test length(extension._GPU_STAGING) == 1
+    @test first_pending_entry == second_pending_entry
+    @test length(extension._GPU_STAGING) == 0
     extension.parallel_gpu_cache_limit!(8)
 
     # Wrapper signatures must retain the wrapped logical region. Equal-shape
@@ -2421,6 +2512,223 @@ function test_mpi_gpu_policy(extension)
     @test parent(cpu_spatial) == first(spatial_sentinels)
     @test parent(gpu_spatial).data == last(spatial_sentinels)
     @test extension.parallel_gpu_stats() == mixed_before
+
+    # Closed inventory of generic multi-Pencil diagnostic/local entry points.
+    # Every position containing vendor storage must be rejected by the shared
+    # collective preflight before numerical work or communication.
+    cpu_spectral_pen = SHTnsKit.create_spectral_pencil(
+        mixed_cfg; comm=MPI.COMM_SELF,
+    )
+    gpu_spectral_pen = similar(cpu_spectral_pen, MockMixedVendorArray)
+    cpu_spectral = PencilArrays.PencilArray{ComplexF64}(
+        undef, cpu_spectral_pen,
+    )
+    gpu_spectral = PencilArrays.PencilArray{ComplexF64}(
+        undef, gpu_spectral_pen,
+    )
+    fill!(parent(cpu_spectral), 0.0)
+    fill!(parent(gpu_spectral).data, 0.0)
+    mixed_cases = Pair{Symbol,Function}[]
+    for name in (:energy_vector_l_spectrum, :energy_vector_m_spectrum)
+        function_object = getfield(SHTnsKit, name)
+        push!(mixed_cases,
+              Symbol(name, :_first) => (() -> function_object(
+                  mixed_cfg, gpu_spectral, cpu_spectral,
+              )))
+        push!(mixed_cases,
+              Symbol(name, :_second) => (() -> function_object(
+                  mixed_cfg, cpu_spectral, gpu_spectral,
+              )))
+    end
+    for (name, first, second) in (
+            (:grid_energy_vector_first, gpu_spatial, cpu_spatial),
+            (:grid_energy_vector_second, cpu_spatial, gpu_spatial))
+        push!(mixed_cases, name => (() -> SHTnsKit.grid_energy_vector(
+            mixed_cfg, first, second,
+        )))
+    end
+    for name in (:dist_SHqst_to_point, :SHqst_to_point)
+        function_object = getfield(SHTnsKit, name)
+        for position in 1:3
+            values = ntuple(index -> index == position ? gpu_spectral :
+                             cpu_spectral, 3)
+            push!(mixed_cases,
+                  Symbol(name, :_, position) => (() -> function_object(
+                      mixed_cfg, values..., 0.25, 0.5,
+                  )))
+        end
+    end
+    for name in (:dist_SHqst_to_lat, :SHqst_to_lat)
+        function_object = getfield(SHTnsKit, name)
+        for position in 1:3
+            values = ntuple(index -> index == position ? gpu_spectral :
+                             cpu_spectral, 3)
+            push!(mixed_cases,
+                  Symbol(name, :_, position) => (() -> function_object(
+                      mixed_cfg, values..., 0.25,
+                  )))
+        end
+    end
+    for (name, first, second) in (
+            (:SH_to_grad_point_first, gpu_spectral, cpu_spectral),
+            (:SH_to_grad_point_second, cpu_spectral, gpu_spectral))
+        push!(mixed_cases, name => (() -> SHTnsKit.SH_to_grad_point(
+            mixed_cfg, first, second, 0.25, 0.5,
+        )))
+    end
+
+    cpu_packed_pen = PencilArrays.Pencil(
+        Array, (mixed_cfg.nlm, 1), (1,), MPI.COMM_SELF,
+    )
+    gpu_packed_pen = similar(cpu_packed_pen, MockMixedVendorArray)
+    cpu_packed = PencilArrays.PencilArray{ComplexF64}(undef, cpu_packed_pen)
+    gpu_packed = PencilArrays.PencilArray{ComplexF64}(undef, gpu_packed_pen)
+    fill!(parent(cpu_packed), 0)
+    fill!(parent(gpu_packed).data, 0)
+    for name in (:synthesis_packed, :synthesis_packed_l)
+        function_object = getfield(SHTnsKit, name)
+        suffix = name === :synthesis_packed ? () : (mixed_cfg.lmax,)
+        push!(mixed_cases,
+              Symbol(name, :_coefficients) => (() -> function_object(
+                  mixed_cfg, gpu_packed, suffix...;
+                  prototype_θφ=cpu_spatial,
+              )))
+        push!(mixed_cases,
+              Symbol(name, :_prototype) => (() -> function_object(
+                  mixed_cfg, cpu_packed, suffix...;
+                  prototype_θφ=gpu_spatial,
+              )))
+    end
+    complex_packed_length = SHTnsKit.nlm_cplx_calc(
+        mixed_cfg.lmax, mixed_cfg.mmax, 1,
+    )
+    cpu_complex_packed_pen = PencilArrays.Pencil(
+        Array, (complex_packed_length, 1), (1,), MPI.COMM_SELF,
+    )
+    gpu_complex_packed_pen = similar(
+        cpu_complex_packed_pen, MockMixedVendorArray,
+    )
+    cpu_complex_packed = PencilArrays.PencilArray{ComplexF64}(
+        undef, cpu_complex_packed_pen,
+    )
+    gpu_complex_packed = PencilArrays.PencilArray{ComplexF64}(
+        undef, gpu_complex_packed_pen,
+    )
+    cpu_complex_spatial = PencilArrays.PencilArray{ComplexF64}(
+        undef, cpu_spatial_pen,
+    )
+    gpu_complex_spatial = PencilArrays.PencilArray{ComplexF64}(
+        undef, gpu_spatial_pen,
+    )
+    fill!(parent(cpu_complex_packed), 0)
+    fill!(parent(gpu_complex_packed).data, 0)
+    fill!(parent(cpu_complex_spatial), 0)
+    fill!(parent(gpu_complex_spatial).data, 0)
+    for name in (:synthesis_packed_cplx, :synthesis_packed_cplx_l)
+        function_object = getfield(SHTnsKit, name)
+        suffix = name === :synthesis_packed_cplx ? () : (mixed_cfg.lmax,)
+        push!(mixed_cases,
+              Symbol(name, :_coefficients) => (() -> function_object(
+                  mixed_cfg, gpu_complex_packed, suffix...;
+                  prototype_θφ=cpu_complex_spatial,
+              )))
+        push!(mixed_cases,
+              Symbol(name, :_prototype) => (() -> function_object(
+                  mixed_cfg, cpu_complex_packed, suffix...;
+                  prototype_θφ=gpu_complex_spatial,
+              )))
+    end
+
+    cpu_batch_spatial = PencilArrays.PencilArray{Float64}(
+        undef, cpu_spatial_pen, 2,
+    )
+    gpu_batch_spatial = PencilArrays.PencilArray{Float64}(
+        undef, gpu_spatial_pen, 2,
+    )
+    cpu_batch_spectral = PencilArrays.PencilArray{ComplexF64}(
+        undef, cpu_spectral_pen, 2,
+    )
+    gpu_batch_spectral = PencilArrays.PencilArray{ComplexF64}(
+        undef, gpu_spectral_pen, 2,
+    )
+    cpu_batch_complex_spatial = PencilArrays.PencilArray{ComplexF64}(
+        undef, cpu_spatial_pen, 2,
+    )
+    gpu_batch_complex_spatial = PencilArrays.PencilArray{ComplexF64}(
+        undef, gpu_spatial_pen, 2,
+    )
+    for value in (cpu_batch_spatial, cpu_batch_spectral)
+        fill!(parent(value), 0)
+    end
+    for value in (gpu_batch_spatial, gpu_batch_spectral)
+        fill!(parent(value).data, 0)
+    end
+    fill!(parent(cpu_batch_complex_spatial), 0)
+    fill!(parent(gpu_batch_complex_spatial).data, 0)
+    append!(mixed_cases, (
+        :analysis_batch_output => (() -> SHTnsKit.analysis_batch!(
+            mixed_cfg, gpu_batch_spectral, cpu_batch_spatial,
+        )),
+        :analysis_batch_fields => (() -> SHTnsKit.analysis_batch!(
+            mixed_cfg, cpu_batch_spectral, gpu_batch_spatial,
+        )),
+        :synthesis_batch_coefficients => (() -> SHTnsKit.synthesis_batch(
+            mixed_cfg, gpu_batch_spectral; prototype_θφ=cpu_batch_spatial,
+        )),
+        :synthesis_batch_prototype => (() -> SHTnsKit.synthesis_batch(
+            mixed_cfg, cpu_batch_spectral; prototype_θφ=gpu_batch_spatial,
+        )),
+        :synthesis_batch_cplx_coefficients => (() ->
+            SHTnsKit.synthesis_batch_cplx(
+                mixed_cfg, gpu_batch_spectral;
+                prototype_θφ=cpu_batch_complex_spatial,
+            )),
+        :synthesis_batch_cplx_prototype => (() ->
+            SHTnsKit.synthesis_batch_cplx(
+                mixed_cfg, cpu_batch_spectral;
+                prototype_θφ=gpu_batch_complex_spatial,
+            )),
+        :synthesis_batch_bang_output => (() -> SHTnsKit.synthesis_batch!(
+            mixed_cfg, gpu_batch_spatial, cpu_batch_spectral;
+            prototype_θφ=cpu_batch_spatial,
+        )),
+        :synthesis_batch_bang_coefficients => (() -> SHTnsKit.synthesis_batch!(
+            mixed_cfg, cpu_batch_spatial, gpu_batch_spectral;
+            prototype_θφ=cpu_batch_spatial,
+        )),
+        :synthesis_batch_bang_prototype => (() -> SHTnsKit.synthesis_batch!(
+            mixed_cfg, cpu_batch_spatial, cpu_batch_spectral;
+            prototype_θφ=gpu_batch_spatial,
+        )),
+    ))
+    for (name, call) in mixed_cases
+        error = try
+            call()
+            nothing
+        catch caught
+            caught
+        end
+        @test error isa ArgumentError
+        @test occursin("storage/vendor/device mismatch", sprint(showerror, error))
+    end
+    @test extension.parallel_gpu_stats() == mixed_before
+
+    diagnostic_source = read(joinpath(
+        ROOT, "ext", "ParallelDiagnostics.jl",
+    ), String)
+    local_source = read(joinpath(ROOT, "ext", "ParallelLocal.jl"), String)
+    for marker in (
+            "energy_vector_l_spectrum", "energy_vector_m_spectrum",
+            "grid_energy_vector")
+        @test occursin(marker, diagnostic_source)
+    end
+    @test occursin("_validate_parallel_storage!", diagnostic_source)
+    for marker in (
+            "dist_SHqst_to_point", "dist_SHqst_to_lat", "SHqst_to_point",
+            "SHqst_to_lat", "SH_to_grad_point", "synthesis_packed_l",
+            "synthesis_batch!", "_validate_parallel_storage!")
+        @test occursin(marker, local_source)
+    end
 
     world_cpu_pen = SHTnsKit.create_spatial_pencil(
         mixed_cfg; comm=MPI.COMM_WORLD,

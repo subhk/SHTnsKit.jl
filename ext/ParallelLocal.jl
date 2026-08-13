@@ -115,6 +115,9 @@ end
 """
 function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real, phi::Real)
     comm = communicator(Q_p)
+    _validate_parallel_storage!(
+        comm, :dist_SHqst_to_point, Q_p, S_p, T_p,
+    )
     lmax, mmax = cfg.lmax, cfg.mmax
     x = float(cost)
     P = Vector{Float64}(undef, lmax + 1)
@@ -181,6 +184,9 @@ end
 function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real;
                                     nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax)
     comm = communicator(Q_p)
+    _validate_parallel_storage!(
+        comm, :dist_SHqst_to_lat, Q_p, S_p, T_p,
+    )
     lmax = cfg.lmax
     x = float(cost)
     P = Vector{Float64}(undef, lmax + 1)
@@ -730,6 +736,9 @@ function _validate_variant_vector!(cfg::SHTnsKit.SHTConfig, values::PencilArray,
                                    allow_longer::Bool=false,
                                    peer=nothing)
     comm = communicator(values)
+    peer === nothing || _validate_parallel_storage!(
+        comm, operation, values, peer,
+    )
     _validate_cfg_replicated(cfg, comm)
     flags = UInt32(0)
     global_size = size_global(values)
@@ -1331,6 +1340,9 @@ function _validate_batch_pencil!(cfg::SHTnsKit.SHTConfig, values::PencilArray,
                                  operation::Symbol; require_real::Bool=false,
                                  require_complex::Bool=false, peer=nothing,
                                  comm=communicator(values))
+    peer === nothing || _validate_parallel_storage!(
+        comm, operation, values, peer,
+    )
     _validate_cfg_replicated(cfg, comm)
     globals = size_global(values)
     flags = UInt32(0)

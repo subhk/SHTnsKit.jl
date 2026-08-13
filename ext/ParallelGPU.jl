@@ -153,6 +153,8 @@ mutable struct _GPUStagingEntry
     lock::ReentrantLock
     tick::UInt64
     users::Int
+    cacheable::Bool
+    reserved_users::Int
 end
 
 @inline _parallel_logical_region(value::SubArray) =
@@ -198,14 +200,22 @@ mutable struct _GPUTransposeHostEntry
     lock::ReentrantLock
     tick::UInt64
     users::Int
+    cacheable::Bool
+    reserved_users::Int
+end
+
+mutable struct _GPUPendingEntry
+    event::Base.Event
+    cacheable::Bool
+    reserved_users::Int
 end
 
 const _GPU_AWARENESS = Dict{Tuple,_GPUAwarenessEntry}()
 const _GPU_STAGING = Dict{Tuple,_GPUStagingEntry}()
-const _GPU_STAGING_PENDING = Dict{Tuple,Base.Event}()
+const _GPU_STAGING_PENDING = Dict{Tuple,_GPUPendingEntry}()
 const _GPU_STAGING_AVAILABLE = Base.Event(true)
 const _GPU_TRANSPOSE_HOST = Dict{Tuple,_GPUTransposeHostEntry}()
-const _GPU_TRANSPOSE_PENDING = Dict{Tuple,Base.Event}()
+const _GPU_TRANSPOSE_PENDING = Dict{Tuple,_GPUPendingEntry}()
 const _GPU_TRANSPOSE_AVAILABLE = Base.Event(true)
 const _GPU_AWARENESS_LOCK = ReentrantLock()
 const _GPU_STAGING_LOCK = ReentrantLock()
@@ -260,6 +270,15 @@ function _trim_staging_cache_locked!()
     return nothing
 end
 
+function _delete_staging_entry_locked!(entry)
+    for (key, candidate) in _GPU_STAGING
+        candidate === entry || continue
+        delete!(_GPU_STAGING, key)
+        return true
+    end
+    return false
+end
+
 function parallel_gpu_cache_limit!(limit::Integer)
     limit >= 1 || throw(ArgumentError("MPI GPU staging cache limit must be positive"))
     return lock(_GPU_STAGING_LOCK) do
@@ -279,11 +298,21 @@ function parallel_gpu_clear_caches!()
         # Pending builders and active users own their registry identities.
         # Clear only completed idle entries; release/publication performs the
         # eventual cleanup without allowing stale builders to overwrite peers.
+        for entry in values(_GPU_STAGING)
+            entry.users > 0 && (entry.cacheable = false)
+        end
         filter!(pair -> pair.second.users > 0, _GPU_STAGING)
+        foreach(pending -> pending.cacheable = false,
+                values(_GPU_STAGING_PENDING))
         notify(_GPU_STAGING_AVAILABLE)
     end
     lock(_GPU_TRANSPOSE_HOST_LOCK) do
+        for entry in values(_GPU_TRANSPOSE_HOST)
+            entry.users > 0 && (entry.cacheable = false)
+        end
         filter!(pair -> pair.second.users > 0, _GPU_TRANSPOSE_HOST)
+        foreach(pending -> pending.cacheable = false,
+                values(_GPU_TRANSPOSE_PENDING))
         notify(_GPU_TRANSPOSE_AVAILABLE)
     end
     _GPU_DIRECT_CALLS[] = 0
@@ -327,6 +356,7 @@ function _build_gpu_transpose_host_entry(adapter, plan, device, plan_owner)
     )
     return _GPUTransposeHostEntry(
         WeakRef(plan_owner), fft_plan, spatial, spectral, ReentrantLock(), 0, 0,
+        true, 0,
     )
 end
 
@@ -344,13 +374,20 @@ function _acquire_gpu_transpose_host_entry(adapter, plan, prototype)
                             pair.second.users > 0, _GPU_TRANSPOSE_HOST)
             entry = get(_GPU_TRANSPOSE_HOST, key, nothing)
             if entry !== nothing && entry.plan_owner.value === plan_owner
-                entry.users += 1
+                if entry.reserved_users > 0
+                    entry.reserved_users -= 1
+                else
+                    entry.users += 1
+                end
                 _GPU_CACHE_TICK[] += 1
                 entry.tick = _GPU_CACHE_TICK[]
                 return (entry, nothing, false, false)
             end
             pending = get(_GPU_TRANSPOSE_PENDING, key, nothing)
-            pending === nothing || return (nothing, pending, false, false)
+            if pending !== nothing
+                pending.reserved_users += 1
+                return (nothing, pending, false, false)
+            end
             if length(_GPU_TRANSPOSE_HOST) + length(_GPU_TRANSPOSE_PENDING) >=
                     _GPU_TRANSPOSE_HOST_LIMIT
                 idle = [pair for pair in _GPU_TRANSPOSE_HOST
@@ -359,7 +396,7 @@ function _acquire_gpu_transpose_host_entry(adapter, plan, prototype)
                 victim = first(sort!(idle; by=pair -> pair.second.tick))
                 delete!(_GPU_TRANSPOSE_HOST, first(victim))
             end
-            pending = Base.Event()
+            pending = _GPUPendingEntry(Base.Event(), true, 0)
             _GPU_TRANSPOSE_PENDING[key] = pending
             return (nothing, pending, true, false)
         end
@@ -368,7 +405,7 @@ function _acquire_gpu_transpose_host_entry(adapter, plan, prototype)
             wait(_GPU_TRANSPOSE_AVAILABLE)
             continue
         elseif !builder
-            wait(pending)
+            wait(pending.event)
             continue
         end
         candidate = try
@@ -377,22 +414,24 @@ function _acquire_gpu_transpose_host_entry(adapter, plan, prototype)
             lock(_GPU_TRANSPOSE_HOST_LOCK) do
                 get(_GPU_TRANSPOSE_PENDING, key, nothing) === pending &&
                     delete!(_GPU_TRANSPOSE_PENDING, key)
-                notify(pending)
+                notify(pending.event)
                 notify(_GPU_TRANSPOSE_AVAILABLE)
             end
             rethrow()
         end
         published = lock(_GPU_TRANSPOSE_HOST_LOCK) do
             if get(_GPU_TRANSPOSE_PENDING, key, nothing) === pending
-                candidate.users = 1
+                candidate.users = 1 + pending.reserved_users
+                candidate.reserved_users = pending.reserved_users
+                candidate.cacheable = pending.cacheable
                 _GPU_CACHE_TICK[] += 1
                 candidate.tick = _GPU_CACHE_TICK[]
                 _GPU_TRANSPOSE_HOST[key] = candidate
                 delete!(_GPU_TRANSPOSE_PENDING, key)
-                notify(pending)
+                notify(pending.event)
                 return candidate
             end
-            notify(pending)
+            notify(pending.event)
             nothing
         end
         published === nothing || return published
@@ -402,7 +441,16 @@ end
 function _release_gpu_transpose_host_entry(entry)
     lock(_GPU_TRANSPOSE_HOST_LOCK) do
         entry.users -= 1
-        entry.users == 0 && notify(_GPU_TRANSPOSE_AVAILABLE)
+        if entry.users == 0
+            if !entry.cacheable
+                for (key, candidate) in _GPU_TRANSPOSE_HOST
+                    candidate === entry || continue
+                    delete!(_GPU_TRANSPOSE_HOST, key)
+                    break
+                end
+            end
+            notify(_GPU_TRANSPOSE_AVAILABLE)
+        end
     end
     return nothing
 end
@@ -526,7 +574,13 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
             if entry !== nothing && entry.logical_id == logical_id &&
                entry.root_owner.value === root_owner
                 entry.logical_owner = WeakRef(owner)
-                acquire && (entry.users += 1)
+                if acquire
+                    if entry.reserved_users > 0
+                        entry.reserved_users -= 1
+                    else
+                        entry.users += 1
+                    end
+                end
                 _GPU_CACHE_TICK[] += 1
                 entry.tick = _GPU_CACHE_TICK[]
                 return (entry, nothing, false, false)
@@ -534,7 +588,10 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
             filter!(pair -> pair.second.root_owner.value !== nothing ||
                             pair.second.users > 0, _GPU_STAGING)
             pending = get(_GPU_STAGING_PENDING, key, nothing)
-            pending === nothing || return (nothing, pending, false, false)
+            if pending !== nothing
+                acquire && (pending.reserved_users += 1)
+                return (nothing, pending, false, false)
+            end
 
             limit = _GPU_STAGING_LIMIT[]
             occupied = length(_GPU_STAGING) + length(_GPU_STAGING_PENDING)
@@ -554,6 +611,7 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
                     reused.logical_id = logical_id
                     reused.signature = signature
                     reused.users = acquire ? 1 : 0
+                    reused.reserved_users = 0
                     _GPU_CACHE_TICK[] += 1
                     reused.tick = _GPU_CACHE_TICK[]
                     _GPU_STAGING[key] = reused
@@ -565,7 +623,7 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
                 victim = first(sort!(idle; by=pair -> pair.second.tick))
                 delete!(_GPU_STAGING, first(victim))
             end
-            pending = Base.Event()
+            pending = _GPUPendingEntry(Base.Event(), true, 0)
             _GPU_STAGING_PENDING[key] = pending
             return (nothing, pending, true, false)
         end
@@ -574,7 +632,7 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
             wait(_GPU_STAGING_AVAILABLE)
             continue
         elseif !builder
-            wait(pending)
+            wait(pending.event)
             continue
         end
 
@@ -586,25 +644,30 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int;
             lock(_GPU_STAGING_LOCK) do
                 get(_GPU_STAGING_PENDING, key, nothing) === pending &&
                     delete!(_GPU_STAGING_PENDING, key)
-                notify(pending)
+                notify(pending.event)
                 notify(_GPU_STAGING_AVAILABLE)
             end
             rethrow()
         end
         candidate = _GPUStagingEntry(
             WeakRef(root_owner), WeakRef(owner), logical_id, signature, buffer,
-            ReentrantLock(), UInt64(0), acquire ? 1 : 0,
+            ReentrantLock(), UInt64(0),
+            (acquire ? 1 : 0) + pending.reserved_users,
+            pending.cacheable, pending.reserved_users,
         )
         published = lock(_GPU_STAGING_LOCK) do
             if get(_GPU_STAGING_PENDING, key, nothing) === pending
+                candidate.users = (acquire ? 1 : 0) + pending.reserved_users
+                candidate.reserved_users = pending.reserved_users
+                candidate.cacheable = pending.cacheable
                 _GPU_CACHE_TICK[] += 1
                 candidate.tick = _GPU_CACHE_TICK[]
                 _GPU_STAGING[key] = candidate
                 delete!(_GPU_STAGING_PENDING, key)
-                notify(pending)
+                notify(pending.event)
                 return candidate
             end
-            notify(pending)
+            notify(pending.event)
             nothing
         end
         published === nothing || return published
@@ -615,11 +678,196 @@ function _release_staging_entry(entry)
     lock(_GPU_STAGING_LOCK) do
         entry.users -= 1
         if entry.users == 0
+            entry.cacheable || _delete_staging_entry_locked!(entry)
             _trim_staging_cache_locked!()
             notify(_GPU_STAGING_AVAILABLE)
         end
     end
     return nothing
+end
+
+function _staging_entry_description(adapter::ParallelGPUAdapter, comm, owner)
+    root_owner = _parallel_root_buffer(owner)
+    logical_region = _parallel_logical_region(owner)
+    logical_id = hash(logical_region)
+    device = adapter.device(root_owner)
+    T = eltype(owner)
+    n = length(owner)
+    signature = (objectid(comm), adapter.name, device, T, n)
+    key = (logical_region, objectid(root_owner), signature)
+    return (; owner, root_owner, logical_region, logical_id, device, T, n,
+            signature, key)
+end
+
+"""
+Atomically reserve the complete unique staging working set for one operation.
+
+The configured limit bounds retained idle buffers, not live call requirements.
+Entries beyond that limit remain discoverable while active, then are discarded
+on final release. No allocation or copy occurs under the registry lock.
+"""
+function _staging_entries(adapter::ParallelGPUAdapter, comm, owners...)
+    descriptions = map(owner -> _staging_entry_description(
+        adapter, comm, owner,
+    ), owners)
+    unique_descriptions = Any[]
+    description_by_key = Dict{Any,Any}()
+    for description in descriptions
+        haskey(description_by_key, description.key) && continue
+        description_by_key[description.key] = description
+        push!(unique_descriptions, description)
+    end
+
+    while true
+        reservation = lock(_GPU_STAGING_LOCK) do
+            filter!(pair -> pair.second.root_owner.value !== nothing ||
+                            pair.second.users > 0, _GPU_STAGING)
+            waits = unique(get(_GPU_STAGING_PENDING, description.key, nothing)
+                           for description in unique_descriptions
+                           if haskey(_GPU_STAGING_PENDING, description.key))
+            foreach(pending -> pending.reserved_users += 1, waits)
+            isempty(waits) || return (; wait=waits, acquired=Any[], builds=Any[])
+
+            acquired = Any[]
+            builds = Any[]
+            # Existing requested entries become active before idle eviction.
+            for description in unique_descriptions
+                entry = get(_GPU_STAGING, description.key, nothing)
+                if entry !== nothing &&
+                   entry.logical_id == description.logical_id &&
+                   entry.root_owner.value === description.root_owner
+                    entry.logical_owner = WeakRef(description.owner)
+                    if entry.reserved_users > 0
+                        entry.reserved_users -= 1
+                    else
+                        entry.users += 1
+                    end
+                    _GPU_CACHE_TICK[] += 1
+                    entry.tick = _GPU_CACHE_TICK[]
+                    push!(acquired, description.key => entry)
+                end
+            end
+
+            for description in unique_descriptions
+                any(pair -> first(pair) == description.key, acquired) && continue
+                # Prefer recycling an idle compatible retained allocation.
+                compatible = [pair for pair in _GPU_STAGING
+                              if pair.second.users == 0 &&
+                                 pair.second.signature[2] === adapter.name &&
+                                 pair.second.signature[3] == description.device &&
+                                 eltype(pair.second.buffer) === description.T &&
+                                 length(pair.second.buffer) >= description.n]
+                if !isempty(compatible)
+                    victim = first(sort!(compatible; by=pair -> pair.second.tick))
+                    delete!(_GPU_STAGING, first(victim))
+                    entry = last(victim)
+                    entry.root_owner = WeakRef(description.root_owner)
+                    entry.logical_owner = WeakRef(description.owner)
+                    entry.logical_id = description.logical_id
+                    entry.signature = description.signature
+                    entry.users = 1
+                    entry.cacheable = true
+                    entry.reserved_users = 0
+                    _GPU_CACHE_TICK[] += 1
+                    entry.tick = _GPU_CACHE_TICK[]
+                    _GPU_STAGING[description.key] = entry
+                    push!(acquired, description.key => entry)
+                    continue
+                end
+
+                # Evict one idle entry if doing so creates retained capacity.
+                if length(_GPU_STAGING) + length(_GPU_STAGING_PENDING) >=
+                        _GPU_STAGING_LIMIT[]
+                    idle = [pair for pair in _GPU_STAGING
+                            if pair.second.users == 0]
+                    if !isempty(idle)
+                        victim = first(sort!(idle; by=pair -> pair.second.tick))
+                        delete!(_GPU_STAGING, first(victim))
+                    end
+                end
+                cacheable = length(_GPU_STAGING) +
+                            length(_GPU_STAGING_PENDING) < _GPU_STAGING_LIMIT[]
+                pending = _GPUPendingEntry(Base.Event(), cacheable, 0)
+                _GPU_STAGING_PENDING[description.key] = pending
+                push!(builds, (; description, pending))
+            end
+            return (; wait=Any[], acquired, builds)
+        end
+
+        if !isempty(reservation.wait)
+            foreach(pending -> wait(pending.event), reservation.wait)
+            continue
+        end
+
+        candidates = Any[]
+        try
+            for build in reservation.builds
+                description = build.description
+                buffer = adapter.with_device(description.device) do
+                    adapter.allocate_pinned(description.T, description.n)
+                end
+                entry = _GPUStagingEntry(
+                    WeakRef(description.root_owner), WeakRef(description.owner),
+                    description.logical_id, description.signature, buffer,
+                    ReentrantLock(), UInt64(0),
+                    1 + build.pending.reserved_users,
+                    build.pending.cacheable, build.pending.reserved_users,
+                )
+                push!(candidates, (; build, entry))
+            end
+        catch
+            lock(_GPU_STAGING_LOCK) do
+                for build in reservation.builds
+                    get(_GPU_STAGING_PENDING, build.description.key, nothing) ===
+                        build.pending || continue
+                    delete!(_GPU_STAGING_PENDING, build.description.key)
+                    notify(build.pending.event)
+                end
+                for pair in reservation.acquired
+                    last(pair).users -= 1
+                end
+                _trim_staging_cache_locked!()
+                notify(_GPU_STAGING_AVAILABLE)
+            end
+            rethrow()
+        end
+
+        published = lock(_GPU_STAGING_LOCK) do
+            entries = copy(reservation.acquired)
+            valid = true
+            for candidate in candidates
+                build = candidate.build
+                if get(_GPU_STAGING_PENDING, build.description.key, nothing) !==
+                        build.pending
+                    valid = false
+                    break
+                end
+            end
+            if valid
+                for candidate in candidates
+                    build = candidate.build
+                    entry = candidate.entry
+                    entry.users = 1 + build.pending.reserved_users
+                    entry.reserved_users = build.pending.reserved_users
+                    entry.cacheable = build.pending.cacheable
+                    _GPU_CACHE_TICK[] += 1
+                    entry.tick = _GPU_CACHE_TICK[]
+                    _GPU_STAGING[build.description.key] = entry
+                    delete!(_GPU_STAGING_PENDING, build.description.key)
+                    push!(entries, build.description.key => entry)
+                end
+            else
+                for pair in reservation.acquired
+                    last(pair).users -= 1
+                end
+            end
+            foreach(candidate -> notify(candidate.build.pending.event), candidates)
+            notify(_GPU_STAGING_AVAILABLE)
+            valid ? Dict(entries) : nothing
+        end
+        published === nothing && continue
+        return map(description -> published[description.key], descriptions)
+    end
 end
 
 function _with_staging(f, adapter::ParallelGPUAdapter, comm, owner,
@@ -634,10 +882,13 @@ function _with_staging(f, adapter::ParallelGPUAdapter, comm, owner,
     end
 end
 
-function _host_staging_value(adapter::ParallelGPUAdapter, comm, value)
+function _host_staging_value(adapter::ParallelGPUAdapter, comm, value,
+                             reserved_entry=nothing)
     raw = _parallel_parent(value)
     adapter.matches(raw) || return (value, nothing)
-    entry = _staging_entry(adapter, comm, raw, length(raw); acquire=true)
+    entry = reserved_entry === nothing ?
+        _staging_entry(adapter, comm, raw, length(raw); acquire=true) :
+        reserved_entry
     buffer = view(entry.buffer, 1:length(raw))
     host = if value isa PencilArray
         host_pen = similar(pencil(value), Array)
@@ -767,15 +1018,20 @@ function _staged_gpu_call(adapter::ParallelGPUAdapter, operation::Symbol,
     all(index -> index in eachindex(values), mutated) || throw(ArgumentError(
         "$operation staged mutation index is out of bounds",
     ))
+    device_values = [_parallel_parent(value) for value in values
+                     if adapter.matches(_parallel_parent(value))]
+    reserved = _staging_entries(adapter, comm, device_values...)
     staged = Any[]
     try
+        next_reserved = 1
         for value in values
-            push!(staged, _host_staging_value(adapter, comm, value))
+            entry = adapter.matches(_parallel_parent(value)) ?
+                reserved[next_reserved] : nothing
+            push!(staged, _host_staging_value(adapter, comm, value, entry))
+            entry === nothing || (next_reserved += 1)
         end
     catch
-        for pair in staged
-            last(pair) === nothing || _release_staging_entry(last(pair))
-        end
+        foreach(_release_staging_entry, unique(reserved))
         rethrow()
     end
     hosts = first.(staged)
@@ -810,9 +1066,7 @@ function _staged_gpu_call(adapter::ParallelGPUAdapter, operation::Symbol,
             _materialize_staged_result(computed, staged)
         end
     finally
-        for pair in staged
-            last(pair) === nothing || _release_staging_entry(last(pair))
-        end
+        foreach(_release_staging_entry, entries)
     end
     result = _device_result_with_comm(
         adapter, comm, prototype, cpu_result, staged, values,
@@ -890,18 +1144,9 @@ function exchange!(send, receive, comm;
         Threads.atomic_add!(_GPU_DIRECT_BYTES, bytes)
         return result
     end
-    _GPU_STAGING_LIMIT[] >= 2 || throw(ArgumentError(
-        "MPI exchange requires a staging cache limit of at least two buffers",
-    ))
-    send_entry = _staging_entry(
-        adapter, comm, send, length(send); acquire=true,
+    send_entry, receive_entry = _staging_entries(
+        adapter, comm, send, receive,
     )
-    receive_entry = try
-        _staging_entry(adapter, comm, receive, length(receive); acquire=true)
-    catch
-        _release_staging_entry(send_entry)
-        rethrow()
-    end
     result = try
         send_entry === receive_entry && throw(ArgumentError(
             "MPI exchange send/receive buffers may not alias",

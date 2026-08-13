@@ -1219,6 +1219,32 @@ function _validate_parallel_storage!(comm, operation::Symbol, values...;
     return local_min
 end
 
+"""Shared first collective for dense compatibility synthesis entry points."""
+function _validate_dense_synthesis_storage!(comm, operation::Symbol,
+                                            values...)
+    _validate_parallel_storage!(comm, operation, values...)
+    return nothing
+end
+
+"""Validate scalar dense storage and optional negative-m storage in one order."""
+function _validate_dense_scalar_synthesis_storage!(
+        comm, coefficients, prototype, Aminus=nothing)
+    operation = :dist_synthesis_dense
+    _validate_dense_synthesis_storage!(
+        comm, operation, coefficients, prototype,
+    )
+    minus_count = MPI.Allreduce(Aminus === nothing ? 0 : 1, +, comm)
+    comm_size = MPI.Comm_size(comm)
+    minus_count in (0, comm_size) || throw(ArgumentError(
+        "$operation collective validation failed: rank-varying Aminus presence",
+    ))
+    has_minus = minus_count == comm_size
+    has_minus && _validate_dense_synthesis_storage!(
+        comm, operation, coefficients, Aminus, prototype,
+    )
+    return has_minus
+end
+
 function _dist_transpose_gpu_analysis!(adapter, plan, output, input)
     return _dist_transpose_gpu_analysis!(
         Val(adapter.name), adapter, plan, output, input,

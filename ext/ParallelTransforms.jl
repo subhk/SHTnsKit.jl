@@ -552,23 +552,13 @@ end
 function _validate_dense_synthesis!(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix,
                                     prototype::PencilArray;
                                     real_output::Bool, use_rfft::Bool,
-                                    Aminus=nothing)
+                                    Aminus=nothing,
+                                    storage_prevalidated::Bool=false)
     comm = communicator(prototype)
-    minus_count = MPI.Allreduce(Aminus === nothing ? 0 : 1, +, comm)
-    comm_size = MPI.Comm_size(comm)
-    if minus_count != 0 && minus_count != comm_size
-        throw(ArgumentError(
-            "dist_synthesis requires Aminus to be present on either every rank or no rank",
-        ))
-    end
-    has_minus = minus_count == comm_size
-    if has_minus
-        _validate_parallel_storage!(
-            comm, :dist_synthesis, Alm, Aminus, prototype,
+    has_minus = storage_prevalidated ? Aminus !== nothing :
+        _validate_dense_scalar_synthesis_storage!(
+            comm, Alm, prototype, Aminus,
         )
-    else
-        _validate_parallel_storage!(comm, :dist_synthesis, Alm, prototype)
-    end
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     flags = UInt32(0)
     size(Alm) == expected || (flags |= 0x0001)
@@ -1456,16 +1446,20 @@ and adding `zp + conj(zn)`, which doubled the Legendre work, the inverse FFT and
 the complex bin layout — an rfft buffer has no negative-m slots.
 """
 function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false, Aminus::Union{Nothing,AbstractMatrix}=nothing)
+    comm = communicator(prototype_θφ)
+    _validate_dense_scalar_synthesis_storage!(
+        comm, Alm, prototype_θφ, Aminus,
+    )
     lmax, mmax = cfg.lmax, cfg.mmax
     nlon = cfg.nlon
     nlat = cfg.nlat
-    comm = communicator(prototype_θφ)
     _validate_scalar_pencil!(
         cfg, prototype_θφ, (cfg.nlat, cfg.nlon), :dist_synthesis_prototype;
         comm,
     )
     _validate_dense_synthesis!(
         cfg, Alm, prototype_θφ; real_output, use_rfft, Aminus,
+        storage_prevalidated=true,
     )
     Alm_int = SHTnsKit._internal_coefficients(Alm, cfg)
     Aminus_int = Aminus === nothing ? nothing : SHTnsKit._internal_coefficients(Aminus, cfg)
@@ -2736,6 +2730,9 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
                                         real_output::Bool=true,
                                         use_rfft::Bool=false)
     comm = communicator(prototype_θφ)
+    _validate_dense_synthesis_storage!(
+        comm, :dist_synthesis_sphtor_dense, Slm, Tlm, prototype_θφ,
+    )
     Slm_pencil = SHTnsKit.matrix_to_spectral_pencil(cfg, Slm; comm)
     Tlm_pencil = SHTnsKit.matrix_to_spectral_pencil(cfg, Tlm; comm)
     return dist_synthesis_sphtor_pencil(
@@ -3099,12 +3096,17 @@ end
 # Synthesis to distributed fields from dense spectra
 function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; prototype_θφ::PencilArray, real_output::Bool=true, use_rfft::Bool=false)
     comm = communicator(prototype_θφ)
+    _validate_dense_synthesis_storage!(
+        comm, :dist_synthesis_qst_dense,
+        Qlm, Slm, Tlm, prototype_θφ,
+    )
     _validate_qst_pencil_communicators!(
         comm, (prototype_θφ,), :dist_synthesis_qst,
     )
     for value in (Qlm, Slm, Tlm)
         _validate_dense_synthesis!(
             cfg, value, prototype_θφ; real_output, use_rfft,
+            storage_prevalidated=true,
         )
     end
     Vr = SHTnsKit.dist_synthesis(cfg, Qlm; prototype_θφ, real_output, use_rfft)

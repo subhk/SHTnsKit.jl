@@ -41,6 +41,9 @@ Base.copyto!(destination::MockMixedVendorArray, source::AbstractArray) =
     (copyto!(destination.data, source); destination)
 Base.copyto!(destination::AbstractArray, source::MockMixedVendorArray) =
     copyto!(destination, source.data)
+Base.copyto!(destination::MockMixedVendorArray,
+             source::MockMixedVendorArray) =
+    (copyto!(destination.data, source.data); destination)
 MockMixedVendorArray{T}(::UndefInitializer, dims::Tuple) where {T} =
     MockMixedVendorArray(Array{T}(undef, dims))
 MockMixedVendorArray{T}(::UndefInitializer, n::Integer) where {T} =
@@ -3061,6 +3064,110 @@ function test_mpi_gpu_policy(extension)
     fill!(parent(world_cpu), 0.75)
     fill!(parent(world_gpu).data, 1.25)
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    world_gpu_comm = PencilArrays.get_comm(world_gpu)
+
+    # Dense compatibility dispatch depends on coefficient residency.  Every
+    # rank must therefore enter the same storage preflight before a CPU rank
+    # starts generic conversion while a vendor rank starts staging.
+    dense_collective_cases = (
+        scalar_coefficients=(() -> iseven(rank) ? SHTnsKit.dist_synthesis(
+            mixed_cfg, dense_Q; prototype_θφ=world_gpu,
+        ) : compound_extension._dist_synthesis_dense_vendor(
+            mixed_adapter, world_gpu_comm, mixed_cfg, vendor_Q, world_gpu,
+        ), :dist_synthesis_dense),
+        scalar_coefficients_aminus=(() -> iseven(rank) ?
+            SHTnsKit.dist_synthesis(
+                mixed_cfg, dense_Q; prototype_θφ=world_gpu,
+                real_output=false, Aminus=vendor_Aminus,
+            ) : compound_extension._dist_synthesis_dense_vendor(
+                mixed_adapter, world_gpu_comm, mixed_cfg, vendor_Q, world_gpu;
+                real_output=false, Aminus=vendor_Aminus,
+            ), :dist_synthesis_dense),
+        scalar_aminus=(() -> iseven(rank) ? SHTnsKit.dist_synthesis(
+            mixed_cfg, vendor_Q; prototype_θφ=world_gpu,
+            real_output=false, Aminus=dense_Aminus,
+        ) : compound_extension._dist_synthesis_dense_vendor(
+            mixed_adapter, world_gpu_comm, mixed_cfg, vendor_Q, world_gpu;
+            real_output=false, Aminus=vendor_Aminus,
+        ), :dist_synthesis_dense),
+        vector_s=(() -> iseven(rank) ? SHTnsKit.dist_synthesis_sphtor(
+            mixed_cfg, dense_S, vendor_T; prototype_θφ=world_gpu,
+        ) : compound_extension._dist_synthesis_sphtor_dense_vendor(
+            mixed_adapter, world_gpu_comm, mixed_cfg, vendor_S, vendor_T,
+            world_gpu,
+        ), :dist_synthesis_sphtor_dense),
+        vector_t=(() -> iseven(rank) ? SHTnsKit.dist_synthesis_sphtor(
+            mixed_cfg, vendor_S, dense_T; prototype_θφ=world_gpu,
+        ) : compound_extension._dist_synthesis_sphtor_dense_vendor(
+            mixed_adapter, world_gpu_comm, mixed_cfg, vendor_S, vendor_T,
+            world_gpu,
+        ), :dist_synthesis_sphtor_dense),
+        qst_q=(() -> iseven(rank) ? SHTnsKit.dist_synthesis_qst(
+            mixed_cfg, dense_Q, vendor_S, vendor_T;
+            prototype_θφ=world_gpu,
+        ) : compound_extension._dist_synthesis_qst_dense_vendor(
+            mixed_adapter, world_gpu_comm, mixed_cfg, vendor_Q, vendor_S,
+            vendor_T, world_gpu,
+        ), :dist_synthesis_qst_dense),
+        qst_s=(() -> iseven(rank) ? SHTnsKit.dist_synthesis_qst(
+            mixed_cfg, vendor_Q, dense_S, vendor_T;
+            prototype_θφ=world_gpu,
+        ) : compound_extension._dist_synthesis_qst_dense_vendor(
+            mixed_adapter, world_gpu_comm, mixed_cfg, vendor_Q, vendor_S,
+            vendor_T, world_gpu,
+        ), :dist_synthesis_qst_dense),
+        qst_t=(() -> iseven(rank) ? SHTnsKit.dist_synthesis_qst(
+            mixed_cfg, vendor_Q, vendor_S, dense_T;
+            prototype_θφ=world_gpu,
+        ) : compound_extension._dist_synthesis_qst_dense_vendor(
+            mixed_adapter, world_gpu_comm, mixed_cfg, vendor_Q, vendor_S,
+            vendor_T, world_gpu,
+        ), :dist_synthesis_qst_dense),
+    )
+    for (call, operation) in values(dense_collective_cases)
+        before_stats = extension.parallel_gpu_stats()
+        before_payload = copy(parent(world_gpu).data)
+        caught = try
+            call()
+            nothing
+        catch error
+            error
+        end
+        expected_message = "ArgumentError: $operation collective validation failed: storage/vendor/device mismatch"
+        @test caught isa ArgumentError
+        @test sprint(showerror, caught) == expected_message
+        @test extension.parallel_gpu_stats() == before_stats
+        @test parent(world_gpu).data == before_payload
+        @test MPI.Allreduce(caught isa ArgumentError ? 1 : 0, min,
+                            MPI.COMM_WORLD) == 1
+        MPI.Barrier(MPI.COMM_WORLD)
+    end
+
+    if MPI.Comm_size(MPI.COMM_WORLD) > 1
+        before_presence_stats = extension.parallel_gpu_stats()
+        before_presence_payload = copy(parent(world_gpu).data)
+        presence_error = try
+            SHTnsKit.dist_synthesis(
+                mixed_cfg, vendor_Q; prototype_θφ=world_gpu,
+                real_output=false,
+                Aminus=iseven(rank) ? nothing : vendor_Aminus,
+            )
+            nothing
+        catch error
+            error
+        end
+        @test presence_error isa ArgumentError
+        @test sprint(showerror, presence_error) ==
+              "ArgumentError: dist_synthesis_dense collective validation failed: rank-varying Aminus presence"
+        @test extension.parallel_gpu_stats() == before_presence_stats
+        @test parent(world_gpu).data == before_presence_payload
+        @test MPI.Allreduce(presence_error isa ArgumentError ? 1 : 0, min,
+                            MPI.COMM_WORLD) == 1
+        MPI.Barrier(MPI.COMM_WORLD)
+    else
+        @test_skip "rank-varying Aminus presence requires at least two ranks"
+    end
+
     alternating = iseven(rank) ? (world_cpu, world_gpu) :
                                  (world_gpu, world_cpu)
     caught_mixed = false

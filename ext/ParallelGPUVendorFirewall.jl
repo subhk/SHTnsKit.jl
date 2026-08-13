@@ -35,8 +35,9 @@ function _stage_vendor_call(operation::Symbol, f, values...;
 end
 
 function _stage_vendor_call_with_adapter(
-        adapter, comm, operation::Symbol, f, values...; mutated::Tuple=())
-    ParallelExt._validate_parallel_storage!(
+        adapter, comm, operation::Symbol, f, values...; mutated::Tuple=(),
+        validate_storage::Bool=true)
+    validate_storage && ParallelExt._validate_parallel_storage!(
         comm, operation, values...; adapter,
     )
     return ParallelExt._staged_gpu_call(
@@ -814,31 +815,32 @@ end
 function SHTnsKit.dist_synthesis(
         cfg::SHTnsKit.SHTConfig, coefficients::VendorArray;
         prototype_θφ::PencilArrays.PencilArray, Aminus=nothing, kwargs...)
-    adapter = ParallelExt._parallel_gpu_adapter(coefficients)
     comm = PencilArrays.communicator(prototype_θφ)
+    ParallelExt._validate_dense_scalar_synthesis_storage!(
+        comm, coefficients, prototype_θφ, Aminus,
+    )
+    adapter = ParallelExt._parallel_gpu_adapter(coefficients)
     return _dist_synthesis_dense_vendor(
         adapter, comm, cfg, coefficients, prototype_θφ;
-        Aminus, kwargs...,
+        Aminus, storage_prevalidated=true, kwargs...,
     )
 end
 
 function _dist_synthesis_dense_vendor(
         adapter, comm, cfg, coefficients, prototype_θφ;
-        Aminus=nothing, kwargs...)
-    minus_count = MPI.Allreduce(Aminus === nothing ? 0 : 1, +, comm)
-    comm_size = MPI.Comm_size(comm)
-    ParallelExt._collective_validation_error(
-        comm, minus_count in (0, comm_size) ? UInt32(0) : UInt32(0x0080),
-        :dist_synthesis_dense,
-    )
-    if minus_count == 0
+        Aminus=nothing, storage_prevalidated::Bool=false, kwargs...)
+    has_minus = storage_prevalidated ? Aminus !== nothing :
+        ParallelExt._validate_dense_scalar_synthesis_storage!(
+            comm, coefficients, prototype_θφ, Aminus,
+        )
+    if !has_minus
         return _stage_vendor_call_with_adapter(
             adapter, comm,
             :dist_synthesis_dense,
             (host_coefficients, host_prototype) -> SHTnsKit.dist_synthesis(
                 cfg, host_coefficients;
                 prototype_θφ=host_prototype, Aminus=nothing, kwargs...,
-            ), coefficients, prototype_θφ,
+            ), coefficients, prototype_θφ; validate_storage=false,
         )
     end
     return _stage_vendor_call_with_adapter(
@@ -848,7 +850,7 @@ function _dist_synthesis_dense_vendor(
             SHTnsKit.dist_synthesis(
                 cfg, host_coefficients;
                 prototype_θφ=host_prototype, Aminus=host_aminus, kwargs...,
-            ), coefficients, Aminus, prototype_θφ,
+        ), coefficients, Aminus, prototype_θφ; validate_storage=false,
     )
 end
 
@@ -881,16 +883,24 @@ end
 function SHTnsKit.dist_synthesis_sphtor(
         cfg::SHTnsKit.SHTConfig, S::VendorArray, T::VendorArray;
         prototype_θφ::PencilArrays.PencilArray, kwargs...)
-    adapter = ParallelExt._parallel_gpu_adapter(S)
     comm = PencilArrays.communicator(prototype_θφ)
+    ParallelExt._validate_dense_synthesis_storage!(
+        comm, :dist_synthesis_sphtor_dense, S, T, prototype_θφ,
+    )
+    adapter = ParallelExt._parallel_gpu_adapter(S)
     return _dist_synthesis_sphtor_dense_vendor(
-        adapter, comm, cfg, S, T, prototype_θφ; kwargs...,
+        adapter, comm, cfg, S, T, prototype_θφ;
+        storage_prevalidated=true, kwargs...,
     )
 end
 
 
 function _dist_synthesis_sphtor_dense_vendor(
-        adapter, comm, cfg, S, T, prototype_θφ; kwargs...)
+        adapter, comm, cfg, S, T, prototype_θφ;
+        storage_prevalidated::Bool=false, kwargs...)
+    storage_prevalidated || ParallelExt._validate_dense_synthesis_storage!(
+        comm, :dist_synthesis_sphtor_dense, S, T, prototype_θφ,
+    )
     return _stage_vendor_call_with_adapter(
         adapter, comm,
         :dist_synthesis_sphtor_dense,
@@ -898,7 +908,7 @@ function _dist_synthesis_sphtor_dense_vendor(
             SHTnsKit.dist_synthesis_sphtor(
                 cfg, host_s, host_t;
                 prototype_θφ=host_prototype, kwargs...,
-            ), S, T, prototype_θφ,
+            ), S, T, prototype_θφ; validate_storage=false,
     )
 end
 
@@ -933,16 +943,24 @@ end
 function SHTnsKit.dist_synthesis_qst(
         cfg::SHTnsKit.SHTConfig, Q::VendorArray, S::VendorArray,
         T::VendorArray; prototype_θφ::PencilArrays.PencilArray, kwargs...)
-    adapter = ParallelExt._parallel_gpu_adapter(Q)
     comm = PencilArrays.communicator(prototype_θφ)
+    ParallelExt._validate_dense_synthesis_storage!(
+        comm, :dist_synthesis_qst_dense, Q, S, T, prototype_θφ,
+    )
+    adapter = ParallelExt._parallel_gpu_adapter(Q)
     return _dist_synthesis_qst_dense_vendor(
-        adapter, comm, cfg, Q, S, T, prototype_θφ; kwargs...,
+        adapter, comm, cfg, Q, S, T, prototype_θφ;
+        storage_prevalidated=true, kwargs...,
     )
 end
 
 
 function _dist_synthesis_qst_dense_vendor(
-        adapter, comm, cfg, Q, S, T, prototype_θφ; kwargs...)
+        adapter, comm, cfg, Q, S, T, prototype_θφ;
+        storage_prevalidated::Bool=false, kwargs...)
+    storage_prevalidated || ParallelExt._validate_dense_synthesis_storage!(
+        comm, :dist_synthesis_qst_dense, Q, S, T, prototype_θφ,
+    )
     return _stage_vendor_call_with_adapter(
         adapter, comm,
         :dist_synthesis_qst_dense,
@@ -950,7 +968,7 @@ function _dist_synthesis_qst_dense_vendor(
             SHTnsKit.dist_synthesis_qst(
                 cfg, host_q, host_s, host_t;
                 prototype_θφ=host_prototype, kwargs...,
-            ), Q, S, T, prototype_θφ,
+            ), Q, S, T, prototype_θφ; validate_storage=false,
     )
 end
 

@@ -22,6 +22,7 @@ const VENDOR_NAME = Val(:amdgpu)
 include("ParallelGPUVendorFirewall.jl")
 
 function _amdgpu_pinned(::Type{T}, n::Integer) where {T}
+    n == 0 && return Vector{T}(undef, 0)
     host = Vector{T}(undef, n)
     AMDGPU.Mem.pin(pointer(host), sizeof(host))
     finalizer(host) do value
@@ -54,73 +55,93 @@ end
     first(PencilArrays.range_local(PencilArrays.pencil(plan.F_buf))[1]) - 1
 
 function ParallelExt._dist_transpose_gpu_analysis!(
-        ::Val{:amdgpu}, plan, output, input)
-    LinearAlgebra.mul!(plan.F_buf, plan.fft_plan, input)
-    RT = typeof(real(zero(eltype(output))))
-    tables = AMDGPUExt._amdgpu_scalar_tables(plan.cfg, RT)
-    kernel! = AMDGPUExt.GPUCommon.distributed_scalar_analysis_kernel!(
-        AMDGPU.ROCBackend(),
+        ::Val{:amdgpu}, adapter, plan, output, input)
+    ParallelExt._gpu_transpose_forward!(
+        adapter, plan, plan.F_buf, input,
     )
-    kernel!(parent(output), parent(plan.F_buf), tables.Plm, tables.weights,
-            RT(plan.cfg.cphi), _first_m(plan), plan.lmax, plan.mmax,
-            plan.cfg.mres, plan.lmax;
-            ndrange=size(parent(output)))
-    AMDGPU.synchronize()
+    ParallelExt._with_owner_device(adapter, output) do
+        RT = typeof(real(zero(eltype(output))))
+        tables = AMDGPUExt._amdgpu_scalar_tables(plan.cfg, RT)
+        kernel! = AMDGPUExt.GPUCommon.distributed_scalar_analysis_kernel!(
+            AMDGPU.ROCBackend(),
+        )
+        kernel!(parent(output), parent(plan.F_buf), tables.Plm, tables.weights,
+                RT(plan.cfg.cphi), _first_m(plan), plan.lmax, plan.mmax,
+                plan.cfg.mres, plan.lmax;
+                ndrange=size(parent(output)))
+        AMDGPU.synchronize()
+    end
     return output
 end
 
 function ParallelExt._dist_transpose_gpu_synthesis!(
-        ::Val{:amdgpu}, plan, output, input)
-    fill!(parent(plan.F_buf), zero(eltype(plan.F_buf)))
-    RT = typeof(real(zero(eltype(input))))
-    tables = AMDGPUExt._amdgpu_scalar_tables(plan.cfg, RT)
-    kernel! = AMDGPUExt.GPUCommon.distributed_scalar_synthesis_kernel!(
-        AMDGPU.ROCBackend(),
+        ::Val{:amdgpu}, adapter, plan, output, input)
+    ParallelExt._with_owner_device(adapter, output) do
+        fill!(parent(plan.F_buf), zero(eltype(plan.F_buf)))
+        RT = typeof(real(zero(eltype(input))))
+        tables = AMDGPUExt._amdgpu_scalar_tables(plan.cfg, RT)
+        kernel! = AMDGPUExt.GPUCommon.distributed_scalar_synthesis_kernel!(
+            AMDGPU.ROCBackend(),
+        )
+        kernel!(parent(plan.F_buf), parent(input), tables.Plm,
+                RT(SHTnsKit.phi_inv_scale(plan.cfg)), _first_m(plan),
+                plan.lmax, plan.mmax, plan.cfg.mres;
+                ndrange=size(parent(plan.F_buf)))
+        AMDGPU.synchronize()
+    end
+    ParallelExt._gpu_transpose_inverse!(
+        adapter, plan, output, plan.F_buf,
     )
-    kernel!(parent(plan.F_buf), parent(input), tables.Plm,
-            RT(SHTnsKit.phi_inv_scale(plan.cfg)), _first_m(plan),
-            plan.lmax, plan.mmax, plan.cfg.mres;
-            ndrange=size(parent(plan.F_buf)))
-    AMDGPU.synchronize()
-    LinearAlgebra.ldiv!(output, plan.fft_plan, plan.F_buf)
     return output
 end
 
 function ParallelExt._dist_transpose_gpu_vector_analysis!(
-        ::Val{:amdgpu}, plan, Sout, Tout, Vt, Vp)
-    LinearAlgebra.mul!(plan.F_buf, plan.fft_plan, Vt)
-    LinearAlgebra.mul!(plan.F_buf2, plan.fft_plan, Vp)
-    RT = typeof(real(zero(eltype(Sout))))
-    tables = AMDGPUExt._amdgpu_vector_tables(plan.cfg, RT)
-    kernel! = AMDGPUExt.GPUCommon.distributed_vector_analysis_kernel!(
-        AMDGPU.ROCBackend(),
+        ::Val{:amdgpu}, adapter, plan, Sout, Tout, Vt, Vp)
+    ParallelExt._gpu_transpose_forward!(
+        adapter, plan, plan.F_buf, Vt,
     )
-    kernel!(parent(Sout), parent(Tout), parent(plan.F_buf),
-            parent(plan.F_buf2), tables.dtheta, tables.over_sin,
-            tables.weights, tables.x, RT(plan.cfg.cphi), _first_m(plan),
-            plan.lmax, plan.mmax, plan.cfg.mres, plan.cfg.robert_form;
-            ndrange=size(parent(Sout)))
-    AMDGPU.synchronize()
+    ParallelExt._gpu_transpose_forward!(
+        adapter, plan, plan.F_buf2, Vp,
+    )
+    ParallelExt._with_owner_device(adapter, Sout) do
+        RT = typeof(real(zero(eltype(Sout))))
+        tables = AMDGPUExt._amdgpu_vector_tables(plan.cfg, RT)
+        kernel! = AMDGPUExt.GPUCommon.distributed_vector_analysis_kernel!(
+            AMDGPU.ROCBackend(),
+        )
+        kernel!(parent(Sout), parent(Tout), parent(plan.F_buf),
+                parent(plan.F_buf2), tables.dtheta, tables.over_sin,
+                tables.weights, tables.x, RT(plan.cfg.cphi), _first_m(plan),
+                plan.lmax, plan.mmax, plan.cfg.mres, plan.cfg.robert_form;
+                ndrange=size(parent(Sout)))
+        AMDGPU.synchronize()
+    end
     return Sout, Tout
 end
 
 function ParallelExt._dist_transpose_gpu_vector_synthesis!(
-        ::Val{:amdgpu}, plan, Vt, Vp, Sin, Tin)
-    fill!(parent(plan.F_buf), zero(eltype(plan.F_buf)))
-    fill!(parent(plan.F_buf2), zero(eltype(plan.F_buf2)))
-    RT = typeof(real(zero(eltype(Sin))))
-    tables = AMDGPUExt._amdgpu_vector_tables(plan.cfg, RT)
-    kernel! = AMDGPUExt.GPUCommon.distributed_vector_synthesis_kernel!(
-        AMDGPU.ROCBackend(),
+        ::Val{:amdgpu}, adapter, plan, Vt, Vp, Sin, Tin)
+    ParallelExt._with_owner_device(adapter, Vt) do
+        fill!(parent(plan.F_buf), zero(eltype(plan.F_buf)))
+        fill!(parent(plan.F_buf2), zero(eltype(plan.F_buf2)))
+        RT = typeof(real(zero(eltype(Sin))))
+        tables = AMDGPUExt._amdgpu_vector_tables(plan.cfg, RT)
+        kernel! = AMDGPUExt.GPUCommon.distributed_vector_synthesis_kernel!(
+            AMDGPU.ROCBackend(),
+        )
+        kernel!(parent(plan.F_buf), parent(plan.F_buf2), parent(Sin), parent(Tin),
+                tables.dtheta, tables.over_sin, tables.x,
+                RT(SHTnsKit.phi_inv_scale(plan.cfg)), _first_m(plan),
+                plan.lmax, plan.mmax, plan.cfg.mres, plan.cfg.robert_form;
+                ndrange=size(parent(plan.F_buf)))
+        AMDGPU.synchronize()
+    end
+    ParallelExt._gpu_transpose_inverse!(
+        adapter, plan, Vt, plan.F_buf,
     )
-    kernel!(parent(plan.F_buf), parent(plan.F_buf2), parent(Sin), parent(Tin),
-            tables.dtheta, tables.over_sin, tables.x,
-            RT(SHTnsKit.phi_inv_scale(plan.cfg)), _first_m(plan),
-            plan.lmax, plan.mmax, plan.cfg.mres, plan.cfg.robert_form;
-            ndrange=size(parent(plan.F_buf)))
-    AMDGPU.synchronize()
-    LinearAlgebra.ldiv!(Vt, plan.fft_plan, plan.F_buf)
-    LinearAlgebra.ldiv!(Vp, plan.fft_plan, plan.F_buf2)
+    ParallelExt._gpu_transpose_inverse!(
+        adapter, plan, Vp, plan.F_buf2,
+    )
     return Vt, Vp
 end
 

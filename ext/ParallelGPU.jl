@@ -126,6 +126,7 @@ end
 
 mutable struct _GPUStagingEntry
     root_owner::WeakRef
+    logical_owner::WeakRef
     logical_id::UInt
     signature::Tuple
     buffer::Any
@@ -133,11 +134,57 @@ mutable struct _GPUStagingEntry
     tick::UInt64
 end
 
+@inline _parallel_logical_region(value::SubArray) =
+    (typeof(value), _parallel_logical_region(parent(value)),
+     Base.parentindices(value), size(value))
+@inline _parallel_logical_region(value::Base.ReshapedArray) =
+    (typeof(value), _parallel_logical_region(parent(value)), size(value))
+@inline _parallel_logical_region(value::Base.ReinterpretArray) =
+    (typeof(value), _parallel_logical_region(parent(value)),
+     eltype(value), size(value))
+@inline _parallel_logical_region(value::Base.PermutedDimsArray) =
+    (typeof(value), _parallel_logical_region(parent(value)), size(value))
+@inline _parallel_logical_region(value::LinearAlgebra.Adjoint) =
+    (typeof(value), _parallel_logical_region(parent(value)), size(value))
+@inline _parallel_logical_region(value::LinearAlgebra.Transpose) =
+    (typeof(value), _parallel_logical_region(parent(value)), size(value))
+@inline _parallel_logical_region(value::LinearAlgebra.AbstractTriangular) =
+    (typeof(value), _parallel_logical_region(parent(value)), size(value))
+@inline _parallel_logical_region(value::LinearAlgebra.Symmetric) =
+    (typeof(value), _parallel_logical_region(parent(value)),
+     getfield(value, :uplo), size(value))
+@inline _parallel_logical_region(value::LinearAlgebra.Hermitian) =
+    (typeof(value), _parallel_logical_region(parent(value)),
+     getfield(value, :uplo), size(value))
+@inline _parallel_logical_region(value::LinearAlgebra.Diagonal) =
+    (typeof(value), _parallel_logical_region(getfield(value, :diag)))
+@inline _parallel_logical_region(value::LinearAlgebra.Bidiagonal) =
+    (typeof(value), getfield(value, :uplo),
+     _parallel_logical_region(getfield(value, :dv)),
+     _parallel_logical_region(getfield(value, :ev)))
+@inline _parallel_logical_region(value::LinearAlgebra.Tridiagonal) =
+    (typeof(value), _parallel_logical_region(getfield(value, :dl)),
+     _parallel_logical_region(getfield(value, :d)),
+     _parallel_logical_region(getfield(value, :du)))
+@inline _parallel_logical_region(value) =
+    (typeof(value), objectid(value), size(value))
+
+mutable struct _GPUTransposeHostEntry
+    plan_owner::WeakRef
+    fft_plan::Any
+    spatial::Any
+    spectral::Any
+    lock::ReentrantLock
+end
+
 const _GPU_AWARENESS = Dict{Tuple,_GPUAwarenessEntry}()
 const _GPU_STAGING = Dict{Tuple,_GPUStagingEntry}()
+const _GPU_TRANSPOSE_HOST = Dict{UInt,_GPUTransposeHostEntry}()
 const _GPU_AWARENESS_LOCK = ReentrantLock()
 const _GPU_STAGING_LOCK = ReentrantLock()
+const _GPU_TRANSPOSE_HOST_LOCK = ReentrantLock()
 const _GPU_STAGING_LIMIT = Ref(8)
+const _GPU_AWARENESS_LIMIT = 64
 const _GPU_CACHE_TICK = Ref(UInt64(0))
 
 const _GPU_DIRECT_CALLS = Threads.Atomic{Int}(0)
@@ -158,10 +205,12 @@ end
 
 function parallel_gpu_cache_sizes()
     awareness = lock(_GPU_AWARENESS_LOCK) do
-        count(entry -> entry.comm.value !== nothing, values(_GPU_AWARENESS))
+        filter!(pair -> pair.second.comm.value !== nothing, _GPU_AWARENESS)
+        length(_GPU_AWARENESS)
     end
     staging = lock(_GPU_STAGING_LOCK) do
-        count(entry -> entry.root_owner.value !== nothing, values(_GPU_STAGING))
+        filter!(pair -> pair.second.root_owner.value !== nothing, _GPU_STAGING)
+        length(_GPU_STAGING)
     end
     return (; awareness, staging)
 end
@@ -180,6 +229,9 @@ function parallel_gpu_clear_caches!()
     lock(_GPU_STAGING_LOCK) do
         empty!(_GPU_STAGING)
     end
+    lock(_GPU_TRANSPOSE_HOST_LOCK) do
+        empty!(_GPU_TRANSPOSE_HOST)
+    end
     _GPU_DIRECT_CALLS[] = 0
     _GPU_STAGED_CALLS[] = 0
     _GPU_DIRECT_BYTES[] = 0
@@ -187,13 +239,124 @@ function parallel_gpu_clear_caches!()
     return nothing
 end
 
+function _gpu_transpose_host_entry(plan)
+    key = objectid(plan)
+    found = lock(_GPU_TRANSPOSE_HOST_LOCK) do
+        filter!(pair -> pair.second.plan_owner.value !== nothing,
+                _GPU_TRANSPOSE_HOST)
+        entry = get(_GPU_TRANSPOSE_HOST, key, nothing)
+        entry !== nothing && entry.plan_owner.value === plan ? entry : nothing
+    end
+    found === nothing || return found
+
+    # Pencil/PencilFFT construction may itself enter MPI, so it must never run
+    # under the process-wide cache lock.
+    input_pencil = Pencil(
+        Array, (plan.nlon, plan.nlat), (2,), plan.comm,
+    )
+    fft_plan = PencilFFTPlan(
+        input_pencil,
+        (Transforms.RFFT(), Transforms.NoTransform()),
+        Transforms.eltype_input(plan.fft_plan);
+        extra_dims=(plan.nlev,),
+        transpose_method=plan.fft_plan.transpose_method,
+    )
+    candidate = _GPUTransposeHostEntry(
+        WeakRef(plan), fft_plan, allocate_input(fft_plan),
+        allocate_output(fft_plan), ReentrantLock(),
+    )
+    return lock(_GPU_TRANSPOSE_HOST_LOCK) do
+        existing = get(_GPU_TRANSPOSE_HOST, key, nothing)
+        if existing !== nothing && existing.plan_owner.value === plan
+            return existing
+        end
+        filter!(pair -> pair.second.plan_owner.value !== nothing,
+                _GPU_TRANSPOSE_HOST)
+        _GPU_TRANSPOSE_HOST[key] = candidate
+        candidate
+    end
+end
+
+function _gpu_transpose_aware(adapter::ParallelGPUAdapter, plan, buffer)
+    local_aware = _gpu_awareness(adapter, plan.comm, _parallel_parent(buffer))
+    return MPI.Allreduce(local_aware ? 1 : 0, min, plan.comm) == 1
+end
+
+"""Run a native forward PencilFFT directly or through its cached CPU mirror."""
+function _gpu_transpose_forward!(adapter::ParallelGPUAdapter, plan,
+                                 device_output, device_input)
+    bytes = _communication_bytes(_parallel_parent(device_input)) +
+            _communication_bytes(_parallel_parent(device_output))
+    if _gpu_transpose_aware(adapter, plan, device_input)
+        result = _with_owner_device(adapter, device_input) do
+            adapter.synchronize(_parallel_parent(device_input))
+            mul!(device_output, plan.fft_plan, device_input)
+            adapter.synchronize(_parallel_parent(device_output))
+            device_output
+        end
+        Threads.atomic_add!(_GPU_DIRECT_CALLS, 1)
+        Threads.atomic_add!(_GPU_DIRECT_BYTES, bytes)
+        return result
+    end
+    entry = _gpu_transpose_host_entry(plan)
+    result = lock(entry.lock) do
+        _device_to_host_snapshot!(
+            adapter, parent(entry.spatial), device_input,
+        )
+        mul!(entry.spectral, entry.fft_plan, entry.spatial)
+        _host_to_device_snapshot!(
+            adapter, device_output, parent(entry.spectral),
+        )
+        device_output
+    end
+    Threads.atomic_add!(_GPU_STAGED_CALLS, 1)
+    Threads.atomic_add!(_GPU_STAGED_BYTES, bytes)
+    return result
+end
+
+"""Run a native inverse PencilFFT directly or through its cached CPU mirror."""
+function _gpu_transpose_inverse!(adapter::ParallelGPUAdapter, plan,
+                                 device_output, device_input)
+    bytes = _communication_bytes(_parallel_parent(device_input)) +
+            _communication_bytes(_parallel_parent(device_output))
+    if _gpu_transpose_aware(adapter, plan, device_input)
+        result = _with_owner_device(adapter, device_input) do
+            adapter.synchronize(_parallel_parent(device_input))
+            ldiv!(device_output, plan.fft_plan, device_input)
+            adapter.synchronize(_parallel_parent(device_output))
+            device_output
+        end
+        Threads.atomic_add!(_GPU_DIRECT_CALLS, 1)
+        Threads.atomic_add!(_GPU_DIRECT_BYTES, bytes)
+        return result
+    end
+    entry = _gpu_transpose_host_entry(plan)
+    result = lock(entry.lock) do
+        _device_to_host_snapshot!(
+            adapter, parent(entry.spectral), device_input,
+        )
+        ldiv!(entry.spatial, entry.fft_plan, entry.spectral)
+        _host_to_device_snapshot!(
+            adapter, device_output, parent(entry.spatial),
+        )
+        device_output
+    end
+    Threads.atomic_add!(_GPU_STAGED_CALLS, 1)
+    Threads.atomic_add!(_GPU_STAGED_BYTES, bytes)
+    return result
+end
+
 function _gpu_awareness(adapter::ParallelGPUAdapter, comm, buffer)
     device = adapter.device(buffer)
     key = (objectid(comm), adapter.name, device)
     entry = lock(_GPU_AWARENESS_LOCK) do
+        filter!(pair -> pair.second.comm.value !== nothing, _GPU_AWARENESS)
         current = get(_GPU_AWARENESS, key, nothing)
         if current === nothing || current.comm.value !== comm
             current = _GPUAwarenessEntry(WeakRef(comm), ReentrantLock(), false, false)
+            if length(_GPU_AWARENESS) >= _GPU_AWARENESS_LIMIT
+                delete!(_GPU_AWARENESS, first(keys(_GPU_AWARENESS)))
+            end
             _GPU_AWARENESS[key] = current
         end
         current
@@ -211,20 +374,24 @@ end
 
 function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int)
     root_owner = _parallel_root_buffer(owner)
-    logical_id = objectid(owner)
+    logical_region = _parallel_logical_region(owner)
+    logical_id = hash(logical_region)
     device = adapter.device(root_owner)
     signature = (objectid(comm), adapter.name, device, eltype(owner), n)
-    key = (logical_id, objectid(root_owner), signature)
+    key = (logical_region, objectid(root_owner), signature)
 
     found = lock(_GPU_STAGING_LOCK) do
-        filter!(pair -> pair.second.root_owner.value !== nothing, _GPU_STAGING)
         entry = get(_GPU_STAGING, key, nothing)
         if entry !== nothing && entry.logical_id == logical_id &&
-           entry.root_owner.value === root_owner
+           entry.root_owner.value === root_owner &&
+           (entry.logical_owner.value === nothing ||
+            entry.logical_owner.value === owner)
+            entry.logical_owner = WeakRef(owner)
             _GPU_CACHE_TICK[] += 1
             entry.tick = _GPU_CACHE_TICK[]
             return entry
         end
+        filter!(pair -> pair.second.root_owner.value !== nothing, _GPU_STAGING)
         nothing
     end
     found === nothing || return found
@@ -233,13 +400,16 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int)
     # global cache lock.
     buffer = adapter.allocate_pinned(eltype(owner), n)
     candidate = _GPUStagingEntry(
-        WeakRef(root_owner), logical_id, signature, buffer,
+        WeakRef(root_owner), WeakRef(owner), logical_id, signature, buffer,
         ReentrantLock(), UInt64(0),
     )
     return lock(_GPU_STAGING_LOCK) do
         existing = get(_GPU_STAGING, key, nothing)
         if existing !== nothing && existing.logical_id == logical_id &&
-           existing.root_owner.value === root_owner
+           existing.root_owner.value === root_owner &&
+           (existing.logical_owner.value === nothing ||
+            existing.logical_owner.value === owner)
+            existing.logical_owner = WeakRef(owner)
             return existing
         end
         filter!(pair -> pair.second.root_owner.value !== nothing, _GPU_STAGING)
@@ -445,6 +615,8 @@ exact MPI collective required by their layout.
 function exchange!(send, receive, comm;
                    adapter=_parallel_gpu_adapter(send),
                    collective=MPI.Alltoall!)
+    alias_flags = Base.mightalias(send, receive) ? UInt32(0x2000) : UInt32(0)
+    _collective_validation_error(comm, alias_flags, :exchange)
     receive_adapter = _parallel_gpu_adapter(receive)
     if adapter === nothing && receive_adapter === nothing
         return collective(send, receive, comm)
@@ -534,23 +706,27 @@ function _validate_parallel_storage!(comm, operation::Symbol, values...;
 end
 
 function _dist_transpose_gpu_analysis!(adapter, plan, output, input)
-    return _dist_transpose_gpu_analysis!(Val(adapter.name), plan, output, input)
+    return _dist_transpose_gpu_analysis!(
+        Val(adapter.name), adapter, plan, output, input,
+    )
 end
 
 function _dist_transpose_gpu_synthesis!(adapter, plan, output, input)
-    return _dist_transpose_gpu_synthesis!(Val(adapter.name), plan, output, input)
+    return _dist_transpose_gpu_synthesis!(
+        Val(adapter.name), adapter, plan, output, input,
+    )
 end
 
 
 function _dist_transpose_gpu_vector_analysis!(adapter, plan, Sout, Tout, Vt, Vp)
     return _dist_transpose_gpu_vector_analysis!(
-        Val(adapter.name), plan, Sout, Tout, Vt, Vp,
+        Val(adapter.name), adapter, plan, Sout, Tout, Vt, Vp,
     )
 end
 
 function _dist_transpose_gpu_vector_synthesis!(adapter, plan, Vt, Vp, Sin, Tin)
     return _dist_transpose_gpu_vector_synthesis!(
-        Val(adapter.name), plan, Vt, Vp, Sin, Tin,
+        Val(adapter.name), adapter, plan, Vt, Vp, Sin, Tin,
     )
 end
 

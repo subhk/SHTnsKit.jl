@@ -50,10 +50,30 @@ Base.copyto!(destination::MockMultiDeviceArray,
              source::MockMultiDeviceArray) =
     (copyto!(destination.data, source.data); destination)
 
+let extension = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
+    Core.eval(extension, Meta.parse("""
+        function _dist_transpose_gpu_analysis!(
+                ::Val{:mock_native_scope}, adapter, callback::Function,
+                output::Main.MockMultiDeviceArray,
+                input::Main.MockMultiDeviceArray)
+            return _with_owner_device(adapter, input) do
+                callback()
+                output
+            end
+        end
+    """))
+end
+
 function _cache_temporary_view!(extension, adapter, comm)
     root = MockMultiDeviceArray(reshape(Float32.(1:4), 2, 2), 1)
     extension._staging_entry(adapter, comm, view(root, 1, :), 2)
     return WeakRef(root)
+end
+
+function _cache_temporary_logical_view!(extension, adapter, comm, root)
+    logical = view(root, 1, :)
+    extension._staging_entry(adapter, comm, logical, length(logical))
+    return WeakRef(logical)
 end
 
 function _mpi_gpu_place(array_type, values::AbstractArray, decomposition, comm)
@@ -317,6 +337,42 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
             @test device_of(prototype_result) == devices[1]
             current_probe = array_type{Float32}(undef, 1)
             @test device_of(current_probe) == devices[2]
+
+            # Prototype-derived Pencil/PencilFFT/workspace construction occurs
+            # on the prototype allocation's device and restores the caller.
+            activate_device!(devices[1])
+            constructor_cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
+            prototype_pen = PencilArrays.Pencil(
+                array_type, (constructor_cfg.nlon, constructor_cfg.nlat),
+                (2,), MPI.COMM_SELF,
+            )
+            constructor_prototype = PencilArrays.PencilArray{Float32}(
+                undef, prototype_pen, 1,
+            )
+            activate_device!(devices[2])
+            prototype_plan = SHTnsKit.DistTransposePlan(
+                constructor_cfg; comm=MPI.COMM_SELF, nlev=1,
+                prototype=constructor_prototype,
+            )
+            @test device_of(parent(prototype_plan.F_buf)) == devices[1]
+            @test device_of(parent(prototype_plan.F_buf2)) == devices[1]
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+            @test_throws ArgumentError SHTnsKit.DistTransposePlan(
+                constructor_cfg; comm=MPI.COMM_SELF, nlev=1,
+                prototype=constructor_prototype, array_type=Array,
+            )
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+
+            activate_device!(devices[1])
+            native_input = SHTnsKit.allocate_spatial(prototype_plan)
+            native_output = SHTnsKit.allocate_spectral(prototype_plan)
+            fill!(parent(native_input), Float32(0.125))
+            activate_device!(devices[2])
+            @test SHTnsKit.dist_analysis!(
+                prototype_plan, native_output, native_input,
+            ) === native_output
+            @test device_of(parent(native_output)) == devices[1]
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
 
             # hardware multi-device context and rejection
             # Staged copies and direct device collectives select the buffer's
@@ -1068,6 +1124,12 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
             @test cfg.cs_phase
             @test !cfg.real_norm
             staged_before = extension.parallel_gpu_stats().staged_calls
+            forced_staged_adapter = extension.ParallelGPUAdapter(
+                Symbol(vendor, :_native_forced_staged), adapter.matches,
+                adapter.array_type, adapter.device, adapter.with_device,
+                _ -> false, adapter.synchronize, adapter.allocate_pinned,
+                adapter.device_to_host!, adapter.host_to_device!,
+            )
             for nlev in (1, 2, 5)
                 plan = SHTnsKit.DistTransposePlan(
                     cfg; comm, nlev, array_type, real_type=RT,
@@ -1144,7 +1206,48 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
                 )
                 @test MPI.Allreduce(qst_error, MPI.MAX, comm) <= 4tol
                 _mpi_gpu_assert_resident((Vr, Vt, Vp, Q, S, T), is_vendor)
-                @test extension.parallel_gpu_stats().staged_calls == staged_before
+
+                # Force the non-aware production branch independently of the
+                # local MPI build. The cached CPU PencilFFT performs all MPI
+                # transposes while native GPU Legendre kernels/storage remain
+                # active. nlev is the native batch dimension (1/2/5).
+                forced_before = extension.parallel_gpu_stats().staged_calls
+                _mpi_gpu_fill_native_spatial!(Vr, refs.Vr)
+                _mpi_gpu_fill_native_spatial!(Vt, refs.Vt)
+                _mpi_gpu_fill_native_spatial!(Vp, refs.Vp)
+                extension._dist_transpose_gpu_analysis!(
+                    forced_staged_adapter, plan, Q, Vr,
+                )
+                extension._dist_transpose_gpu_vector_analysis!(
+                    forced_staged_adapter, plan, S, T, Vt, Vp,
+                )
+                @test MPI.Allreduce(max(
+                    _mpi_gpu_native_spectral_error(
+                        Q, refs.Qanalysis, plan.m_local,
+                    ),
+                    _mpi_gpu_native_spectral_error(
+                        S, refs.Sanalysis, plan.m_local,
+                    ),
+                    _mpi_gpu_native_spectral_error(
+                        T, refs.Tanalysis, plan.m_local,
+                    ),
+                ), MPI.MAX, comm) <= 4tol
+                _mpi_gpu_fill_native_spectral!(Q, refs.Q, plan.m_local)
+                _mpi_gpu_fill_native_spectral!(S, refs.S, plan.m_local)
+                _mpi_gpu_fill_native_spectral!(T, refs.T, plan.m_local)
+                extension._dist_transpose_gpu_synthesis!(
+                    forced_staged_adapter, plan, Vr, Q,
+                )
+                extension._dist_transpose_gpu_vector_synthesis!(
+                    forced_staged_adapter, plan, Vt, Vp, S, T,
+                )
+                @test MPI.Allreduce(max(
+                    _mpi_gpu_native_spatial_error(Vr, refs.Vr),
+                    _mpi_gpu_native_spatial_error(Vt, refs.Vt),
+                    _mpi_gpu_native_spatial_error(Vp, refs.Vp),
+                ), MPI.MAX, comm) <= 4tol
+                @test extension.parallel_gpu_stats().staged_calls ==
+                      forced_before + 6
 
                 if nlev == 2
                     # QST must reject the complete six-array payload before
@@ -1199,7 +1302,7 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
                     MPI.Barrier(comm)
                 end
             end
-            @test extension.parallel_gpu_stats().staged_calls == staged_before
+            @test extension.parallel_gpu_stats().staged_calls >= staged_before + 18
         end
 
         @testset "repeated-plan cache and residency" begin
@@ -1411,6 +1514,32 @@ function test_mpi_gpu_policy(extension)
 
     # Device scopes restore caller state after copy and MPI exceptions.
     context_aware[] = false
+
+    # Native vendor dispatch itself must select the allocation's physical
+    # device and restore the caller's device on success and failure. This
+    # covers vendor kernels as well as their direct PencilFFT calls.
+    native_scope_adapter = extension.ParallelGPUAdapter(
+        :mock_native_scope,
+        context_adapter.matches, context_adapter.array_type,
+        context_adapter.device, context_adapter.with_device,
+        context_adapter.gpu_aware, context_adapter.synchronize,
+        context_adapter.allocate_pinned, context_adapter.device_to_host!,
+        context_adapter.host_to_device!,
+    )
+    MOCK_CURRENT_DEVICE[] = 2
+    native_callback_device = Ref(0)
+    @test extension._dist_transpose_gpu_analysis!(
+        native_scope_adapter,
+        () -> (native_callback_device[] = MOCK_CURRENT_DEVICE[]),
+        context_receive, context_value,
+    ) === context_receive
+    @test native_callback_device[] == 1
+    @test MOCK_CURRENT_DEVICE[] == 2
+    @test_throws ErrorException extension._dist_transpose_gpu_analysis!(
+        native_scope_adapter, () -> error("native kernel failed"),
+        context_receive, context_value,
+    )
+    @test MOCK_CURRENT_DEVICE[] == 2
     context_copy_error[] = true
     empty!(context_events)
     extension.parallel_gpu_clear_caches!()
@@ -1466,6 +1595,34 @@ function test_mpi_gpu_policy(extension)
     @test extension.parallel_gpu_stats() == before_cross_device
     MPI.Barrier(MPI.COMM_SELF)
 
+    # Original send/receive aliasing is rejected before either policy branch,
+    # callback, traffic counters, or mutation. Distinct overlapping views are
+    # just as invalid as exact identity.
+    alias_root = MockMultiDeviceArray(Float32[1, 2, 3, 4], 1)
+    alias_cases = (
+        (view(alias_root, 1:3), view(alias_root, 1:3)),
+        (view(alias_root, 1:3), view(alias_root, 2:4)),
+    )
+    for aware in (false, true), (send_alias, receive_alias) in alias_cases
+        context_aware[] = aware
+        alias_sentinel = copy(alias_root.data)
+        alias_callbacks = Ref(0)
+        alias_stats = extension.parallel_gpu_stats()
+        @test_throws ArgumentError extension.exchange!(
+            send_alias, receive_alias, MPI.COMM_SELF;
+            adapter=context_adapter,
+            collective=(_send, receive, _comm) -> begin
+                alias_callbacks[] += 1
+                fill!(receive, -1)
+            end,
+        )
+        @test alias_root.data == alias_sentinel
+        @test alias_callbacks[] == 0
+        @test extension.parallel_gpu_stats() == alias_stats
+        MPI.Barrier(MPI.COMM_SELF)
+    end
+    context_aware[] = false
+
     extension.parallel_gpu_clear_caches!()
     multi_host_allocations[] = 0
     # Equal-size logical views of one allocation need independent staging
@@ -1487,6 +1644,22 @@ function test_mpi_gpu_policy(extension)
         first_view, second_view; validate_storage=false,
     ) == 46
     @test multi_host_allocations[] == 2
+
+    # Wrapper signatures must retain the wrapped logical region. Equal-shape
+    # reshapes over different views of one root need separate, reusable slots.
+    extension.parallel_gpu_clear_caches!()
+    multi_host_allocations[] = 0
+    first_reshape = reshape(view(multi, 1, :), 1, :)
+    second_reshape = reshape(view(multi, 2, :), 1, :)
+    for _ in 1:2
+        @test extension._staged_gpu_call(
+            multi_adapter, :distinct_wrapped_views, multi_comm,
+            (first_host, second_host) -> sum(10 .* first_host .+ second_host),
+            first_reshape, second_reshape; validate_storage=false,
+        ) == 46
+    end
+    @test multi_host_allocations[] == 2
+    @test extension.parallel_gpu_cache_sizes().staging == 2
 
     # Out-of-place restoration must allocate on the prototype's physical
     # device, not whichever device happens to be current in this task.
@@ -1532,12 +1705,14 @@ function test_mpi_gpu_policy(extension)
     end
     extension.parallel_gpu_clear_caches!()
     extension.parallel_gpu_cache_limit!(length(wrappers) + 1)
-    for wrapper in wrappers
-        extension._staging_entry(
-            multi_adapter, multi_comm, wrapper, length(wrapper),
-        )
+    GC.@preserve wrappers begin
+        for wrapper in wrappers
+            extension._staging_entry(
+                multi_adapter, multi_comm, wrapper, length(wrapper),
+            )
+        end
+        @test extension.parallel_gpu_cache_sizes().staging == length(wrappers)
     end
-    @test extension.parallel_gpu_cache_sizes().staging == length(wrappers)
 
     # Live logical wrappers cannot make the registry exceed its cap, and a
     # cached view does not keep its physical allocation alive.
@@ -1555,6 +1730,40 @@ function test_mpi_gpu_policy(extension)
     GC.gc(true)
     @test weak_root.value === nothing
     @test extension.parallel_gpu_cache_sizes().staging == 0
+
+    # A dead logical view must be removable even while its allocation root is
+    # still live; the cache must not retain entries by objectid alone.
+    extension.parallel_gpu_clear_caches!()
+    live_root = MockMultiDeviceArray(reshape(Float32.(1:4), 2, 2), 1)
+    weak_logical = _cache_temporary_logical_view!(
+        extension, multi_adapter, multi_comm, live_root,
+    )
+    @test length(extension._GPU_STAGING) == 1
+    GC.gc(true)
+    @test weak_logical.value === nothing
+    extension.parallel_gpu_cache_sizes()
+    @test length(extension._GPU_STAGING) == 1
+    reused_region = view(live_root, 1, :)
+    before_region_reuse = multi_host_allocations[]
+    extension._staging_entry(
+        multi_adapter, multi_comm, reused_region, length(reused_region),
+    )
+    @test multi_host_allocations[] == before_region_reuse
+    @test length(extension._GPU_STAGING) <= extension._GPU_STAGING_LIMIT[]
+
+    # Awareness registries purge dead communicator identities and remain
+    # bounded even when many live subcommunicators are observed.
+    extension.parallel_gpu_clear_caches!()
+    awareness_comms = [Ref(Symbol(:awareness_comm_, n)) for n in 1:80]
+    for awareness_comm in awareness_comms
+        extension._gpu_awareness(multi_adapter, awareness_comm, multi)
+    end
+    @test length(extension._GPU_AWARENESS) <= 64
+    empty!(awareness_comms)
+    awareness_comm = nothing
+    GC.gc(true)
+    extension.parallel_gpu_cache_sizes()
+    @test length(extension._GPU_AWARENESS) == 0
 
     extension.parallel_gpu_clear_caches!()
     extension.parallel_gpu_cache_limit!(8)
@@ -1842,12 +2051,16 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
         @test occursin(wrapper, parallel_gpu)
     end
     @test occursin("logical_id", parallel_gpu)
+    @test occursin("logical_owner", parallel_gpu)
     @test occursin("adapter.with_device(device)", parallel_gpu)
     @test occursin("_with_owner_device", parallel_gpu)
     @test occursin("_device_to_host_snapshot!", parallel_gpu)
     @test occursin("_host_to_device_snapshot!", parallel_gpu)
     @test occursin("local_device_mismatch", parallel_gpu)
     @test occursin("_validate_parallel_storage!(comm, :exchange", parallel_gpu)
+    @test occursin("Base.mightalias", parallel_gpu)
+    @test occursin("_gpu_transpose_forward!", parallel_gpu)
+    @test occursin("_gpu_transpose_inverse!", parallel_gpu)
     @test !occursin("using CUDA", parallel_gpu)
     @test !occursin("using AMDGPU", parallel_gpu)
 
@@ -1860,6 +2073,14 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test occursin(vendor === :cuda ? "CUDA.device(" : "AMDGPU.device(", source)
     @test occursin(vendor === :cuda ? "CUDA.device!(f, device)" :
                                     "AMDGPU.device!(f, device)", source)
+    @test occursin("n == 0 && return Vector{T}(undef, 0)", source)
+    @test occursin("_gpu_transpose_forward!", source)
+    @test occursin("_gpu_transpose_inverse!", source)
+    empty_pinned = vendor === :cuda ?
+        compound_extension._cuda_pinned(Float32, 0) :
+        compound_extension._amdgpu_pinned(Float32, 0)
+    @test empty_pinned isa Vector{Float32}
+    @test isempty(empty_pinned)
 
     runner_file = vendor === :cuda ?
         joinpath(root, "test", "gpu", "cuda", "mpi_runtests.jl") :
@@ -1936,6 +2157,10 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
         joinpath(root, "ext", "ParallelTransposeTransforms.jl"), String,
     )
     @test occursin("plan.F_buf, plan.F_buf2, all_values...", transpose_source)
+    @test occursin("_scalar_precision_code(real_type)", transpose_source)
+    @test occursin("comm, communicator(prototype)", transpose_source)
+    @test occursin("array_type === prototype_array_type", transpose_source)
+    @test occursin("_with_owner_device", transpose_source)
 
     # Dealiased decompositions may leave a rank owning only Fourier bins above
     # mmax. The native kernel offset must still be the rank's real first bin,

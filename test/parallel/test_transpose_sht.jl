@@ -38,6 +38,42 @@ const rank = MPI.Comm_rank(comm)
     rank == 0 && println("DistTransposePlan construction OK on $(MPI.Comm_size(comm)) rank(s)")
 end
 
+@testset "DistTransposePlan collective constructor validation" begin
+    cfg = create_gauss_config(4, 7; nlon=10)
+    world_pen = PencilArrays.Pencil(
+        Array, (cfg.nlon, cfg.nlat), (2,), comm,
+    )
+    varying_prototype = if iseven(rank)
+        PencilArray{Float32}(undef, world_pen, 1)
+    else
+        PencilArray{Float64}(undef, world_pen, 1)
+    end
+    caught = false
+    try
+        DistTransposePlan(cfg; comm, nlev=1, prototype=varying_prototype)
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+
+    self_pen = PencilArrays.Pencil(
+        Array, (cfg.nlon, cfg.nlat), (2,), MPI.COMM_SELF,
+    )
+    self_prototype = PencilArray{Float64}(undef, self_pen, 1)
+    varying_comm_prototype = iseven(rank) ? self_prototype :
+                             PencilArray{Float64}(undef, world_pen, 1)
+    caught = false
+    try
+        DistTransposePlan(cfg; comm, nlev=1,
+                          prototype=varying_comm_prototype)
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+end
+
 @testset "transpose dist_analysis! vs serial (scalar)" begin
     for lmax in (32, 64)
         nlat = lmax + 2; nlon = 2 * lmax + 1

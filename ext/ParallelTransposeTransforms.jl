@@ -116,16 +116,26 @@ function SHTnsKit.DistTransposePlan(
     constructor_flags = UInt32(0)
     nlev > 0 || (constructor_flags |= 0x0001)
     use_rfft || (constructor_flags |= 0x0010)
-    real_type in (Float32, Float64) || (constructor_flags |= 0x0004)
+    precision_code = _scalar_precision_code(real_type)
+    precision_code in (1, 3) || (constructor_flags |= 0x0004)
     array_type <: AbstractArray || (constructor_flags |= 0x20000)
     MPI.Allreduce(nlev, min, comm) == MPI.Allreduce(nlev, max, comm) ||
         (constructor_flags |= 0x0001)
     MPI.Allreduce(Int(with_vector), min, comm) ==
         MPI.Allreduce(Int(with_vector), max, comm) ||
         (constructor_flags |= 0x0004)
+    MPI.Allreduce(precision_code, min, comm) ==
+        MPI.Allreduce(precision_code, max, comm) ||
+        (constructor_flags |= 0x0004)
+    if prototype !== nothing
+        prototype_array_type = _parallel_array_type(prototype)
+        array_type === prototype_array_type || (constructor_flags |= 0x20000)
+    end
     _collective_validation_error(comm, constructor_flags, :DistTransposePlan)
     if prototype !== nothing
-        _validate_explicit_comm!(communicator(prototype), comm, :DistTransposePlan)
+        _validate_explicit_comm!(
+            comm, communicator(prototype), :DistTransposePlan,
+        )
         _validate_parallel_storage!(comm, :DistTransposePlan, prototype)
     end
     use_rfft || error("DistTransposePlan currently requires use_rfft=true")
@@ -136,18 +146,29 @@ function SHTnsKit.DistTransposePlan(
     # 1. Build the PencilFFTs plan: global (φ, θ) = (nlon, nlat),
     #    rFFT on dim1 (φ), NoTransform on dim2 (θ).
     #    extra_dims=(nlev,) carries radial levels as a trailing LOCAL dimension.
-    input_pencil = Pencil(array_type, (nlon, nlat), (2,), comm)
-    fft_plan = PencilFFTPlan(
-        input_pencil,
-        (Transforms.RFFT(), Transforms.NoTransform()),
-        real_type;
-        extra_dims = (nlev,),
-    )
-
-    # 2. Allocate the spectral output buffer: shape (m_local, θ_ALL, nlev),
-    #    decomposed on dim1 (m).
-    F_buf  = allocate_output(fft_plan)
-    F_buf2 = allocate_output(fft_plan)   # second buffer for vector (sphtor) component
+    construct_plans = function()
+        input_pencil = Pencil(array_type, (nlon, nlat), (2,), comm)
+        fft_plan = PencilFFTPlan(
+            input_pencil,
+            (Transforms.RFFT(), Transforms.NoTransform()),
+            real_type;
+            extra_dims = (nlev,),
+        )
+        F_buf = allocate_output(fft_plan)
+        F_buf2 = allocate_output(fft_plan)
+        spectral_pencil = Pencil(
+            array_type, (lmax + 1, nlon ÷ 2 + 1), (2,), comm,
+        )
+        (; fft_plan, F_buf, F_buf2, spectral_pencil)
+    end
+    constructed = if prototype === nothing
+        construct_plans()
+    else
+        adapter = _parallel_gpu_adapter(parent(prototype))
+        adapter === nothing ? construct_plans() :
+            _with_owner_device(construct_plans, adapter, prototype)
+    end
+    (; fft_plan, F_buf, F_buf2, spectral_pencil) = constructed
 
     # 3. Determine which m values this rank owns (from F_buf's pencil).
     #    dim1 of F_buf's pencil is the m dimension (after the internal FFT+transpose).
@@ -173,8 +194,6 @@ function SHTnsKit.DistTransposePlan(
     #    For the canonical grid nbin == mmax+1 so this is bitwise-identical to the old
     #    (lmax+1, mmax+1) pencil; for dealiased grids the extra (m > mmax) columns are
     #    unused/zero and the irFFT zero-pads them on synthesis.
-    spectral_pencil = Pencil(array_type, (lmax + 1, nbin), (2,), comm)
-
     # 5. Assert alignment: the leading m-columns of spectral_pencil (dim2, 0-based,
     #    restricted to ≤ mmax) must equal m_local.  This catches any future
     #    divergence in distribution strategies between the FFT and spectral pencils.

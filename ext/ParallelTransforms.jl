@@ -2937,7 +2937,7 @@ function _validate_qst_spatial_inputs!(cfg::SHTnsKit.SHTConfig,
                                        Vt::PencilArray,
                                        Vp::PencilArray;
                                        use_rfft::Bool,
-                                       comm=MPI.COMM_WORLD)
+                                       comm=communicator(Vr))
     _validate_qst_pencil_communicators!(
         comm, (Vr, Vt, Vp), :analysis_qst,
     )
@@ -2963,7 +2963,7 @@ function _validate_qst_synthesis_inputs!(cfg::SHTnsKit.SHTConfig,
                                          prototype::PencilArray;
                                          real_output::Bool,
                                          use_rfft::Bool,
-                                         comm=MPI.COMM_WORLD)
+                                         comm=communicator(Qlm))
     _validate_qst_pencil_communicators!(
         comm, (Qlm, Slm, Tlm, prototype), :synthesis_qst,
     )

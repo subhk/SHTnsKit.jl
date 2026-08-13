@@ -31,7 +31,7 @@ end
 function _validate_operator_pencils!(cfg, input::PencilArray,
                                      output::PencilArray,
                                      operation::Symbol;
-                                     comm=MPI.COMM_WORLD)
+                                     comm=communicator(input))
     _validate_qst_pencil_communicators!(comm, (input, output), operation)
     _validate_cfg_replicated(cfg, comm)
     expected = (cfg.lmax + 1, cfg.mmax + 1)
@@ -86,7 +86,7 @@ end
 In-place multiply by -l(l+1) for distributed Alm with dims (:l,:m). No communication.
 """
 function SHTnsKit.dist_apply_laplacian!(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray)
-    comm = MPI.COMM_WORLD
+    comm = communicator(Alm_pencil)
     _validate_qst_pencil_communicators!(comm, (Alm_pencil,), :dist_apply_laplacian!)
     _validate_cfg_replicated(cfg, comm)
     _validate_scalar_pencil!(

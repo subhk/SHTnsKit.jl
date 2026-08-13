@@ -67,6 +67,87 @@ function _mpi_gpu_collect(value::PencilArrays.PencilArray, comm)
     return global_value
 end
 
+_mpi_gpu_collect_any(value::PencilArrays.PencilArray, comm) =
+    _mpi_gpu_collect(value, comm)
+_mpi_gpu_collect_any(value::AbstractArray, _comm) = Array(value)
+
+function _mpi_gpu_fill_native_spatial!(destination, fields)
+    ranges = PencilArrays.range_local(PencilArrays.pencil(destination))
+    host = Array{eltype(destination)}(undef, size(parent(destination)))
+    @inbounds for lev in axes(host, 3), local_θ in axes(host, 2),
+                  local_φ in axes(host, 1)
+        host[local_φ, local_θ, lev] =
+            fields[lev][ranges[2][local_θ], ranges[1][local_φ]]
+    end
+    copyto!(parent(destination), host)
+    return destination
+end
+
+function _mpi_gpu_fill_native_spectral!(destination, coefficients, m_local)
+    host = zeros(eltype(destination), size(parent(destination)))
+    @inbounds for lev in axes(host, 3), (local_m, m) in enumerate(m_local),
+                  l in m:(size(host, 1) - 1)
+        host[l + 1, local_m, lev] = coefficients[lev][l + 1, m + 1]
+    end
+    copyto!(parent(destination), host)
+    return destination
+end
+
+function _mpi_gpu_native_spectral_error(value, references, m_local)
+    host = Array(parent(value))
+    error = zero(typeof(abs(zero(eltype(host)))))
+    @inbounds for lev in axes(host, 3), (local_m, m) in enumerate(m_local),
+                  l in m:(size(host, 1) - 1)
+        error = max(error, abs(
+            host[l + 1, local_m, lev] - references[lev][l + 1, m + 1],
+        ))
+    end
+    return error
+end
+
+function _mpi_gpu_native_spatial_error(value, references)
+    ranges = PencilArrays.range_local(PencilArrays.pencil(value))
+    host = Array(parent(value))
+    error = zero(eltype(host))
+    @inbounds for lev in axes(host, 3), local_θ in axes(host, 2),
+                  local_φ in axes(host, 1)
+        error = max(error, abs(
+            host[local_φ, local_θ, lev] -
+            references[lev][ranges[2][local_θ], ranges[1][local_φ]],
+        ))
+    end
+    return error
+end
+
+function _mpi_gpu_native_references(cfg, ::Type{RT}, nlev) where {RT}
+    CT = Complex{RT}
+    Q = [zeros(CT, cfg.lmax + 1, cfg.mmax + 1) for _ in 1:nlev]
+    S = [zeros(CT, cfg.lmax + 1, cfg.mmax + 1) for _ in 1:nlev]
+    T = [zeros(CT, cfg.lmax + 1, cfg.mmax + 1) for _ in 1:nlev]
+    for lev in 1:nlev, m in 0:cfg.mmax, l in m:cfg.lmax
+        scale = RT(0.025 * (lev + 1) / (l + 1)^2)
+        imag_scale = m == 0 ? zero(RT) : RT(0.35) * scale
+        Q[lev][l + 1, m + 1] = CT(scale, imag_scale)
+        if l > 0
+            S[lev][l + 1, m + 1] = CT(RT(0.7) * scale, -imag_scale)
+            T[lev][l + 1, m + 1] = CT(-RT(0.4) * scale, RT(0.2) * imag_scale)
+        end
+    end
+    Vr = [SHTnsKit.synthesis(cfg, Q[lev]; real_output=true) for lev in 1:nlev]
+    vector = [SHTnsKit.synthesis_sphtor(
+        cfg, S[lev], T[lev]; real_output=true,
+    ) for lev in 1:nlev]
+    Vt = [vector[lev][1] for lev in 1:nlev]
+    Vp = [vector[lev][2] for lev in 1:nlev]
+    Qanalysis = [SHTnsKit.analysis(cfg, Vr[lev]) for lev in 1:nlev]
+    STanalysis = [SHTnsKit.analysis_sphtor(
+        cfg, Vt[lev], Vp[lev],
+    ) for lev in 1:nlev]
+    Sanalysis = [STanalysis[lev][1] for lev in 1:nlev]
+    Tanalysis = [STanalysis[lev][2] for lev in 1:nlev]
+    return (; Q, S, T, Vr, Vt, Vp, Qanalysis, Sanalysis, Tanalysis)
+end
+
 @inline function _mpi_gpu_assert_resident(value, is_vendor)
     if value isa PencilArrays.PencilArray
         @test is_vendor(parent(value))
@@ -191,15 +272,16 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
     # GPU) validate values as well as residency for scalar, vector and QST.
     shared_axes = (
         grid_kinds=(:gauss,), precisions=(Float32, Float64), mres_values=(1,),
-        norms=(:orthonormal,), real_norm_values=(false,),
-        cs_phase_values=(true,), pole_orders=(false,),
+        norms=(:orthonormal, :fourpi, :schmidt),
+        real_norm_values=(false, true),
+        cs_phase_values=(false, true), pole_orders=(false,),
     )
     run_scalar_full_parity(MPIGPUScalarAdapter(array_type, is_vendor, comm);
                            shared_axes...)
     run_sphtor_full_parity(MPIGPUVectorAdapter(array_type, is_vendor, comm);
-        shared_axes..., robert_values=(false,))
+        shared_axes..., robert_values=(false, true))
     run_qst_full_parity(MPIGPUQSTAdapter(array_type, is_vendor, comm);
-        shared_axes..., robert_values=(false,))
+        shared_axes..., robert_values=(false, true))
 
     @testset "actual allocation device cache key" begin
         # A buffer allocated on device 1 remains keyed to device 1 even while
@@ -264,21 +346,113 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
             _mpi_gpu_assert_resident(SHTnsKit.analysis_qst(cfg, qst...), is_vendor)
         end
 
+        @testset "scalar packed complex axisym _l _ml compatibility" begin
+            Q = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+            Q[1, 1] = RT(0.18)
+            Q[2, 1] = RT(-0.07)
+            Q[3, 2] = CT(RT(0.04), RT(-0.03))
+            field = SHTnsKit.synthesis(cfg, Q; real_output=true)
+            field_device = _mpi_gpu_place(array_type, field, (1,), comm)
+            for ltr in (2, cfg.lmax)
+                packed = SHTnsKit.analysis_packed_l(cfg, field_device, ltr)
+                _mpi_gpu_assert_resident(packed, is_vendor)
+                @test vec(_mpi_gpu_collect(packed, comm)) ≈
+                      SHTnsKit.analysis_packed_l(cfg, vec(field), ltr) atol=tol rtol=tol
+                rebuilt = SHTnsKit.synthesis_packed_l(
+                    cfg, packed, ltr; prototype_θφ=field_device,
+                )
+                @test _mpi_gpu_collect(rebuilt, comm) ≈
+                      reshape(SHTnsKit.synthesis_packed_l(
+                          cfg, SHTnsKit.pack_lm(cfg, Q), ltr,
+                      ), cfg.nlat, cfg.nlon) atol=tol rtol=tol
+            end
+
+            complex_field = complex.(field, RT(0.2) .* field)
+            complex_device = _mpi_gpu_place(
+                array_type, complex_field, (1,), comm,
+            )
+            complex_packed = SHTnsKit.analysis_packed_cplx_l(
+                cfg, complex_device, 2,
+            )
+            _mpi_gpu_assert_resident(complex_packed, is_vendor)
+            @test vec(_mpi_gpu_collect(complex_packed, comm)) ≈
+                  SHTnsKit.analysis_packed_cplx_l(
+                      cfg, vec(complex_field), 2,
+                  ) atol=4tol rtol=4tol
+            complex_rebuilt = SHTnsKit.synthesis_packed_cplx_l(
+                cfg, complex_packed, 2; prototype_θφ=complex_device,
+            )
+            @test _mpi_gpu_collect(complex_rebuilt, comm) ≈
+                  reshape(SHTnsKit.synthesis_packed_cplx_l(
+                      cfg, vec(_mpi_gpu_collect(complex_packed, comm)), 2,
+                  ), cfg.nlat, cfg.nlon) atol=4tol rtol=4tol
+
+            axisym = CT[RT(0.2), RT(-0.08), RT(0.04), RT(-0.01)]
+            axisym_field = SHTnsKit.synthesis_axisym(cfg, axisym)
+            axisym_device = _mpi_gpu_place(
+                array_type, axisym_field, (1,), comm,
+            )
+            axisym_back = SHTnsKit.analysis_axisym_l(
+                cfg, axisym_device, 2,
+            )
+            _mpi_gpu_assert_resident(axisym_back, is_vendor)
+            @test vec(_mpi_gpu_collect(axisym_back, comm)) ≈
+                  SHTnsKit.analysis_axisym_l(cfg, axisym_field, 2) atol=tol rtol=tol
+            @test vec(_mpi_gpu_collect(
+                SHTnsKit.synthesis_axisym_l(cfg, axisym_back, 2), comm,
+            )) ≈ SHTnsKit.synthesis_axisym_l(cfg, axisym, 2) atol=tol rtol=tol
+
+            stored_im = 1
+            mode = SHTnsKit.synthesis_packed_ml(
+                cfg, stored_im, CT[RT(0.1), CT(RT(-0.03), RT(0.02)), RT(0.01)],
+                cfg.lmax,
+            )
+            mode_device = _mpi_gpu_place(array_type, mode, (1,), comm)
+            mode_back = SHTnsKit.analysis_packed_ml(
+                cfg, stored_im, mode_device, cfg.lmax,
+            )
+            _mpi_gpu_assert_resident(mode_back, is_vendor)
+            @test vec(_mpi_gpu_collect(mode_back, comm)) ≈
+                  SHTnsKit.analysis_packed_ml(
+                      cfg, stored_im, mode, cfg.lmax,
+                  ) atol=4tol rtol=4tol
+            mode_synthesized = SHTnsKit.synthesis_packed_ml(
+                cfg, stored_im, mode_back, cfg.lmax,
+            )
+            _mpi_gpu_assert_resident(mode_synthesized, is_vendor)
+            @test vec(_mpi_gpu_collect(mode_synthesized, comm)) ≈
+                  mode atol=4tol rtol=4tol
+
+            dist_packed = SHTnsKit.dist_analysis_packed(cfg, field_device)
+            _mpi_gpu_assert_resident(dist_packed, is_vendor)
+            @test Array(dist_packed) ≈ SHTnsKit.analysis_packed(
+                cfg, vec(field),
+            ) atol=tol rtol=tol
+            dist_field = SHTnsKit.dist_synthesis_packed(
+                cfg, dist_packed; prototype_θφ=field_device,
+            )
+            @test _mpi_gpu_collect_any(dist_field, comm) ≈ field atol=tol rtol=tol
+        end
+
         @testset "batch sizes 1/2/5 and bang identity" begin
             for nfields in (1, 2, 5)
-                fields = PencilArrays.PencilArray{RT}(
-                    undef, PencilArrays.pencil(spatial), nfields,
+                host_fields = cat(
+                    (scalar .* RT(1 + 0.1field) for field in 1:nfields)...;
+                    dims=3,
                 )
-                local_scalar = Array(parent(spatial))
-                host_fields = repeat(reshape(local_scalar, size(local_scalar)..., 1),
-                                     1, 1, nfields)
-                copyto!(parent(fields), host_fields)
+                fields = _mpi_gpu_place(
+                    array_type, host_fields, (1,), comm,
+                )
                 coefficients = SHTnsKit.analysis_batch(cfg, fields)
                 _mpi_gpu_assert_resident(coefficients, is_vendor)
+                @test _mpi_gpu_collect(coefficients, comm) ≈
+                      SHTnsKit.analysis_batch(cfg, host_fields) atol=tol rtol=tol
                 coefficients_bang = similar(coefficients)
                 @test SHTnsKit.analysis_batch!(
                     cfg, coefficients_bang, fields,
                 ) === coefficients_bang
+                @test _mpi_gpu_collect(coefficients_bang, comm) ≈
+                      SHTnsKit.analysis_batch(cfg, host_fields) atol=tol rtol=tol
                 reconstructed = SHTnsKit.synthesis_batch(
                     cfg, coefficients; prototype_θφ=fields,
                 )
@@ -288,6 +462,72 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
                     prototype_θφ=fields,
                 ) === reconstructed_bang
                 _mpi_gpu_assert_resident(reconstructed_bang, is_vendor)
+                @test _mpi_gpu_collect(reconstructed_bang, comm) ≈
+                      host_fields atol=tol rtol=tol
+                complex_scalar = SHTnsKit.synthesis_batch_cplx(
+                    cfg, coefficients; prototype_θφ=fields,
+                )
+                _mpi_gpu_assert_resident(complex_scalar, is_vendor)
+                @test _mpi_gpu_collect(complex_scalar, comm) ≈
+                      SHTnsKit.synthesis_batch_cplx(
+                          cfg, SHTnsKit.analysis_batch(cfg, host_fields),
+                      ) atol=4tol rtol=4tol
+
+                Qbatch = _mpi_gpu_collect(coefficients, comm)
+                Sbatch = RT(0.35) .* Qbatch
+                Tbatch = RT(-0.2) .* Qbatch
+                Sdevice = _mpi_gpu_place(array_type, Sbatch, (2,), comm)
+                Tdevice = _mpi_gpu_place(array_type, Tbatch, (2,), comm)
+                host_vector = SHTnsKit.synthesis_sphtor_batch(
+                    cfg, Sbatch, Tbatch,
+                )
+                Vt = _mpi_gpu_place(array_type, host_vector[1], (1,), comm)
+                Vp = _mpi_gpu_place(array_type, host_vector[2], (1,), comm)
+                analyzed_vector = SHTnsKit.analysis_sphtor_batch(cfg, Vt, Vp)
+                _mpi_gpu_assert_resident(analyzed_vector, is_vendor)
+                @test _mpi_gpu_collect(analyzed_vector[1], comm) ≈
+                      SHTnsKit.analysis_sphtor_batch(
+                          cfg, host_vector[1], host_vector[2],
+                      )[1] atol=4tol rtol=4tol
+                synthesized_vector = SHTnsKit.synthesis_sphtor_batch(
+                    cfg, Sdevice, Tdevice,
+                )
+                @test _mpi_gpu_collect(synthesized_vector[1], comm) ≈
+                      host_vector[1] atol=4tol rtol=4tol
+                complex_vector = SHTnsKit.synthesis_sphtor_batch_cplx(
+                    cfg, Sdevice, Tdevice,
+                )
+                _mpi_gpu_assert_resident(complex_vector, is_vendor)
+                host_complex_vector = SHTnsKit.synthesis_sphtor_batch_cplx(
+                    cfg, Sbatch, Tbatch,
+                )
+                @test _mpi_gpu_collect(complex_vector[1], comm) ≈
+                      host_complex_vector[1] atol=4tol rtol=4tol
+
+                Qdevice = _mpi_gpu_place(array_type, Qbatch, (2,), comm)
+                Vr = _mpi_gpu_place(array_type, host_fields, (1,), comm)
+                analyzed_qst = SHTnsKit.analysis_qst_batch(cfg, Vr, Vt, Vp)
+                _mpi_gpu_assert_resident(analyzed_qst, is_vendor)
+                host_qst_analysis = SHTnsKit.analysis_qst_batch(
+                    cfg, host_fields, host_vector[1], host_vector[2],
+                )
+                @test _mpi_gpu_collect(analyzed_qst[1], comm) ≈
+                      host_qst_analysis[1] atol=4tol rtol=4tol
+                synthesized_qst = SHTnsKit.synthesis_qst_batch(
+                    cfg, Qdevice, Sdevice, Tdevice,
+                )
+                _mpi_gpu_assert_resident(synthesized_qst, is_vendor)
+                @test _mpi_gpu_collect(synthesized_qst[1], comm) ≈
+                      host_fields atol=4tol rtol=4tol
+                complex_qst = SHTnsKit.synthesis_qst_batch_cplx(
+                    cfg, Qdevice, Sdevice, Tdevice,
+                )
+                _mpi_gpu_assert_resident(complex_qst, is_vendor)
+                host_complex_qst = SHTnsKit.synthesis_qst_batch_cplx(
+                    cfg, Qbatch, Sbatch, Tbatch,
+                )
+                @test _mpi_gpu_collect(complex_qst[1], comm) ≈
+                      host_complex_qst[1] atol=4tol rtol=4tol
             end
         end
 
@@ -321,37 +561,474 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
             _mpi_gpu_assert_resident((lap, rotated), is_vendor)
         end
 
-        @testset "native scalar/vector/QST transpose" begin
+        @testset "vector QST _l _ml local gradient all operators" begin
+            Q = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+            S = zero(Q); T = zero(Q)
+            Q[1, 1] = RT(0.2); Q[3, 2] = CT(RT(0.03), RT(-0.02))
+            S[2, 1] = RT(0.1); S[3, 2] = CT(RT(-0.04), RT(0.01))
+            T[2, 1] = RT(-0.05); T[4, 2] = CT(RT(0.02), RT(0.03))
+            Qd = _mpi_gpu_place(array_type, Q, (2,), comm)
+            Sd = _mpi_gpu_place(array_type, S, (2,), comm)
+            Td = _mpi_gpu_place(array_type, T, (2,), comm)
+            Vr_host = SHTnsKit.synthesis(cfg, Q; real_output=true)
+            Vt_host, Vp_host = SHTnsKit.synthesis_sphtor(
+                cfg, S, T; real_output=true,
+            )
+            Vr = _mpi_gpu_place(array_type, Vr_host, (1,), comm)
+            Vt = _mpi_gpu_place(array_type, Vt_host, (1,), comm)
+            Vp = _mpi_gpu_place(array_type, Vp_host, (1,), comm)
+            ltr = 2
+            vector_l = SHTnsKit.analysis_sphtor_l(cfg, Vt, Vp, ltr)
+            qst_l = SHTnsKit.analysis_qst_l(cfg, Vr, Vt, Vp, ltr)
+            _mpi_gpu_assert_resident((vector_l, qst_l), is_vendor)
+            vector_l_ref = SHTnsKit.analysis_sphtor_l(
+                cfg, Vt_host, Vp_host, ltr,
+            )
+            qst_l_ref = SHTnsKit.analysis_qst_l(
+                cfg, Vr_host, Vt_host, Vp_host, ltr,
+            )
+            @test _mpi_gpu_collect(vector_l[1], comm) ≈ vector_l_ref[1] atol=4tol rtol=4tol
+            @test _mpi_gpu_collect(qst_l[1], comm) ≈ qst_l_ref[1] atol=4tol rtol=4tol
+            synthesized_l = SHTnsKit.synthesis_qst_l(
+                cfg, Qd, Sd, Td, ltr; prototype_θφ=Vr,
+            )
+            qst_synthesis_l_ref = SHTnsKit.synthesis_qst_l(
+                cfg, Q, S, T, ltr; real_output=true,
+            )
+            @test _mpi_gpu_collect(synthesized_l[1], comm) ≈
+                  qst_synthesis_l_ref[1] atol=4tol rtol=4tol
+            complex_vector_l = SHTnsKit.synthesis_sphtor_l_cplx(
+                cfg, Sd, Td, ltr; prototype_θφ=Vr,
+            )
+            complex_qst_l = SHTnsKit.synthesis_qst_l_cplx(
+                cfg, Qd, Sd, Td, ltr; prototype_θφ=Vr,
+            )
+            _mpi_gpu_assert_resident((complex_vector_l, complex_qst_l), is_vendor)
+            @test _mpi_gpu_collect(complex_vector_l[1], comm) ≈
+                  SHTnsKit.synthesis_sphtor_l_cplx(
+                      cfg, S, T, ltr,
+                  )[1] atol=4tol rtol=4tol
+            @test _mpi_gpu_collect(complex_qst_l[1], comm) ≈
+                  SHTnsKit.synthesis_qst_l_cplx(
+                      cfg, Q, S, T, ltr,
+                  )[1] atol=4tol rtol=4tol
+            for (operation, reference) in (
+                (SHTnsKit.synthesis_sph_l,
+                 SHTnsKit.synthesis_sph_l(cfg, S, ltr)),
+                (SHTnsKit.synthesis_tor_l,
+                 SHTnsKit.synthesis_tor_l(cfg, T, ltr)),
+                (SHTnsKit.synthesis_grad_l,
+                 SHTnsKit.synthesis_grad_l(cfg, S, ltr)),
+            )
+                input = operation === SHTnsKit.synthesis_tor_l ? Td : Sd
+                value = operation(
+                    cfg, input, ltr; prototype_θφ=Vr,
+                )
+                _mpi_gpu_assert_resident(value, is_vendor)
+                @test _mpi_gpu_collect(value[1], comm) ≈ reference[1] atol=4tol rtol=4tol
+            end
+
+            stored_im = 1
+            m = stored_im * cfg.mres
+            Qm = CT.(Q[(m + 1):end, m + 1])
+            Sm = CT.(S[(m + 1):end, m + 1])
+            Tm = CT.(T[(m + 1):end, m + 1])
+            mode_qst = SHTnsKit.synthesis_qst_ml(
+                cfg, stored_im, Qm, Sm, Tm, cfg.lmax,
+            )
+            mode_devices = map(mode_qst) do value
+                _mpi_gpu_place(array_type, value, (1,), comm)
+            end
+            mode_back = SHTnsKit.analysis_qst_ml(
+                cfg, stored_im, mode_devices..., cfg.lmax,
+            )
+            _mpi_gpu_assert_resident(mode_back, is_vendor)
+            mode_ref = SHTnsKit.analysis_qst_ml(
+                cfg, stored_im, mode_qst..., cfg.lmax,
+            )
+            @test vec(_mpi_gpu_collect(mode_back[1], comm)) ≈
+                  mode_ref[1] atol=4tol rtol=4tol
+            mode_rebuilt = SHTnsKit.synthesis_qst_ml(
+                cfg, stored_im, mode_back..., cfg.lmax,
+            )
+            _mpi_gpu_assert_resident(mode_rebuilt, is_vendor)
+            for component in 1:3
+                @test vec(_mpi_gpu_collect(mode_rebuilt[component], comm)) ≈
+                      mode_qst[component] atol=4tol rtol=4tol
+            end
+            mode_vector = SHTnsKit.synthesis_sphtor_ml(
+                cfg, stored_im, mode_back[2], mode_back[3], cfg.lmax,
+            )
+            _mpi_gpu_assert_resident(mode_vector, is_vendor)
+            @test vec(_mpi_gpu_collect(mode_vector[1], comm)) ≈
+                  mode_qst[2] atol=4tol rtol=4tol
+            for (operation, coefficient, reference) in (
+                (SHTnsKit.synthesis_sph_ml, mode_back[2],
+                 SHTnsKit.synthesis_sph_ml(
+                     cfg, stored_im, mode_ref[2], cfg.lmax,
+                 )),
+                (SHTnsKit.synthesis_tor_ml, mode_back[3],
+                 SHTnsKit.synthesis_tor_ml(
+                     cfg, stored_im, mode_ref[3], cfg.lmax,
+                 )),
+            )
+                value = operation(cfg, stored_im, coefficient, cfg.lmax)
+                _mpi_gpu_assert_resident(value, is_vendor)
+                @test vec(_mpi_gpu_collect(value[1], comm)) ≈
+                      reference[1] atol=4tol rtol=4tol
+            end
+            @test vec(_mpi_gpu_collect(SHTnsKit.synthesis_grad_ml(
+                cfg, stored_im, mode_back[2], cfg.lmax,
+            ), comm)) ≈ SHTnsKit.synthesis_grad_ml(
+                cfg, stored_im, mode_ref[2], cfg.lmax,
+            ) atol=4tol rtol=4tol
+
+            cost = RT(0.31); phi = RT(-0.27); nphi = 7
+            packed_Q = SHTnsKit.pack_lm(cfg, Q)
+            packed_S = SHTnsKit.pack_lm(cfg, S)
+            packed_T = SHTnsKit.pack_lm(cfg, T)
+            @test SHTnsKit.synthesis_point(cfg, Qd, cost, phi) ≈
+                  SHTnsKit.synthesis_point(cfg, Q, cost, phi) atol=4tol rtol=4tol
+            @test Array(SHTnsKit.SH_to_lat(cfg, Qd, cost; nphi)) ≈
+                  SHTnsKit.SH_to_lat(cfg, packed_Q, cost; nphi) atol=4tol rtol=4tol
+            @test collect(SHTnsKit.SHqst_to_point(
+                cfg, Qd, Sd, Td, cost, phi,
+            )) ≈ collect(SHTnsKit.SHqst_to_point(
+                cfg, packed_Q, packed_S, packed_T, cost, phi,
+            )) atol=4tol rtol=4tol
+            qst_lat = SHTnsKit.SHqst_to_lat(
+                cfg, Qd, Sd, Td, cost; nphi,
+            )
+            qst_lat_ref = SHTnsKit.SHqst_to_lat(
+                cfg, packed_Q, packed_S, packed_T, cost; nphi,
+            )
+            for component in 1:3
+                @test Array(qst_lat[component]) ≈ qst_lat_ref[component] atol=4tol rtol=4tol
+            end
+            grad = SHTnsKit.SH_to_grad_point(cfg, Qd, Sd, cost, phi)
+            @test collect(grad) ≈ collect(SHTnsKit.SH_to_grad_point(
+                cfg, packed_Q, packed_S, cost, phi,
+            )) atol=4tol rtol=4tol
+
+            for (operation, reference) in (
+                (SHTnsKit.divergence_from_spheroidal,
+                 SHTnsKit.divergence_from_spheroidal(cfg, S)),
+                (SHTnsKit.spheroidal_from_divergence,
+                 SHTnsKit.spheroidal_from_divergence(cfg, S)),
+                (SHTnsKit.vorticity_from_toroidal,
+                 SHTnsKit.vorticity_from_toroidal(cfg, T)),
+                (SHTnsKit.toroidal_from_vorticity,
+                 SHTnsKit.toroidal_from_vorticity(cfg, T)),
+            )
+                input = operation in (
+                    SHTnsKit.vorticity_from_toroidal,
+                    SHTnsKit.toroidal_from_vorticity,
+                ) ? Td : Sd
+                result = operation(cfg, input)
+                _mpi_gpu_assert_resident(result, is_vendor)
+                @test _mpi_gpu_collect(result, comm) ≈ reference atol=tol rtol=tol
+            end
+            for (operation!, input, reference) in (
+                (SHTnsKit.divergence_from_spheroidal!, Sd,
+                 SHTnsKit.divergence_from_spheroidal(cfg, S)),
+                (SHTnsKit.spheroidal_from_divergence!, Sd,
+                 SHTnsKit.spheroidal_from_divergence(cfg, S)),
+                (SHTnsKit.vorticity_from_toroidal!, Td,
+                 SHTnsKit.vorticity_from_toroidal(cfg, T)),
+                (SHTnsKit.toroidal_from_vorticity!, Td,
+                 SHTnsKit.toroidal_from_vorticity(cfg, T)),
+            )
+                output = similar(input)
+                @test operation!(cfg, output, input) === output
+                _mpi_gpu_assert_resident(output, is_vendor)
+                @test _mpi_gpu_collect(output, comm) ≈ reference atol=tol rtol=tol
+            end
+            mx = zeros(RT, 2cfg.nlm)
+            SHTnsKit.mul_ct_matrix(SHTnsKit.CPU(), cfg, mx)
+            neighbour = similar(Qd)
+            SHTnsKit.SH_mul_mx(SHTnsKit.CPU(), cfg, mx, Qd, neighbour)
+            dense_neighbour = zeros(CT, size(Q))
+            SHTnsKit.dist_SH_mul_mx!(cfg, mx, Q, dense_neighbour)
+            @test _mpi_gpu_collect(neighbour, comm) ≈ dense_neighbour atol=tol rtol=tol
+            divergence_grid = SHTnsKit.dist_spatial_divergence(
+                cfg, Sd, Td; prototype_θφ=Vr,
+            )
+            vorticity_grid = SHTnsKit.dist_spatial_vorticity(
+                cfg, Sd, Td; prototype_θφ=Vr,
+            )
+            @test _mpi_gpu_collect_any(divergence_grid, comm) ≈
+                  SHTnsKit.synthesis(
+                      cfg, SHTnsKit.divergence_from_spheroidal(cfg, S),
+                  ) atol=4tol rtol=4tol
+            @test _mpi_gpu_collect_any(vorticity_grid, comm) ≈
+                  SHTnsKit.synthesis(
+                      cfg, SHTnsKit.vorticity_from_toroidal(cfg, T),
+                  ) atol=4tol rtol=4tol
+            laplacian_expected = copy(Q)
+            SHTnsKit.dist_apply_laplacian!(cfg, laplacian_expected)
+            laplacian_grid = SHTnsKit.dist_scalar_laplacian(
+                cfg, Vr; prototype_θφ=Vr,
+            )
+            @test _mpi_gpu_collect_any(laplacian_grid, comm) ≈
+                  SHTnsKit.synthesis(cfg, laplacian_expected) atol=4tol rtol=4tol
+            laplacian_output = similar(Vr)
+            @test SHTnsKit.dist_scalar_laplacian!(
+                cfg, laplacian_output, Vr,
+            ) === laplacian_output
+            @test _mpi_gpu_collect(laplacian_output, comm) ≈
+                  SHTnsKit.synthesis(cfg, laplacian_expected) atol=4tol rtol=4tol
+        end
+
+        @testset "general rotations diagnostics storage and compatibility" begin
+            Q = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
+            Q[1, 1] = RT(0.2); Q[2, 1] = RT(-0.05)
+            Q[3, 2] = CT(RT(0.04), RT(-0.03))
+            S = RT(0.6) .* Q; T = RT(-0.35) .* Q
+            Qd = _mpi_gpu_place(array_type, Q, (2,), comm)
+            Sd = _mpi_gpu_place(array_type, S, (2,), comm)
+            Td = _mpi_gpu_place(array_type, T, (2,), comm)
+            alpha, beta, gamma = RT(0.17), RT(-0.31), RT(0.23)
+            first = zeros(CT, size(Q)); second = similar(first); expected = similar(first)
+            SHTnsKit.dist_SH_Zrotate(cfg, Q, alpha, first)
+            SHTnsKit.dist_SH_Yrotate(cfg, first, beta, second)
+            SHTnsKit.dist_SH_Zrotate(cfg, second, gamma, expected)
+            rotated = similar(Qd)
+            @test SHTnsKit.dist_SH_rotate_euler(
+                cfg, Qd, alpha, beta, gamma, rotated,
+            ) === rotated
+            @test _mpi_gpu_collect(rotated, comm) ≈ expected atol=4tol rtol=4tol
+            y = similar(Qd); x90 = similar(Qd); y90 = similar(Qd)
+            SHTnsKit.dist_SH_Yrotate(cfg, Qd, beta, y)
+            SHTnsKit.dist_SH_Xrotate90(cfg, Qd, x90)
+            SHTnsKit.dist_SH_Yrotate90(cfg, Qd, y90)
+            for value in (y, x90, y90)
+                _mpi_gpu_assert_resident(value, is_vendor)
+            end
+            expected_y = zeros(CT, size(Q))
+            SHTnsKit.dist_SH_Yrotate(cfg, Q, beta, expected_y)
+            for operation! in (
+                SHTnsKit.dist_SH_Yrotate_allgatherm!,
+                SHTnsKit.dist_SH_Yrotate_truncgatherm!,
+            )
+                output = similar(Qd)
+                @test operation!(cfg, Qd, beta, output) === output
+                @test _mpi_gpu_collect(output, comm) ≈ expected_y atol=4tol rtol=4tol
+            end
+            packed = array_type(SHTnsKit.pack_lm(cfg, Q))
+            packed_host = SHTnsKit.pack_lm(cfg, Q)
+            packed_z = SHTnsKit.dist_SH_Zrotate_packed(
+                cfg, packed, alpha; prototype_lm=Qd,
+            )
+            packed_y = SHTnsKit.dist_SH_Yrotate_packed(
+                cfg, packed, beta; prototype_lm=Qd,
+            )
+            packed_y90 = SHTnsKit.dist_SH_Yrotate90_packed(
+                cfg, packed; prototype_lm=Qd,
+            )
+            packed_x90 = SHTnsKit.dist_SH_Xrotate90_packed(
+                cfg, packed; prototype_lm=Qd,
+            )
+            expected_z_packed = similar(packed_host)
+            SHTnsKit.SH_Zrotate(cfg, packed_host, alpha, expected_z_packed)
+            @test Array(packed_z) ≈ expected_z_packed atol=4tol rtol=4tol
+            @test Array(packed_y) ≈ SHTnsKit.SH_Yrotate(
+                cfg, packed_host, beta, similar(packed_host),
+            ) atol=4tol rtol=4tol
+            @test Array(packed_y90) ≈ SHTnsKit.SH_Yrotate90(
+                cfg, packed_host, similar(packed_host),
+            ) atol=4tol rtol=4tol
+            @test Array(packed_x90) ≈ SHTnsKit.SH_Xrotate90(
+                cfg, packed_host, similar(packed_host),
+            ) atol=4tol rtol=4tol
+            _mpi_gpu_assert_resident(
+                (packed_z, packed_y, packed_y90, packed_x90), is_vendor,
+            )
+
+            scalar_energy = SHTnsKit.energy_scalar(cfg, Qd)
+            @test scalar_energy ≈ SHTnsKit.energy_scalar(cfg, Q) atol=tol rtol=tol
+            @test SHTnsKit.energy_scalar_l_spectrum(cfg, Qd) ≈
+                  SHTnsKit.energy_scalar_l_spectrum(cfg, Q) atol=tol rtol=tol
+            @test SHTnsKit.energy_scalar_m_spectrum(cfg, Qd) ≈
+                  SHTnsKit.energy_scalar_m_spectrum(cfg, Q) atol=tol rtol=tol
+            @test SHTnsKit.energy_vector_l_spectrum(cfg, Sd, Td) ≈
+                  SHTnsKit.energy_vector_l_spectrum(cfg, S, T) atol=tol rtol=tol
+            @test SHTnsKit.energy_vector_m_spectrum(cfg, Sd, Td) ≈
+                  SHTnsKit.energy_vector_m_spectrum(cfg, S, T) atol=tol rtol=tol
+            @test SHTnsKit.enstrophy_l_spectrum(cfg, Td) ≈
+                  SHTnsKit.enstrophy_l_spectrum(cfg, T) atol=tol rtol=tol
+            @test SHTnsKit.enstrophy_m_spectrum(cfg, Td) ≈
+                  SHTnsKit.enstrophy_m_spectrum(cfg, T) atol=tol rtol=tol
+            field = SHTnsKit.synthesis(cfg, Q)
+            field_device = _mpi_gpu_place(array_type, field, (1,), comm)
+            @test SHTnsKit.grid_energy_scalar(cfg, field_device) ≈
+                  SHTnsKit.grid_energy_scalar(cfg, field) atol=4tol rtol=4tol
+            @test SHTnsKit.grid_enstrophy(cfg, field_device) ≈
+                  SHTnsKit.grid_enstrophy(cfg, field) atol=4tol rtol=4tol
+            Vt_host, Vp_host = SHTnsKit.synthesis_sphtor(cfg, S, T)
+            Vt = _mpi_gpu_place(array_type, Vt_host, (1,), comm)
+            Vp = _mpi_gpu_place(array_type, Vp_host, (1,), comm)
+            @test SHTnsKit.grid_energy_vector(cfg, Vt, Vp) ≈
+                  SHTnsKit.grid_energy_vector(cfg, Vt_host, Vp_host) atol=4tol rtol=4tol
+
+            # Preserved dist_* compatibility paths are compared with the same
+            # independent serial CPU transforms, not with a round-trip oracle.
+            compat_Q = SHTnsKit.dist_analysis(cfg, field_device)
+            @test _mpi_gpu_collect_any(compat_Q, comm) ≈
+                  SHTnsKit.analysis(cfg, field) atol=4tol rtol=4tol
+            compat_field = SHTnsKit.dist_synthesis(
+                cfg, Qd; prototype_θφ=field_device,
+            )
+            @test _mpi_gpu_collect_any(compat_field, comm) ≈ field atol=4tol rtol=4tol
+            compat_ST = SHTnsKit.dist_analysis_sphtor(cfg, Vt, Vp)
+            @test _mpi_gpu_collect_any(compat_ST[1], comm) ≈
+                  SHTnsKit.analysis_sphtor(cfg, Vt_host, Vp_host)[1] atol=4tol rtol=4tol
+            compat_QST = SHTnsKit.dist_analysis_qst(
+                cfg, field_device, Vt, Vp,
+            )
+            @test _mpi_gpu_collect_any(compat_QST[1], comm) ≈
+                  SHTnsKit.analysis(cfg, field) atol=4tol rtol=4tol
+            _mpi_gpu_assert_resident((Qd, Sd, Td, rotated), is_vendor)
+            @test eltype(parent(Qd)) === CT
+        end
+
+        @testset "native scalar/vector/QST transpose nonzero numerics" begin
+            # DistTransposePlan deliberately exposes the canonical
+            # orthonormal+CS convention; other conventions are covered above
+            # by cfg-form parity and converted at that public boundary.
+            @test cfg.norm === :orthonormal
+            @test cfg.cs_phase
+            @test !cfg.real_norm
             staged_before = extension.parallel_gpu_stats().staged_calls
             for nlev in (1, 2, 5)
                 plan = SHTnsKit.DistTransposePlan(
                     cfg; comm, nlev, array_type, real_type=RT,
                     with_vector=true,
                 )
+                refs = _mpi_gpu_native_references(cfg, RT, nlev)
                 Vr = SHTnsKit.allocate_spatial(plan)
                 Vt = SHTnsKit.allocate_spatial(plan)
                 Vp = SHTnsKit.allocate_spatial(plan)
-                fill!(parent(Vr), RT(0.25))
-                fill!(parent(Vt), zero(RT))
-                fill!(parent(Vp), zero(RT))
+                _mpi_gpu_fill_native_spatial!(Vr, refs.Vr)
+                _mpi_gpu_fill_native_spatial!(Vt, refs.Vt)
+                _mpi_gpu_fill_native_spatial!(Vp, refs.Vp)
                 Q = SHTnsKit.allocate_spectral(plan)
                 S = SHTnsKit.allocate_spectral(plan)
                 T = SHTnsKit.allocate_spectral(plan)
+
+                # Analysis is checked against independent serial CPU analysis,
+                # not against a distributed round-trip result.
                 @test SHTnsKit.dist_analysis!(plan, Q, Vr) === Q
-                @test SHTnsKit.dist_synthesis!(plan, Vr, Q) === Vr
+                scalar_error = _mpi_gpu_native_spectral_error(
+                    Q, refs.Qanalysis, plan.m_local,
+                )
+                @test MPI.Allreduce(scalar_error, MPI.MAX, comm) <= tol
                 @test SHTnsKit.dist_analysis_sphtor!(
                     plan, S, T, Vt, Vp,
                 ) === (S, T)
-                @test SHTnsKit.dist_synthesis_sphtor!(
-                    plan, Vt, Vp, S, T,
-                ) === (Vt, Vp)
+                vector_error = max(
+                    _mpi_gpu_native_spectral_error(
+                        S, refs.Sanalysis, plan.m_local,
+                    ),
+                    _mpi_gpu_native_spectral_error(
+                        T, refs.Tanalysis, plan.m_local,
+                    ),
+                )
+                @test MPI.Allreduce(vector_error, MPI.MAX, comm) <= 4tol
                 @test SHTnsKit.dist_analysis_qst!(
                     plan, Q, S, T, Vr, Vt, Vp,
                 ) === (Q, S, T)
+                qst_error = max(
+                    _mpi_gpu_native_spectral_error(
+                        Q, refs.Qanalysis, plan.m_local,
+                    ),
+                    _mpi_gpu_native_spectral_error(
+                        S, refs.Sanalysis, plan.m_local,
+                    ),
+                    _mpi_gpu_native_spectral_error(
+                        T, refs.Tanalysis, plan.m_local,
+                    ),
+                )
+                @test MPI.Allreduce(qst_error, MPI.MAX, comm) <= 4tol
+
+                # Synthesis starts from independent nonzero CPU coefficients.
+                _mpi_gpu_fill_native_spectral!(Q, refs.Q, plan.m_local)
+                _mpi_gpu_fill_native_spectral!(S, refs.S, plan.m_local)
+                _mpi_gpu_fill_native_spectral!(T, refs.T, plan.m_local)
+                @test SHTnsKit.dist_synthesis!(plan, Vr, Q) === Vr
+                scalar_error = _mpi_gpu_native_spatial_error(Vr, refs.Vr)
+                @test MPI.Allreduce(scalar_error, MPI.MAX, comm) <= tol
+                @test SHTnsKit.dist_synthesis_sphtor!(
+                    plan, Vt, Vp, S, T,
+                ) === (Vt, Vp)
+                vector_error = max(
+                    _mpi_gpu_native_spatial_error(Vt, refs.Vt),
+                    _mpi_gpu_native_spatial_error(Vp, refs.Vp),
+                )
+                @test MPI.Allreduce(vector_error, MPI.MAX, comm) <= 4tol
                 @test SHTnsKit.dist_synthesis_qst!(
                     plan, Vr, Vt, Vp, Q, S, T,
                 ) === (Vr, Vt, Vp)
+                qst_error = max(
+                    _mpi_gpu_native_spatial_error(Vr, refs.Vr),
+                    _mpi_gpu_native_spatial_error(Vt, refs.Vt),
+                    _mpi_gpu_native_spatial_error(Vp, refs.Vp),
+                )
+                @test MPI.Allreduce(qst_error, MPI.MAX, comm) <= 4tol
                 _mpi_gpu_assert_resident((Vr, Vt, Vp, Q, S, T), is_vendor)
+                @test extension.parallel_gpu_stats().staged_calls == staged_before
+
+                if nlev == 2
+                    # QST must reject the complete six-array payload before
+                    # mutation, staging, FFT work, or communication side effects.
+                    WrongRT = RT === Float32 ? Float64 : Float32
+                    bad_vp = PencilArrays.PencilArray{WrongRT}(
+                        undef, PencilArrays.pencil(Vp), nlev,
+                    )
+                    fill!(parent(bad_vp), WrongRT(0.125))
+                    spectral_sentinel = CT(RT(73), RT(-19))
+                    fill!(parent(Q), spectral_sentinel)
+                    fill!(parent(S), spectral_sentinel)
+                    fill!(parent(T), spectral_sentinel)
+                    before = extension.parallel_gpu_stats()
+                    caught = false
+                    try
+                        SHTnsKit.dist_analysis_qst!(
+                            plan, Q, S, T, Vr, Vt, bad_vp,
+                        )
+                    catch error
+                        caught = error isa ArgumentError
+                    end
+                    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+                    @test all(==(spectral_sentinel), Array(parent(Q)))
+                    @test all(==(spectral_sentinel), Array(parent(S)))
+                    @test all(==(spectral_sentinel), Array(parent(T)))
+                    @test extension.parallel_gpu_stats() == before
+                    MPI.Barrier(comm)
+
+                    bad_t = PencilArrays.PencilArray{Complex{WrongRT}}(
+                        undef, PencilArrays.pencil(T), nlev,
+                    )
+                    fill!(parent(bad_t), Complex{WrongRT}(0.1, -0.2))
+                    spatial_sentinel = RT(91)
+                    fill!(parent(Vr), spatial_sentinel)
+                    fill!(parent(Vt), spatial_sentinel)
+                    fill!(parent(Vp), spatial_sentinel)
+                    before = extension.parallel_gpu_stats()
+                    caught = false
+                    try
+                        SHTnsKit.dist_synthesis_qst!(
+                            plan, Vr, Vt, Vp, Q, S, bad_t,
+                        )
+                    catch error
+                        caught = error isa ArgumentError
+                    end
+                    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+                    @test all(==(spatial_sentinel), Array(parent(Vr)))
+                    @test all(==(spatial_sentinel), Array(parent(Vt)))
+                    @test all(==(spatial_sentinel), Array(parent(Vp)))
+                    @test extension.parallel_gpu_stats() == before
+                    MPI.Barrier(comm)
+                end
             end
             @test extension.parallel_gpu_stats().staged_calls == staged_before
         end
@@ -560,6 +1237,43 @@ function test_mpi_gpu_policy(extension)
     @test pencil_result === device_pencil
     @test parent(device_pencil).data == 3 .* reshape(Float32.(1:6), 3, 2)
 
+    # Execute real staged mathematical callbacks on COMM_SELF while this test
+    # normally runs under a two-rank WORLD. Before subgroup propagation was
+    # fixed, the generic validators entered WORLD and mismatched/hung here.
+    subgroup_cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
+    subgroup_dense = zeros(ComplexF64, 3, 3)
+    subgroup_dense[1, 1] = 0.2
+    subgroup_dense[2, 1] = -0.05
+    subgroup_dense[3, 2] = 0.03 - 0.02im
+    subgroup_pen = PencilArrays.Pencil(
+        MockMPIArray, size(subgroup_dense), (2,), MPI.COMM_SELF,
+    )
+    subgroup_spectral = PencilArrays.PencilArray{ComplexF64}(
+        undef, subgroup_pen,
+    )
+    parent(subgroup_spectral).data .= subgroup_dense
+    subgroup_point = extension._staged_gpu_call(
+        adapter, :mock_subgroup_point, MPI.COMM_SELF,
+        host -> SHTnsKit.synthesis_point(
+            subgroup_cfg, host, 0.31, -0.27,
+        ), subgroup_spectral,
+    )
+    @test subgroup_point ≈ SHTnsKit.synthesis_point(
+        subgroup_cfg, subgroup_dense, 0.31, -0.27,
+    ) atol=3e-12
+    subgroup_diagonal = extension._staged_gpu_call(
+        adapter, :mock_subgroup_diagonal, MPI.COMM_SELF,
+        host -> SHTnsKit.divergence_from_spheroidal(
+            subgroup_cfg, host,
+        ), subgroup_spectral,
+    )
+    @test subgroup_diagonal isa PencilArrays.PencilArray
+    @test parent(subgroup_diagonal).data ≈
+          SHTnsKit.divergence_from_spheroidal(
+              subgroup_cfg, subgroup_dense,
+          ) atol=3e-12
+    MPI.Barrier(MPI.COMM_SELF)
+
     concurrent_adapter = extension.ParallelGPUAdapter(
         :mock_concurrent,
         value -> value isa MockMPIArray,
@@ -630,7 +1344,8 @@ const MPI_GPU_FIREWALL_GROUPS = (
     :synthesis_qst_l_cplx, :synthesis_qst_ml, :analysis_batch,
     :analysis_batch!, :synthesis_batch, :synthesis_batch!,
     :synthesis_batch_cplx, :analysis_sphtor_batch,
-    :synthesis_sphtor_batch, :analysis_qst_batch, :synthesis_qst_batch,
+    :synthesis_sphtor_batch, :synthesis_sphtor_batch_cplx,
+    :analysis_qst_batch, :synthesis_qst_batch, :synthesis_qst_batch_cplx,
     :analysis_packed, :analysis_packed_l, :analysis_packed_cplx,
     :analysis_packed_cplx_l, :analysis_packed_ml, :analysis_axisym,
     :analysis_axisym_l, :synthesis_packed, :synthesis_packed_l,
@@ -647,12 +1362,18 @@ const MPI_GPU_FIREWALL_GROUPS = (
     :dist_analysis_sphtor, :dist_synthesis_sphtor,
     :dist_analysis_qst, :dist_synthesis_qst,
     :dist_scalar_roundtrip!, :dist_vector_roundtrip!,
-    :dist_apply_laplacian!, :SH_mul_mx, :dist_spatial_divergence,
+    :divergence_from_spheroidal, :divergence_from_spheroidal!,
+    :spheroidal_from_divergence, :spheroidal_from_divergence!,
+    :vorticity_from_toroidal, :vorticity_from_toroidal!,
+    :toroidal_from_vorticity, :toroidal_from_vorticity!,
+    :dist_apply_laplacian!, :SH_mul_mx, :dist_SH_mul_mx!,
+    :dist_spatial_divergence,
     :dist_spatial_vorticity, :dist_scalar_laplacian,
     :dist_scalar_laplacian!, :dist_SH_Zrotate, :dist_SH_Yrotate,
-    :dist_SH_Xrotate90, :dist_SH_rotate_euler,
+    :dist_SH_Yrotate_allgatherm!, :dist_SH_Yrotate_truncgatherm!,
+    :dist_SH_Yrotate90, :dist_SH_Xrotate90, :dist_SH_rotate_euler,
     :dist_SH_Zrotate_packed, :dist_SH_Yrotate_packed,
-    :dist_SH_Xrotate90_packed, :energy_scalar,
+    :dist_SH_Yrotate90_packed, :dist_SH_Xrotate90_packed, :energy_scalar,
     :energy_scalar_l_spectrum, :energy_scalar_m_spectrum,
     :energy_vector_l_spectrum, :energy_vector_m_spectrum,
     :enstrophy_l_spectrum, :enstrophy_m_spectrum,
@@ -687,14 +1408,37 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test isdefined(@__MODULE__, :run_mpi_gpu_full_parity)
     @test occursin("run_mpi_gpu_full_parity(", runner)
     for family in (
-        "native scalar/vector/QST transpose",
+        "native scalar/vector/QST transpose nonzero numerics",
         "scalar/vector/QST cfg parity",
+        "scalar packed complex axisym _l _ml compatibility",
         "batch sizes 1/2/5 and bang identity",
         "fixed/local/operator/rotation staged parity",
+        "vector QST _l _ml local gradient all operators",
+        "general rotations diagnostics storage and compatibility",
         "actual allocation device cache key",
         "repeated-plan cache and residency",
     )
         @test occursin(family, read(@__FILE__, String))
+    end
+    matrix_source = read(@__FILE__, String)
+    for call_marker in (
+        "run_scalar_full_parity(", "run_sphtor_full_parity(",
+        "run_qst_full_parity(", "analysis_packed_cplx_l(",
+        "analysis_axisym_l(", "analysis_packed_ml(",
+        "analysis_sphtor_batch(", "analysis_qst_batch(",
+        "analysis_sphtor_l(", "analysis_qst_l(", "analysis_qst_ml(",
+        "SHqst_to_point(", "SH_to_grad_point(",
+        "divergence_from_spheroidal(", "spheroidal_from_divergence(",
+        "vorticity_from_toroidal(", "toroidal_from_vorticity(",
+        "dist_spatial_divergence(", "dist_spatial_vorticity(",
+        "dist_scalar_laplacian!(", "dist_SH_rotate_euler(",
+        "dist_SH_Xrotate90(", "dist_SH_Yrotate90(",
+        "energy_scalar_l_spectrum(", "energy_vector_m_spectrum(",
+        "enstrophy_l_spectrum(", "grid_energy_vector(",
+        "dist_analysis_qst(", "dist_analysis_qst!(",
+        "parallel_gpu_stats() == before",
+    )
+        @test occursin(call_marker, matrix_source)
     end
 
     project = read(joinpath(root, "Project.toml"), String)

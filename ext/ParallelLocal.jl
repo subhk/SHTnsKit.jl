@@ -309,7 +309,7 @@ end
 
 function _validate_local_spectral_pencils!(cfg, values::Tuple,
                                            operation::Symbol;
-                                           comm=MPI.COMM_WORLD)
+                                           comm=communicator(first(values)))
     reference = first(values)
     _validate_qst_pencil_communicators!(comm, values, operation)
     _validate_cfg_replicated(cfg, comm)
@@ -460,7 +460,7 @@ end
 
 function _validate_local_complex_pencil!(cfg, coefficients::PencilArray,
                                          operation::Symbol;
-                                         comm=MPI.COMM_WORLD)
+                                         comm=communicator(coefficients))
     _validate_qst_pencil_communicators!(comm, (coefficients,), operation)
     _validate_cfg_replicated(cfg, comm)
     _validate_scalar_pencil!(

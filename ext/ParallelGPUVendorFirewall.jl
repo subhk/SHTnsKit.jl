@@ -231,6 +231,10 @@ function SHTnsKit.dist_analysis_qst!(plan::ParallelExt.DistTransposePlan,
                                      Vr::VendorPencilArray,
                                      Vt::VendorPencilArray,
                                      Vp::VendorPencilArray)
+    ParallelExt._validate_transpose_qst_call!(
+        plan, :dist_analysis_qst_transpose;
+        spatial=(Vr, Vt, Vp), spectral=(Q, S, T),
+    )
     SHTnsKit.dist_analysis!(plan, Q, Vr)
     SHTnsKit.dist_analysis_sphtor!(plan, S, T, Vt, Vp)
     return Q, S, T
@@ -243,6 +247,10 @@ function SHTnsKit.dist_synthesis_qst!(plan::ParallelExt.DistTransposePlan,
                                       Q::VendorPencilArray,
                                       S::VendorPencilArray,
                                       T::VendorPencilArray)
+    ParallelExt._validate_transpose_qst_call!(
+        plan, :dist_synthesis_qst_transpose;
+        spatial=(Vr, Vt, Vp), spectral=(Q, S, T),
+    )
     SHTnsKit.dist_synthesis!(plan, Vr, Q)
     SHTnsKit.dist_synthesis_sphtor!(plan, Vt, Vp, S, T)
     return Vr, Vt, Vp

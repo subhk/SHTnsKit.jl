@@ -282,6 +282,24 @@ function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
     return nothing
 end
 
+function _validate_transpose_qst_call!(
+        plan::DistTransposePlan, operation::Symbol;
+        spatial::Tuple, spectral::Tuple)
+    length(spatial) == 3 && length(spectral) == 3 || throw(ArgumentError(
+        "$operation requires three spatial and three spectral arrays",
+    ))
+    # Validate the complete Q/S/T call before delegating to either scalar or
+    # tangential transforms. In particular, no output may be changed when a
+    # later vector argument has invalid storage, layout, precision, or comm.
+    _validate_transpose_call!(
+        plan, operation; spatial, spectral,
+    )
+    plan.with_vector || throw(ArgumentError(
+        "DistTransposePlan requires with_vector=true for QST transforms",
+    ))
+    return nothing
+end
+
 # ---------------------------------------------------------------------------
 # Analysis: spatial → spectral
 # ---------------------------------------------------------------------------
@@ -560,6 +578,10 @@ spheroidal/toroidal components (S,T) via `dist_analysis_sphtor!`.
 function SHTnsKit.dist_analysis_qst!(plan::DistTransposePlan,
                                       Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray,
                                       Vr::PencilArray,  Vt::PencilArray,  Vp::PencilArray)
+    _validate_transpose_qst_call!(
+        plan, :dist_analysis_qst_transpose;
+        spatial=(Vr, Vt, Vp), spectral=(Qlm, Slm, Tlm),
+    )
     SHTnsKit.dist_analysis!(plan, Qlm, Vr)
     SHTnsKit.dist_analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)
     return Qlm, Slm, Tlm
@@ -574,6 +596,10 @@ spheroidal/toroidal components (S,T) via `dist_synthesis_sphtor!`.
 function SHTnsKit.dist_synthesis_qst!(plan::DistTransposePlan,
                                        Vr::PencilArray,  Vt::PencilArray,  Vp::PencilArray,
                                        Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray)
+    _validate_transpose_qst_call!(
+        plan, :dist_synthesis_qst_transpose;
+        spatial=(Vr, Vt, Vp), spectral=(Qlm, Slm, Tlm),
+    )
     SHTnsKit.dist_synthesis!(plan, Vr, Qlm)
     SHTnsKit.dist_synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)
     return Vr, Vt, Vp

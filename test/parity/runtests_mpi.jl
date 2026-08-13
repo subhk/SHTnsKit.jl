@@ -370,7 +370,8 @@ adapter = MPIScalarAdapter(MPI.COMM_WORLD)
 vector_adapter = MPIVectorAdapter(MPI.COMM_WORLD)
 qst_adapter = MPIQSTAdapter(MPI.COMM_WORLD)
 if isempty(ARGS) || (!("sphtor_full" in ARGS) && !("qst_full" in ARGS) &&
-                     !("operators" in ARGS) && !("rotations" in ARGS))
+                     !("operators" in ARGS) && !("rotations" in ARGS) &&
+                     !("subgroup_firewall" in ARGS))
 # Exercise every mathematical axis without taking their full Cartesian product:
 # each Pencil construction owns an MPI Cartesian communicator, and a giant
 # product needlessly exhausts MPI implementations with a 2048-context limit.
@@ -1669,11 +1670,11 @@ if isempty(ARGS) || "qst_full" in ARGS
             Pencil((cfg.nlat, cfg.nlon), (1,), MPI.COMM_SELF),
         )
         fill!(parent(self_spatial), 0)
-        rank_bad_vr = rank == 0 ? self_spatial : Vrd
+        rank_bad_vt = rank == 0 ? self_spatial : Vtd
         @test _all_ranks_catch(
             qst_adapter.comm; message_contains="communicator mismatch",
         ) do
-            analysis_qst(cfg, rank_bad_vr, Vtd, Vpd)
+            analysis_qst(cfg, Vrd, rank_bad_vt, Vpd)
         end
         MPI.Barrier(qst_adapter.comm)
 
@@ -1684,12 +1685,12 @@ if isempty(ARGS) || "qst_full" in ARGS
             ),
         )
         fill!(parent(self_spectral), 0)
-        rank_bad_q = rank == 0 ? self_spectral : Qd
+        rank_bad_s = rank == 0 ? self_spectral : Sd
         @test _all_ranks_catch(
             qst_adapter.comm; message_contains="communicator mismatch",
         ) do
             synthesis_qst(
-                cfg, rank_bad_q, Sd, Td; prototype_θφ=Vrd,
+                cfg, Qd, rank_bad_s, Td; prototype_θφ=Vrd,
             )
         end
         MPI.Barrier(qst_adapter.comm)
@@ -1697,6 +1698,7 @@ if isempty(ARGS) || "qst_full" in ARGS
         fill!(Qout, ComplexF32(31, -7))
         fill!(Sout, ComplexF32(31, -7))
         fill!(Tout, ComplexF32(31, -7))
+        rank_bad_vr = rank == 0 ? self_spatial : Vrd
         @test _all_ranks_catch(
             qst_adapter.comm; message_contains="communicator mismatch",
         ) do
@@ -2151,31 +2153,22 @@ if isempty(ARGS) || "local_evaluation" in ARGS
         @test extension._local_evaluation_stats().payload_reductions == 0
         MPI.Barrier(comm)
 
-        # Build both candidates collectively before selecting a rank-varying
-        # communicator anchor.  Local evaluation must reject this on the
-        # trusted world communicator before touching either candidate's comm.
-        Qself = matrix_to_spectral_pencil(
-            cfg, _local_external(cfg, Qcan); comm=MPI.COMM_SELF,
-        )
+        # The first input is the communicator anchor.  Exercise collective
+        # rejection with a rank-varying peer while every rank enters the same
+        # trusted communicator; a rank-varying anchor is two distinct calls
+        # and cannot be validated by a collective without using WORLD.
         Sself = matrix_to_spectral_pencil(
             cfg, _local_external(cfg, Scan); comm=MPI.COMM_SELF,
         )
         Tself = matrix_to_spectral_pencil(
             cfg, _local_external(cfg, Tcan); comm=MPI.COMM_SELF,
         )
-        Drself = matrix_to_spectral_pencil(
-            cfg, _local_external(cfg, Drcan); comm=MPI.COMM_SELF,
-        )
-        badQ = rank == 0 ? Qself : Qp
         badScomm = rank == 0 ? Sself : Sp
         badT = rank == 0 ? Tself : Tp
-        badDr = rank == 0 ? Drself : Drp
         for call in (
-            () -> synthesis_point(cfg, badQ, 0.2, 0.7),
-            () -> SH_to_lat(cfg, badQ, 0.2; nphi=5),
-            () -> SHqst_to_point(cfg, badQ, badScomm, badT, 0.2, 0.7),
-            () -> SHqst_to_lat(cfg, badQ, badScomm, badT, 0.2; nphi=5),
-            () -> SH_to_grad_point(cfg, badDr, badScomm, 0.2, 0.7),
+            () -> SHqst_to_point(cfg, Qp, badScomm, badT, 0.2, 0.7),
+            () -> SHqst_to_lat(cfg, Qp, badScomm, badT, 0.2; nphi=5),
+            () -> SH_to_grad_point(cfg, Drp, badScomm, 0.2, 0.7),
         )
             extension._reset_local_evaluation_stats!()
             @test _all_ranks_catch(comm; message_contains="communicator mismatch") do
@@ -2185,19 +2178,6 @@ if isempty(ARGS) || "local_evaluation" in ARGS
             MPI.Barrier(comm)
         end
 
-        complex_self = _place_distributed_vector(external, MPI.COMM_SELF)
-        bad_complex = rank == 0 ? complex_self : distributed
-        for call in (
-            () -> synthesis_point_cplx(cfg, bad_complex, -0.28, 0.77),
-            () -> SH_to_lat_cplx(cfg, bad_complex, -0.28; nphi=7),
-        )
-            extension._reset_local_evaluation_stats!()
-            @test _all_ranks_catch(comm; message_contains="communicator mismatch") do
-                call()
-            end
-            @test extension._local_evaluation_stats().payload_reductions == 0
-            MPI.Barrier(comm)
-        end
     end
 end
 
@@ -2282,22 +2262,23 @@ if isempty(ARGS) || "operators" in ARGS
         bad_pen = Pencil((cfg.lmax + 2, cfg.mmax + 1), (2,), comm)
         malformed = PencilArray{ComplexF32}(undef, bad_pen)
         fill!(parent(malformed), ComplexF32(3, -2))
-        candidate = rank == 0 ? malformed : source
-        fill!(parent(output), ComplexF32(27, -5))
-        sentinel = copy(parent(output))
+        fill!(parent(malformed), ComplexF32(27, -5))
+        candidate_output = rank == 0 ? malformed : output
+        fill!(parent(candidate_output), ComplexF32(27, -5))
+        sentinel = copy(parent(candidate_output))
         extension._reset_operator_stats!()
         @test _all_ranks_catch(comm; message_contains="global shape mismatch") do
-            SH_mul_mx(cfg, mx, candidate, output)
+            SH_mul_mx(cfg, mx, source, candidate_output)
         end
-        @test parent(output) == sentinel
+        @test parent(candidate_output) == sentinel
         @test extension._operator_stats().narrow_payload_sent_elements == 0
         MPI.Barrier(comm)
 
-        self_source = matrix_to_spectral_pencil(cfg, dense; comm=MPI.COMM_SELF)
-        bad_comm_source = rank == 0 ? self_source : source
+        self_output = matrix_to_spectral_pencil(cfg, dense; comm=MPI.COMM_SELF)
+        bad_comm_output = rank == 0 ? self_output : output
         extension._reset_operator_stats!()
         @test _all_ranks_catch(comm; message_contains="communicator mismatch") do
-            divergence_from_spheroidal(cfg, bad_comm_source)
+            divergence_from_spheroidal!(cfg, bad_comm_output, source)
         end
         @test extension._operator_stats().diagonal_payload_sent_elements == 0
         MPI.Barrier(comm)
@@ -2515,6 +2496,103 @@ if isempty(ARGS) || "rotations" in ARGS
             MPI.Barrier(subgroup)
             Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)._safe_comm_free(subgroup)
         end
+    end
+end
+
+if isempty(ARGS) || "subgroup_firewall" in ARGS
+    if MPI.Comm_size(MPI.COMM_WORLD) == 4
+        @testset "staged-family subgroup communicator contract" begin
+            world = MPI.COMM_WORLD
+            world_rank = MPI.Comm_rank(world)
+            color = world_rank ÷ 2
+            subgroup = MPI.Comm_split(world, color, world_rank)
+            cfg = create_gauss_config(
+                4, 7; nlon=12,
+                norm=color == 0 ? :orthonormal : :schmidt,
+                real_norm=color == 1,
+                cs_phase=color == 0,
+            )
+            dense = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+            dense[2, 1] = 0.12 + 0im
+            dense[3, 2] = ComplexF64(0.04 * (color + 1), -0.03)
+            spectral = matrix_to_spectral_pencil(cfg, dense; comm=subgroup)
+
+            # Local point/latitude and vector-local paths must reduce only
+            # within the Pencil's subgroup even though the two groups carry
+            # intentionally different replicated cfg conventions.
+            point = synthesis_point(cfg, spectral, 0.21, 0.37)
+            @test point ≈ synthesis_point(cfg, dense, 0.21, 0.37) atol=3e-12
+            latitude = SH_to_lat(cfg, spectral, -0.19; nphi=7)
+            packed = SHTnsKit.pack_lm(cfg, dense)
+            @test latitude ≈ SH_to_lat(cfg, packed, -0.19; nphi=7) atol=3e-12
+            qst_point = SHqst_to_point(
+                cfg, spectral, spectral, spectral, 0.11, -0.29,
+            )
+            expected_qst = SHqst_to_point(
+                cfg, packed, packed, packed, 0.11, -0.29,
+            )
+            @test collect(qst_point) ≈ collect(expected_qst) atol=3e-12
+            MPI.Barrier(subgroup)
+
+            # Diagonal and neighbouring-degree operators use the first input
+            # as their trusted communicator and preserve invalid-call payloads.
+            diagonal = divergence_from_spheroidal(cfg, spectral)
+            @test spectral_pencil_to_matrix(cfg, diagonal) ≈
+                  divergence_from_spheroidal(cfg, dense) atol=3e-12
+            lap = copy(spectral)
+            @test SHTnsKit.dist_apply_laplacian!(cfg, lap) === lap
+            @test spectral_pencil_to_matrix(cfg, lap) ≈
+                  divergence_from_spheroidal(cfg, dense) atol=3e-12
+
+            mx = zeros(Float64, 2cfg.nlm)
+            mul_ct_matrix(CPU(), cfg, mx)
+            neighbour = similar(spectral)
+            @test SH_mul_mx(CPU(), cfg, mx, spectral, neighbour) === neighbour
+            @test all(isfinite, parent(neighbour))
+            MPI.Barrier(subgroup)
+
+            # A representative staged composition (analysis → diagonal →
+            # synthesis) must likewise remain inside the subgroup.
+            prototype = create_spatial_array(cfg; comm=subgroup)
+            fill!(parent(prototype), 0.25 + 0.05color)
+            composed = dist_scalar_laplacian(
+                cfg, prototype; prototype_θφ=prototype,
+            )
+            # The public composition returns local storage, so the successful
+            # result plus the subgroup barrier is the communicator assertion:
+            # a WORLD validation would mix the deliberately different cfgs.
+            @test composed isa Matrix{Float64}
+            @test all(isfinite, parent(composed))
+            MPI.Barrier(subgroup)
+
+            sentinel = ComplexF64(73, -19)
+            output = similar(spectral)
+            fill!(parent(output), sentinel)
+            wrong = if MPI.Comm_rank(subgroup) == 0
+                candidate = PencilArray{ComplexF64}(
+                    undef,
+                    Pencil(
+                        (cfg.lmax + 1, cfg.mmax + 1), (2,), MPI.COMM_SELF,
+                    ),
+                )
+                fill!(parent(candidate), sentinel)
+                candidate
+            else
+                output
+            end
+            @test _all_ranks_catch(
+                subgroup; message_contains="communicator mismatch",
+            ) do
+                divergence_from_spheroidal!(cfg, wrong, spectral)
+            end
+            @test all(==(sentinel), parent(wrong))
+            MPI.Barrier(subgroup)
+            Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)._safe_comm_free(
+                subgroup,
+            )
+        end
+    else
+        @test_skip MPI.Comm_size(MPI.COMM_WORLD) == 4
     end
 end
 

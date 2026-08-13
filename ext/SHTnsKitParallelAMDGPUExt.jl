@@ -37,9 +37,8 @@ const AMDGPU_PARALLEL_ADAPTER = ParallelExt.ParallelGPUAdapter(
     :amdgpu,
     value -> ParallelExt._parallel_root_buffer(value) isa AMDGPU.AnyROCArray,
     _ -> AMDGPU.ROCArray,
-    value -> AMDGPU.device_id(AMDGPU.device(
-        ParallelExt._parallel_root_buffer(value),
-    )),
+    value -> AMDGPU.device(ParallelExt._parallel_root_buffer(value)),
+    (f, device) -> AMDGPU.device!(f, device),
     _ -> MPI.has_rocm(),
     _ -> AMDGPU.synchronize(),
     _amdgpu_pinned,

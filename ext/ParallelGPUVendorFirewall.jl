@@ -341,6 +341,24 @@ for name in (:synthesis_sph_l, :synthesis_tor_l, :synthesis_grad_l)
     end
 end
 
+for (complex_name, real_name) in (
+    (:synthesis_sph_l_cplx, :synthesis_sph_l),
+    (:synthesis_tor_l_cplx, :synthesis_tor_l),
+)
+    @eval function SHTnsKit.$complex_name(
+        cfg::SHTnsKit.SHTConfig, coefficients::VendorPencilArray,
+        ltr::Integer; prototype_θφ::VendorPencilArray,
+    )
+        return _stage_vendor_call(
+            $(QuoteNode(complex_name)),
+            (host_coefficients, host_prototype) -> SHTnsKit.$real_name(
+                cfg, host_coefficients, ltr;
+                prototype_θφ=host_prototype, real_output=false,
+            ), coefficients, prototype_θφ,
+        )
+    end
+end
+
 function SHTnsKit.analysis_sphtor_ml(cfg::SHTnsKit.SHTConfig,
                                      stored_im::Integer,
                                      Vt::VendorPencilArray,

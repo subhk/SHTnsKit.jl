@@ -30,6 +30,7 @@ const CUDA_PARALLEL_ADAPTER = ParallelExt.ParallelGPUAdapter(
     value -> ParallelExt._parallel_root_buffer(value) isa CUDA.AnyCuArray,
     _ -> CUDA.CuArray,
     value -> CUDA.device(ParallelExt._parallel_root_buffer(value)),
+    (f, device) -> CUDA.device!(f, device),
     _ -> MPI.has_cuda(),
     _ -> CUDA.synchronize(),
     _cuda_pinned,

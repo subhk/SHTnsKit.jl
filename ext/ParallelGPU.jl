@@ -6,17 +6,25 @@
 # package extensions register the small set of vendor operations needed here.
 # Mathematical code calls `allreduce!`/`exchange!` and storage helpers only.
 
-struct ParallelGPUAdapter{FM,FA,FD,FG,FS,FH,FHD,FDH}
+struct ParallelGPUAdapter{FM,FA,FD,FWD,FG,FS,FH,FHD,FDH}
     name::Symbol
     matches::FM
     array_type::FA
     device::FD
+    with_device::FWD
     gpu_aware::FG
     synchronize::FS
     allocate_pinned::FH
     device_to_host!::FHD
     host_to_device!::FDH
 end
+
+ParallelGPUAdapter(name::Symbol, matches, array_type, device, gpu_aware,
+                   synchronize, allocate_pinned, device_to_host!,
+                   host_to_device!) = ParallelGPUAdapter(
+    name, matches, array_type, device, (f, _device) -> f(), gpu_aware,
+    synchronize, allocate_pinned, device_to_host!, host_to_device!,
+)
 
 const _PARALLEL_GPU_ADAPTERS = Dict{Symbol,WeakRef}()
 const _PARALLEL_GPU_ADAPTER_LOCK = ReentrantLock()
@@ -66,6 +74,32 @@ end
     _parallel_root_buffer(parent(value))
 @inline _parallel_root_buffer(value::Base.ReinterpretArray) =
     _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::Base.LogicalIndex) =
+    _parallel_root_buffer(getfield(value, :mask))
+@inline _parallel_root_buffer(value::Base.PermutedDimsArray) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.Adjoint) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.Transpose) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.Symmetric) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.Hermitian) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.Diagonal) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.Bidiagonal) =
+    _parallel_root_buffer(getfield(value, :dv))
+@inline _parallel_root_buffer(value::LinearAlgebra.Tridiagonal) =
+    _parallel_root_buffer(getfield(value, :d))
+@inline _parallel_root_buffer(value::LinearAlgebra.UpperTriangular) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.LowerTriangular) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.UnitUpperTriangular) =
+    _parallel_root_buffer(parent(value))
+@inline _parallel_root_buffer(value::LinearAlgebra.UnitLowerTriangular) =
+    _parallel_root_buffer(parent(value))
 @inline _parallel_root_buffer(value) = value
 
 function _parallel_array_type(prototype)
@@ -91,7 +125,8 @@ mutable struct _GPUAwarenessEntry
 end
 
 mutable struct _GPUStagingEntry
-    owner::WeakRef
+    root_owner::WeakRef
+    logical_id::UInt
     signature::Tuple
     buffer::Any
     lock::ReentrantLock
@@ -126,7 +161,7 @@ function parallel_gpu_cache_sizes()
         count(entry -> entry.comm.value !== nothing, values(_GPU_AWARENESS))
     end
     staging = lock(_GPU_STAGING_LOCK) do
-        count(entry -> entry.owner.value !== nothing, values(_GPU_STAGING))
+        count(entry -> entry.root_owner.value !== nothing, values(_GPU_STAGING))
     end
     return (; awareness, staging)
 end
@@ -176,15 +211,16 @@ end
 
 function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int)
     root_owner = _parallel_root_buffer(owner)
+    logical_id = objectid(owner)
     device = adapter.device(root_owner)
     signature = (objectid(comm), adapter.name, device, eltype(owner), n)
-    owner_id = objectid(root_owner)
-    key = (owner_id, signature)
+    key = (logical_id, objectid(root_owner), signature)
 
     found = lock(_GPU_STAGING_LOCK) do
-        filter!(pair -> pair.second.owner.value !== nothing, _GPU_STAGING)
+        filter!(pair -> pair.second.root_owner.value !== nothing, _GPU_STAGING)
         entry = get(_GPU_STAGING, key, nothing)
-        if entry !== nothing && entry.owner.value === root_owner
+        if entry !== nothing && entry.logical_id == logical_id &&
+           entry.root_owner.value === root_owner
             _GPU_CACHE_TICK[] += 1
             entry.tick = _GPU_CACHE_TICK[]
             return entry
@@ -197,14 +233,16 @@ function _staging_entry(adapter::ParallelGPUAdapter, comm, owner, n::Int)
     # global cache lock.
     buffer = adapter.allocate_pinned(eltype(owner), n)
     candidate = _GPUStagingEntry(
-        WeakRef(root_owner), signature, buffer, ReentrantLock(), UInt64(0),
+        WeakRef(root_owner), logical_id, signature, buffer,
+        ReentrantLock(), UInt64(0),
     )
     return lock(_GPU_STAGING_LOCK) do
         existing = get(_GPU_STAGING, key, nothing)
-        if existing !== nothing && existing.owner.value === root_owner
+        if existing !== nothing && existing.logical_id == logical_id &&
+           existing.root_owner.value === root_owner
             return existing
         end
-        filter!(pair -> pair.second.owner.value !== nothing, _GPU_STAGING)
+        filter!(pair -> pair.second.root_owner.value !== nothing, _GPU_STAGING)
         limit = _GPU_STAGING_LIMIT[]
         if length(_GPU_STAGING) >= limit
             # Do not evict a live owner's entry: another task may already have
@@ -257,20 +295,26 @@ function _device_result(adapter::ParallelGPUAdapter, prototype, result,
         result === first(pair) && return original
     end
     if result isa PencilArray
-        array_type = adapter.array_type(prototype)
-        device_pen = similar(pencil(result), array_type)
-        output = PencilArray{eltype(result)}(
-            undef, device_pen, PencilArrays.extra_dims(result)...,
-        )
-        adapter.host_to_device!(parent(output), parent(result))
-        adapter.synchronize(parent(output))
-        return output
+        device = adapter.device(_parallel_root_buffer(prototype))
+        return adapter.with_device(device) do
+            array_type = adapter.array_type(prototype)
+            device_pen = similar(pencil(result), array_type)
+            output = PencilArray{eltype(result)}(
+                undef, device_pen, PencilArrays.extra_dims(result)...,
+            )
+            adapter.host_to_device!(parent(output), parent(result))
+            adapter.synchronize(parent(output))
+            output
+        end
     elseif result isa AbstractArray
-        array_type = adapter.array_type(prototype)
-        output = array_type{eltype(result)}(undef, size(result))
-        adapter.host_to_device!(output, result)
-        adapter.synchronize(output)
-        return output
+        device = adapter.device(_parallel_root_buffer(prototype))
+        return adapter.with_device(device) do
+            array_type = adapter.array_type(prototype)
+            output = array_type{eltype(result)}(undef, size(result))
+            adapter.host_to_device!(output, result)
+            adapter.synchronize(output)
+            output
+        end
     elseif result isa Tuple
         return map(value -> _device_result(
             adapter, prototype, value, staged, originals,

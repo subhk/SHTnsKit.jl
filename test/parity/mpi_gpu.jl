@@ -1,4 +1,5 @@
 using Test
+using LinearAlgebra
 
 # Reuse the same mathematical oracle suites as CPU and standalone GPU parity.
 isdefined(@__MODULE__, :ScalarParityAdapter) || include("scalar_full.jl")
@@ -32,6 +33,10 @@ mutable struct MockMultiDeviceArray{T,N} <: AbstractArray{T,N}
     device::Int
 end
 
+const MOCK_CURRENT_DEVICE = Ref(99)
+MockMultiDeviceArray{T}(::UndefInitializer, dims::Dims) where {T} =
+    MockMultiDeviceArray(Array{T}(undef, dims), MOCK_CURRENT_DEVICE[])
+
 Base.IndexStyle(::Type{<:MockMultiDeviceArray}) = IndexLinear()
 Base.size(array::MockMultiDeviceArray) = size(array.data)
 Base.getindex(array::MockMultiDeviceArray, indices...) = array.data[indices...]
@@ -41,6 +46,12 @@ Base.copyto!(destination::MockMultiDeviceArray, source::AbstractArray) =
     (copyto!(destination.data, source); destination)
 Base.copyto!(destination::AbstractArray, source::MockMultiDeviceArray) =
     copyto!(destination, source.data)
+
+function _cache_temporary_view!(extension, adapter, comm)
+    root = MockMultiDeviceArray(reshape(Float32.(1:4), 2, 2), 1)
+    extension._staging_entry(adapter, comm, view(root, 1, :), 2)
+    return WeakRef(root)
+end
 
 function _mpi_gpu_place(array_type, values::AbstractArray, decomposition, comm)
     pen = PencilArrays.Pencil(array_type, size(values), decomposition, comm)
@@ -297,7 +308,26 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
             extension._gpu_awareness(adapter, MPI.COMM_SELF, first_buffer)
             extension._gpu_awareness(adapter, MPI.COMM_SELF, second_buffer)
             @test extension.parallel_gpu_cache_sizes().awareness == 2
+            prototype_result = extension._device_result(
+                adapter, first_buffer, Float32[1], (), (),
+            )
+            @test device_of(prototype_result) == devices[1]
+            current_probe = array_type{Float32}(undef, 1)
+            @test device_of(current_probe) == devices[2]
         end
+
+        # Distinct equal-size logical views of one vendor allocation retain
+        # independent host snapshots in a multi-input staged callback.
+        extension.parallel_gpu_clear_caches!()
+        view_root = array_type(reshape(Float32.(1:4), 2, 2))
+        first_view = view(view_root, 1, :)
+        second_view = view(view_root, 2, :)
+        @test extension._staged_gpu_call(
+            adapter, :hardware_distinct_views, MPI.COMM_SELF,
+            (first_host, second_host) -> sum(10 .* first_host .+ second_host),
+            first_view, second_view; validate_storage=false,
+        ) ≈ 46
+        @test extension.parallel_gpu_cache_sizes().staging == 2
         activate_device!(assigned)
     end
 
@@ -626,6 +656,19 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
                 )
                 _mpi_gpu_assert_resident(value, is_vendor)
                 @test _mpi_gpu_collect(value[1], comm) ≈ reference[1] atol=4tol rtol=4tol
+            end
+            for (operation, reference, input) in (
+                (SHTnsKit.synthesis_sph_l_cplx,
+                 SHTnsKit.synthesis_sph_l_cplx(cfg, S, ltr), Sd),
+                (SHTnsKit.synthesis_tor_l_cplx,
+                 SHTnsKit.synthesis_tor_l_cplx(cfg, T, ltr), Td),
+            )
+                value = operation(
+                    cfg, input, ltr; prototype_θφ=Vr,
+                )
+                _mpi_gpu_assert_resident(value, is_vendor)
+                @test _mpi_gpu_collect(value[1], comm) ≈ reference[1] atol=4tol rtol=4tol
+                @test _mpi_gpu_collect(value[2], comm) ≈ reference[2] atol=4tol rtol=4tol
             end
 
             stored_im = 1
@@ -1105,17 +1148,118 @@ function test_mpi_gpu_policy(extension)
     multi = MockMultiDeviceArray(reshape(Float32.(1:4), 2, 2), 1)
     multi_view = view(multi, :, :)
     current_device = Ref(99)
+    multi_host_allocations = Ref(0)
     multi_adapter = extension.ParallelGPUAdapter(
         :mock_multidevice,
         value -> extension._parallel_root_buffer(value) isa MockMultiDeviceArray,
         _ -> MockMultiDeviceArray,
         value -> extension._parallel_root_buffer(value).device,
+        (f, device) -> begin
+            previous = MOCK_CURRENT_DEVICE[]
+            try
+                MOCK_CURRENT_DEVICE[] = device
+                f()
+            finally
+                MOCK_CURRENT_DEVICE[] = previous
+            end
+        end,
         _ -> false,
         _ -> nothing,
-        (T, n) -> Vector{T}(undef, n),
+        (T, n) -> (multi_host_allocations[] += 1; Vector{T}(undef, n)),
         copyto!, copyto!,
     )
     multi_comm = Ref(:multidevice_subgroup)
+
+    # Equal-size logical views of one allocation need independent staging
+    # snapshots. Sharing a root-keyed entry overwrites the first input before
+    # the CPU callback observes it.
+    first_view = view(multi, 1, :)
+    second_view = view(multi, 2, :)
+    distinct_view_result = extension._staged_gpu_call(
+        multi_adapter, :distinct_views, multi_comm,
+        (first_host, second_host) -> sum(10 .* first_host .+ second_host),
+        first_view, second_view; validate_storage=false,
+    )
+    @test distinct_view_result == 46
+    @test multi_host_allocations[] == 2
+    @test extension.parallel_gpu_cache_sizes().staging == 2
+    @test extension._staged_gpu_call(
+        multi_adapter, :distinct_views, multi_comm,
+        (first_host, second_host) -> sum(10 .* first_host .+ second_host),
+        first_view, second_view; validate_storage=false,
+    ) == 46
+    @test multi_host_allocations[] == 2
+
+    # Out-of-place restoration must allocate on the prototype's physical
+    # device, not whichever device happens to be current in this task.
+    MOCK_CURRENT_DEVICE[] = 2
+    prototype_device_result = extension._device_result(
+        multi_adapter, multi, Float32[7, 8], (), (),
+    )
+    @test prototype_device_result isa MockMultiDeviceArray
+    @test prototype_device_result.device == multi.device
+    @test MOCK_CURRENT_DEVICE[] == 2
+    failing_device_adapter = extension.ParallelGPUAdapter(
+        :mock_multidevice_failure, multi_adapter.matches,
+        multi_adapter.array_type, multi_adapter.device,
+        multi_adapter.with_device, multi_adapter.gpu_aware,
+        multi_adapter.synchronize, multi_adapter.allocate_pinned,
+        multi_adapter.device_to_host!,
+        (_device, _host) -> error("copy to device failed"),
+    )
+    @test_throws ErrorException extension._device_result(
+        failing_device_adapter, multi, Float32[7, 8], (), (),
+    )
+    @test MOCK_CURRENT_DEVICE[] == 2
+
+    # Every standard array wrapper admitted by a vendor adapter must resolve
+    # to the allocation that owns its physical device and cache lifetime.
+    mask_root = MockMultiDeviceArray(Bool[true, false, true, false], 1)
+    wrappers = (
+        PermutedDimsArray(multi, (2, 1)), adjoint(multi), transpose(multi),
+        Symmetric(multi), Hermitian(multi), UpperTriangular(multi),
+        LowerTriangular(multi), UnitUpperTriangular(multi),
+        UnitLowerTriangular(multi), Diagonal(view(multi, 1:2, 1)),
+        Bidiagonal(view(multi, 1:2, 1), view(multi, 1:1, 2), :U),
+        Tridiagonal(
+            view(multi, 1:1, 1), view(multi, 1:2, 1), view(multi, 1:1, 2),
+        ),
+        Base.LogicalIndex(mask_root),
+    )
+    expected_roots = (ntuple(_ -> multi, length(wrappers) - 1)..., mask_root)
+    for (wrapper, expected_root) in zip(wrappers, expected_roots)
+        @test extension._parallel_root_buffer(wrapper) === expected_root
+        @test multi_adapter.matches(wrapper)
+        @test multi_adapter.device(wrapper) == expected_root.device
+    end
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(length(wrappers) + 1)
+    for wrapper in wrappers
+        extension._staging_entry(
+            multi_adapter, multi_comm, wrapper, length(wrapper),
+        )
+    end
+    @test extension.parallel_gpu_cache_sizes().staging == length(wrappers)
+
+    # Live logical wrappers cannot make the registry exceed its cap, and a
+    # cached view does not keep its physical allocation alive.
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(2)
+    for wrapper in wrappers
+        extension._staging_entry(
+            multi_adapter, multi_comm, wrapper, length(wrapper),
+        )
+        @test extension.parallel_gpu_cache_sizes().staging <= 2
+    end
+    extension.parallel_gpu_clear_caches!()
+    weak_root = _cache_temporary_view!(extension, multi_adapter, multi_comm)
+    @test extension.parallel_gpu_cache_sizes().staging == 1
+    GC.gc(true)
+    @test weak_root.value === nothing
+    @test extension.parallel_gpu_cache_sizes().staging == 0
+
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(8)
     extension.allreduce!(multi_view, +, multi_comm; adapter=multi_adapter,
                          collective=(host, _op, _comm) -> host)
     multi.device = 2
@@ -1337,8 +1481,9 @@ const MPI_GPU_FIREWALL_GROUPS = (
     :synthesis_sphtor_cplx, :synthesis_sph, :synthesis_sph_cplx,
     :synthesis_tor, :synthesis_tor_cplx, :analysis_sphtor_l,
     :analysis_sphtor_ml, :synthesis_sphtor_l, :synthesis_sphtor_l_cplx,
-    :synthesis_sphtor_ml, :synthesis_sph_l, :synthesis_sph_ml,
-    :synthesis_tor_l, :synthesis_tor_ml, :analysis_qst,
+    :synthesis_sphtor_ml, :synthesis_sph_l, :synthesis_sph_l_cplx,
+    :synthesis_sph_ml, :synthesis_tor_l, :synthesis_tor_l_cplx,
+    :synthesis_tor_ml, :analysis_qst,
     :analysis_qst_cplx, :synthesis_qst, :synthesis_qst_cplx,
     :analysis_qst_l, :analysis_qst_ml, :synthesis_qst_l,
     :synthesis_qst_l_cplx, :synthesis_qst_ml, :analysis_batch,
@@ -1390,6 +1535,16 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test occursin("ReentrantLock", parallel_gpu)
     @test occursin("function exchange!", parallel_gpu)
     @test occursin("function allreduce!", parallel_gpu)
+    for wrapper in (
+        "LogicalIndex", "PermutedDimsArray", "Adjoint", "Transpose",
+        "Symmetric", "Hermitian", "Diagonal", "Bidiagonal", "Tridiagonal",
+        "UpperTriangular", "LowerTriangular", "UnitUpperTriangular",
+        "UnitLowerTriangular",
+    )
+        @test occursin(wrapper, parallel_gpu)
+    end
+    @test occursin("logical_id", parallel_gpu)
+    @test occursin("adapter.with_device(device)", parallel_gpu)
     @test !occursin("using CUDA", parallel_gpu)
     @test !occursin("using AMDGPU", parallel_gpu)
 
@@ -1400,6 +1555,8 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test occursin(vendor === :cuda ? "MPI.has_cuda" : "MPI.has_rocm", source)
     @test occursin("_parallel_root_buffer(value)", source)
     @test occursin(vendor === :cuda ? "CUDA.device(" : "AMDGPU.device(", source)
+    @test occursin(vendor === :cuda ? "CUDA.device!(f, device)" :
+                                    "AMDGPU.device!(f, device)", source)
 
     runner_file = vendor === :cuda ?
         joinpath(root, "test", "gpu", "cuda", "mpi_runtests.jl") :
@@ -1427,6 +1584,7 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
         "analysis_axisym_l(", "analysis_packed_ml(",
         "analysis_sphtor_batch(", "analysis_qst_batch(",
         "analysis_sphtor_l(", "analysis_qst_l(", "analysis_qst_ml(",
+        "synthesis_sph_l_cplx(", "synthesis_tor_l_cplx(",
         "SHqst_to_point(", "SH_to_grad_point(",
         "divergence_from_spheroidal(", "spheroidal_from_divergence(",
         "vorticity_from_toroidal(", "toroidal_from_vorticity(",
@@ -1467,6 +1625,8 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test !occursin("allowscalar", firewall)
     @test occursin("_dist_transpose_gpu_analysis!", firewall)
     @test occursin("_staged_gpu_call", firewall)
+    @test occursin(":synthesis_sph_l_cplx", firewall)
+    @test occursin(":synthesis_tor_l_cplx", firewall)
 
     # Dealiased decompositions may leave a rank owning only Fourier bins above
     # mmax. The native kernel offset must still be the rank's real first bin,

@@ -88,6 +88,7 @@ import PencilArrays: pencil, range_local, size_local, size_global, topology, par
 using PencilFFTs                         # Distributed FFTs
 using PencilFFTs: Transforms, PencilFFTPlan, allocate_input, allocate_output
 using FFTW                               # For 1D FFTs on local arrays
+import LinearAlgebra
 import SHTnsKit                          # Core spherical harmonic functionality
 
 # `MPI.Comm_free` is present in MPI.jl 0.20.x but was removed from the public

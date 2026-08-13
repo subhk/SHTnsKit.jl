@@ -55,8 +55,9 @@ if HAS_LITERATE
                 # Generate markdown with Documenter flavor
                 Literate.markdown(example_filepath, OUTPUT_DIR;
                                 flavor = Literate.DocumenterFlavor(),
+                                codefence = "````julia" => "````",
                                 documenter = true,
-                                execute = false)  # Set to true if examples should be executed
+                                execute = false)  # Render optional/MPI examples without executing them
                                 
                 println("OK Generated: $(replace(example, ".jl" => ".md"))")
             catch e
@@ -104,6 +105,7 @@ pages = Any[
     ],
     "Reference" => Any[
         "API Reference" => "api/index.md",
+        "SHTns 3.7 Parity" => "shtns37-parity.md",
         "Examples Gallery" => "examples/index.md"
     ]
 ]

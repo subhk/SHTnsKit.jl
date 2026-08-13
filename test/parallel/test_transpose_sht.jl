@@ -3,6 +3,7 @@ using SHTnsKit, PencilArrays, PencilFFTs, Test
 
 const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
+const ParExt = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
 
 @testset "DistTransposePlan construction" begin
     lmax = 32; nlat = lmax + 2; nlon = 2 * lmax + 1
@@ -71,6 +72,69 @@ end
         caught = error isa ArgumentError
     end
     @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+
+    # Presence and explicit array storage are collective constructor options;
+    # rank-local branching here used to strand peers in Pencil construction.
+    varying_presence = iseven(rank) ?
+        PencilArray{Float64}(undef, world_pen, 1) : nothing
+    caught = false
+    try
+        DistTransposePlan(
+            cfg; comm, nlev=1, prototype=varying_presence,
+            array_type=Array, real_type=Float64,
+        )
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+
+    varying_array_type = iseven(rank) ? Array : Matrix
+    caught = false
+    try
+        DistTransposePlan(
+            cfg; comm, nlev=1, array_type=varying_array_type,
+            real_type=Float64,
+        )
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+end
+
+@testset "DistTransposePlan exact call layouts" begin
+    cfg = create_gauss_config(4, 7; nlon=10)
+    plan = DistTransposePlan(cfg; comm, nlev=1)
+    output = allocate_spectral(plan)
+    input = allocate_spatial(plan)
+    wrong_spatial_pen = PencilArrays.Pencil(
+        Array, (plan.nlon, plan.nlat), (1,), comm,
+    )
+    wrong_spatial = PencilArray{Float64}(undef, wrong_spatial_pen, 1)
+    fill!(parent(output), 19 + 3im)
+    spectral_sentinel = copy(parent(output))
+    @test_throws ArgumentError ParExt._validate_transpose_call!(
+        plan, :wrong_spatial_layout;
+        spatial=(wrong_spatial,), spectral=(output,),
+    )
+    @test parent(output) == spectral_sentinel
+    MPI.Barrier(comm)
+
+    wrong_spectral_pen = PencilArrays.Pencil(
+        Array, PencilArrays.size_global(plan.spectral_pencil), (1,), comm,
+    )
+    wrong_spectral = PencilArray{ComplexF64}(
+        undef, wrong_spectral_pen, 1,
+    )
+    fill!(parent(input), 23.0)
+    spatial_sentinel = copy(parent(input))
+    @test_throws ArgumentError ParExt._validate_transpose_call!(
+        plan, :wrong_spectral_layout;
+        spatial=(input,), spectral=(wrong_spectral,),
+    )
+    @test parent(input) == spatial_sentinel
     MPI.Barrier(comm)
 end
 

@@ -27,9 +27,14 @@ end
 function _stage_vendor_call(operation::Symbol, f, values...;
                             mutated::Tuple=())
     prototype = first(value for value in values if value isa VendorPencilArray)
+    adapter = _vendor_adapter(prototype)
+    comm = _vendor_comm(values...)
+    ParallelExt._validate_parallel_storage!(
+        comm, operation, values...; adapter,
+    )
     return ParallelExt._staged_gpu_call(
-        _vendor_adapter(prototype), operation, _vendor_comm(values...), f,
-        values...; mutated,
+        adapter, operation, comm, f, values...;
+        mutated, validate_storage=false,
     )
 end
 
@@ -48,7 +53,7 @@ end
 
 function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig,
                             coefficients::VendorPencilArray;
-                            prototype_θφ::VendorPencilArray, kwargs...)
+                            prototype_θφ::PencilArrays.PencilArray, kwargs...)
     return _stage_vendor_call(
         :synthesis,
         (host_coefficients, host_prototype) -> SHTnsKit.synthesis(
@@ -60,7 +65,7 @@ end
 
 function SHTnsKit.synthesis_cplx(cfg::SHTnsKit.SHTConfig,
                                  coefficients::VendorPencilArray;
-                                 prototype_θφ::VendorPencilArray)
+                                 prototype_θφ::PencilArrays.PencilArray)
     return _stage_vendor_call(
         :synthesis_cplx,
         (host_coefficients, host_prototype) -> SHTnsKit.synthesis_cplx(
@@ -71,7 +76,7 @@ end
 
 function SHTnsKit.analysis_sphtor(cfg::SHTnsKit.SHTConfig,
                                   Vt::VendorPencilArray,
-                                  Vp::VendorPencilArray; kwargs...)
+                                  Vp::PencilArrays.PencilArray; kwargs...)
     return _stage_vendor_call(
         :analysis_sphtor,
         (host_vt, host_vp) -> SHTnsKit.analysis_sphtor(
@@ -83,8 +88,8 @@ end
 
 function SHTnsKit.synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
                                    S::VendorPencilArray,
-                                   T::VendorPencilArray;
-                                   prototype_θφ::VendorPencilArray, kwargs...)
+                                   T::PencilArrays.PencilArray;
+                                   prototype_θφ::PencilArrays.PencilArray, kwargs...)
     return _stage_vendor_call(
         :synthesis_sphtor,
         (host_s, host_t, host_prototype) -> SHTnsKit.synthesis_sphtor(
@@ -96,8 +101,8 @@ end
 
 function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig,
                                Vr::VendorPencilArray,
-                               Vt::VendorPencilArray,
-                               Vp::VendorPencilArray; kwargs...)
+                               Vt::PencilArrays.PencilArray,
+                               Vp::PencilArrays.PencilArray; kwargs...)
     return _stage_vendor_call(
         :analysis_qst,
         (host_vr, host_vt, host_vp) -> SHTnsKit.analysis_qst(
@@ -109,9 +114,9 @@ end
 
 function SHTnsKit.synthesis_qst(cfg::SHTnsKit.SHTConfig,
                                 Q::VendorPencilArray,
-                                S::VendorPencilArray,
-                                T::VendorPencilArray;
-                                prototype_θφ::VendorPencilArray, kwargs...)
+                                S::PencilArrays.PencilArray,
+                                T::PencilArrays.PencilArray;
+                                prototype_θφ::PencilArrays.PencilArray, kwargs...)
     return _stage_vendor_call(
         :synthesis_qst,
         (host_q, host_s, host_t, host_prototype) -> SHTnsKit.synthesis_qst(
@@ -145,7 +150,7 @@ for name in (
     )
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   output::VendorPencilArray,
-                                  input::VendorPencilArray)
+                                  input::PencilArrays.PencilArray)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_output, host_input) -> SHTnsKit.$name(
@@ -170,7 +175,7 @@ end
 # the vendor Legendre kernels selected by these helpers.
 function SHTnsKit.dist_analysis!(plan::ParallelExt.DistTransposePlan,
                                  output::VendorPencilArray,
-                                 input::VendorPencilArray)
+                                 input::PencilArrays.PencilArray)
     ParallelExt._validate_transpose_call!(
         plan, :dist_analysis_transpose; spatial=(input,), spectral=(output,),
     )
@@ -181,7 +186,7 @@ end
 
 function SHTnsKit.dist_synthesis!(plan::ParallelExt.DistTransposePlan,
                                   output::VendorPencilArray,
-                                  input::VendorPencilArray)
+                                  input::PencilArrays.PencilArray)
     ParallelExt._validate_transpose_call!(
         plan, :dist_synthesis_transpose; spatial=(output,), spectral=(input,),
     )
@@ -192,9 +197,9 @@ end
 
 function SHTnsKit.dist_analysis_sphtor!(plan::ParallelExt.DistTransposePlan,
                                         S::VendorPencilArray,
-                                        T::VendorPencilArray,
-                                        Vt::VendorPencilArray,
-                                        Vp::VendorPencilArray)
+                                        T::PencilArrays.PencilArray,
+                                        Vt::PencilArrays.PencilArray,
+                                        Vp::PencilArrays.PencilArray)
     ParallelExt._validate_transpose_call!(
         plan, :dist_analysis_sphtor_transpose;
         spatial=(Vt, Vp), spectral=(S, T),
@@ -209,9 +214,9 @@ end
 
 function SHTnsKit.dist_synthesis_sphtor!(plan::ParallelExt.DistTransposePlan,
                                          Vt::VendorPencilArray,
-                                         Vp::VendorPencilArray,
-                                         S::VendorPencilArray,
-                                         T::VendorPencilArray)
+                                         Vp::PencilArrays.PencilArray,
+                                         S::PencilArrays.PencilArray,
+                                         T::PencilArrays.PencilArray)
     ParallelExt._validate_transpose_call!(
         plan, :dist_synthesis_sphtor_transpose;
         spatial=(Vt, Vp), spectral=(S, T),
@@ -226,11 +231,11 @@ end
 
 function SHTnsKit.dist_analysis_qst!(plan::ParallelExt.DistTransposePlan,
                                      Q::VendorPencilArray,
-                                     S::VendorPencilArray,
-                                     T::VendorPencilArray,
-                                     Vr::VendorPencilArray,
-                                     Vt::VendorPencilArray,
-                                     Vp::VendorPencilArray)
+                                     S::PencilArrays.PencilArray,
+                                     T::PencilArrays.PencilArray,
+                                     Vr::PencilArrays.PencilArray,
+                                     Vt::PencilArrays.PencilArray,
+                                     Vp::PencilArrays.PencilArray)
     ParallelExt._validate_transpose_qst_call!(
         plan, :dist_analysis_qst_transpose;
         spatial=(Vr, Vt, Vp), spectral=(Q, S, T),
@@ -242,11 +247,11 @@ end
 
 function SHTnsKit.dist_synthesis_qst!(plan::ParallelExt.DistTransposePlan,
                                       Vr::VendorPencilArray,
-                                      Vt::VendorPencilArray,
-                                      Vp::VendorPencilArray,
-                                      Q::VendorPencilArray,
-                                      S::VendorPencilArray,
-                                      T::VendorPencilArray)
+                                      Vt::PencilArrays.PencilArray,
+                                      Vp::PencilArrays.PencilArray,
+                                      Q::PencilArrays.PencilArray,
+                                      S::PencilArrays.PencilArray,
+                                      T::PencilArrays.PencilArray)
     ParallelExt._validate_transpose_qst_call!(
         plan, :dist_synthesis_qst_transpose;
         spatial=(Vr, Vt, Vp), spectral=(Q, S, T),
@@ -260,7 +265,7 @@ end
 for name in (:analysis_sphtor_cplx,)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   Vt::VendorPencilArray,
-                                  Vp::VendorPencilArray; kwargs...)
+                                  Vp::PencilArrays.PencilArray; kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_vt, host_vp) -> SHTnsKit.$name(
@@ -273,8 +278,8 @@ end
 for name in (:synthesis_sphtor_cplx,)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   S::VendorPencilArray,
-                                  T::VendorPencilArray;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  T::PencilArrays.PencilArray;
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_s, host_t, host_prototype) -> SHTnsKit.$name(
@@ -289,7 +294,7 @@ for name in (:synthesis_sph, :synthesis_sph_cplx,
              :synthesis_tor, :synthesis_tor_cplx, :synthesis_grad)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   coefficients::VendorPencilArray;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
@@ -302,7 +307,7 @@ end
 
 function SHTnsKit.analysis_sphtor_l(cfg::SHTnsKit.SHTConfig,
                                     Vt::VendorPencilArray,
-                                    Vp::VendorPencilArray, ltr::Integer)
+                                    Vp::PencilArrays.PencilArray, ltr::Integer)
     return _stage_vendor_call(
         :analysis_sphtor_l,
         (host_vt, host_vp) -> SHTnsKit.analysis_sphtor_l(
@@ -314,8 +319,8 @@ end
 for name in (:synthesis_sphtor_l, :synthesis_sphtor_l_cplx)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   S::VendorPencilArray,
-                                  T::VendorPencilArray, ltr::Integer;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  T::PencilArrays.PencilArray, ltr::Integer;
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_s, host_t, host_prototype) -> SHTnsKit.$name(
@@ -330,7 +335,7 @@ for name in (:synthesis_sph_l, :synthesis_tor_l, :synthesis_grad_l)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   coefficients::VendorPencilArray,
                                   ltr::Integer;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
@@ -347,7 +352,7 @@ for (complex_name, real_name) in (
 )
     @eval function SHTnsKit.$complex_name(
         cfg::SHTnsKit.SHTConfig, coefficients::VendorPencilArray,
-        ltr::Integer; prototype_θφ::VendorPencilArray,
+        ltr::Integer; prototype_θφ::PencilArrays.PencilArray,
     )
         return _stage_vendor_call(
             $(QuoteNode(complex_name)),
@@ -362,7 +367,7 @@ end
 function SHTnsKit.analysis_sphtor_ml(cfg::SHTnsKit.SHTConfig,
                                      stored_im::Integer,
                                      Vt::VendorPencilArray,
-                                     Vp::VendorPencilArray, ltr::Integer)
+                                     Vp::PencilArrays.PencilArray, ltr::Integer)
     return _stage_vendor_call(
         :analysis_sphtor_ml,
         (host_vt, host_vp) -> SHTnsKit.analysis_sphtor_ml(
@@ -374,7 +379,7 @@ end
 function SHTnsKit.synthesis_sphtor_ml(cfg::SHTnsKit.SHTConfig,
                                       stored_im::Integer,
                                       S::VendorPencilArray,
-                                      T::VendorPencilArray, ltr::Integer)
+                                      T::PencilArrays.PencilArray, ltr::Integer)
     return _stage_vendor_call(
         :synthesis_sphtor_ml,
         (host_s, host_t) -> SHTnsKit.synthesis_sphtor_ml(
@@ -396,8 +401,8 @@ end
 
 function SHTnsKit.analysis_qst_cplx(cfg::SHTnsKit.SHTConfig,
                                     Vr::VendorPencilArray,
-                                    Vt::VendorPencilArray,
-                                    Vp::VendorPencilArray; kwargs...)
+                                    Vt::PencilArrays.PencilArray,
+                                    Vp::PencilArrays.PencilArray; kwargs...)
     return _stage_vendor_call(
         :analysis_qst_cplx,
         (host_vr, host_vt, host_vp) -> SHTnsKit.analysis_qst_cplx(
@@ -408,8 +413,8 @@ end
 
 function SHTnsKit.analysis_qst_l(cfg::SHTnsKit.SHTConfig,
                                  Vr::VendorPencilArray,
-                                 Vt::VendorPencilArray,
-                                 Vp::VendorPencilArray, ltr::Integer)
+                                 Vt::PencilArrays.PencilArray,
+                                 Vp::PencilArrays.PencilArray, ltr::Integer)
     return _stage_vendor_call(
         :analysis_qst_l,
         (host_vr, host_vt, host_vp) -> SHTnsKit.analysis_qst_l(
@@ -420,9 +425,9 @@ end
 
 function SHTnsKit.synthesis_qst_cplx(cfg::SHTnsKit.SHTConfig,
                                      Q::VendorPencilArray,
-                                     S::VendorPencilArray,
-                                     T::VendorPencilArray;
-                                     prototype_θφ::VendorPencilArray)
+                                     S::PencilArrays.PencilArray,
+                                     T::PencilArrays.PencilArray;
+                                     prototype_θφ::PencilArrays.PencilArray)
     return _stage_vendor_call(
         :synthesis_qst_cplx,
         (host_q, host_s, host_t, host_prototype) ->
@@ -437,9 +442,9 @@ end
 for name in (:synthesis_qst_l, :synthesis_qst_l_cplx)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   Q::VendorPencilArray,
-                                  S::VendorPencilArray,
-                                  T::VendorPencilArray, ltr::Integer;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  S::PencilArrays.PencilArray,
+                                  T::PencilArrays.PencilArray, ltr::Integer;
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_q, host_s, host_t, host_prototype) -> SHTnsKit.$name(
@@ -454,8 +459,8 @@ for name in (:analysis_qst_ml, :synthesis_qst_ml)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   stored_im::Integer,
                                   Q::VendorPencilArray,
-                                  S::VendorPencilArray,
-                                  T::VendorPencilArray, ltr::Integer)
+                                  S::PencilArrays.PencilArray,
+                                  T::PencilArrays.PencilArray, ltr::Integer)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_q, host_s, host_t) -> SHTnsKit.$name(
@@ -488,7 +493,7 @@ end
 for name in (:synthesis_packed, :synthesis_packed_cplx)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   input::VendorPencilArray;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_input, host_prototype) -> SHTnsKit.$name(
@@ -502,7 +507,7 @@ end
 for name in (:synthesis_packed_l, :synthesis_packed_cplx_l)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   input::VendorPencilArray, ltr::Integer;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_input, host_prototype) -> SHTnsKit.$name(
@@ -555,7 +560,7 @@ end
 
 function SHTnsKit.analysis_batch!(cfg::SHTnsKit.SHTConfig,
                                    output::VendorPencilArray,
-                                   input::VendorPencilArray; kwargs...)
+                                   input::PencilArrays.PencilArray; kwargs...)
     return _stage_vendor_call(
         :analysis_batch!,
         (host_output, host_input) -> SHTnsKit.analysis_batch!(
@@ -567,7 +572,7 @@ end
 for name in (:synthesis_batch, :synthesis_batch_cplx)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   input::VendorPencilArray;
-                                  prototype_θφ::VendorPencilArray, kwargs...)
+                                  prototype_θφ::PencilArrays.PencilArray, kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_input, host_prototype) -> SHTnsKit.$name(
@@ -579,8 +584,8 @@ end
 
 function SHTnsKit.synthesis_batch!(cfg::SHTnsKit.SHTConfig,
                                     output::VendorPencilArray,
-                                    input::VendorPencilArray;
-                                    prototype_θφ::VendorPencilArray=output,
+                                    input::PencilArrays.PencilArray;
+                                    prototype_θφ::PencilArrays.PencilArray=output,
                                     kwargs...)
     return _stage_vendor_call(
         :synthesis_batch!,
@@ -597,7 +602,7 @@ for name in (:analysis_sphtor_batch, :synthesis_sphtor_batch,
              :synthesis_sphtor_batch_cplx)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   first::VendorPencilArray,
-                                  second::VendorPencilArray; kwargs...)
+                                  second::PencilArrays.PencilArray; kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_first, host_second) -> SHTnsKit.$name(
@@ -611,8 +616,8 @@ for name in (:analysis_qst_batch, :synthesis_qst_batch,
              :synthesis_qst_batch_cplx)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   first::VendorPencilArray,
-                                  second::VendorPencilArray,
-                                  third::VendorPencilArray; kwargs...)
+                                  second::PencilArrays.PencilArray,
+                                  third::PencilArrays.PencilArray; kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_first, host_second, host_third) -> SHTnsKit.$name(
@@ -647,8 +652,8 @@ for name in (:SHqst_to_point, :SH_to_grad_point)
     if name === :SHqst_to_point
         @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                       Q::VendorPencilArray,
-                                      S::VendorPencilArray,
-                                      T::VendorPencilArray,
+                                      S::PencilArrays.PencilArray,
+                                      T::PencilArrays.PencilArray,
                                       cost::Real, phi::Real)
             return _stage_vendor_call(
                 $(QuoteNode(name)),
@@ -662,7 +667,7 @@ end
 
 function SHTnsKit.SH_to_grad_point(cfg::SHTnsKit.SHTConfig,
                                    Dr::VendorPencilArray,
-                                   S::VendorPencilArray,
+                                   S::PencilArrays.PencilArray,
                                    cost::Real, phi::Real)
     return _stage_vendor_call(
         :SH_to_grad_point,
@@ -674,8 +679,8 @@ end
 
 function SHTnsKit.SHqst_to_lat(cfg::SHTnsKit.SHTConfig,
                                Q::VendorPencilArray,
-                               S::VendorPencilArray,
-                               T::VendorPencilArray, cost::Real; kwargs...)
+                               S::PencilArrays.PencilArray,
+                               T::PencilArrays.PencilArray, cost::Real; kwargs...)
     return _stage_vendor_call(
         :SHqst_to_lat,
         (host_q, host_s, host_t) -> SHTnsKit.SHqst_to_lat(
@@ -706,8 +711,8 @@ end
 
 function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig,
                                       Q::VendorPencilArray,
-                                      S::VendorPencilArray,
-                                      T::VendorPencilArray,
+                                      S::PencilArrays.PencilArray,
+                                      T::PencilArrays.PencilArray,
                                       cost::Real, phi::Real)
     return _stage_vendor_call(
         :dist_SHqst_to_point,
@@ -720,8 +725,8 @@ end
 
 function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig,
                                     Q::VendorPencilArray,
-                                    S::VendorPencilArray,
-                                    T::VendorPencilArray,
+                                    S::PencilArrays.PencilArray,
+                                    T::PencilArrays.PencilArray,
                                     cost::Real; kwargs...)
     return _stage_vendor_call(
         :dist_SHqst_to_lat,
@@ -742,7 +747,7 @@ end
 
 function SHTnsKit.dist_synthesis_packed(
         cfg::SHTnsKit.SHTConfig, coefficients::VendorArray;
-        prototype_θφ::VendorPencilArray, kwargs...)
+        prototype_θφ::PencilArrays.PencilArray, kwargs...)
     return _stage_vendor_call(
         :dist_synthesis_packed,
         (host_coefficients, host_prototype) ->
@@ -764,7 +769,7 @@ end
 
 function SHTnsKit.dist_synthesis_packed_cplx(
         cfg::SHTnsKit.SHTConfig, coefficients::VendorArray;
-        prototype_θφ::VendorPencilArray)
+        prototype_θφ::PencilArrays.PencilArray)
     return _stage_vendor_call(
         :dist_synthesis_packed_cplx,
         (host_coefficients, host_prototype) ->
@@ -784,7 +789,7 @@ end
 
 function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig,
                                  coefficients::VendorPencilArray;
-                                 prototype_θφ::VendorPencilArray, kwargs...)
+                                 prototype_θφ::PencilArrays.PencilArray, kwargs...)
     return _stage_vendor_call(
         :dist_synthesis,
         (host_coefficients, host_prototype) -> SHTnsKit.dist_synthesis(
@@ -796,7 +801,7 @@ end
 
 function SHTnsKit.dist_analysis_sphtor(cfg::SHTnsKit.SHTConfig,
                                        Vt::VendorPencilArray,
-                                       Vp::VendorPencilArray; kwargs...)
+                                       Vp::PencilArrays.PencilArray; kwargs...)
     return _stage_vendor_call(
         :dist_analysis_sphtor,
         (host_vt, host_vp) -> SHTnsKit.dist_analysis_sphtor(
@@ -807,8 +812,8 @@ end
 
 function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
                                         S::VendorPencilArray,
-                                        T::VendorPencilArray;
-                                        prototype_θφ::VendorPencilArray,
+                                        T::PencilArrays.PencilArray;
+                                        prototype_θφ::PencilArrays.PencilArray,
                                         kwargs...)
     return _stage_vendor_call(
         :dist_synthesis_sphtor,
@@ -822,8 +827,8 @@ end
 
 function SHTnsKit.dist_analysis_qst(cfg::SHTnsKit.SHTConfig,
                                     Vr::VendorPencilArray,
-                                    Vt::VendorPencilArray,
-                                    Vp::VendorPencilArray; kwargs...)
+                                    Vt::PencilArrays.PencilArray,
+                                    Vp::PencilArrays.PencilArray; kwargs...)
     return _stage_vendor_call(
         :dist_analysis_qst,
         (host_vr, host_vt, host_vp) -> SHTnsKit.dist_analysis_qst(
@@ -834,9 +839,9 @@ end
 
 function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig,
                                      Q::VendorPencilArray,
-                                     S::VendorPencilArray,
-                                     T::VendorPencilArray;
-                                     prototype_θφ::VendorPencilArray,
+                                     S::PencilArrays.PencilArray,
+                                     T::PencilArrays.PencilArray;
+                                     prototype_θφ::PencilArrays.PencilArray,
                                      kwargs...)
     return _stage_vendor_call(
         :dist_synthesis_qst,
@@ -857,7 +862,7 @@ end
 
 function SHTnsKit.dist_vector_roundtrip!(cfg::SHTnsKit.SHTConfig,
                                          Vt::VendorPencilArray,
-                                         Vp::VendorPencilArray)
+                                         Vp::PencilArrays.PencilArray)
     return _stage_vendor_call(
         :dist_vector_roundtrip!,
         (host_vt, host_vp) -> SHTnsKit.dist_vector_roundtrip!(
@@ -870,7 +875,7 @@ end
 function SHTnsKit.SH_mul_mx(::SHTnsKit.CPU, cfg::SHTnsKit.SHTConfig,
                             mx::AbstractVector{<:Real},
                             input::VendorPencilArray,
-                            output::VendorPencilArray)
+                            output::PencilArrays.PencilArray)
     return _stage_vendor_call(
         :SH_mul_mx,
         (host_input, host_output) -> SHTnsKit.SH_mul_mx(
@@ -880,23 +885,21 @@ function SHTnsKit.SH_mul_mx(::SHTnsKit.CPU, cfg::SHTnsKit.SHTConfig,
 end
 
 SHTnsKit.SH_mul_mx(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real},
-                   input::VendorPencilArray, output::VendorPencilArray) =
+                   input::VendorPencilArray,
+                   output::PencilArrays.PencilArray) =
     SHTnsKit.SH_mul_mx(SHTnsKit.CPU(), cfg, mx, input, output)
 
 SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig,
                          mx::AbstractVector{<:Real},
                          input::VendorPencilArray,
-                         output::VendorPencilArray) =
+                         output::PencilArrays.PencilArray) =
     SHTnsKit.SH_mul_mx(SHTnsKit.CPU(), cfg, mx, input, output)
 
 for name in (:dist_spatial_divergence, :dist_spatial_vorticity)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   first::VendorPencilArray,
-                                  second::VendorPencilArray; kwargs...)
+                                  second::PencilArrays.PencilArray; kwargs...)
         prototype = get(kwargs, :prototype_θφ, first)
-        prototype isa VendorPencilArray || throw(ArgumentError(
-            "$(string($name)) prototype must use the input GPU vendor",
-        ))
         forwarded = Base.structdiff((; kwargs...), (; prototype_θφ=prototype))
         return _stage_vendor_call(
             $(QuoteNode(name)),
@@ -911,9 +914,6 @@ end
 function SHTnsKit.dist_scalar_laplacian(cfg::SHTnsKit.SHTConfig,
                                         input::VendorPencilArray; kwargs...)
     prototype = get(kwargs, :prototype_θφ, input)
-    prototype isa VendorPencilArray || throw(ArgumentError(
-        "dist_scalar_laplacian prototype must use the input GPU vendor",
-    ))
     forwarded = Base.structdiff((; kwargs...), (; prototype_θφ=prototype))
     return _stage_vendor_call(
         :dist_scalar_laplacian,
@@ -926,7 +926,7 @@ end
 
 function SHTnsKit.dist_scalar_laplacian!(cfg::SHTnsKit.SHTConfig,
                                          output::VendorPencilArray,
-                                         input::VendorPencilArray; kwargs...)
+                                         input::PencilArrays.PencilArray; kwargs...)
     return _stage_vendor_call(
         :dist_scalar_laplacian!,
         (host_output, host_input) -> SHTnsKit.dist_scalar_laplacian!(
@@ -947,7 +947,7 @@ for name in (:dist_SH_Zrotate, :dist_SH_Yrotate,
              :dist_SH_Yrotate_truncgatherm!)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   input::VendorPencilArray, angle::Real,
-                                  output::VendorPencilArray)
+                                  output::PencilArrays.PencilArray)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_input, host_output) -> SHTnsKit.$name(
@@ -960,7 +960,7 @@ end
 for name in (:dist_SH_Yrotate90, :dist_SH_Xrotate90)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   input::VendorPencilArray,
-                                  output::VendorPencilArray)
+                                  output::PencilArrays.PencilArray)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_input, host_output) -> SHTnsKit.$name(
@@ -973,7 +973,7 @@ end
 function SHTnsKit.dist_SH_rotate_euler(cfg::SHTnsKit.SHTConfig,
                                        input::VendorPencilArray,
                                        alpha::Real, beta::Real, gamma::Real,
-                                       output::VendorPencilArray)
+                                       output::PencilArrays.PencilArray)
     return _stage_vendor_call(
         :dist_SH_rotate_euler,
         (host_input, host_output) -> SHTnsKit.dist_SH_rotate_euler(
@@ -985,7 +985,7 @@ end
 for name in (:dist_SH_Zrotate_packed, :dist_SH_Yrotate_packed)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   coefficients::VendorArray, angle::Real;
-                                  prototype_lm::VendorPencilArray)
+                                  prototype_lm::PencilArrays.PencilArray)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
@@ -998,7 +998,7 @@ end
 for name in (:dist_SH_Yrotate90_packed, :dist_SH_Xrotate90_packed)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   coefficients::VendorArray;
-                                  prototype_lm::VendorPencilArray)
+                                  prototype_lm::PencilArrays.PencilArray)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
@@ -1021,7 +1021,7 @@ for name in (:energy_vector_l_spectrum, :energy_vector_m_spectrum,
              :grid_energy_vector)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   first::VendorPencilArray,
-                                  second::VendorPencilArray; kwargs...)
+                                  second::PencilArrays.PencilArray; kwargs...)
         return _stage_vendor_call(
             $(QuoteNode(name)),
             (host_first, host_second) -> SHTnsKit.$name(

@@ -1369,6 +1369,35 @@ function test_mpi_gpu_policy(extension)
     @test staged_collectives[] == 2
     @test extension.parallel_gpu_cache_sizes().staging == 1
 
+    # Every host-to-device result transfer uses a bounded pinned snapshot,
+    # including zero-length results, and reuses it on repeated calls.
+    extension.parallel_gpu_clear_caches!()
+    pin_lengths = Int[]
+    result_adapter = extension.ParallelGPUAdapter(
+        :mock_pinned_results, adapter.matches, adapter.array_type,
+        adapter.device, adapter.with_device, adapter.gpu_aware,
+        adapter.synchronize,
+        (T, n) -> (push!(pin_lengths, n); Vector{T}(undef, n)),
+        adapter.device_to_host!, adapter.host_to_device!,
+    )
+    for _ in 1:2
+        restored = extension._staged_gpu_call(
+            result_adapter, :pinned_result, comm,
+            host -> Float32[sum(host), length(host)], buffer;
+            validate_storage=false,
+        )
+        @test restored.data == Float32[24, 3]
+    end
+    empty_device = MockMPIArray(Float32[])
+    empty_restored = extension._staged_gpu_call(
+        result_adapter, :pinned_empty_result, comm,
+        _host -> Float32[], empty_device; validate_storage=false,
+    )
+    @test isempty(empty_restored)
+    @test count(==(3), pin_lengths) == 1
+    @test count(==(2), pin_lengths) == 1
+    @test count(==(0), pin_lengths) <= 2
+
     # Device-aware cache keys follow the allocation behind views, not the
     # current task device.  Reusing an allocation after its fake device changes
     # must create independent awareness and pinned-staging entries.
@@ -1398,6 +1427,83 @@ function test_mpi_gpu_policy(extension)
         copyto!, copyto!,
     )
     multi_comm = Ref(:multidevice_subgroup)
+
+    # Native CPU mirror plans are single-flight, pinned, bounded, observable,
+    # and recover after a failed first construction without stranding waiters.
+    @test isdefined(extension, :_with_gpu_transpose_host_entry)
+    if isdefined(extension, :_with_gpu_transpose_host_entry)
+        native_cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
+        native_plan = SHTnsKit.DistTransposePlan(
+            native_cfg; comm=MPI.COMM_SELF, nlev=1,
+        )
+        native_pins = Threads.Atomic{Int}(0)
+        native_adapter = extension.ParallelGPUAdapter(
+            :mock_native_host_plan, multi_adapter.matches,
+            multi_adapter.array_type, multi_adapter.device,
+            multi_adapter.with_device, multi_adapter.gpu_aware,
+            multi_adapter.synchronize,
+            (T, n) -> begin
+                Threads.atomic_add!(native_pins, 1)
+                for _ in 1:16
+                    yield()
+                end
+                Vector{T}(undef, n)
+            end,
+            multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+        )
+        extension.parallel_gpu_clear_caches!()
+        start_native = Base.Event()
+        native_tasks = [Threads.@spawn begin
+            wait(start_native)
+            extension._with_gpu_transpose_host_entry(
+                native_adapter, native_plan, multi,
+            ) do entry
+                (objectid(entry.fft_plan), objectid(entry.spatial),
+                 objectid(entry.spectral))
+            end
+        end for _ in 1:8]
+        notify(start_native)
+        native_ids = fetch.(native_tasks)
+        @test all(==(first(native_ids)), native_ids)
+        @test native_pins[] == 2
+        @test extension.parallel_gpu_cache_sizes().native_host_plans == 1
+
+        fail_next_pin = Ref(true)
+        failing_native_adapter = extension.ParallelGPUAdapter(
+            :mock_native_host_failure, multi_adapter.matches,
+            multi_adapter.array_type, multi_adapter.device,
+            multi_adapter.with_device, multi_adapter.gpu_aware,
+            multi_adapter.synchronize,
+            (T, n) -> begin
+                if fail_next_pin[]
+                    fail_next_pin[] = false
+                    error("native pin failed")
+                end
+                Vector{T}(undef, n)
+            end,
+            multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+        )
+        extension.parallel_gpu_clear_caches!()
+        @test_throws ErrorException extension._with_gpu_transpose_host_entry(
+            _ -> nothing, failing_native_adapter, native_plan, multi,
+        )
+        @test extension._with_gpu_transpose_host_entry(
+            _ -> :recovered, failing_native_adapter, native_plan, multi,
+        ) === :recovered
+
+        extension.parallel_gpu_clear_caches!()
+        live_native_plans = [SHTnsKit.DistTransposePlan(
+            native_cfg; comm=MPI.COMM_SELF, nlev=1,
+        ) for _ in 1:10]
+        for plan in live_native_plans
+            extension._with_gpu_transpose_host_entry(
+                _ -> nothing, native_adapter, plan, multi,
+            )
+            @test extension.parallel_gpu_cache_sizes().native_host_plans <= 8
+        end
+        extension.parallel_gpu_clear_caches!()
+        @test extension.parallel_gpu_cache_sizes().native_host_plans == 0
+    end
 
     # Every sync/copy must run on the physical device owning that buffer while
     # host MPI/CPU callbacks run on the caller's original current device.
@@ -1645,6 +1751,99 @@ function test_mpi_gpu_policy(extension)
     ) == 46
     @test multi_host_allocations[] == 2
 
+    # Equivalent live wrappers describe the same transfer region and must
+    # reuse one entry and one lock even when wrapper identities differ.
+    extension.parallel_gpu_clear_caches!()
+    multi_host_allocations[] = 0
+    equivalent_first = view(multi, [1], :)
+    equivalent_second = view(multi, [1], :)
+    equivalent_entry = extension._staging_entry(
+        multi_adapter, multi_comm, equivalent_first, 2,
+    )
+    @test extension._staging_entry(
+        multi_adapter, multi_comm, equivalent_second, 2,
+    ) === equivalent_entry
+    @test multi_host_allocations[] == 1
+
+    # Concurrent first use of equivalent live wrappers is single-flight: all
+    # tasks receive the same entry/lock and only one pin allocation occurs.
+    extension.parallel_gpu_clear_caches!()
+    concurrent_allocations = Threads.Atomic{Int}(0)
+    concurrent_adapter = extension.ParallelGPUAdapter(
+        :mock_equivalent_views, multi_adapter.matches,
+        multi_adapter.array_type, multi_adapter.device,
+        multi_adapter.with_device, multi_adapter.gpu_aware,
+        multi_adapter.synchronize,
+        (T, n) -> begin
+            Threads.atomic_add!(concurrent_allocations, 1)
+            for _ in 1:16
+                yield()
+            end
+            Vector{T}(undef, n)
+        end,
+        multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+    )
+    start = Base.Event()
+    concurrent_views = [view(multi, [1], :) for _ in 1:8]
+    tasks = [Threads.@spawn begin
+        wait(start)
+        extension._staging_entry(
+            concurrent_adapter, multi_comm, logical, length(logical),
+        )
+    end for logical in concurrent_views]
+    notify(start)
+    concurrent_entries = fetch.(tasks)
+    @test all(entry -> entry === first(concurrent_entries), concurrent_entries)
+    @test concurrent_allocations[] == 1
+
+    # At capacity, different live regions borrow only idle compatible pinned
+    # slots. Concurrent excess users wait; they never allocate uncached buffers
+    # or corrupt one another's payload.
+    extension.parallel_gpu_clear_caches!()
+    extension.parallel_gpu_cache_limit!(2)
+    pool_allocations = Threads.Atomic{Int}(0)
+    pool_adapter = extension.ParallelGPUAdapter(
+        :mock_bounded_pool, multi_adapter.matches, multi_adapter.array_type,
+        multi_adapter.device, multi_adapter.with_device,
+        multi_adapter.gpu_aware, multi_adapter.synchronize,
+        (T, n) -> begin
+            Threads.atomic_add!(pool_allocations, 1)
+            Vector{T}(undef, n)
+        end,
+        multi_adapter.device_to_host!, multi_adapter.host_to_device!,
+    )
+    pool_values = [MockMultiDeviceArray(Float32[n, n + 1], 1) for n in 1:8]
+    for _ in 1:2, value in pool_values
+        extension.allreduce!(
+            value, +, multi_comm; adapter=pool_adapter,
+            collective=(host, _op, _comm) -> host,
+        )
+    end
+    @test pool_allocations[] <= 2
+    extension.parallel_gpu_clear_caches!()
+    pool_allocations[] = 0
+    start_pool = Base.Event()
+    pool_tasks = [Threads.@spawn begin
+        wait(start_pool)
+        extension.allreduce!(
+            value, +, multi_comm; adapter=pool_adapter,
+            collective=(host, _op, _comm) -> begin
+                for _ in 1:8
+                    yield()
+                end
+                host .+= 1
+                host
+            end,
+        )
+    end for value in pool_values]
+    notify(start_pool)
+    fetch.(pool_tasks)
+    @test pool_allocations[] <= 2
+    for (n, value) in enumerate(pool_values)
+        @test value.data == Float32[n + 1, n + 2]
+    end
+    extension.parallel_gpu_cache_limit!(8)
+
     # Wrapper signatures must retain the wrapped logical region. Equal-shape
     # reshapes over different views of one root need separate, reusable slots.
     extension.parallel_gpu_clear_caches!()
@@ -1773,7 +1972,8 @@ function test_mpi_gpu_policy(extension)
     extension.allreduce!(multi_view, +, multi_comm; adapter=multi_adapter,
                          collective=(host, _op, _comm) -> host)
     @test current_device[] == 99
-    @test extension.parallel_gpu_cache_sizes() == (awareness=2, staging=2)
+    @test extension.parallel_gpu_cache_sizes() ==
+          (awareness=2, staging=2, native_host_plans=0)
 
     # A staged collective cannot return until its host-to-device copy has been
     # synchronized. Per-entry locks must also be released on MPI/copy errors.
@@ -1979,7 +2179,8 @@ function test_mpi_gpu_policy(extension)
     @test stats.direct_bytes >= sizeof(Float32) * 3
     @test stats.staged_bytes >= sizeof(Float32) * (3 + 3)
     extension.parallel_gpu_clear_caches!()
-    @test extension.parallel_gpu_cache_sizes() == (awareness=0, staging=0)
+    @test extension.parallel_gpu_cache_sizes() ==
+          (awareness=0, staging=0, native_host_plans=0)
 end
 
 const MPI_GPU_FIREWALL_GROUPS = (
@@ -2152,6 +2353,10 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test occursin("_staged_gpu_call", firewall)
     @test occursin(":synthesis_sph_l_cplx", firewall)
     @test occursin(":synthesis_tor_l_cplx", firewall)
+    @test !occursin("prototype_θφ::VendorPencilArray", firewall)
+    @test !occursin("prototype isa VendorPencilArray || throw", firewall)
+    @test occursin("prototype_θφ::PencilArrays.PencilArray", firewall)
+    @test occursin("_validate_parallel_storage!", firewall)
 
     transpose_source = read(
         joinpath(root, "ext", "ParallelTransposeTransforms.jl"), String,

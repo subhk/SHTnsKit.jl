@@ -117,6 +117,8 @@ function SHTnsKit.DistTransposePlan(
     nlev > 0 || (constructor_flags |= 0x0001)
     use_rfft || (constructor_flags |= 0x0010)
     precision_code = _scalar_precision_code(real_type)
+    prototype_present = prototype === nothing ? 0 : 1
+    array_type_code = _parallel_array_type_code(array_type)
     precision_code in (1, 3) || (constructor_flags |= 0x0004)
     array_type <: AbstractArray || (constructor_flags |= 0x20000)
     MPI.Allreduce(nlev, min, comm) == MPI.Allreduce(nlev, max, comm) ||
@@ -127,6 +129,12 @@ function SHTnsKit.DistTransposePlan(
     MPI.Allreduce(precision_code, min, comm) ==
         MPI.Allreduce(precision_code, max, comm) ||
         (constructor_flags |= 0x0004)
+    MPI.Allreduce(prototype_present, min, comm) ==
+        MPI.Allreduce(prototype_present, max, comm) ||
+        (constructor_flags |= 0x20000)
+    MPI.Allreduce(array_type_code, min, comm) ==
+        MPI.Allreduce(array_type_code, max, comm) ||
+        (constructor_flags |= 0x20000)
     if prototype !== nothing
         prototype_array_type = _parallel_array_type(prototype)
         array_type === prototype_array_type || (constructor_flags |= 0x20000)
@@ -266,9 +274,27 @@ function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
     flags = UInt32(0)
     spatial_type = Transforms.eltype_input(plan.fft_plan)
     spectral_type = eltype(plan.F_buf)
+    spatial_reference = Pencil(
+        Array, (plan.nlon, plan.nlat), (2,), comm,
+    )
+    layout_matches = function(reference, value)
+        candidate = pencil(value)
+        try
+            size_global(candidate) == size_global(reference) &&
+            PencilArrays.decomposition(candidate) ==
+                PencilArrays.decomposition(reference) &&
+            size(PencilArrays.topology(candidate)) ==
+                size(PencilArrays.topology(reference)) &&
+            PencilArrays.range_local(candidate) ==
+                PencilArrays.range_local(reference) &&
+            size(parent(value)) ==
+                (PencilArrays.size_local(reference)..., plan.nlev)
+        catch
+            false
+        end
+    end
     for value in spatial
-        size_global(pencil(value)) == (plan.nlon, plan.nlat) || (flags |= 0x0001)
-        size(parent(value), 3) == plan.nlev || (flags |= 0x0002)
+        layout_matches(spatial_reference, value) || (flags |= 0x0002)
         eltype(value) === spatial_type || (flags |= 0x0004)
         communicator(value) === comm || begin
             compatible = try
@@ -280,9 +306,7 @@ function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
         end
     end
     for value in spectral
-        size_global(pencil(value)) == size_global(plan.spectral_pencil) ||
-            (flags |= 0x0001)
-        size(parent(value), 3) == plan.nlev || (flags |= 0x0002)
+        layout_matches(plan.spectral_pencil, value) || (flags |= 0x0002)
         eltype(value) === spectral_type || (flags |= 0x0004)
         communicator(value) === comm || begin
             compatible = try

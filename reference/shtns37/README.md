@@ -41,7 +41,10 @@ Analysis fixtures use deterministic spatial inputs and call SHTns' public
 `spat_to_SH`, `spat_cplx_to_SH`, `_l`, `_ml`, spheroidal/toroidal, and QST
 analysis functions directly. Full scalar, vector, and QST batches are repeated
 public SHTns calls. Manifest payload roles distinguish `analysis_input` from
-`analysis_oracle`; no expected coefficient is derived with SHTnsKit.
+`analysis_oracle`; no expected coefficient is derived with SHTnsKit. Because
+these public C entry points accept mutable spatial buffers, the generator keeps
+each deterministic input as an immutable payload snapshot and passes a fresh
+copy to SHTns, so scratch writes can never alter the serialized oracle input.
 
 The rotation fixture calls the complete public SHTns 3.7 surface: Z, Y, Y90,
 X90, ZYZ, ZXZ, angle-axis, Wigner-d extraction, and real/complex apply. Serial

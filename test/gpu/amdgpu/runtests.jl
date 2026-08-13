@@ -173,7 +173,9 @@ end
     test_angle_axis_pi_singularity()
     if AMDGPU.functional()
         run_rotation_parity(AMDGPURotationAdapter())
-        test_shtns37_gpu_fixtures(ROCArray)
+        test_shtns37_gpu_fixtures(
+            ROCArray, value -> (@test value isa AMDGPU.AnyROCArray),
+        )
     else
         @test_skip AMDGPU.functional()
     end

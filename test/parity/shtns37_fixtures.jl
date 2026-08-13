@@ -265,6 +265,79 @@ function test_shtns37_analysis_fixtures_cpu()
     end
 end
 
+_shtns37_expected_real(seed, i) = seed + 0.013i - 0.0007i * i
+_shtns37_expected_complex(seed, i) =
+    (seed + 0.011i) + im * (-0.3seed + 0.007i)
+
+function _shtns37_expected_real_grid(fixture, seed)
+    return [_shtns37_expected_real(seed, (it - 1) * fixture["nphi"] + ip)
+            for it in 1:fixture["nlat"], ip in 1:fixture["nphi"]]
+end
+
+function _shtns37_expected_complex_grid(fixture, seed)
+    return [_shtns37_expected_complex(seed, (it - 1) * fixture["nphi"] + ip)
+            for it in 1:fixture["nlat"], ip in 1:fixture["nphi"]]
+end
+
+"""Prove analysis payloads contain the deterministic bytes from before SHTns runs."""
+function test_shtns37_analysis_inputs_are_pristine()
+    fixtures = Dict(
+        fixture["id"] => fixture
+        for fixture in TOML.parsefile(SHTNS37_MANIFEST_PATH)["fixture"]
+        if get(fixture, "direction", "") == "analysis"
+    )
+    payloads(id) = _shtns37_payloads(fixtures[id])
+    grid(id, seed) = _shtns37_expected_real_grid(fixtures[id], seed)
+    cgrid(id, seed) = _shtns37_expected_complex_grid(fixtures[id], seed)
+    line(seed, n) = [_shtns37_expected_complex(seed, i) for i in 1:n]
+    pristine(actual, expected) = isapprox(
+        actual, expected; atol=8eps(Float64), rtol=8eps(Float64),
+    )
+
+    @testset "SHTns 3.7 immutable analysis inputs" begin
+        @test pristine(payloads("analysis_scalar_full")["field"],
+              cat(grid("analysis_scalar_full", 0.2),
+                  grid("analysis_scalar_full", 0.3); dims=3))
+        @test pristine(payloads("analysis_scalar_complex")["field"],
+                       cgrid("analysis_scalar_complex", 0.31))
+        @test pristine(payloads("analysis_scalar_l")["field"],
+                       grid("analysis_scalar_l", 0.42))
+        @test pristine(vec(payloads("analysis_scalar_ml")["field"]),
+                       line(0.27, fixtures["analysis_scalar_ml"]["nlat"]))
+
+        @test pristine(payloads("analysis_sphtor_full")["Vt"],
+              cat(grid("analysis_sphtor_full", 0.12),
+                  grid("analysis_sphtor_full", 0.22); dims=3))
+        @test pristine(payloads("analysis_sphtor_full")["Vp"],
+              cat(grid("analysis_sphtor_full", -0.16),
+                  grid("analysis_sphtor_full", -0.26); dims=3))
+        @test pristine(payloads("analysis_sphtor_l")["Vt"],
+                       grid("analysis_sphtor_l", 0.14))
+        @test pristine(payloads("analysis_sphtor_l")["Vp"],
+                       grid("analysis_sphtor_l", -0.19))
+        @test pristine(vec(payloads("analysis_sphtor_ml")["Vt"]),
+                       line(0.17, fixtures["analysis_sphtor_ml"]["nlat"]))
+        @test pristine(vec(payloads("analysis_sphtor_ml")["Vp"]),
+                       line(-0.21, fixtures["analysis_sphtor_ml"]["nlat"]))
+
+        @test pristine(payloads("analysis_qst_full")["Vr"],
+              cat(grid("analysis_qst_full", 0.2), grid("analysis_qst_full", 0.3); dims=3))
+        @test pristine(payloads("analysis_qst_full")["Vt"],
+              cat(grid("analysis_qst_full", 0.1), grid("analysis_qst_full", 0.2); dims=3))
+        @test pristine(payloads("analysis_qst_full")["Vp"],
+              cat(grid("analysis_qst_full", -0.2), grid("analysis_qst_full", -0.3); dims=3))
+        @test pristine(payloads("analysis_qst_l")["Vr"], grid("analysis_qst_l", 0.22))
+        @test pristine(payloads("analysis_qst_l")["Vt"], grid("analysis_qst_l", 0.13))
+        @test pristine(payloads("analysis_qst_l")["Vp"], grid("analysis_qst_l", -0.18))
+        @test pristine(vec(payloads("analysis_qst_ml")["Vr"]),
+                       line(0.23, fixtures["analysis_qst_ml"]["nlat"]))
+        @test pristine(vec(payloads("analysis_qst_ml")["Vt"]),
+                       line(0.11, fixtures["analysis_qst_ml"]["nlat"]))
+        @test pristine(vec(payloads("analysis_qst_ml")["Vp"]),
+                       line(-0.2, fixtures["analysis_qst_ml"]["nlat"]))
+    end
+end
+
 function _test_shtns37_local_fixture(f)
     cfg=_shtns37_config(f);p=_shtns37_payloads(f);cap=Symbol(f["capability"]);a=f["atol"];r=f["rtol"]
     if cap===:point
@@ -337,6 +410,7 @@ function test_shtns37_fixtures_cpu()
     test_shtns37_local_fixtures()
     test_shtns37_operator_rotation_fixtures()
     test_shtns37_analysis_fixtures_cpu()
+    test_shtns37_analysis_inputs_are_pristine()
     return nothing
 end
 
@@ -369,7 +443,7 @@ function _test_shtns37_analysis_fixture_gpu(f,p,cfg,to_device)
 end
 
 """Run every generated oracle through one functional vendor GPU backend."""
-function test_shtns37_gpu_fixtures(to_device)
+function test_shtns37_gpu_fixtures(to_device, assert_resident)
     manifest=TOML.parsefile(SHTNS37_MANIFEST_PATH)
     @testset "SHTns 3.7 GPU fixtures" begin
         for f in manifest["fixture"]
@@ -440,8 +514,11 @@ function test_shtns37_gpu_fixtures(to_device)
                 elseif cap===:rotations
                     z=to_device(zeros(ComplexF64,cfg.nlm));y=similar(z);y90=similar(z);x90=similar(z);Q=to_device(vec(p["Q"]));SH_Zrotate(GPU(),cfg,Q,f["z_angle"],z);SH_Yrotate(GPU(),cfg,Q,f["y_angle"],y);SH_Yrotate90(GPU(),cfg,Q,y90);SH_Xrotate90(GPU(),cfg,Q,x90)
                     @test Array(z) ≈ vec(p["Z"]) atol=a rtol=r;@test Array(y) ≈ vec(p["Y"]) atol=a rtol=r;@test Array(y90) ≈ vec(p["Y90"]) atol=a rtol=r;@test Array(x90) ≈ vec(p["X90"]) atol=a rtol=r
-                    angles=f["euler_angles"];rot=shtns_rotation_create(cfg.lmax,cfg.mmax,0);shtns_rotation_set_angles_ZYZ(rot,angles...);rr=similar(z);shtns_rotation_apply_real(GPU(),rot,Q,rr);@test Array(rr) ≈ vec(p["ZYZ_real"]) atol=a rtol=r
-                    rc=to_device(zeros(ComplexF64,length(vec(p["A"]))));shtns_rotation_apply_cplx(GPU(),rot,to_device(vec(p["A"])),rc);@test Array(rc) ≈ vec(p["ZYZ_complex"]) atol=a rtol=r
+                    angles=f["euler_angles"];rot=shtns_rotation_create(cfg.lmax,cfg.mmax,0);shtns_rotation_set_angles_ZYZ(rot,angles...);rr=similar(z);shtns_rotation_apply_real(GPU(),rot,Q,rr);assert_resident(rr);@test Array(rr) ≈ vec(p["ZYZ_real"]) atol=a rtol=r
+                    rc=to_device(zeros(ComplexF64,length(vec(p["A"]))));shtns_rotation_apply_cplx(GPU(),rot,to_device(vec(p["A"])),rc);assert_resident(rc);@test Array(rc) ≈ vec(p["ZYZ_complex"]) atol=a rtol=r
+                    shtns_rotation_set_angles_ZXZ(rot,angles...);zxz=similar(z);shtns_rotation_apply_real(GPU(),rot,Q,zxz);assert_resident(zxz);@test Array(zxz) ≈ vec(p["ZXZ_real"]) atol=a rtol=r
+                    axis=f["angle_axis"];shtns_rotation_set_angle_axis(rot,axis...);axis_result=similar(z);shtns_rotation_apply_real(GPU(),rot,Q,axis_result);assert_resident(axis_result);@test Array(axis_result) ≈ vec(p["axis_real"]) atol=a rtol=r
+                    shtns_rotation_destroy(rot)
                 end
             end
         end
@@ -591,10 +668,36 @@ function test_shtns37_fixture_manifest()
         for api in expected_analysis_apis
             @test occursin("$api(",generator_source)
         end
+        @test occursin("copy_real_input", generator_source)
+        @test occursin("copy_complex_input", generator_source)
+        expected_work_calls = (
+            "spat_to_SH(c, input_work,", "spat_cplx_to_SH(c, input_work,",
+            "spat_to_SH_l(c, input_work,", "spat_to_SH_ml(c, im, input_work,",
+            "spat_to_SHsphtor(c, vt_work, vp_work,",
+            "spat_to_SHsphtor_l(c, vt_work, vp_work,",
+            "spat_to_SHsphtor_ml(c, im, vt_work, vp_work,",
+            "spat_to_SHqst(c, vr_work, vt_work, vp_work,",
+            "spat_to_SHqst_l(c, vr_work, vt_work, vp_work,",
+            "spat_to_SHqst_ml(c, im, vr_work, vt_work, vp_work,",
+        )
+        for call in expected_work_calls
+            @test occursin(call, generator_source)
+        end
         runner_source=read(@__FILE__,String)
         @test occursin("_test_shtns37_analysis_fixture_gpu",runner_source)
         @test occursin("_test_shtns37_analysis_fixture_mpi",runner_source)
         @test occursin("_test_shtns37_analysis_fixture_mpi_gpu",read(SHTNS37_MPI_GPU_PATH,String))
+        gpu_helper = match(
+            r"(?s)function test_shtns37_gpu_fixtures.*?Run every generated oracle through the MPI",
+            runner_source,
+        ).match
+        @test occursin("function test_shtns37_gpu_fixtures(to_device, assert_resident)",
+                       gpu_helper)
+        @test occursin("shtns_rotation_set_angles_ZXZ", gpu_helper)
+        @test occursin("p[\"ZXZ_real\"]", gpu_helper)
+        @test occursin("shtns_rotation_set_angle_axis", gpu_helper)
+        @test occursin("p[\"axis_real\"]", gpu_helper)
+        @test count("assert_resident", gpu_helper) >= 3
         @test Set(Symbol(f["capability"]) for f in fixtures) ==
               Set(SHTns37TestCapabilities.CAPABILITIES)
         @test Set(f["grid"] for f in fixtures) ==

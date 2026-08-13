@@ -4,7 +4,7 @@ shtns_interface = 0x307A0
 upstream_tag = "v3.7"
 upstream_commit = "4e04fba84ea156974df5edaf4ee856c0f4f86e77"
 upstream_archive_sha256 = "5c6a2d585211232a030c6fbbb08f6a794dd1aab987d31511ef53deea12138d97"
-generator_source_sha256 = "672b5a5f83d6a2deb9e449c54ead6942c4d31d64e2fd0ecffc88373106d37ea0"
+generator_source_sha256 = "49a492966585ccb221c2f763f319c36400003dee2412ecf32a7941bf8d513a28"
 
 [[fixture]]
 id = "scalar_real_full_gauss_f64"

@@ -96,7 +96,9 @@ jobs:
           set -o pipefail
           mkdir -p logs
           {
-            mpiexec -n 2 julia --project=test/gpu/cuda -e '
+            julia --project=test/gpu/cuda -e '
+              using MPI
+              preflight = """
               using MPI, CUDA
               MPI.Init()
               MPI.Comm_size(MPI.COMM_WORLD) == 2 || error("MPI/CUDA parity requires exactly two ranks")
@@ -105,8 +107,13 @@ jobs:
               length(devices) >= 2 || error("MPI/CUDA parity requires two visible GPUs")
               CUDA.device!(devices[MPI.Comm_rank(MPI.COMM_WORLD) + 1])
               MPI.Barrier(MPI.COMM_WORLD)
+              """
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/cuda -e $preflight`)
             '
-            mpiexec -n 2 julia --project=test/gpu/cuda test/gpu/cuda/mpi_runtests.jl
+            julia --project=test/gpu/cuda -e '
+              using MPI
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/cuda test/gpu/cuda/mpi_runtests.jl`)
+            '
           } 2>&1 | tee logs/mpi-cuda-parity.log
       - name: Archive MPI/CUDA parity log
         if: always()
@@ -133,7 +140,9 @@ jobs:
           set -o pipefail
           mkdir -p logs
           {
-            mpiexec -n 2 julia --project=test/gpu/amdgpu -e '
+            julia --project=test/gpu/amdgpu -e '
+              using MPI
+              preflight = """
               using MPI, AMDGPU
               MPI.Init()
               MPI.Comm_size(MPI.COMM_WORLD) == 2 || error("MPI/AMDGPU parity requires exactly two ranks")
@@ -143,8 +152,13 @@ jobs:
               length(devices) >= 2 || error("MPI/AMDGPU parity requires two visible GPUs")
               AMDGPU.device!(devices[MPI.Comm_rank(MPI.COMM_WORLD) + 1])
               MPI.Barrier(MPI.COMM_WORLD)
+              """
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/amdgpu -e $preflight`)
             '
-            mpiexec -n 2 julia --project=test/gpu/amdgpu test/gpu/amdgpu/mpi_runtests.jl
+            julia --project=test/gpu/amdgpu -e '
+              using MPI
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/amdgpu test/gpu/amdgpu/mpi_runtests.jl`)
+            '
           } 2>&1 | tee logs/mpi-amdgpu-parity.log
       - name: Archive MPI/AMDGPU parity log
         if: always()

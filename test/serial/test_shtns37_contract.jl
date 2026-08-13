@@ -161,3 +161,48 @@ end
     @test occursin("test/gpu/amdgpu/mpi_runtests.jl", source)
     @test count("actions/upload-artifact@v4", source) == 4
 end
+
+function _shtns37_workflow_job(source::String, job::String)
+    marker = "\n  $job:\n"
+    parts = split(source, marker; limit=2)
+    length(parts) == 2 || return ""
+    body = parts[2]
+    boundary = findfirst(r"\n  [a-z0-9-]+:\n", body)
+    boundary === nothing && return body
+    return body[firstindex(body):prevind(body, first(boundary))]
+end
+
+@testset "SHTns 3.7 MPI workflows use the active project launcher" begin
+    root = normpath(joinpath(@__DIR__, "..", ".."))
+    gpu_source = read(joinpath(root, ".github", "workflows", "gpu-parity.yml"), String)
+    mpi_source = read(joinpath(root, ".github", "workflows", "mpi-examples.yml"), String)
+
+    for source in (gpu_source, mpi_source)
+        @test !occursin(r"(?m)^\s*mpiexec(?:\s|$)", source)
+    end
+
+    for (job, project, runner) in (
+        ("mpi-cuda-parity", "test/gpu/cuda", "test/gpu/cuda/mpi_runtests.jl"),
+        ("mpi-amdgpu-parity", "test/gpu/amdgpu", "test/gpu/amdgpu/mpi_runtests.jl"),
+    )
+        body = _shtns37_workflow_job(gpu_source, job)
+        @test !isempty(body)
+        @test count("MPI.mpiexec()", body) == 2
+        @test count("julia --project=$project -e", body) >= 2
+        @test occursin("\$(Base.julia_cmd()) --project=$project", body)
+        @test occursin(runner, body)
+    end
+
+    cpu_body = _shtns37_workflow_job(mpi_source, "shtns37-mpi-cpu-parity")
+    @test !isempty(cpu_body)
+    @test count("MPI.mpiexec()", cpu_body) == 1
+    @test occursin("julia --project=. -e", cpu_body)
+    @test occursin("\$(Base.julia_cmd()) --project=.", cpu_body)
+    @test occursin("test/parity/runtests_mpi.jl", cpu_body)
+
+    examples_body = _shtns37_workflow_job(mpi_source, "run-mpi-examples")
+    @test !isempty(examples_body)
+    @test count("MPI.mpiexec()", examples_body) == 2
+    @test count("julia --project=. -e", examples_body) >= 2
+    @test count("\$(Base.julia_cmd()) --project=.", examples_body) == 2
+end

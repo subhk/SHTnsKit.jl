@@ -242,7 +242,7 @@ function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
     _validate_cfg_replicated(plan.cfg, comm)
     all_values = (spatial..., spectral...)
     isempty(all_values) || _validate_parallel_storage!(
-        comm, operation, plan.F_buf, all_values...,
+        comm, operation, plan.F_buf, plan.F_buf2, all_values...,
     )
     flags = UInt32(0)
     spatial_type = Transforms.eltype_input(plan.fft_plan)

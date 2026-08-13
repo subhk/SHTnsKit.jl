@@ -46,6 +46,9 @@ Base.copyto!(destination::MockMultiDeviceArray, source::AbstractArray) =
     (copyto!(destination.data, source); destination)
 Base.copyto!(destination::AbstractArray, source::MockMultiDeviceArray) =
     copyto!(destination, source.data)
+Base.copyto!(destination::MockMultiDeviceArray,
+             source::MockMultiDeviceArray) =
+    (copyto!(destination.data, source.data); destination)
 
 function _cache_temporary_view!(extension, adapter, comm)
     root = MockMultiDeviceArray(reshape(Float32.(1:4), 2, 2), 1)
@@ -314,6 +317,129 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
             @test device_of(prototype_result) == devices[1]
             current_probe = array_type{Float32}(undef, 1)
             @test device_of(current_probe) == devices[2]
+
+            # hardware multi-device context and rejection
+            # Staged copies and direct device collectives select the buffer's
+            # real device and restore the caller's different current device.
+            staged_result = extension._staged_gpu_call(
+                adapter, :hardware_owner_device, MPI.COMM_SELF,
+                host -> copy(host), first_buffer; validate_storage=false,
+            )
+            @test device_of(staged_result) == devices[1]
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+            forced_direct_adapter = extension.ParallelGPUAdapter(
+                Symbol(vendor, :_forced_direct), adapter.matches,
+                adapter.array_type, adapter.device, adapter.with_device,
+                _ -> true, adapter.synchronize, adapter.allocate_pinned,
+                adapter.device_to_host!, adapter.host_to_device!,
+            )
+            direct_callback_device = Ref{Any}()
+            extension.allreduce!(
+                first_buffer, +, MPI.COMM_SELF;
+                adapter=forced_direct_adapter,
+                collective=(buffer, _op, _comm) -> begin
+                    direct_callback_device[] = device_of(
+                        array_type{Float32}(undef, 1),
+                    )
+                    buffer
+                end,
+            )
+            @test direct_callback_device[] == devices[1]
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+
+            staged_callback_device = Ref{Any}()
+            forced_staged_adapter = extension.ParallelGPUAdapter(
+                Symbol(vendor, :_forced_staged), adapter.matches,
+                adapter.array_type, adapter.device, adapter.with_device,
+                _ -> false, adapter.synchronize, adapter.allocate_pinned,
+                adapter.device_to_host!, adapter.host_to_device!,
+            )
+            @test_throws ErrorException extension.allreduce!(
+                first_buffer, +, MPI.COMM_SELF;
+                adapter=forced_staged_adapter,
+                collective=(_host, _op, _comm) -> begin
+                    staged_callback_device[] = device_of(
+                        array_type{Float32}(undef, 1),
+                    )
+                    error("staged MPI failed")
+                end,
+            )
+            @test staged_callback_device[] == devices[2]
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+
+            direct_failure_device = Ref{Any}()
+            @test_throws ErrorException extension.allreduce!(
+                first_buffer, +, MPI.COMM_SELF;
+                adapter=forced_direct_adapter,
+                collective=(_buffer, _op, _comm) -> begin
+                    direct_failure_device[] = device_of(
+                        array_type{Float32}(undef, 1),
+                    )
+                    error("direct MPI failed")
+                end,
+            )
+            @test direct_failure_device[] == devices[1]
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+
+            copy_failure_adapter = extension.ParallelGPUAdapter(
+                Symbol(vendor, :_copy_failure), adapter.matches,
+                adapter.array_type, adapter.device, adapter.with_device,
+                _ -> false, adapter.synchronize, adapter.allocate_pinned,
+                (_host, _device) -> error("device copy failed"),
+                adapter.host_to_device!,
+            )
+            @test_throws ErrorException extension.allreduce!(
+                first_buffer, +, MPI.COMM_SELF; adapter=copy_failure_adapter,
+                collective=(host, _op, _comm) -> host,
+            )
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+
+            cross_device_sentinel = Array(second_buffer)
+            cross_device_calls = Ref(0)
+            cross_device_stats = extension.parallel_gpu_stats()
+            @test_throws ArgumentError extension.exchange!(
+                first_buffer, second_buffer, MPI.COMM_SELF; adapter,
+                collective=(_send, receive, _comm) -> begin
+                    cross_device_calls[] += 1
+                    fill!(receive, -1)
+                end,
+            )
+            @test Array(second_buffer) == cross_device_sentinel
+            @test cross_device_calls[] == 0
+            @test extension.parallel_gpu_stats() == cross_device_stats
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+            MPI.Barrier(MPI.COMM_SELF)
+
+            # Native batched vector/QST validation includes both FFT
+            # workspaces and rejects a single workspace moved to device 2.
+            activate_device!(devices[1])
+            plan = SHTnsKit.DistTransposePlan(
+                SHTnsKit.create_gauss_config(2, 4; nlon=6);
+                comm=MPI.COMM_SELF, nlev=2, array_type, real_type=Float32,
+                with_vector=true,
+            )
+            Vt = SHTnsKit.allocate_spatial(plan)
+            Vp = SHTnsKit.allocate_spatial(plan)
+            S = SHTnsKit.allocate_spectral(plan)
+            T = SHTnsKit.allocate_spectral(plan)
+            activate_device!(devices[2])
+            bad_workspace = PencilArrays.PencilArray{eltype(plan.F_buf2)}(
+                undef, PencilArrays.pencil(plan.F_buf2),
+                PencilArrays.extra_dims(plan.F_buf2)...,
+            )
+            bad_plan = typeof(plan)(
+                plan.cfg, plan.nlat, plan.nlon, plan.lmax, plan.mmax,
+                plan.nlev, plan.comm, plan.fft_plan, plan.F_buf, bad_workspace,
+                plan.spectral_pencil, plan.m_local, plan.NP, plan.dP, plan.Pos,
+                plan.with_vector,
+            )
+            native_calls = extension.parallel_gpu_stats()
+            @test_throws ArgumentError SHTnsKit.dist_analysis_sphtor!(
+                bad_plan, S, T, Vt, Vp,
+            )
+            @test extension.parallel_gpu_stats() == native_calls
+            @test device_of(array_type{Float32}(undef, 1)) == devices[2]
+            MPI.Barrier(MPI.COMM_SELF)
         end
 
         # Distinct equal-size logical views of one vendor allocation retain
@@ -1170,6 +1296,178 @@ function test_mpi_gpu_policy(extension)
     )
     multi_comm = Ref(:multidevice_subgroup)
 
+    # Every sync/copy must run on the physical device owning that buffer while
+    # host MPI/CPU callbacks run on the caller's original current device.
+    context_events = Any[]
+    context_aware = Ref(false)
+    context_copy_error = Ref(false)
+    context_adapter = extension.ParallelGPUAdapter(
+        :mock_device_context,
+        multi_adapter.matches, multi_adapter.array_type, multi_adapter.device,
+        (f, device) -> begin
+            previous = MOCK_CURRENT_DEVICE[]
+            push!(context_events, (:enter, device, previous))
+            try
+                MOCK_CURRENT_DEVICE[] = device
+                f()
+            finally
+                MOCK_CURRENT_DEVICE[] = previous
+                push!(context_events, (:exit, device, previous))
+            end
+        end,
+        _ -> context_aware[],
+        value -> push!(context_events, (
+            :sync, MOCK_CURRENT_DEVICE[], multi_adapter.device(value),
+        )),
+        (T, n) -> Vector{T}(undef, n),
+        (host, value) -> begin
+            push!(context_events, (
+                :device_to_host, MOCK_CURRENT_DEVICE[],
+                multi_adapter.device(value),
+            ))
+            context_copy_error[] && error("device copy failed")
+            copyto!(host, value)
+        end,
+        (value, host) -> begin
+            push!(context_events, (
+                :host_to_device, MOCK_CURRENT_DEVICE[],
+                multi_adapter.device(value),
+            ))
+            context_copy_error[] && error("device copy failed")
+            copyto!(value, host)
+        end,
+    )
+    context_value = MockMultiDeviceArray(Float32[1, 2], 1)
+    context_receive = MockMultiDeviceArray(zeros(Float32, 2), 1)
+    MOCK_CURRENT_DEVICE[] = 2
+
+    function assert_context_events(events, callback_device)
+        device_events = filter(
+            event -> first(event) in (:sync, :device_to_host, :host_to_device),
+            events,
+        )
+        @test !isempty(device_events)
+        @test all(event -> event[2] == event[3] == 1, device_events)
+        @test all(event -> event[2] == callback_device,
+                  filter(event -> first(event) == :host, events))
+        @test MOCK_CURRENT_DEVICE[] == 2
+    end
+
+    extension._staged_gpu_call(
+        context_adapter, :device_context_staged_math, MPI.COMM_SELF,
+        host -> begin
+            push!(context_events, (:host, MOCK_CURRENT_DEVICE[]))
+            host .+= 1
+            host
+        end,
+        context_value; mutated=(1,), validate_storage=false,
+    )
+    assert_context_events(context_events, 2)
+
+    empty!(context_events)
+    extension.parallel_gpu_clear_caches!()
+    extension.allreduce!(
+        context_value, +, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(host, _op, _comm) -> begin
+            push!(context_events, (:host, MOCK_CURRENT_DEVICE[]))
+            host
+        end,
+    )
+    assert_context_events(context_events, 2)
+
+    empty!(context_events)
+    extension.parallel_gpu_clear_caches!()
+    extension.exchange!(
+        context_value, context_receive, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(send, receive, _comm) -> begin
+            push!(context_events, (:host, MOCK_CURRENT_DEVICE[]))
+            copyto!(receive, send)
+        end,
+    )
+    assert_context_events(context_events, 2)
+
+    context_aware[] = true
+    empty!(context_events)
+    extension.parallel_gpu_clear_caches!()
+    extension.allreduce!(
+        context_value, +, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(device, _op, _comm) -> begin
+            push!(context_events, (:host, MOCK_CURRENT_DEVICE[]))
+            device
+        end,
+    )
+    assert_context_events(context_events, 1)
+
+    empty!(context_events)
+    extension.parallel_gpu_clear_caches!()
+    extension.exchange!(
+        context_value, context_receive, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(send, receive, _comm) -> begin
+            push!(context_events, (:host, MOCK_CURRENT_DEVICE[]))
+            copyto!(receive, send)
+        end,
+    )
+    assert_context_events(context_events, 1)
+
+    # Device scopes restore caller state after copy and MPI exceptions.
+    context_aware[] = false
+    context_copy_error[] = true
+    empty!(context_events)
+    extension.parallel_gpu_clear_caches!()
+    @test_throws ErrorException extension.allreduce!(
+        context_value, +, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(host, _op, _comm) -> host,
+    )
+    @test MOCK_CURRENT_DEVICE[] == 2
+    context_copy_error[] = false
+    empty!(context_events)
+    extension.parallel_gpu_clear_caches!()
+    @test_throws ErrorException extension.allreduce!(
+        context_value, +, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(_host, _op, _comm) -> error("MPI failed"),
+    )
+    @test MOCK_CURRENT_DEVICE[] == 2
+
+    context_aware[] = true
+    extension.parallel_gpu_clear_caches!()
+    @test_throws ErrorException extension.allreduce!(
+        context_value, +, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(_device, _op, _comm) -> error("direct MPI failed"),
+    )
+    @test MOCK_CURRENT_DEVICE[] == 2
+    extension.parallel_gpu_clear_caches!()
+    @test_throws ErrorException extension.exchange!(
+        context_value, context_receive, MPI.COMM_SELF;
+        adapter=context_adapter,
+        collective=(_send, _receive, _comm) -> error("direct MPI failed"),
+    )
+    @test MOCK_CURRENT_DEVICE[] == 2
+    context_aware[] = false
+
+    # Same-vendor buffers on different local devices are a collective error
+    # before callbacks, communication counters, or output mutation.
+    cross_device = MockMultiDeviceArray(Float32[9, 10], 2)
+    @test_throws ArgumentError extension._validate_parallel_storage!(
+        MPI.COMM_SELF, :cross_device_fake, context_value, cross_device;
+        adapter=context_adapter,
+    )
+    cross_device_sentinel = copy(cross_device.data)
+    cross_device_calls = Ref(0)
+    before_cross_device = extension.parallel_gpu_stats()
+    @test_throws ArgumentError extension.exchange!(
+        context_value, cross_device, MPI.COMM_SELF; adapter=context_adapter,
+        collective=(_send, receive, _comm) -> begin
+            cross_device_calls[] += 1
+            fill!(receive, -1)
+        end,
+    )
+    @test cross_device.data == cross_device_sentinel
+    @test cross_device_calls[] == 0
+    @test extension.parallel_gpu_stats() == before_cross_device
+    MPI.Barrier(MPI.COMM_SELF)
+
+    extension.parallel_gpu_clear_caches!()
+    multi_host_allocations[] = 0
     # Equal-size logical views of one allocation need independent staging
     # snapshots. Sharing a root-keyed entry overwrites the first input before
     # the CPU callback observes it.
@@ -1303,7 +1601,7 @@ function test_mpi_gpu_policy(extension)
     empty!(events)
     event_receive = MockMPIArray(zeros(Float32, 2))
     extension.exchange!(
-        event_buffer, event_receive, Ref(:event_exchange);
+        event_buffer, event_receive, MPI.COMM_SELF;
         adapter=event_adapter,
         collective=(send, receive, _comm) -> begin
             push!(events, :collective)
@@ -1545,6 +1843,11 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     end
     @test occursin("logical_id", parallel_gpu)
     @test occursin("adapter.with_device(device)", parallel_gpu)
+    @test occursin("_with_owner_device", parallel_gpu)
+    @test occursin("_device_to_host_snapshot!", parallel_gpu)
+    @test occursin("_host_to_device_snapshot!", parallel_gpu)
+    @test occursin("local_device_mismatch", parallel_gpu)
+    @test occursin("_validate_parallel_storage!(comm, :exchange", parallel_gpu)
     @test !occursin("using CUDA", parallel_gpu)
     @test !occursin("using AMDGPU", parallel_gpu)
 
@@ -1573,6 +1876,7 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
         "vector QST _l _ml local gradient all operators",
         "general rotations diagnostics storage and compatibility",
         "actual allocation device cache key",
+        "hardware multi-device context and rejection",
         "repeated-plan cache and residency",
     )
         @test occursin(family, read(@__FILE__, String))
@@ -1627,6 +1931,11 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     @test occursin("_staged_gpu_call", firewall)
     @test occursin(":synthesis_sph_l_cplx", firewall)
     @test occursin(":synthesis_tor_l_cplx", firewall)
+
+    transpose_source = read(
+        joinpath(root, "ext", "ParallelTransposeTransforms.jl"), String,
+    )
+    @test occursin("plan.F_buf, plan.F_buf2, all_values...", transpose_source)
 
     # Dealiased decompositions may leave a rank owning only Fourier bins above
     # mmax. The native kernel offset must still be the rank's real first bin,

@@ -289,6 +289,33 @@ function _with_entry_locks(f, entries, index::Int=1)
     end
 end
 
+@inline function _with_owner_device(f, adapter::ParallelGPUAdapter, value)
+    raw = _parallel_parent(value)
+    device = adapter.device(_parallel_root_buffer(raw))
+    return adapter.with_device(f, device)
+end
+
+@inline function _device_to_host_snapshot!(adapter::ParallelGPUAdapter,
+                                           host, value)
+    raw = _parallel_parent(value)
+    return _with_owner_device(adapter, raw) do
+        adapter.synchronize(raw)
+        adapter.device_to_host!(host, raw)
+        adapter.synchronize(raw)
+        host
+    end
+end
+
+@inline function _host_to_device_snapshot!(adapter::ParallelGPUAdapter,
+                                           value, host)
+    raw = _parallel_parent(value)
+    return _with_owner_device(adapter, raw) do
+        adapter.host_to_device!(raw, host)
+        adapter.synchronize(raw)
+        raw
+    end
+end
+
 function _device_result(adapter::ParallelGPUAdapter, prototype, result,
                         staged=(), originals=())
     for (pair, original) in zip(staged, originals)
@@ -338,7 +365,9 @@ for ordinary MPI mathematical entry points.
 function _staged_gpu_call(adapter::ParallelGPUAdapter, operation::Symbol,
                           comm, f, values...;
                           mutated::Tuple=(), validate_storage::Bool=true)
-    validate_storage && _validate_parallel_storage!(comm, operation, values...)
+    validate_storage && _validate_parallel_storage!(
+        comm, operation, values...; adapter,
+    )
     all(index -> index in eachindex(values), mutated) || throw(ArgumentError(
         "$operation staged mutation index is out of bounds",
     ))
@@ -357,18 +386,13 @@ function _staged_gpu_call(adapter::ParallelGPUAdapter, operation::Symbol,
         for (value, pair) in zip(values, staged)
             entry = last(pair)
             entry === nothing && continue
-            raw = _parallel_parent(value)
-            adapter.synchronize(raw)
-            adapter.device_to_host!(entry.buffer, raw)
-            adapter.synchronize(raw)
+            _device_to_host_snapshot!(adapter, entry.buffer, value)
         end
         cpu_result = f(hosts...)
         for index in mutated
             entry = last(staged[index])
             entry === nothing && continue
-            raw = _parallel_parent(values[index])
-            adapter.host_to_device!(raw, entry.buffer)
-            adapter.synchronize(raw)
+            _host_to_device_snapshot!(adapter, values[index], entry.buffer)
         end
         _device_result(adapter, prototype, cpu_result, staged, values)
     end
@@ -390,20 +414,20 @@ function allreduce!(buffer, op, comm;
     adapter === nothing && return collective(buffer, op, comm)
     bytes = _communication_bytes(buffer)
     if _gpu_awareness(adapter, comm, buffer)
-        adapter.synchronize(buffer)
-        result = collective(buffer, op, comm)
-        adapter.synchronize(buffer)
+        result = _with_owner_device(adapter, buffer) do
+            adapter.synchronize(buffer)
+            value = collective(buffer, op, comm)
+            adapter.synchronize(buffer)
+            value
+        end
         Threads.atomic_add!(_GPU_DIRECT_CALLS, 1)
         Threads.atomic_add!(_GPU_DIRECT_BYTES, bytes)
         return result
     end
     result = _with_staging(adapter, comm, buffer) do host
-        adapter.synchronize(buffer)
-        adapter.device_to_host!(host, buffer)
-        adapter.synchronize(buffer)
+        _device_to_host_snapshot!(adapter, host, buffer)
         collective(host, op, comm)
-        adapter.host_to_device!(buffer, host)
-        adapter.synchronize(buffer)
+        _host_to_device_snapshot!(adapter, buffer, host)
         buffer
     end
     Threads.atomic_add!(_GPU_STAGED_CALLS, 1)
@@ -425,6 +449,7 @@ function exchange!(send, receive, comm;
     if adapter === nothing && receive_adapter === nothing
         return collective(send, receive, comm)
     end
+    _validate_parallel_storage!(comm, :exchange, send, receive; adapter)
     adapter !== nothing && adapter.matches(send) && adapter.matches(receive) &&
         (receive_adapter === nothing || adapter.name === receive_adapter.name) ||
         throw(ArgumentError(
@@ -432,9 +457,12 @@ function exchange!(send, receive, comm;
     ))
     bytes = _communication_bytes(send) + _communication_bytes(receive)
     if _gpu_awareness(adapter, comm, send)
-        adapter.synchronize(send)
-        result = collective(send, receive, comm)
-        adapter.synchronize(receive)
+        result = _with_owner_device(adapter, send) do
+            adapter.synchronize(send)
+            value = collective(send, receive, comm)
+            adapter.synchronize(receive)
+            value
+        end
         Threads.atomic_add!(_GPU_DIRECT_CALLS, 1)
         Threads.atomic_add!(_GPU_DIRECT_BYTES, bytes)
         return result
@@ -451,12 +479,9 @@ function exchange!(send, receive, comm;
         lock(second_entry.lock) do
             send_host = send_entry.buffer
             receive_host = receive_entry.buffer
-            adapter.synchronize(send)
-            adapter.device_to_host!(send_host, send)
-            adapter.synchronize(send)
+            _device_to_host_snapshot!(adapter, send_host, send)
             collective(send_host, receive_host, comm)
-            adapter.host_to_device!(receive, receive_host)
-            adapter.synchronize(receive)
+            _host_to_device_snapshot!(adapter, receive, receive_host)
             receive
         end
     end
@@ -474,7 +499,8 @@ function _parallel_storage_code(value)
 end
 
 """Validate vendor/residency collectively before allocation or mutation."""
-function _validate_parallel_storage!(comm, operation::Symbol, values...)
+function _validate_parallel_storage!(comm, operation::Symbol, values...;
+                                     adapter=nothing)
     flags = UInt32(0)
     codes = map(_parallel_storage_code, values)
     local_min = isempty(codes) ? 0 : minimum(codes)
@@ -483,8 +509,26 @@ function _validate_parallel_storage!(comm, operation::Symbol, values...)
     global_min = MPI.Allreduce(local_min, min, comm)
     global_max = MPI.Allreduce(local_max, max, comm)
     global_min == global_max || (flags |= 0x20000)
+    device_descriptors = Any[]
+    for value in values
+        raw = _parallel_parent(value)
+        value_adapter = adapter !== nothing && adapter.matches(raw) ? adapter :
+                        _parallel_gpu_adapter(raw)
+        value_adapter === nothing && continue
+        push!(device_descriptors, (
+            value_adapter.name,
+            value_adapter.device(_parallel_root_buffer(raw)),
+        ))
+    end
+    local_device_mismatch = any(
+        descriptor -> descriptor[1] != first(device_descriptors)[1] ||
+                      descriptor[2] != first(device_descriptors)[2],
+        Iterators.drop(device_descriptors, 1),
+    )
+    MPI.Allreduce(local_device_mismatch ? 1 : 0, max, comm) == 0 ||
+        (flags |= 0x40000)
     flags == 0 || throw(ArgumentError(
-        "$operation collective validation failed: storage/vendor mismatch",
+        "$operation collective validation failed: storage/vendor/device mismatch",
     ))
     return local_min
 end

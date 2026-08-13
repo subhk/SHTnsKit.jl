@@ -303,6 +303,19 @@ import SHTnsKit: wigner_d_matrix_deriv
 # correct and are unchanged.
 _rot_wm(cfg) = Float64[cfg.mi[k] == 0 ? 1.0 : 2.0 for k in 1:cfg.nlm]
 
+# Rotation kernels consume canonical ZYZ angles, which can differ from the
+# public/stored fields because setter-created rotations reverse the outer
+# angles and ZXZ adds constant phase offsets.  Pullbacks differentiate in the
+# canonical coordinates, then return the tangent in the stored parameter
+# order expected by callers of the setters.
+@inline _rotation_rrule_angles(r::SHTnsKit.SHTRotation) =
+    SHTnsKit._rotation_zyz_angles(r, Float64)
+
+@inline function _rotation_rrule_tangent(r::SHTnsKit.SHTRotation, gα, gβ, gγ)
+    αbar, βbar, γbar = r.reverse_outer ? (gγ, gβ, gα) : (gα, gβ, gγ)
+    return Tangent{SHTnsKit.SHTRotation}(; α=αbar, β=βbar, γ=γbar)
+end
+
 function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Zrotate), cfg::SHTnsKit.SHTConfig, Qlm, alpha::Real, Rlm)
     y = SHTnsKit.SH_Zrotate(cfg, Qlm, alpha, Rlm)
     function pullback(ȳ)
@@ -404,7 +417,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
         lmax, mmax = r.lmax, r.mmax
         Z̄ = similar(Zlm)
         fill!(Z̄, zero(eltype(Z̄)))
-        α, β, γ = r.α, r.β, r.γ
+        α, β, γ = _rotation_rrule_angles(r)
         # This pullback reimplements the Wigner engine, which works in the Y_l^m
         # basis, while the primal is `ε ∘ engine ∘ ε` in the packed LM_cplx layout
         # (see SHTnsKit._lmcplx_ybasis_signs). Convert both the input and the
@@ -485,7 +498,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
             end
         end
         Z̄ .*= ε   # back to the packed layout
-        rt = Tangent{SHTnsKit.SHTRotation}(; α=gα, β=gβ, γ=gγ)
+        rt = _rotation_rrule_tangent(r, gα, gβ, gγ)
         return NoTangent(), rt, Z̄, ZeroTangent()
     end
     return y, pullback
@@ -513,7 +526,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
         end
         # Compute adjoint of complex rotation (transpose of Wigner-d matrix)
         Z̄ = zeros(eltype(Zbar_full), length(Zbar_full))
-        α, β, γ = r.α, r.β, r.γ
+        α, β, γ = _rotation_rrule_angles(r)
         for l in 0:lmax
             mm = min(l, mmax)
             n = 2l + 1
@@ -540,8 +553,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
         gα = 0.0; gβ = 0.0; gγ = 0.0
         for l in 0:lmax
             mm = min(l, mmax)
-            dl = wigner_d_matrix(l, r.β)
-            ddl = wigner_d_matrix_deriv(l, r.β)  # depends only on (l,β); hoisted out of the m-loop below
+            dl = wigner_d_matrix(l, β)
+            ddl = wigner_d_matrix_deriv(l, β)  # depends only on (l,β); hoisted out of the m-loop below
             b = zeros(eltype(Z̄), 2l + 1)
             for mp in -mm:mm
                 idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, mp) + 1
@@ -555,12 +568,12 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                         (-1)^(-mp) * conj(Qlm[SHTnsKit.LM_index(lmax, 1, l, -mp) + 1])
                     end
                 end) : 0
-                b[mp + l + 1] *= cis(-mp * r.γ)
+                b[mp + l + 1] *= cis(-mp * γ)
             end
             c = dl * b
             for m in 0:mm
                 idxp = SHTnsKit.LM_index(lmax, 1, l, m) + 1
-                Rm = c[m + l + 1] * cis(-m * r.α)
+                Rm = c[m + l + 1] * cis(-m * α)
                 gα += real(conj(ȳ[idxp]) * ((0 - 1im) * m * Rm))
                 # β
                 sβ = zero(eltype(Z̄))
@@ -569,8 +582,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                     sβ += ddl[m + l + 1, mp + l + 1] * b[mp + l + 1]
                     sγ += dl[m + l + 1, mp + l + 1] * ((0 - 1im) * mp * b[mp + l + 1])
                 end
-                gβ += real(conj(ȳ[idxp]) * (sβ * cis(-m * r.α)))
-                gγ += real(conj(ȳ[idxp]) * (sγ * cis(-m * r.α)))
+                gβ += real(conj(ȳ[idxp]) * (sβ * cis(-m * α)))
+                gγ += real(conj(ȳ[idxp]) * (sγ * cis(-m * α)))
             end
         end
         # Fold back to packed positive-m: q̄(m) = Z̄(m) + (-1)^m conj(Z̄(-m))
@@ -588,7 +601,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                 Q̄[idxp] = Z̄[idxc_p] + (-1)^m * conj(Z̄[idxc_n])
             end
         end
-        rt = Tangent{SHTnsKit.SHTRotation}(; α=gα, β=gβ, γ=gγ)
+        rt = _rotation_rrule_tangent(r, gα, gβ, gγ)
         return NoTangent(), rt, Q̄, ZeroTangent()
     end
     return y, pullback

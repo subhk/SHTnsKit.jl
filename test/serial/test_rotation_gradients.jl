@@ -55,6 +55,11 @@ end
     end
     complex_input = randn(rng, ComplexF64, nlm_cplx_calc(lmax, lmax, 1))
     complex_cotangent = randn(rng, ComplexF64, length(complex_input))
+    real_direction = randn(rng, ComplexF64, cfg.nlm)
+    for index in eachindex(real_direction)
+        cfg.mi[index] == 0 && (real_direction[index] = real(real_direction[index]))
+    end
+    complex_direction = randn(rng, ComplexF64, length(complex_input))
     angles = (0.23, 0.41, -0.17)
     epsilon = 1e-6
 
@@ -83,9 +88,11 @@ end
         return copy(primal), rotation_bar, input_bar
     end
 
-    for (name, apply, input, cotangent) in (
-        ("real", shtns_rotation_apply_real, real_input, real_cotangent),
-        ("complex", shtns_rotation_apply_cplx, complex_input, complex_cotangent),
+    for (name, apply, input, cotangent, direction) in (
+        ("real", shtns_rotation_apply_real, real_input, real_cotangent,
+         real_direction),
+        ("complex", shtns_rotation_apply_cplx, complex_input,
+         complex_cotangent, complex_direction),
     ), convention in (:ZYZ, :ZXZ)
         @testset "$name $convention" begin
             setter = setter_rotation(convention, angles)
@@ -99,6 +106,16 @@ end
             @test setter_input_bar ≈ direct_input_bar atol=2e-12 rtol=2e-12
             @test [setter_rbar.α, setter_rbar.β, setter_rbar.γ] ≈
                   [direct_rbar.γ, direct_rbar.β, direct_rbar.α] atol=2e-12 rtol=2e-12
+
+            coefficient_loss(candidate) = real(sum(
+                conj(cotangent) .* apply(setter, candidate, similar(candidate)),
+            ))
+            coefficient_fd = (
+                coefficient_loss(input .+ epsilon .* direction) -
+                coefficient_loss(input .- epsilon .* direction)
+            ) / (2epsilon)
+            coefficient_ad = real(sum(conj(setter_input_bar) .* direction))
+            @test coefficient_ad ≈ coefficient_fd rtol=2e-5 atol=2e-7
 
             loss(values) = begin
                 rotation = setter_rotation(convention, values)
@@ -121,11 +138,6 @@ end
         angle_axis = SHTRotation(lmax, lmax)
         shtns_rotation_set_angle_axis(angle_axis, 0.37, 0.2, -0.4, 0.7)
         direct = SHTRotation(lmax, lmax; α=angles[1], β=angles[2], γ=angles[3])
-        real_direction = randn(rng, ComplexF64, cfg.nlm)
-        for index in eachindex(real_direction)
-            cfg.mi[index] == 0 && (real_direction[index] = real(real_direction[index]))
-        end
-        complex_direction = randn(rng, ComplexF64, length(complex_input))
 
         for (name, apply, input, cotangent, direction) in (
             ("real", shtns_rotation_apply_real, real_input, real_cotangent,

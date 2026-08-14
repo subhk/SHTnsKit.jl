@@ -37,14 +37,14 @@ using SHTnsKit
 using FFTW
 
 # Distributed reverse rules in this extension use CPU FFTW/Legendre adjoints.
-# Keeping their dispatch explicitly host-backed prevents a vendor PencilArray
-# from reaching an implicit `Matrix(...)` conversion. GPU-backed distributed
-# AD requires a vendor-native compound rule; until one is available, fail at
-# the storage boundary instead of silently moving a full field to the host.
-const HostPencilArray = PencilArray{T,N,A} where {T,N,A<:Array{T,N}}
+# Runtime storage classification accepts CPU wrappers (views, shared arrays,
+# and custom host arrays) while preventing a vendor PencilArray from reaching
+# an implicit host conversion. GPU-backed distributed AD requires a
+# vendor-native compound rule; until one is available, fail at the storage
+# boundary before running the forward transform.
 
 @inline function _require_host_pencil(operation::Symbol, value::PencilArray)
-    value isa HostPencilArray && return value
+    SHTnsKit.on_device(parent(value)) isa SHTnsKit.CPU && return value
     throw(SHTnsKit.BackendUnavailableError(
         operation,
         "distributed reverse-mode AD for GPU-backed PencilArray storage requires a vendor-native compound rule",
@@ -111,8 +111,9 @@ end
 # ----- dist_analysis rrule ---------------------------------------------------
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
-                              cfg::SHTnsKit.SHTConfig, fθφ::HostPencilArray;
+                              cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
                               kwargs...)
+    _require_host_pencil(:dist_analysis_pullback, fθφ)
     y = SHTnsKit.dist_analysis(cfg, fθφ; kwargs...)
     θ_globals = collect(globalindices(fθφ, 1))
     φ_globals = collect(globalindices(fθφ, 2))
@@ -129,13 +130,6 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
         return NoTangent(), NoTangent(), f̄
     end
     return y, dist_analysis_pullback
-end
-
-function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
-                              ::SHTnsKit.SHTConfig, field::PencilArray;
-                              kwargs...)
-    _require_host_pencil(:dist_analysis_pullback, field)
-    error("unreachable host PencilArray reverse-rule dispatch")
 end
 
 # ----- dist_synthesis rrule --------------------------------------------------
@@ -187,8 +181,10 @@ end
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
                               cfg::SHTnsKit.SHTConfig,
-                              Vtθφ::HostPencilArray, Vpθφ::HostPencilArray;
+                              Vtθφ::PencilArray, Vpθφ::PencilArray;
                               kwargs...)
+    _require_host_pencil(:dist_analysis_sphtor_pullback, Vtθφ)
+    _require_host_pencil(:dist_analysis_sphtor_pullback, Vpθφ)
     y = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; kwargs...)
     θ_globals = collect(globalindices(Vtθφ, 1))
     φ_globals = collect(globalindices(Vtθφ, 2))
@@ -214,14 +210,6 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
         return NoTangent(), NoTangent(), V̄t, V̄p
     end
     return y, dist_analysis_sphtor_pullback
-end
-
-function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
-                              ::SHTnsKit.SHTConfig,
-                              Vt::PencilArray, Vp::PencilArray; kwargs...)
-    _require_host_pencil(:dist_analysis_sphtor_pullback, Vt)
-    _require_host_pencil(:dist_analysis_sphtor_pullback, Vp)
-    error("unreachable host PencilArray reverse-rule dispatch")
 end
 
 # ----- dist_synthesis_sphtor rrule ------------------------------------------

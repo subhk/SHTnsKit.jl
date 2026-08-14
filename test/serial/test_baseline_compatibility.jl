@@ -234,14 +234,15 @@ end
         @test haskey(fixture, "method")
         @test haskey(fixture, "runtime_probe")
 
-        baseline_sources = revision_source_pairs(
-            _COMPATIBILITY_ROOT, fixture["baseline"]["commit"],
-        )
-        baseline_inventory = inventory_sources(baseline_sources, fixture["exports"])
+        # Normal tests must work in source tarballs and shallow checkouts. The
+        # immutable baseline inventory is committed in this fixture; only the
+        # separately-invoked generator consults Git history.
+        baseline_inventory = withenv("PATH" => "/nonexistent") do
+            fixture_inventory(fixture)
+        end
         current_inventory = inventory_sources(source_pairs(_COMPATIBILITY_ROOT), fixture["exports"])
-        @test isempty(baseline_inventory.parse_errors)
         @test isempty(current_inventory.parse_errors)
-        @test baseline_inventory.source_digest == fixture["baseline"]["source_digest_sha256"]
+        @test occursin(r"^[0-9a-f]{64}$", baseline_inventory.source_digest)
         @test fixture["baseline"]["method_count"] == 247 == length(baseline_inventory.methods)
 
         baseline_tuple_contracts = filter(
@@ -255,15 +256,13 @@ end
         @test fixture["baseline"]["tuple_component_method_count"] == 31
         @test all(entry -> haskey(entry, "tuple_component_signatures"), fixture["method"])
 
-        fixture_methods = method_from_fixture.(fixture["method"])
+        fixture_methods = baseline_inventory.methods
         @test length(fixture_methods) == length(baseline_inventory.methods)
-        @test Set(method_fingerprint.(fixture_methods)) ==
-              Set(method_fingerprint.(baseline_inventory.methods))
-        @test sort(method_to_fixture.(baseline_inventory.methods); by=entry -> entry["fingerprint"]) ==
+        @test sort(method_to_fixture.(fixture_methods); by=entry -> entry["fingerprint"]) ==
               sort(fixture["method"]; by=entry -> entry["fingerprint"])
         baseline_tuple_arities = Dict(
             method_fingerprint(method) => method.tuple_arities
-            for method in baseline_inventory.methods
+            for method in fixture_methods
         )
         fixture_tuple_arities = Dict(
             method_fingerprint(method) => method.tuple_arities
@@ -295,6 +294,27 @@ end
             ]),
         )
         @test !method_compatible(ordered_tuple_contract, swapped_tuple_contract)
+
+        constrained_contract = merge(first(fixture_methods), (; where=["T <: Real"]))
+        widened_constraint = merge(constrained_contract, (; where=["T <: Number"]))
+        narrowed_constraint = merge(constrained_contract, (; where=["T <: Integer"]))
+        @test method_compatible(constrained_contract, widened_constraint)
+        @test !method_compatible(constrained_contract, narrowed_constraint)
+
+        multiple_constraints = merge(
+            first(fixture_methods),
+            (; where=["T <: Real", "S <: Integer"]),
+        )
+        reordered_widened_constraints = merge(
+            multiple_constraints,
+            (; where=["S <: Real", "T <: Number"]),
+        )
+        narrowed_multiple_constraints = merge(
+            multiple_constraints,
+            (; where=["S <: Signed", "T <: Integer"]),
+        )
+        @test method_compatible(multiple_constraints, reordered_widened_constraints)
+        @test !method_compatible(multiple_constraints, narrowed_multiple_constraints)
 
         compatibility_misses = String[]
         for baseline_method in fixture_methods

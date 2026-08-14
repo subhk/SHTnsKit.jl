@@ -1,5 +1,5 @@
 [audit]
-entry_count = 661
+entry_count = 662
 scanner = "deterministic non-overlapping spelling scanner; longer transfer spellings win"
 scope = "src/device_utils.jl and every ext/*.jl file"
 
@@ -4634,6 +4634,14 @@ path = "ext/SHTnsKitParallelADExt.jl"
 reason = "CPU-only automatic-differentiation storage; vendor PencilArray inputs must be rejected before forward work or materialization"
 same_snippet_ordinal = 1
 snippet_sha256 = "3baa4bf3d82bfdbbe9c386fff1d1b1a1c5e9e0072bd928f1b89089a6de9b50da"
+token = "parent"
+[[entry]]
+classification = "cpu_only"
+key = "ext/SHTnsKitParallelADExt.jl|parent|c38c2e6a6b68113bbd76fb25b51058f344b1354176686e64edfb3ed7f97b6e8d|1"
+path = "ext/SHTnsKitParallelADExt.jl"
+reason = "CPU-only automatic-differentiation storage; vendor PencilArray inputs must be rejected before forward work or materialization"
+same_snippet_ordinal = 1
+snippet_sha256 = "c38c2e6a6b68113bbd76fb25b51058f344b1354176686e64edfb3ed7f97b6e8d"
 token = "parent"
 [[entry]]
 classification = "bounded_pinned_mpi_staging"

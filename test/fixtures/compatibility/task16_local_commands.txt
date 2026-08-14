@@ -1,6 +1,7 @@
 evidence_kind=local_readiness
 certifying=false
-tested_commit=015ab70ce4cbc5bdc59a908436824ddf26224b98
-tested_tree=539d8ae80d11b3e3aaeaf71286e04928ed4e8cac
+audited_tree_digest=ddf0bbffab05a945d40e70633b0f280a6b26dacf127bfc7a5c374a1f3d11a865
+audited_scope=Project.toml,.github/workflows,docs/src/shtns37-parity.md,ext,src,test
+audited_exclusions=test/fixtures/compatibility/task16_gate.toml,test/fixtures/compatibility/task16_local_commands.txt,test/fixtures/compatibility/task16_local_summary.log
 pkg_command=/usr/bin/env JULIA_DEPOT_PATH=/private/tmp/julia_depot_shtnskit:/Users/subha/.julia SHTNSKIT_RUN_JET_TESTS=1 SHTNSKIT_RUN_AQUA_TESTS=1 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'
 mpi_command=/usr/bin/env JULIA_BINDIR=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin JULIA_DEPOT_PATH=/private/tmp/julia_depot_shtnskit:/Users/subha/.julia /Users/subha/.julia/packages/MPI/pvbg6/bin/mpiexecjl -n 4 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=test/gpu/cuda test/parity/runtests_mpi.jl

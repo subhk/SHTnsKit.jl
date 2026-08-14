@@ -39,7 +39,7 @@ end
     @test local_gate["mpi_cpu_ranks"] == 4
     @test local_gate["mpi_cpu_exit_code"] == 0
     @test get(local_gate, "certifying", true) == false
-    @test haskey(local_gate, "tested_tree")
+    @test haskey(local_gate, "audited_tree_digest")
     @test haskey(local_gate, "commands_sha256")
     @test haskey(local_gate, "summary_log_sha256")
 
@@ -75,7 +75,7 @@ end
     transfer_fixture = TOML.parsefile(audit_path)
     scanned = scan_host_transfer_occurrences(root)
     allowed = transfer_fixture["entry"]
-    @test transfer_fixture["audit"]["entry_count"] == length(scanned) == 661
+    @test transfer_fixture["audit"]["entry_count"] == length(scanned) == 662
     scanned_keys = Set(transfer_occurrence_key.(scanned))
     allowed_keys = Set(entry["key"] for entry in allowed)
     @test length(allowed_keys) == length(allowed)
@@ -125,7 +125,8 @@ end
     @test occursin("_staged_gpu_call", read(joinpath(root, "ext", "ParallelGPU.jl"), String))
 
     parallel_ad_source = read(joinpath(root, "ext", "SHTnsKitParallelADExt.jl"), String)
-    @test occursin("HostPencilArray", parallel_ad_source)
+    @test occursin("on_device(parent(value))", parallel_ad_source)
+    @test !occursin("HostPencilArray", parallel_ad_source)
     @test !occursin("Matrix{ComplexF64}(A)", parallel_ad_source)
     @test occursin("_require_host_pencil", parallel_ad_source)
     @test occursin("BackendUnavailableError", parallel_ad_source)

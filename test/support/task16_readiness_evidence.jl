@@ -5,17 +5,78 @@ function _task16_sha256(path::AbstractString)
     return bytes2hex(sha256(read(path)))
 end
 
+const _TASK16_AUDITED_SCOPE = [
+    "Project.toml",
+    ".github/workflows",
+    "docs/src/shtns37-parity.md",
+    "ext",
+    "src",
+    "test",
+]
+
+# The evidence record and the two files whose hashes it records cannot be part
+# of their own content identity. All other files in the audited scope count.
+const _TASK16_AUDITED_EXCLUSIONS = [
+    "test/fixtures/compatibility/task16_gate.toml",
+    "test/fixtures/compatibility/task16_local_commands.txt",
+    "test/fixtures/compatibility/task16_local_summary.log",
+]
+
+function _task16_audited_paths(root::AbstractString, scope, exclusions)
+    excluded = Set(replace.(String.(exclusions), '\\' => '/'))
+    candidates = String[]
+    for relative in String.(scope)
+        path = joinpath(root, relative)
+        if isfile(path)
+            push!(candidates, replace(relpath(path, root), '\\' => '/'))
+        elseif isdir(path)
+            for (directory, _, names) in walkdir(path), name in names
+                file = joinpath(directory, name)
+                isfile(file) && push!(
+                    candidates, replace(relpath(file, root), '\\' => '/'),
+                )
+            end
+        else
+            throw(ArgumentError("missing Task 16 audited path: $relative"))
+        end
+    end
+    unique!(sort!(candidates))
+    all(exclusion -> exclusion in candidates, excluded) ||
+        throw(ArgumentError("Task 16 evidence exclusion is outside its audited scope"))
+    return filter(path -> path ∉ excluded, candidates)
+end
+
+"""
+    task16_audited_tree_digest(root, scope, exclusions)
+
+Compute a Git-independent content identity. The outer SHA-256 covers a sorted
+manifest whose records are `relative-path NUL SHA256(file) newline`.
+"""
+function task16_audited_tree_digest(root::AbstractString, scope, exclusions)
+    records = [path * '\0' * _task16_sha256(joinpath(root, path))
+               for path in _task16_audited_paths(root, scope, exclusions)]
+    return bytes2hex(sha256(codeunits(join(records, '\n') * '\n')))
+end
+
 function test_task16_readiness_evidence(root::AbstractString, fixture)
     @testset "Task 16 local readiness is non-certifying" begin
         local_gate = fixture["local_gate"]
         @test local_gate["certifying"] == false
         @test local_gate["evidence_kind"] == "local_readiness"
-        @test local_gate["tested_commit"] == fixture["gate"]["baseline_head"]
-        @test occursin(r"^[0-9a-f]{40}$", local_gate["tested_commit"])
-        @test occursin(r"^[0-9a-f]{40}$", local_gate["tested_tree"])
-        treeish = local_gate["tested_commit"] * "^{tree}"
-        actual_tree = strip(read(`git -C $root rev-parse $treeish`, String))
-        @test actual_tree == local_gate["tested_tree"]
+        @test !haskey(local_gate, "tested_commit")
+        @test !haskey(local_gate, "tested_tree")
+        @test haskey(local_gate, "audited_tree_digest")
+        @test haskey(local_gate, "audited_scope")
+        @test haskey(local_gate, "audited_exclusions")
+        if all(key -> haskey(local_gate, key),
+               ("audited_tree_digest", "audited_scope", "audited_exclusions"))
+            @test local_gate["audited_scope"] == _TASK16_AUDITED_SCOPE
+            @test local_gate["audited_exclusions"] == _TASK16_AUDITED_EXCLUSIONS
+            @test occursin(r"^[0-9a-f]{64}$", local_gate["audited_tree_digest"])
+            @test task16_audited_tree_digest(
+                root, local_gate["audited_scope"], local_gate["audited_exclusions"],
+            ) == local_gate["audited_tree_digest"]
+        end
 
         commands_path = joinpath(root, local_gate["commands_file"])
         summary_path = joinpath(root, local_gate["summary_log"])
@@ -35,8 +96,7 @@ function test_task16_readiness_evidence(root::AbstractString, fixture)
 
         summary = read(summary_path, String)
         for (key, value) in (
-            "tested_commit" => local_gate["tested_commit"],
-            "tested_tree" => local_gate["tested_tree"],
+            "audited_tree_digest" => local_gate["audited_tree_digest"],
             "serial_pass" => local_gate["serial_pass"],
             "parallel_grid_pass" => local_gate["parallel_grid_pass"],
             "jet_pass" => local_gate["jet_pass"],

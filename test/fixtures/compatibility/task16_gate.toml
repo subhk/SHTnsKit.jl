@@ -1,21 +1,21 @@
 [gate]
 date = "2026-08-14"
-baseline_head = "015ab70ce4cbc5bdc59a908436824ddf26224b98"
 julia = "1.12.4"
 platform = "aarch64-apple-darwin"
 
 [local_gate]
 evidence_kind = "local_readiness"
 certifying = false
-tested_commit = "015ab70ce4cbc5bdc59a908436824ddf26224b98"
-tested_tree = "539d8ae80d11b3e3aaeaf71286e04928ed4e8cac"
+audited_tree_digest = "ddf0bbffab05a945d40e70633b0f280a6b26dacf127bfc7a5c374a1f3d11a865"
+audited_scope = ["Project.toml", ".github/workflows", "docs/src/shtns37-parity.md", "ext", "src", "test"]
+audited_exclusions = ["test/fixtures/compatibility/task16_gate.toml", "test/fixtures/compatibility/task16_local_commands.txt", "test/fixtures/compatibility/task16_local_summary.log"]
 commands_file = "test/fixtures/compatibility/task16_local_commands.txt"
-commands_sha256 = "051ae82bbe56d15b3c91a499b7397dc8493a91b96f3e6d717e714acc43eadac3"
+commands_sha256 = "3b4fd122b0346054133e0363d7a629b5883b45d17dcb9d8761918e6dd5ed42f1"
 summary_log = "test/fixtures/compatibility/task16_local_summary.log"
-summary_log_sha256 = "aac826756c9b0f7aa0464250ac3ee25ad163c3f742671d46f53eb8b82bae5bb0"
+summary_log_sha256 = "a80fb50621e842a2aa501cc8211465cf3effcea5e241d3c6efe2cbdd688815b0"
 pkg_exit_code = 0
-serial_pass = 70253
-parallel_grid_pass = 1673
+serial_pass = 76022
+parallel_grid_pass = 1692
 jet_pass = 30
 aqua_pass = 3
 mpi_cpu_ranks = 4
@@ -25,7 +25,7 @@ mpi_cpu_fixture_pass_per_rank = 66
 [host_transfer_audit]
 allowlist = "test/fixtures/compatibility/host_transfer_allowlist.toml"
 scanner = "test/support/host_transfer_inventory.jl"
-entry_count = 661
+entry_count = 662
 allowscalar_match_count = 0
 legacy_cuda_host_result_bridges = 2
 

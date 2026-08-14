@@ -25,6 +25,7 @@ Base.getindex(::FakeVendorArray, ::Int) = error("fake vendor storage was read")
 Base.setindex!(::FakeVendorArray, _, ::Int) = error("fake vendor storage was written")
 Base.similar(value::FakeVendorArray, ::Type{T}=eltype(value), dims::Dims=size(value)) where {T} =
     FakeVendorArray{T}(undef, dims)
+SHTnsKit.on_device(::FakeVendorArray) = SHTnsKit.GPU()
 
 @testset "Parallel AD storage boundary" begin
     cfg = create_gauss_config(3, 5; nlon=7)
@@ -63,6 +64,29 @@ Base.similar(value::FakeVendorArray, ::Type{T}=eltype(value), dims::Dims=size(va
     vector_synthesis_tangent = vector_synthesis_pb(vector_field)
     @test vector_synthesis_tangent[3] isa Matrix{ComplexF64}
     @test vector_synthesis_tangent[4] isa Matrix{ComplexF64}
+
+    # CPU storage wrappers such as views are valid Pencil parents. Reverse
+    # rules classify their runtime device instead of requiring concrete Array.
+    view_storage = similar(parent(field))
+    view_storage .= parent(field)
+    view_field = PencilArray(host_pencil, @view(view_storage[:, :]))
+    @test parent(view_field) isa SubArray
+    view_scalar_coefficients, view_scalar_analysis_pb = rrule(
+        dist_analysis, cfg, view_field,
+    )
+    @test view_scalar_analysis_pb(one.(view_scalar_coefficients))[3] isa PencilArray
+    @test first(rrule(
+        dist_synthesis, cfg, view_scalar_coefficients; prototype_θφ=view_field,
+    )) isa AbstractMatrix
+    view_vector_coefficients, view_vector_analysis_pb = rrule(
+        dist_analysis_sphtor, cfg, view_field, view_field,
+    )
+    @test view_vector_analysis_pb((one.(view_vector_coefficients[1]),
+                                   one.(view_vector_coefficients[2])))[3] isa PencilArray
+    @test first(rrule(
+        dist_synthesis_sphtor, cfg, view_vector_coefficients...;
+        prototype_θφ=view_field,
+    )) isa Tuple
 
     fake_pencil = Pencil(FakeVendorArray, (cfg.nlat, cfg.nlon), MPI.COMM_SELF)
     fake = PencilArray{Float64}(undef, fake_pencil)

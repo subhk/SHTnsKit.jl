@@ -4,7 +4,7 @@ using SHA
 using SHTnsKit
 
 export inventory_sources, method_compatible, method_fingerprint,
-       method_from_fixture, method_to_fixture, resolve_type_expression,
+       fixture_inventory, method_from_fixture, method_to_fixture, resolve_type_expression,
        source_pairs, revision_source_pairs
 
 """Return sorted `relative_path => source` pairs for every Julia file below `src`."""
@@ -253,10 +253,84 @@ function method_from_fixture(entry)
     return record
 end
 
+"Load the committed baseline inventory without consulting Git or network state."
+function fixture_inventory(fixture)
+    methods = method_from_fixture.(fixture["method"])
+    probes = [
+        (name=entry["name"], kind=entry["classification"])
+        for entry in fixture["runtime_probe"]
+    ]
+    return (
+        methods=methods,
+        probes=probes,
+        source_digest=fixture["baseline"]["source_digest_sha256"],
+    )
+end
+
 function _argument_compatible(baseline, current, type_compatible)
     baseline.kind == current.kind || return false
     baseline.default == current.default || return false
     return type_compatible(baseline.type, current.type)
+end
+
+function _where_constraint(parameter::AbstractString)
+    parsed = try
+        Meta.parse(parameter)
+    catch
+        return nothing
+    end
+    if parsed isa Symbol
+        return (name=String(parsed), lower="Union{}", upper="Any")
+    elseif parsed isa Expr && parsed.head === :(<:) && length(parsed.args) == 2 &&
+           parsed.args[1] isa Symbol
+        return (name=String(parsed.args[1]), lower="Union{}",
+                upper=_normalise_component_signature(parsed.args[2]))
+    elseif parsed isa Expr && parsed.head === :(>:) && length(parsed.args) == 2 &&
+           parsed.args[1] isa Symbol
+        return (name=String(parsed.args[1]),
+                lower=_normalise_component_signature(parsed.args[2]), upper="Any")
+    elseif parsed isa Expr && parsed.head === :comparison && length(parsed.args) == 5 &&
+           parsed.args[2] === :(<:) && parsed.args[4] === :(<:) &&
+           parsed.args[3] isa Symbol
+        return (name=String(parsed.args[3]),
+                lower=_normalise_component_signature(parsed.args[1]),
+                upper=_normalise_component_signature(parsed.args[5]))
+    end
+    return nothing
+end
+
+function _constraint_bound_subtype(subtype::AbstractString, supertype::AbstractString)
+    subtype == supertype && return true
+    subtype_type = resolve_type_expression(subtype)
+    supertype_type = resolve_type_expression(supertype)
+    subtype_type === nothing || supertype_type === nothing ||
+        return subtype_type <: supertype_type
+    return false
+end
+
+"""Whether every baseline type-variable instantiation remains valid currently."""
+function _where_compatible(baseline_parameters, current_parameters)
+    baseline_constraints = _where_constraint.(baseline_parameters)
+    current_constraints = _where_constraint.(current_parameters)
+    if any(isnothing, baseline_constraints) || any(isnothing, current_constraints)
+        # Unsupported constraint syntax is never silently accepted. Only its
+        # normalized exact spelling can prove compatibility.
+        return sort!(_normalise_component_signature.(baseline_parameters)) ==
+               sort!(_normalise_component_signature.(current_parameters))
+    end
+    baseline_by_name = Dict(constraint.name => constraint
+                            for constraint in baseline_constraints)
+    current_by_name = Dict(constraint.name => constraint
+                           for constraint in current_constraints)
+    keys(baseline_by_name) == keys(current_by_name) || return false
+    return all(values(baseline_by_name)) do baseline
+        current = current_by_name[baseline.name]
+        # [baseline.lower, baseline.upper] must be a subset of the current
+        # interval: current.lower <: baseline.lower and
+        # baseline.upper <: current.upper.
+        _constraint_bound_subtype(current.lower, baseline.lower) &&
+            _constraint_bound_subtype(baseline.upper, current.upper)
+    end
 end
 
 """
@@ -269,7 +343,7 @@ changing the default of a baseline keyword is not.
 function method_compatible(baseline, current;
                            type_compatible=(baseline, current) -> baseline == current)
     baseline.name == current.name || return false
-    baseline.where == current.where || return false
+    _where_compatible(baseline.where, current.where) || return false
     length(baseline.positional) == length(current.positional) || return false
     all(zip(baseline.positional, current.positional)) do (b, c)
         _argument_compatible(b, c, type_compatible)

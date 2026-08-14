@@ -47,7 +47,7 @@ using .SHTns37TestCapabilities
             @test row isa SHTnsKit.SHTns37Capability
             @test row.testfile == SHTns37TestCapabilities.TESTFILES[row.backend]
             expected_status = row.backend in (:cpu, :mpi_cpu) ?
-                :verified : :unverified_hardware
+                :required : :unverified_hardware
             @test row.status == expected_status
         end
 
@@ -130,6 +130,9 @@ end
             docs_source = read(docs_path, String)
             @test occursin("SHTnsKit._shtns37_parity_markdown()", docs_source)
             @test !occursin(r"(?m)^\| `scalar_real_full` \|", docs_source)
+            @test occursin("immutable CI artifact", docs_source)
+            @test occursin("local readiness", docs_source)
+            @test occursin("local passing command is not certification", docs_source)
         end
     end
 end

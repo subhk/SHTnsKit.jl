@@ -2,9 +2,99 @@ using Test
 using TOML
 using SHTnsKit
 
+include(joinpath(@__DIR__, "..", "support", "compatibility_inventory.jl"))
+using .CompatibilityInventory
+
 const _BASELINE_COMPATIBILITY_FIXTURE = joinpath(
     @__DIR__, "..", "fixtures", "compatibility", "e2ce9027.toml"
 )
+const _COMPATIBILITY_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+
+function _compatible_declared_type(baseline::AbstractString, current::AbstractString)
+    baseline_type = resolve_type_expression(baseline)
+    current_type = resolve_type_expression(current)
+    if baseline_type !== nothing && current_type !== nothing
+        return baseline_type <: current_type
+    end
+    return baseline == current
+end
+
+function _has_baseline_method(method)
+    isdefined(SHTnsKit, Symbol(method.name)) || return false
+    function_object = getfield(SHTnsKit, Symbol(method.name))
+    types = [resolve_type_expression(argument.type, method.where)
+             for argument in method.positional]
+    any(isnothing, types) && return false
+
+    required = count(argument -> argument.kind == "required", method.positional)
+    vararg = !isempty(method.positional) && last(method.positional).kind == "vararg"
+    fixed = length(method.positional) - (vararg ? 1 : 0)
+    arities = collect(required:fixed)
+    vararg && push!(arities, fixed + 1)
+    keyword_names = Tuple(Symbol(argument.name) for argument in method.keywords
+                          if argument.kind != "keyword_vararg")
+    return all(arities) do arity
+        signature_types = if vararg && arity > fixed
+            vcat(types[1:fixed], types[end])
+        else
+            types[1:arity]
+        end
+        hasmethod(function_object, Tuple{signature_types...}, keyword_names)
+    end
+end
+
+function _run_export_family_probe(name::String, kind::String)
+    symbol = Symbol(name)
+    if kind == "method_family"
+        # Each declaration in this family is checked structurally and with
+        # `hasmethod` below; this record prevents family-level omissions.
+        @test isdefined(SHTnsKit, symbol)
+        @test getfield(SHTnsKit, symbol) isa Function ||
+              getfield(SHTnsKit, symbol) isa Type
+    elseif kind == "type"
+        @test isdefined(SHTnsKit, symbol)
+        @test getfield(SHTnsKit, symbol) isa Type
+        if name == "ComputeDevice"
+            @test isabstracttype(ComputeDevice)
+            @test CPU <: ComputeDevice
+            @test GPU <: ComputeDevice
+        elseif name == "CPU"
+            @test CPU() isa ComputeDevice
+        elseif name == "GPU"
+            @test GPU() isa ComputeDevice
+        elseif name == "SHTConfig"
+            @test create_gauss_config(2, 3) isa SHTConfig
+        elseif name == "SHTPlan"
+            @test SHTPlan(create_gauss_config(2, 3)) isa SHTPlan
+        elseif name == "SHTRotation"
+            @test SHTRotation(2, 2) isa SHTRotation
+        else
+            error("unprobed baseline type family: $name")
+        end
+    elseif kind == "macro"
+        @test isdefined(SHTnsKit, symbol)
+        source = collect(1.0:5.0)
+        output = zeros(5)
+        if name == "@sht_loop"
+            @sht_loop output[I] = source[I] over I ∈ CartesianIndices(output)
+            @test output == source
+        elseif name == "@sht_inside"
+            @sht_inside output[I] = source[I]
+            @test output == [0.0, 2.0, 3.0, 4.0, 0.0]
+        else
+            error("unprobed baseline macro family: $name")
+        end
+    elseif kind == "generated_or_extension"
+        @test name in ("DistAnalysisPlan", "DistPlan", "DistQstPlan", "DistSphtorPlan")
+        extension_source = read(joinpath(_COMPATIBILITY_ROOT, "ext", "ParallelPlans.jl"), String)
+        mpi_runner = read(joinpath(_COMPATIBILITY_ROOT, "test", "parity", "runtests_mpi.jl"), String)
+        @test occursin(Regex("struct\\s+" * name * "(?:\\{|\\s)"), extension_source)
+        @test occursin(name * "(", extension_source)
+        @test occursin(name * "(", mpi_runner)
+    else
+        error("unknown baseline export classification: $kind")
+    end
+end
 
 function _compatibility_coefficients(cfg)
     Q = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
@@ -137,6 +227,68 @@ end
               "f5ec0b731b891260a4c44f94951ddf118086f44b"
         @test fixture["baseline"]["export_count"] == length(baseline_exports)
         @test baseline_exports ⊆ final_exports
+
+        # A names-only export snapshot does not prove that callers retain the
+        # positional, typed, and keyword entry points they compiled against.
+        @test haskey(fixture["baseline"], "method_count")
+        @test haskey(fixture, "method")
+        @test haskey(fixture, "runtime_probe")
+
+        baseline_sources = revision_source_pairs(
+            _COMPATIBILITY_ROOT, fixture["baseline"]["commit"],
+        )
+        baseline_inventory = inventory_sources(baseline_sources, fixture["exports"])
+        current_inventory = inventory_sources(source_pairs(_COMPATIBILITY_ROOT), fixture["exports"])
+        @test isempty(baseline_inventory.parse_errors)
+        @test isempty(current_inventory.parse_errors)
+        @test baseline_inventory.source_digest == fixture["baseline"]["source_digest_sha256"]
+        @test fixture["baseline"]["method_count"] == 247 == length(baseline_inventory.methods)
+
+        fixture_methods = method_from_fixture.(fixture["method"])
+        @test length(fixture_methods) == length(baseline_inventory.methods)
+        @test Set(method_fingerprint.(fixture_methods)) ==
+              Set(method_fingerprint.(baseline_inventory.methods))
+        @test sort(method_to_fixture.(baseline_inventory.methods); by=entry -> entry["fingerprint"]) ==
+              sort(fixture["method"]; by=entry -> entry["fingerprint"])
+
+        compatibility_misses = String[]
+        for baseline_method in fixture_methods
+            any(current_inventory.methods) do current_method
+                method_compatible(
+                    baseline_method, current_method;
+                    type_compatible=_compatible_declared_type,
+                )
+            end || push!(compatibility_misses, method_fingerprint(baseline_method))
+        end
+        @test isempty(compatibility_misses)
+
+        unresolved = filter(fixture_methods) do method
+            any(argument -> resolve_type_expression(argument.type, method.where) === nothing,
+                method.positional)
+        end
+        @test isempty(unresolved)
+        @test all(_has_baseline_method, fixture_methods)
+
+        runtime_probes = fixture["runtime_probe"]
+        @test length(runtime_probes) == length(baseline_exports) == 248
+        @test length(unique(probe["name"] for probe in runtime_probes)) == 248
+        classified = Dict(probe.name => probe.kind for probe in baseline_inventory.probes)
+        expected_proof = Dict(
+            "method_family" => "static_structural_and_hasmethod",
+            "type" => "explicit_core_family_probe",
+            "macro" => "explicit_core_family_probe",
+            "generated_or_extension" => "extension_source_and_mpi_runner_probe",
+        )
+        for probe in runtime_probes
+            @test get(classified, probe["name"], nothing) == probe["classification"]
+            @test probe["proof"] == expected_proof[probe["classification"]]
+            _run_export_family_probe(probe["name"], probe["classification"])
+        end
+        @test Set(keys(classified)) == Set(String.(fixture["exports"]))
+        @test count(==("method_family"), values(classified)) == 236
+        @test count(==("type"), values(classified)) == 6
+        @test count(==("macro"), values(classified)) == 2
+        @test count(==("generated_or_extension"), values(classified)) == 4
 
         probes = fixture["probe"]
         expected_probe_ids = Set((

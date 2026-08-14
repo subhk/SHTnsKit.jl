@@ -36,6 +36,33 @@ using PencilArrays: PencilArray
 using SHTnsKit
 using FFTW
 
+# Distributed reverse rules in this extension use CPU FFTW/Legendre adjoints.
+# Keeping their dispatch explicitly host-backed prevents a vendor PencilArray
+# from reaching an implicit `Matrix(...)` conversion. GPU-backed distributed
+# AD requires a vendor-native compound rule; until one is available, fail at
+# the storage boundary instead of silently moving a full field to the host.
+const HostPencilArray = PencilArray{T,N,A} where {T,N,A<:Array{T,N}}
+
+@inline function _require_host_pencil(operation::Symbol, value::PencilArray)
+    value isa HostPencilArray && return value
+    throw(SHTnsKit.BackendUnavailableError(
+        operation,
+        "distributed reverse-mode AD for GPU-backed PencilArray storage requires a vendor-native compound rule",
+    ))
+end
+
+@inline function _materialize_host_coefficient(operation::Symbol, value, cfg)
+    value isa ChainRulesCore.AbstractZero &&
+        return zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    SHTnsKit.on_device(value) isa SHTnsKit.CPU || throw(
+        SHTnsKit.BackendUnavailableError(
+            operation,
+            "distributed reverse-mode AD coefficient cotangents must remain on the CPU for a host-backed PencilArray",
+        ),
+    )
+    return ComplexF64.(value)
+end
+
 # ----- PencilArrays helpers -------------------------------------------------
 # `communicator` and `globalindices` are internal helpers of the sibling
 # SHTnsKitParallelExt module and are NOT exported by PencilArrays (verified
@@ -84,7 +111,7 @@ end
 # ----- dist_analysis rrule ---------------------------------------------------
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
-                              cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                              cfg::SHTnsKit.SHTConfig, fθφ::HostPencilArray;
                               kwargs...)
     y = SHTnsKit.dist_analysis(cfg, fθφ; kwargs...)
     θ_globals = collect(globalindices(fθφ, 1))
@@ -104,6 +131,13 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
     return y, dist_analysis_pullback
 end
 
+function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
+                              ::SHTnsKit.SHTConfig, field::PencilArray;
+                              kwargs...)
+    _require_host_pencil(:dist_analysis_pullback, field)
+    error("unreachable host PencilArray reverse-rule dispatch")
+end
+
 # ----- dist_synthesis rrule --------------------------------------------------
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis),
@@ -111,6 +145,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis),
                               prototype_θφ::PencilArray,
                               real_output::Bool=true,
                               use_rfft::Bool=false)
+    _require_host_pencil(:dist_synthesis_pullback, prototype_θφ)
     y = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output, use_rfft)
     comm = communicator(prototype_θφ)
     θ_globals = collect(globalindices(prototype_θφ, 1))
@@ -152,7 +187,7 @@ end
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
                               cfg::SHTnsKit.SHTConfig,
-                              Vtθφ::PencilArray, Vpθφ::PencilArray;
+                              Vtθφ::HostPencilArray, Vpθφ::HostPencilArray;
                               kwargs...)
     y = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; kwargs...)
     θ_globals = collect(globalindices(Vtθφ, 1))
@@ -162,16 +197,15 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
 
     function dist_analysis_sphtor_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
-        # unthunk EACH component — a Tuple/Tangent of Thunks would otherwise reach
-        # Matrix{ComplexF64}(::Thunk) below and error (matches the synthesis twin).
+        # Unthunk each component and materialise only after the host-storage
+        # guard. This preserves CPU AD without making a hidden vendor→host copy.
         Slm̄, Tlm̄ = ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2])
-        # A loss consuming only one output leaves the other a ZeroTangent, and
-        # `Matrix{ComplexF64}(::ZeroTangent)` is a MethodError. Same treatment the
-        # serial sphtor rrules got.
-        _mz(A) = A isa ChainRulesCore.AbstractZero ?
-                 zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1) : Matrix{ComplexF64}(A)
-        S̄in = _mz(Slm̄)
-        T̄in = _mz(Tlm̄)
+        S̄in = _materialize_host_coefficient(
+            :dist_analysis_sphtor_pullback, Slm̄, cfg,
+        )
+        T̄in = _materialize_host_coefficient(
+            :dist_analysis_sphtor_pullback, Tlm̄, cfg,
+        )
         V̄t_parent, V̄p_parent = SHTnsKit._adjoint_analysis_sphtor(
             cfg, S̄in, T̄in;
             θ_globals=θ_globals, φ_window=φ_window)
@@ -180,6 +214,14 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
         return NoTangent(), NoTangent(), V̄t, V̄p
     end
     return y, dist_analysis_sphtor_pullback
+end
+
+function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
+                              ::SHTnsKit.SHTConfig,
+                              Vt::PencilArray, Vp::PencilArray; kwargs...)
+    _require_host_pencil(:dist_analysis_sphtor_pullback, Vt)
+    _require_host_pencil(:dist_analysis_sphtor_pullback, Vp)
+    error("unreachable host PencilArray reverse-rule dispatch")
 end
 
 # ----- dist_synthesis_sphtor rrule ------------------------------------------
@@ -192,6 +234,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
                               prototype_θφ::PencilArray,
                               real_output::Bool=true,
                               use_rfft::Bool=false)
+    _require_host_pencil(:dist_synthesis_sphtor_pullback, prototype_θφ)
     y = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm;
                                         prototype_θφ=prototype_θφ,
                                         real_output=real_output,

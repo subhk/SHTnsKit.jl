@@ -5,6 +5,14 @@ julia = "1.12.4"
 platform = "aarch64-apple-darwin"
 
 [local_gate]
+evidence_kind = "local_readiness"
+certifying = false
+tested_commit = "015ab70ce4cbc5bdc59a908436824ddf26224b98"
+tested_tree = "539d8ae80d11b3e3aaeaf71286e04928ed4e8cac"
+commands_file = "test/fixtures/compatibility/task16_local_commands.txt"
+commands_sha256 = "051ae82bbe56d15b3c91a499b7397dc8493a91b96f3e6d717e714acc43eadac3"
+summary_log = "test/fixtures/compatibility/task16_local_summary.log"
+summary_log_sha256 = "aac826756c9b0f7aa0464250ac3ee25ad163c3f742671d46f53eb8b82bae5bb0"
 pkg_exit_code = 0
 serial_pass = 70253
 parallel_grid_pass = 1673
@@ -15,28 +23,21 @@ mpi_cpu_exit_code = 0
 mpi_cpu_fixture_pass_per_rank = 66
 
 [host_transfer_audit]
-command = "rg -n 'Array\\(|collect\\(|allowscalar|fallback|CPU\\(' ext src/device_utils.jl"
-exact_pattern_match_count = 196
-parent_copy_command = "rg -n '\\b(parent|copyto!|copy!)\\b' ext src/device_utils.jl"
-parent_copy_match_count = 204
+allowlist = "test/fixtures/compatibility/host_transfer_allowlist.toml"
+scanner = "test/support/host_transfer_inventory.jl"
+entry_count = 659
 allowscalar_match_count = 0
 legacy_cuda_host_result_bridges = 2
-classification = [
-  "index and ownership metadata collection",
-  "small cached GPU setup tables",
-  "CPU-resident PencilArray algorithms",
-  "bounded pinned MPI staging",
-  "explicit gpu_analysis_safe and gpu_synthesis_safe fallback",
-  "isolated baseline-compatible gpu_analysis and gpu_synthesis host-result bridges",
-]
-conclusion = "No typed CUDA, AMDGPU, MPI/CUDA, or MPI/AMDGPU mathematical result is implicitly materialized on the host; parent and copy paths retain vendor storage except at the explicit pinned staging boundary."
 
 [[cell]]
 backend = "cpu"
 runner = "test/parity/runtests_cpu.jl"
 physical_hardware = true
 result = "passed"
-status = "verified"
+status = "required"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
 
 [[cell]]
 backend = "cuda"
@@ -44,6 +45,9 @@ runner = "test/gpu/cuda/runtests.jl"
 physical_hardware = false
 result = "unavailable_hardware"
 status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
 pass = 450
 skip = 2
 
@@ -53,6 +57,9 @@ runner = "test/gpu/amdgpu/runtests.jl"
 physical_hardware = false
 result = "unavailable_hardware"
 status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
 pass = 408
 skip = 2
 
@@ -61,7 +68,10 @@ backend = "mpi_cpu"
 runner = "test/parity/runtests_mpi.jl"
 physical_hardware = true
 result = "passed"
-status = "verified"
+status = "required"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
 ranks = 4
 
 [[cell]]
@@ -70,6 +80,9 @@ runner = "test/gpu/cuda/mpi_runtests.jl"
 physical_hardware = false
 result = "unavailable_hardware"
 status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
 ranks = 2
 pass_per_rank = 839
 skip_per_rank = 1
@@ -80,6 +93,9 @@ runner = "test/gpu/amdgpu/mpi_runtests.jl"
 physical_hardware = false
 result = "unavailable_hardware"
 status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
 ranks = 2
 pass_per_rank = 839
 skip_per_rank = 1

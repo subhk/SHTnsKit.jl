@@ -7,9 +7,11 @@ API and checked by the backend-specific runners shown below.
 
 The matrix uses only three status values:
 
-- **verified** means the named parity runner has supplied certification evidence.
+- **verified** means an immutable CI artifact and its digest are recorded for
+  the named parity runner. A local passing command is not certification.
 - **required** is an executable compatibility obligation that has not yet been
-  promoted by the final certification gate.
+  certified. Checked-in local readiness summaries may demonstrate that the
+  runner is ready without changing this status.
 - **unverified hardware** means the implementation and runner exist, but no
   physical hardware run is claimed by the checked-in contract.
 

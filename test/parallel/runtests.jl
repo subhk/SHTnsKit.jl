@@ -21,6 +21,7 @@
 #   mpiexec -n 2 julia --project test/parallel/test_disttranspose_dealiased.jl
 #   mpiexec -n 2 julia --project test/parallel/test_dist_plan_alloc.jl
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_audit_fixes.jl
+#   mpiexec -n 1 julia --project test/parallel/test_parallel_ad_storage.jl
 
 using Test
 

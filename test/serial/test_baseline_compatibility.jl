@@ -251,6 +251,9 @@ end
         @test haskey(fixture["baseline"], "tuple_arity_method_count")
         @test fixture["baseline"]["tuple_arity_method_count"] == 31
         @test all(entry -> haskey(entry, "tuple_arities"), fixture["method"])
+        @test haskey(fixture["baseline"], "tuple_component_method_count")
+        @test fixture["baseline"]["tuple_component_method_count"] == 31
+        @test all(entry -> haskey(entry, "tuple_component_signatures"), fixture["method"])
 
         fixture_methods = method_from_fixture.(fixture["method"])
         @test length(fixture_methods) == length(baseline_inventory.methods)
@@ -268,6 +271,9 @@ end
         )
         @test fixture_tuple_arities == baseline_tuple_arities
         @test count(method -> !isempty(method.tuple_arities), fixture_methods) == 31
+        @test count(method -> !isempty(method.tuple_component_signatures),
+                    fixture_methods) == 31
+        @test sum(method -> length(method.tuple_component_signatures), fixture_methods) == 34
 
         tuple_contract = first(baseline_tuple_contracts)
         incompatible_tuple_contract = merge(
@@ -275,6 +281,20 @@ end
             (; tuple_arities=[maximum(tuple_contract.tuple_arities) + 1]),
         )
         @test !method_compatible(tuple_contract, incompatible_tuple_contract)
+
+        ordered_tuple_contract = first(filter(baseline_tuple_contracts) do method
+            length(method.tuple_component_signatures) == 1 &&
+                length(only(method.tuple_component_signatures)) >= 2 &&
+                only(method.tuple_component_signatures) !=
+                    reverse(only(method.tuple_component_signatures))
+        end)
+        swapped_tuple_contract = merge(
+            ordered_tuple_contract,
+            (; tuple_component_signatures=[
+                reverse(only(ordered_tuple_contract.tuple_component_signatures)),
+            ]),
+        )
+        @test !method_compatible(ordered_tuple_contract, swapped_tuple_contract)
 
         compatibility_misses = String[]
         for baseline_method in fixture_methods

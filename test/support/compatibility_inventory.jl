@@ -95,33 +95,81 @@ function _unwrap_signature(signature)
     return signature, sort!(whereparts)
 end
 
-function _tuple_arities!(out::Set{Int}, ex; top::Bool=true)
+function _normalise_component_signature(value::AbstractString)
+    parsed = try
+        Meta.parse(value)
+    catch
+        return replace(strip(value), r"\s+" => " ")
+    end
+    return _syntax(parsed)
+end
+
+_normalise_component_signature(value) = _normalise_component_signature(_syntax(value))
+
+function _record_tuple_signature!(out::Dict{String,Vector{String}}, value)
+    value isa Expr && value.head === :tuple || return out
+    signature = _normalise_component_signature.(value.args)
+    out[join(signature, '\0')] = signature
+    return out
+end
+
+"Record tuples returned explicitly anywhere in the method, excluding nested callables."
+function _explicit_tuple_signatures!(out, ex; top::Bool=true)
     ex isa Expr || return out
     if ex.head === :return
-        value = only(ex.args)
-        value isa Expr && value.head === :tuple && push!(out, length(value.args))
+        _implicit_tuple_signatures!(out, only(ex.args))
         return out
     elseif !top && ex.head in (:function, :->, :macro)
         return out
     end
     for arg in ex.args
-        _tuple_arities!(out, arg; top=false)
-    end
-    if top && ex.head === :block
-        values = filter(arg -> !(arg isa LineNumberNode), ex.args)
-        !isempty(values) && values[end] isa Expr && values[end].head === :tuple &&
-            push!(out, length(values[end].args))
+        _explicit_tuple_signatures!(out, arg; top=false)
     end
     return out
 end
 
-function _documented_tuple_arities(doc::Union{Nothing,String})
-    doc === nothing && return Int[]
-    result = Int[]
+"Record tuple alternatives produced by the result position of blocks/branches."
+function _implicit_tuple_signatures!(out, ex)
+    ex isa Expr || return out
+    if ex.head === :tuple
+        return _record_tuple_signature!(out, ex)
+    elseif ex.head === :return
+        return _implicit_tuple_signatures!(out, only(ex.args))
+    elseif ex.head === :block
+        values = filter(arg -> !(arg isa LineNumberNode), ex.args)
+        isempty(values) || _implicit_tuple_signatures!(out, values[end])
+    elseif ex.head === :if
+        length(ex.args) >= 2 && _implicit_tuple_signatures!(out, ex.args[2])
+        length(ex.args) >= 3 && _implicit_tuple_signatures!(out, ex.args[3])
+    elseif ex.head in (:let, :try)
+        # Each block in a result-producing let/try can be a return alternative.
+        for arg in ex.args
+            arg isa Expr && arg.head === :block &&
+                _implicit_tuple_signatures!(out, arg)
+        end
+    end
+    return out
+end
+
+function _documented_tuple_signatures(doc::Union{Nothing,String})
+    doc === nothing && return Vector{String}[]
+    result = Vector{String}[]
     for match in eachmatch(r"->\s*\(([^()]+)\)", doc)
-        push!(result, count(==(','), match.captures[1]) + 1)
+        push!(result, _normalise_component_signature.(
+            split(match.captures[1], ','; keepempty=false),
+        ))
     end
     return result
+end
+
+function _tuple_component_signatures(body, doc)
+    signatures = Dict{String,Vector{String}}()
+    _explicit_tuple_signatures!(signatures, body)
+    _implicit_tuple_signatures!(signatures, body)
+    for signature in _documented_tuple_signatures(doc)
+        signatures[join(signature, '\0')] = signature
+    end
+    return sort!(collect(values(signatures)); by=signature -> join(signature, '\0'))
 end
 
 function _method_record(signature, body, path, exports, doc)
@@ -138,8 +186,8 @@ function _method_record(signature, body, path, exports, doc)
             push!(positional, _argument(arg))
         end
     end
-    tuples = _tuple_arities!(Set{Int}(), body)
-    union!(tuples, _documented_tuple_arities(doc))
+    tuple_component_signatures = _tuple_component_signatures(body, doc)
+    tuples = Set(length(signature) for signature in tuple_component_signatures)
     return (
         name=name,
         path=path,
@@ -147,6 +195,7 @@ function _method_record(signature, body, path, exports, doc)
         keywords=keywords,
         where=whereparts,
         tuple_arities=sort!(collect(tuples)),
+        tuple_component_signatures=tuple_component_signatures,
     )
 end
 
@@ -175,6 +224,7 @@ function method_to_fixture(method)
         "keyword" => keywords,
         "where" => method.where,
         "tuple_arities" => method.tuple_arities,
+        "tuple_component_signatures" => method.tuple_component_signatures,
     )
 end
 
@@ -193,6 +243,10 @@ function method_from_fixture(entry)
         keywords=_fixture_argument.(entry["keyword"]),
         where=String.(entry["where"]),
         tuple_arities=Int.(entry["tuple_arities"]),
+        tuple_component_signatures=[
+            _normalise_component_signature.(String.(signature))
+            for signature in entry["tuple_component_signatures"]
+        ],
     )
     method_fingerprint(record) == entry["fingerprint"] ||
         throw(ArgumentError("method fixture fingerprint drift for $(record.name)"))
@@ -230,6 +284,13 @@ function method_compatible(baseline, current;
     end
     all(arity -> arity in current.tuple_arities, baseline.tuple_arities) ||
         return false
+    current_tuple_signatures = Set(
+        Tuple(_normalise_component_signature.(signature))
+        for signature in current.tuple_component_signatures
+    )
+    all(baseline.tuple_component_signatures) do signature
+        Tuple(_normalise_component_signature.(signature)) in current_tuple_signatures
+    end || return false
     return true
 end
 

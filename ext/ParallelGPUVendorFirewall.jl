@@ -26,15 +26,27 @@ end
 
 function _stage_vendor_call(operation::Symbol, f, values...;
                             mutated::Tuple=())
-    prototype = first(value for value in values if value isa VendorPencilArray)
-    adapter = _vendor_adapter(prototype)
-    comm = _vendor_comm(values...)
-    return _stage_vendor_call_with_adapter(
-        adapter, comm, operation, f, values...; mutated,
-    )
+    return _ordinary_vendor_backend_unavailable(operation)
 end
 
 function _stage_vendor_call_with_adapter(
+        adapter, comm, operation::Symbol, f, values...; mutated::Tuple=(),
+        validate_storage::Bool=true)
+    return _ordinary_vendor_backend_unavailable(operation)
+end
+
+@noinline function _ordinary_vendor_backend_unavailable(operation::Symbol)
+    throw(SHTnsKit.BackendUnavailableError(
+        operation,
+        "distributed GPU execution is not device-native for this API; " *
+        "use a DistTransposePlan native transform or CPU storage",
+    ))
+end
+
+# Explicit internal hook for policy/cache tests.  Ordinary public mathematical
+# dispatch never calls this helper: full-field host staging is permitted only
+# inside the MPI collective implementation in `ParallelGPU.jl`.
+function _internal_staged_vendor_call_with_adapter(
         adapter, comm, operation::Symbol, f, values...; mutated::Tuple=(),
         validate_storage::Bool=true)
     validate_storage && ParallelExt._validate_parallel_storage!(
@@ -48,9 +60,8 @@ end
 
 # The ordinary full-grid APIs already have device-native transpose-plan entry
 # points in the parallel extension and the vendor-specific kernels below this
-# include.  The remaining cfg-form APIs are deliberately staged at this single
-# compound-extension boundary, before any generic CPU PencilArray method can
-# index device storage.
+# include.  All other compound APIs fail at this single boundary before a
+# generic CPU PencilArray method can copy or index device storage.
 
 function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig,
                            field::VendorPencilArray; kwargs...)
@@ -135,9 +146,8 @@ function SHTnsKit.synthesis_qst(cfg::SHTnsKit.SHTConfig,
     )
 end
 
-# Same-shape local spectral operations.  Out-of-place results are restored to
-# the device; bang variants copy the staged destination back and return the
-# original object.
+# Same-shape local spectral APIs are owned here so device storage cannot fall
+# through to CPU indexing. They remain unavailable until native kernels exist.
 for name in (
         :divergence_from_spheroidal, :spheroidal_from_divergence,
         :vorticity_from_toroidal, :toroidal_from_vorticity,
@@ -787,7 +797,7 @@ function SHTnsKit.dist_synthesis_packed_cplx(
     )
 end
 
-# Preserved `dist_*` aliases use the same staged boundary for cfg-form calls.
+# Preserved `dist_*` aliases use the same early-error boundary for cfg-form calls.
 function SHTnsKit.dist_analysis(cfg::SHTnsKit.SHTConfig,
                                 field::VendorPencilArray; kwargs...)
     return _stage_vendor_call(:dist_analysis, field) do host

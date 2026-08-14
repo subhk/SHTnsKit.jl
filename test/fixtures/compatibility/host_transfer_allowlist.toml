@@ -884,26 +884,26 @@ same_snippet_ordinal = 1
 snippet_sha256 = "dfaa956764bdeb80269a1a9319f6529abb65ae4e653189ae8ff91d8458789496"
 token = "similar_array"
 [[entry]]
-classification = "bounded_pinned_mpi_staging"
+classification = "unreachable_early_error_callback"
 key = "ext/ParallelGPUVendorFirewall.jl|cpu_constructor|4ebb302406e55f6fe1c6518366307bc01ad0f0d09fd79d86d7249cd8a4687333|1"
 path = "ext/ParallelGPUVendorFirewall.jl"
-reason = "explicit pinned MPI staging boundary; keep the transfer bounded, synchronized, and restored to the originating vendor before return"
+reason = "legacy callback text is guarded by the compound early-error boundary; ordinary MPI GPU dispatch must never execute or transfer through it"
 same_snippet_ordinal = 1
 snippet_sha256 = "4ebb302406e55f6fe1c6518366307bc01ad0f0d09fd79d86d7249cd8a4687333"
 token = "cpu_constructor"
 [[entry]]
-classification = "bounded_pinned_mpi_staging"
+classification = "unreachable_early_error_callback"
 key = "ext/ParallelGPUVendorFirewall.jl|cpu_constructor|ff4dd4427a5e573ba9a4f372b28ba29e24a57ce745b2182c561db98d51bd4b94|1"
 path = "ext/ParallelGPUVendorFirewall.jl"
-reason = "explicit pinned MPI staging boundary; keep the transfer bounded, synchronized, and restored to the originating vendor before return"
+reason = "legacy callback text is guarded by the compound early-error boundary; ordinary MPI GPU dispatch must never execute or transfer through it"
 same_snippet_ordinal = 1
 snippet_sha256 = "ff4dd4427a5e573ba9a4f372b28ba29e24a57ce745b2182c561db98d51bd4b94"
 token = "cpu_constructor"
 [[entry]]
-classification = "bounded_pinned_mpi_staging"
+classification = "unreachable_early_error_callback"
 key = "ext/ParallelGPUVendorFirewall.jl|cpu_constructor|ff4dd4427a5e573ba9a4f372b28ba29e24a57ce745b2182c561db98d51bd4b94|2"
 path = "ext/ParallelGPUVendorFirewall.jl"
-reason = "explicit pinned MPI staging boundary; keep the transfer bounded, synchronized, and restored to the originating vendor before return"
+reason = "legacy callback text is guarded by the compound early-error boundary; ordinary MPI GPU dispatch must never execute or transfer through it"
 same_snippet_ordinal = 2
 snippet_sha256 = "ff4dd4427a5e573ba9a4f372b28ba29e24a57ce745b2182c561db98d51bd4b94"
 token = "cpu_constructor"

@@ -18,6 +18,7 @@ include(joinpath(ROOT, "test", "parity", "mpi_gpu.jl"))
     test_mpi_gpu_policy(extension)
     compound = Base.get_extension(SHTnsKit, :SHTnsKitParallelCUDAExt)
     test_mpi_gpu_source_contract(ROOT, :cuda, compound)
+    test_mpi_gpu_ordinary_early_errors(extension, compound)
     cuda_functional = CUDA.functional()
     cuda_devices = cuda_functional ? collect(CUDA.devices()) : Any[]
     run_mpi_gpu_full_parity(

@@ -43,6 +43,15 @@ gpu_coefficients = analysis(cfg, device_field)
 distributed_coefficients = analysis(cfg, spatial_pencil)
 ```
 
+For a `PencilArray` whose parent is a CUDA or AMDGPU array, only the
+`DistTransposePlan` scalar, spheroidal/toroidal, and QST bang transforms are
+currently device-native. Their Legendre work stays on the device and only the
+MPI transpose/all-reduce boundary may use bounded pinned staging when the MPI
+library is not GPU-aware. Other ordinary MPI+GPU mathematical APIs throw
+`BackendUnavailableError` before copying, mutating, or incrementing staging
+counters. They remain `unverified hardware`; the package does not claim parity
+for a whole-call CPU-staged implementation.
+
 Strict `GPU()` calls report an unavailable backend rather than silently moving
 data to the CPU. The legacy `gpu_analysis_safe` and `gpu_synthesis_safe`
 wrappers are the explicit compatibility path when automatic host fallback is

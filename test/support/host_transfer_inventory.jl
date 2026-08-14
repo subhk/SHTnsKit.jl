@@ -91,7 +91,7 @@ end
                     "ext/SHTnsKitParallelAMDGPUExt.jl")
         return token in ("vector", "copyto")
     elseif path == "ext/ParallelGPUVendorFirewall.jl"
-        return occursin("SHTnsKit.CPU()", snippet)
+        return false
     end
     return occursin("_stage", snippet) || occursin("pinned", lower)
 end
@@ -109,6 +109,12 @@ function classify_transfer_occurrence(entry)
     path, token, snippet = entry.path, entry.token, entry.snippet
     if token == "allowscalar"
         return nothing
+    elseif path == "ext/ParallelGPUVendorFirewall.jl" &&
+           token == "cpu_constructor"
+        return (
+            classification="unreachable_early_error_callback",
+            reason="legacy callback text is guarded by the compound early-error boundary; ordinary MPI GPU dispatch must never execute or transfer through it",
+        )
     elseif occursin("gpu_analysis_safe", snippet) ||
            occursin("gpu_synthesis_safe", snippet) ||
            occursin("Historical host-buffer compatibility", snippet) ||

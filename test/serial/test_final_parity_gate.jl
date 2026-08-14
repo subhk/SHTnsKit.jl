@@ -94,11 +94,12 @@ end
     @test Set(entry["classification"] for entry in allowed) == Set((
         "bounded_pinned_mpi_staging", "cpu_only", "legacy_host_result",
         "metadata_or_storage_preserving", "small_setup_table",
-        "explicit_cpu_or_fallback",
+        "explicit_cpu_or_fallback", "unreachable_early_error_callback",
     ))
     @test all(required -> any(entry -> entry["classification"] == required, allowed), (
         "metadata_or_storage_preserving", "small_setup_table", "cpu_only",
         "bounded_pinned_mpi_staging", "legacy_host_result",
+        "unreachable_early_error_callback",
     ))
     for occurrence in scanned
         entry = only(filter(entry -> entry["key"] == transfer_occurrence_key(occurrence), allowed))

@@ -18,6 +18,7 @@ include(joinpath(ROOT, "test", "parity", "mpi_gpu.jl"))
     test_mpi_gpu_policy(extension)
     compound = Base.get_extension(SHTnsKit, :SHTnsKitParallelAMDGPUExt)
     test_mpi_gpu_source_contract(ROOT, :amdgpu, compound)
+    test_mpi_gpu_ordinary_early_errors(extension, compound)
     amdgpu_functional = AMDGPU.functional()
     amdgpu_devices = amdgpu_functional ? AMDGPU.devices() : Any[]
     run_mpi_gpu_full_parity(

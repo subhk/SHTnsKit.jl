@@ -25,7 +25,7 @@ mpi_cpu_fixture_pass_per_rank = 66
 [host_transfer_audit]
 allowlist = "test/fixtures/compatibility/host_transfer_allowlist.toml"
 scanner = "test/support/host_transfer_inventory.jl"
-entry_count = 659
+entry_count = 661
 allowscalar_match_count = 0
 legacy_cuda_host_result_bridges = 2
 

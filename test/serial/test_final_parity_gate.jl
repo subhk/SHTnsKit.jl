@@ -75,7 +75,7 @@ end
     transfer_fixture = TOML.parsefile(audit_path)
     scanned = scan_host_transfer_occurrences(root)
     allowed = transfer_fixture["entry"]
-    @test transfer_fixture["audit"]["entry_count"] == length(scanned) == 659
+    @test transfer_fixture["audit"]["entry_count"] == length(scanned) == 661
     scanned_keys = Set(transfer_occurrence_key.(scanned))
     allowed_keys = Set(entry["key"] for entry in allowed)
     @test length(allowed_keys) == length(allowed)
@@ -86,6 +86,11 @@ end
     @test all(entry -> !isempty(entry["classification"]), allowed)
     @test all(entry -> !isempty(entry["reason"]), allowed)
     @test count(entry -> entry["token"] == "allowscalar", allowed) == 0
+    similar_array_entries = filter(entry -> entry["token"] == "similar_array", allowed)
+    @test length(similar_array_entries) == 2
+    @test all(entry -> entry["path"] == "ext/ParallelGPU.jl", similar_array_entries)
+    @test all(entry -> entry["classification"] == "bounded_pinned_mpi_staging",
+              similar_array_entries)
     @test Set(entry["classification"] for entry in allowed) == Set((
         "bounded_pinned_mpi_staging", "cpu_only", "legacy_host_result",
         "metadata_or_storage_preserving", "small_setup_table",
@@ -138,4 +143,7 @@ end
     )
     @test first(scalar_synthesis_guard) < first(scalar_synthesis_forward)
     @test first(vector_synthesis_guard) < first(vector_synthesis_forward)
+
+    parallel_runner = read(joinpath(root, "test", "parallel", "runtests.jl"), String)
+    @test occursin("include(\"test_parallel_ad_storage.jl\")", parallel_runner)
 end

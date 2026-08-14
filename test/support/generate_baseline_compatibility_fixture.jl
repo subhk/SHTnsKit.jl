@@ -12,6 +12,8 @@ inventory = inventory_sources(revision_source_pairs(root, revision), fixture["ex
 isempty(inventory.parse_errors) || error("baseline parse errors: $(inventory.parse_errors)")
 
 fixture["baseline"]["method_count"] = length(inventory.methods)
+fixture["baseline"]["tuple_arity_method_count"] =
+    count(method -> !isempty(method.tuple_arities), inventory.methods)
 fixture["baseline"]["source_digest_sha256"] = inventory.source_digest
 fixture["baseline"]["method_extraction"] =
     "all src/**/*.jl at the immutable baseline tree; normalized declaration AST"

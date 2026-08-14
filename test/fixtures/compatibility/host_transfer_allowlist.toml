@@ -1,5 +1,5 @@
 [audit]
-entry_count = 659
+entry_count = 661
 scanner = "deterministic non-overlapping spelling scanner; longer transfer spellings win"
 scope = "src/device_utils.jl and every ext/*.jl file"
 
@@ -867,6 +867,22 @@ reason = "metadata collection or storage-preserving parent/copy operation; verif
 same_snippet_ordinal = 1
 snippet_sha256 = "f854f1d0973707feb49c15be695ec85e241b574c7d73ccf471d0ecb18beb8ab4"
 token = "parent"
+[[entry]]
+classification = "bounded_pinned_mpi_staging"
+key = "ext/ParallelGPU.jl|similar_array|6a8e594f63d86bc61b54dbc56c19d4805c44a24b282db0e576119367a4940434|1"
+path = "ext/ParallelGPU.jl"
+reason = "explicit pinned MPI staging boundary; keep the transfer bounded, synchronized, and restored to the originating vendor before return"
+same_snippet_ordinal = 1
+snippet_sha256 = "6a8e594f63d86bc61b54dbc56c19d4805c44a24b282db0e576119367a4940434"
+token = "similar_array"
+[[entry]]
+classification = "bounded_pinned_mpi_staging"
+key = "ext/ParallelGPU.jl|similar_array|dfaa956764bdeb80269a1a9319f6529abb65ae4e653189ae8ff91d8458789496|1"
+path = "ext/ParallelGPU.jl"
+reason = "explicit pinned MPI staging boundary; keep the transfer bounded, synchronized, and restored to the originating vendor before return"
+same_snippet_ordinal = 1
+snippet_sha256 = "dfaa956764bdeb80269a1a9319f6529abb65ae4e653189ae8ff91d8458789496"
+token = "similar_array"
 [[entry]]
 classification = "bounded_pinned_mpi_staging"
 key = "ext/ParallelGPUVendorFirewall.jl|cpu_constructor|4ebb302406e55f6fe1c6518366307bc01ad0f0d09fd79d86d7249cd8a4687333|1"

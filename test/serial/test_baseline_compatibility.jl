@@ -244,12 +244,37 @@ end
         @test baseline_inventory.source_digest == fixture["baseline"]["source_digest_sha256"]
         @test fixture["baseline"]["method_count"] == 247 == length(baseline_inventory.methods)
 
+        baseline_tuple_contracts = filter(
+            method -> !isempty(method.tuple_arities), baseline_inventory.methods,
+        )
+        @test length(baseline_tuple_contracts) == 31
+        @test haskey(fixture["baseline"], "tuple_arity_method_count")
+        @test fixture["baseline"]["tuple_arity_method_count"] == 31
+        @test all(entry -> haskey(entry, "tuple_arities"), fixture["method"])
+
         fixture_methods = method_from_fixture.(fixture["method"])
         @test length(fixture_methods) == length(baseline_inventory.methods)
         @test Set(method_fingerprint.(fixture_methods)) ==
               Set(method_fingerprint.(baseline_inventory.methods))
         @test sort(method_to_fixture.(baseline_inventory.methods); by=entry -> entry["fingerprint"]) ==
               sort(fixture["method"]; by=entry -> entry["fingerprint"])
+        baseline_tuple_arities = Dict(
+            method_fingerprint(method) => method.tuple_arities
+            for method in baseline_inventory.methods
+        )
+        fixture_tuple_arities = Dict(
+            method_fingerprint(method) => method.tuple_arities
+            for method in fixture_methods
+        )
+        @test fixture_tuple_arities == baseline_tuple_arities
+        @test count(method -> !isempty(method.tuple_arities), fixture_methods) == 31
+
+        tuple_contract = first(baseline_tuple_contracts)
+        incompatible_tuple_contract = merge(
+            tuple_contract,
+            (; tuple_arities=[maximum(tuple_contract.tuple_arities) + 1]),
+        )
+        @test !method_compatible(tuple_contract, incompatible_tuple_contract)
 
         compatibility_misses = String[]
         for baseline_method in fixture_methods

@@ -174,6 +174,7 @@ function method_to_fixture(method)
         "positional" => positional,
         "keyword" => keywords,
         "where" => method.where,
+        "tuple_arities" => method.tuple_arities,
     )
 end
 
@@ -191,7 +192,7 @@ function method_from_fixture(entry)
         positional=_fixture_argument.(entry["positional"]),
         keywords=_fixture_argument.(entry["keyword"]),
         where=String.(entry["where"]),
-        tuple_arities=Int[],
+        tuple_arities=Int.(entry["tuple_arities"]),
     )
     method_fingerprint(record) == entry["fingerprint"] ||
         throw(ArgumentError("method fixture fingerprint drift for $(record.name)"))
@@ -227,6 +228,8 @@ function method_compatible(baseline, current;
         _argument_compatible(baseline_keyword, current_keyword, type_compatible) ||
             return false
     end
+    all(arity -> arity in current.tuple_arities, baseline.tuple_arities) ||
+        return false
     return true
 end
 

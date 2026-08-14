@@ -8,6 +8,7 @@ export scan_host_transfer_occurrences, transfer_occurrence_key,
 const TRANSFER_PATTERNS = (
     :to_device_cpu => r"to_device\s*\(\s*CPU\s*\(\s*\)\s*,",
     :to_cpu => r"\b_to_cpu\b",
+    :similar_array => r"\bsimilar\s*\([^,\n]+,\s*Array\s*\)",
     :typed_array => r"\bArray\s*\{[^\n]*?\}\s*\(",
     :array => r"\bArray\s*\(",
     :matrix => r"\bMatrix\s*\{[^\n]*?\}\s*\(",
@@ -82,7 +83,8 @@ end
 @inline function _bounded_staging_occurrence(path, token, snippet)
     lower = lowercase(snippet)
     if path == "ext/ParallelGPU.jl"
-        return occursin("pinned", lower) || occursin("device_to_host!", snippet) ||
+        return token == "similar_array" ||
+               occursin("pinned", lower) || occursin("device_to_host!", snippet) ||
                occursin("host_to_device!", snippet) || occursin("host_parent", snippet) ||
                occursin("Array(result)", snippet)
     elseif path in ("ext/SHTnsKitParallelCUDAExt.jl",

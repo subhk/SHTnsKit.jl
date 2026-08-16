@@ -1,20 +1,20 @@
 [gate]
-date = "2026-08-14"
+date = "2026-08-16"
 julia = "1.12.4"
 platform = "aarch64-apple-darwin"
 
 [local_gate]
 evidence_kind = "local_readiness"
 certifying = false
-audited_tree_digest = "73931ec2ea18ef438ff82a21c1431783dac7c6d65019d80c8fe2e6130266cd73"
+audited_tree_digest = "c2d41a5dfb68844ef0e5d10e2e094423131a49eea0230b1ff9002c596ac1e56c"
 audited_scope = ["Project.toml", ".github/workflows", "docs/src/shtns37-parity.md", "ext", "src", "test"]
 audited_exclusions = ["test/fixtures/compatibility/task16_gate.toml", "test/fixtures/compatibility/task16_local_commands.txt", "test/fixtures/compatibility/task16_local_summary.log"]
 commands_file = "test/fixtures/compatibility/task16_local_commands.txt"
 commands_sha256 = "8f3eca535453b9d48709977bd9336fb723f6a8af6005ffeb4df13b132fec335c"
 summary_log = "test/fixtures/compatibility/task16_local_summary.log"
-summary_log_sha256 = "76c3c8775b5147d754aa9cc213a58df308f0dcb03fd19fb1781163c40e0123cf"
+summary_log_sha256 = "d759e5c40e5b53d9767b090dd0e7016464b08f23ec21d2b5d1a5048858c1b697"
 pkg_exit_code = 0
-serial_pass = 76022
+serial_pass = 76027
 parallel_grid_pass = 1692
 jet_pass = 30
 aqua_pass = 3

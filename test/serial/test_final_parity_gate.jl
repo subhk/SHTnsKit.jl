@@ -10,6 +10,46 @@ const _FINAL_GATE_FIXTURE = joinpath(
     @__DIR__, "..", "fixtures", "compatibility", "task16_gate.toml"
 )
 
+@testset "Task 16 audit ignores generated environment artifacts" begin
+    mktempdir() do root
+        test_dir = joinpath(root, "test")
+        mkpath(test_dir)
+        source_path = joinpath(test_dir, "source.jl")
+        write(source_path, "const audited_value = 1\n")
+
+        scope = ["test"]
+        baseline = task16_audited_tree_digest(root, scope, String[])
+
+        generated = (
+            joinpath(test_dir, "Manifest.toml"),
+            joinpath(test_dir, "Manifest-v1.10.toml"),
+            joinpath(test_dir, "source.jl.cov"),
+            joinpath(test_dir, "source.jl.123.cov"),
+            joinpath(test_dir, "source.jl.mem"),
+            joinpath(test_dir, "LocalPreferences.toml"),
+            joinpath(test_dir, "JuliaLocalPreferences.toml"),
+        )
+        for path in generated
+            write(path, "generated and environment-specific\n")
+        end
+        @test task16_audited_tree_digest(root, scope, String[]) == baseline
+
+        write(source_path, "const audited_value = 2\n")
+        @test task16_audited_tree_digest(root, scope, String[]) != baseline
+    end
+end
+
+@testset "Task 16 audit uses reproducible checkout line endings" begin
+    root = normpath(joinpath(@__DIR__, "..", ".."))
+    attributes_path = joinpath(root, ".gitattributes")
+    @test isfile(attributes_path)
+    if isfile(attributes_path)
+        attributes = read(attributes_path, String)
+        @test occursin(r"(?m)^\* text=auto eol=lf$", attributes)
+        @test occursin(r"(?m)^\*\.bin binary$", attributes)
+    end
+end
+
 function _source_match_count(root::String, pattern::Regex)
     files = String[joinpath(root, "src", "device_utils.jl")]
     append!(files, sort(filter(

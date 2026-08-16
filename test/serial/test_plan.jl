@@ -157,10 +157,14 @@ end
         synthesis!(cfg, f, alm; fft_scratch)
         GC.gc()
 
-        @test @allocated(synthesis!(plan, f, alm)) <= 128
-        @test @allocated(synthesis!(plan_r, f, alm)) <= 128
-        @test @allocated(synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)) <= 128
-        @test @allocated(synthesis!(cfg, f, alm; fft_scratch)) <= 128
+        # Coverage instrumentation adds small bookkeeping allocations on x86
+        # runners. Keep the strict production-path ceiling while still ruling
+        # out any field-sized allocation in coverage-enabled CI.
+        allocation_limit = Base.JLOptions().code_coverage == 0 ? 128 : 2048
+        @test @allocated(synthesis!(plan, f, alm)) <= allocation_limit
+        @test @allocated(synthesis!(plan_r, f, alm)) <= allocation_limit
+        @test @allocated(synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)) <= allocation_limit
+        @test @allocated(synthesis!(cfg, f, alm; fft_scratch)) <= allocation_limit
     end
 
     @testset "Planned scalar matches the non-planned path exactly" begin

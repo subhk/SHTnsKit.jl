@@ -22,6 +22,15 @@ const _TASK16_AUDITED_EXCLUSIONS = [
     "test/fixtures/compatibility/task16_local_summary.log",
 ]
 
+function _task16_generated_audit_artifact(path::AbstractString)
+    name = basename(path)
+    return occursin(r"^Manifest(?:-v[^/]*)?\.toml$", name) ||
+           occursin(r"\.jl(?:\.[^.]+)?\.cov$", name) ||
+           endswith(name, ".jl.mem") ||
+           name == "LocalPreferences.toml" ||
+           name == "JuliaLocalPreferences.toml"
+end
+
 function _task16_audited_paths(root::AbstractString, scope, exclusions)
     excluded = Set(replace.(String.(exclusions), '\\' => '/'))
     candidates = String[]
@@ -43,7 +52,10 @@ function _task16_audited_paths(root::AbstractString, scope, exclusions)
     unique!(sort!(candidates))
     all(exclusion -> exclusion in candidates, excluded) ||
         throw(ArgumentError("Task 16 evidence exclusion is outside its audited scope"))
-    return filter(path -> path ∉ excluded, candidates)
+    return filter(
+        path -> path ∉ excluded && !_task16_generated_audit_artifact(path),
+        candidates,
+    )
 end
 
 """

@@ -76,7 +76,7 @@ jobs:
         run: |
           julia --project=. -e '
             using Pkg
-            Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
+            Pkg.add(["MPI", "PencilArrays", "PencilFFTs", "ChainRulesCore"])
             ENV["JULIA_MPI_BINARY"] = "system"
             Pkg.build("MPI")
           '
@@ -130,6 +130,14 @@ jobs:
           OMP_NUM_THREADS: 2
           OPENBLAS_NUM_THREADS: 1
           JULIA_NUM_THREADS: 2
+
+      - name: Reinstall direct parallel test dependencies (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          julia --project=. -e '
+            using Pkg
+            Pkg.add(["MPI", "PencilArrays", "PencilFFTs", "ChainRulesCore"])
+          '
 
       - name: Run comprehensive serial tests
         run: |

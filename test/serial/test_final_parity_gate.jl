@@ -53,14 +53,26 @@ end
 @testset "Task 16 CI restores the audited project after MPI setup" begin
     root = normpath(joinpath(@__DIR__, "..", ".."))
     workflow = read(joinpath(root, ".github", "workflows", "ci.yml"), String)
-    install = findfirst("Pkg.add([\"MPI\", \"PencilArrays\", \"PencilFFTs\"])", workflow)
+    installs = findall(
+        "Pkg.add([\"MPI\", \"PencilArrays\", \"PencilFFTs\", \"ChainRulesCore\"])",
+        workflow,
+    )
     restore = findfirst("git restore --source=HEAD -- Project.toml", workflow)
     clean_check = findfirst("git diff --exit-code -- Project.toml", workflow)
-    @test install !== nothing
+    audited_test = findfirst("uses: julia-actions/julia-runtest@v1", workflow)
+    parallel_test = findfirst(
+        "julia --project=. -t 4 -e 'include(\"test/parallel/runtests.jl\")'",
+        workflow,
+    )
+    @test length(installs) == 2
     @test restore !== nothing
     @test clean_check !== nothing
-    if install !== nothing && restore !== nothing && clean_check !== nothing
-        @test first(install) < first(restore) < first(clean_check)
+    @test audited_test !== nothing
+    @test parallel_test !== nothing
+    if length(installs) == 2 && restore !== nothing && clean_check !== nothing &&
+       audited_test !== nothing && parallel_test !== nothing
+        @test first(installs[1]) < first(restore) < first(clean_check) <
+              first(audited_test) < first(installs[2]) < first(parallel_test)
     end
 end
 

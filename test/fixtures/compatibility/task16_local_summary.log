@@ -1,6 +1,6 @@
 evidence_kind=local_readiness
 certifying=false
-audited_tree_digest=edfcc0895a5f792b66c0dc2a44cad01a94381bb3e240cb2cf24ac67eb3364d67
+audited_tree_digest=881e71b42352e45b999425192958110e192e60af1e9d5fd1238cfba9f2af4c11
 platform=aarch64-apple-darwin
 julia=1.12.4
 pkg_exit_code=0

@@ -50,6 +50,20 @@ end
     end
 end
 
+@testset "Task 16 CI restores the audited project after MPI setup" begin
+    root = normpath(joinpath(@__DIR__, "..", ".."))
+    workflow = read(joinpath(root, ".github", "workflows", "ci.yml"), String)
+    install = findfirst("Pkg.add([\"MPI\", \"PencilArrays\", \"PencilFFTs\"])", workflow)
+    restore = findfirst("git restore --source=HEAD -- Project.toml", workflow)
+    clean_check = findfirst("git diff --exit-code -- Project.toml", workflow)
+    @test install !== nothing
+    @test restore !== nothing
+    @test clean_check !== nothing
+    if install !== nothing && restore !== nothing && clean_check !== nothing
+        @test first(install) < first(restore) < first(clean_check)
+    end
+end
+
 function _source_match_count(root::String, pattern::Regex)
     files = String[joinpath(root, "src", "device_utils.jl")]
     append!(files, sort(filter(

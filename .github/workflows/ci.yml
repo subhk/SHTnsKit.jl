@@ -80,6 +80,10 @@ jobs:
             ENV["JULIA_MPI_BINARY"] = "system"
             Pkg.build("MPI")
           '
+          # Pkg.add installs weak/test dependencies for this job but must not
+          # change the audited package definition seen by Pkg.test.
+          git restore --source=HEAD -- Project.toml
+          git diff --exit-code -- Project.toml
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'

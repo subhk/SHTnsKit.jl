@@ -13,9 +13,9 @@ comm = COMM_WORLD
 # Build config and prototype (θ,φ) pencil
 cfg = create_gauss_config(32, 40; nlon=65)
 
-# Assume you created a prototype `(θ,φ)` pencil named proto_θφ.
-# For example (API depends on your PencilArrays version):
-# proto_θφ = allocate(comm; dims=(:θ,:φ), sizes=(cfg.nlat, cfg.nlon), eltype=Float64)
+# Create a latitude-decomposed `(θ,φ)` prototype using PencilArrays 0.19.
+pen = Pencil((cfg.nlat, cfg.nlon), (1,), comm)
+proto_θφ = PencilArray{Float64}(undef, pen)
 
 # Fill a test field
 fθφ = similar(proto_θφ)

@@ -1,0 +1,3029 @@
+exports = ["@sht_inside", "@sht_loop", "CI", "CPU", "ComputeDevice", "DistAnalysisPlan", "DistPlan", "DistQstPlan", "DistSphtorPlan", "DistTransposePlan", "GPU", "LM_cplx", "LM_cplx_index", "LM_index", "LiM_index", "SHTConfig", "SHTPlan", "SHTRotation", "SH_Xrotate90", "SH_Yrotate", "SH_Yrotate90", "SH_Zrotate", "SH_mul_mx", "SH_to_lat", "SHqst_to_lat", "allocate_padded_spatial", "allocate_padded_spatial_batch", "allocate_spatial", "allocate_spectral", "analysis", "analysis!", "analysis_axisym", "analysis_axisym_l", "analysis_batch", "analysis_batch!", "analysis_packed", "analysis_packed_cplx", "analysis_packed_l", "analysis_packed_ml", "analysis_qst", "analysis_qst_batch", "analysis_qst_cplx", "analysis_qst_l", "analysis_qst_ml", "analysis_sphtor", "analysis_sphtor!", "analysis_sphtor_batch", "analysis_sphtor_cplx", "analysis_sphtor_l", "analysis_sphtor_ml", "analysis_turbo", "benchmark_turbo_vs_simd", "build_li_mi", "check_gpu_memory", "compute_optimal_padding", "copy_from_padded!", "copy_to_padded!", "create_config", "create_gauss_config", "create_gauss_config_spf", "create_gauss_fly_config", "create_regular_config", "create_spatial_array", "create_spatial_pencil", "create_spectral_array", "create_spectral_pencil", "destroy_config", "disable_fft_plan_cache!", "disable_padding!", "disable_plm_tables!", "dist_SH_Xrotate90_packed", "dist_SH_Yrotate90_packed", "dist_SH_Yrotate_packed", "dist_SH_Zrotate_packed", "dist_SH_rotate_euler", "dist_SH_to_lat", "dist_SH_to_point", "dist_SHqst_to_lat", "dist_SHqst_to_point", "dist_analysis", "dist_analysis!", "dist_analysis_packed", "dist_analysis_packed_cplx", "dist_analysis_qst!", "dist_analysis_sphtor!", "dist_scalar_laplacian", "dist_scalar_laplacian!", "dist_scalar_roundtrip!", "dist_spatial_divergence", "dist_spatial_vorticity", "dist_synthesis", "dist_synthesis!", "dist_synthesis_packed", "dist_synthesis_packed_cplx", "dist_synthesis_qst!", "dist_synthesis_sphtor!", "dist_vector_roundtrip!", "divergence_from_spheroidal", "divergence_from_spheroidal!", "enable_fft_plan_cache!", "enable_plm_tables!", "energy_scalar", "energy_scalar_l_spectrum", "energy_scalar_lm", "energy_scalar_m_spectrum", "energy_scalar_packed", "energy_vector", "energy_vector_l_spectrum", "energy_vector_lm", "energy_vector_m_spectrum", "energy_vector_packed", "enstrophy", "enstrophy_l_spectrum", "enstrophy_lm", "enstrophy_m_spectrum", "estimate_memory_usage", "estimate_padding_overhead", "estimate_table_memory", "fdgrad_scalar_energy", "fdgrad_vector_energy", "fft_phi_backend", "fft_plan_cache_enabled", "get_available_gpus", "get_batch_size", "get_device", "get_nlat_padded", "get_spat_dist", "gpu_analysis", "gpu_analysis_safe", "gpu_analysis_sphtor", "gpu_apply_laplacian!", "gpu_clear_cache!", "gpu_memory_info", "gpu_synthesis", "gpu_synthesis_safe", "gpu_synthesis_sphtor", "grad_energy_scalar_alm", "grad_energy_scalar_packed", "grad_energy_vector_Slm_Tlm", "grad_energy_vector_packed", "grad_enstrophy_Tlm", "grad_grid_energy_scalar_field", "grad_grid_energy_vector_fields", "grad_grid_enstrophy_zeta", "grad_loss_vorticity_Tlm", "grid_energy_scalar", "grid_energy_vector", "grid_enstrophy", "im_from_lm", "inside", "is_on_the_fly", "is_padding_enabled", "is_south_pole_first", "latitude_range", "local_range", "local_size", "loop_backend", "loss_and_grad_vorticity_Tlm", "loss_vorticity_grid", "matrix_to_spectral_pencil", "mode_range", "mul_ct_matrix", "nlm_calc", "nlm_cplx_calc", "on_device", "prepare_plm_tables!", "reset_batch_size!", "scratch_fft", "scratch_spatial", "set_allow_padding!", "set_batch_size!", "set_device!", "set_fft_plan_cache!", "set_gpu_device", "set_loop_backend", "set_north_pole_first!", "set_on_the_fly!", "set_south_pole_first!", "set_use_tables!", "shtns_rotation_apply_cplx", "shtns_rotation_apply_real", "shtns_rotation_create", "shtns_rotation_destroy", "shtns_rotation_set_angle_axis", "shtns_rotation_set_angles_ZXZ", "shtns_rotation_set_angles_ZYZ", "shtns_rotation_wigner_d_matrix", "spatial_range", "spectral_pencil_to_matrix", "spectral_range", "spheroidal_from_divergence", "spheroidal_from_divergence!", "st_dt_matrix", "suggest_pencil_grid", "synthesis", "synthesis!", "synthesis_axisym", "synthesis_axisym_l", "synthesis_batch", "synthesis_batch!", "synthesis_batch_cplx", "synthesis_cplx", "synthesis_packed", "synthesis_packed_cplx", "synthesis_packed_l", "synthesis_packed_ml", "synthesis_point", "synthesis_point_cplx", "synthesis_qst", "synthesis_qst_batch", "synthesis_qst_batch_cplx", "synthesis_qst_cplx", "synthesis_qst_l", "synthesis_qst_l_cplx", "synthesis_qst_ml", "synthesis_sph", "synthesis_sph_cplx", "synthesis_sph_l", "synthesis_sph_l_cplx", "synthesis_sph_ml", "synthesis_sphtor", "synthesis_sphtor!", "synthesis_sphtor_batch", "synthesis_sphtor_batch_cplx", "synthesis_sphtor_cplx", "synthesis_sphtor_l", "synthesis_sphtor_l_cplx", "synthesis_sphtor_ml", "synthesis_tor", "synthesis_tor_cplx", "synthesis_tor_l", "synthesis_tor_l_cplx", "synthesis_tor_ml", "synthesis_turbo", "to_device", "toroidal_from_vorticity", "toroidal_from_vorticity!", "turbo_apply_laplacian!", "vorticity_from_toroidal", "vorticity_from_toroidal!", "vorticity_grid", "vorticity_spectral", "zgrad_enstrophy_Tlm", "zgrad_rotation_angles_cplx", "zgrad_rotation_angles_real", "zgrad_scalar_energy", "zgrad_vector_energy", "δ"]
+
+[baseline]
+commit = "e2ce9027"
+commit_full = "e2ce9027c94a40b29c6582bc0616d22e26a94ad7"
+export_count = 248
+extraction = "Julia Meta.parseall traversal of export expressions in src/SHTnsKit.jl"
+method_count = 247
+method_extraction = "all src/**/*.jl at the immutable baseline tree; normalized declaration AST"
+source_blob = "f5ec0b731b891260a4c44f94951ddf118086f44b"
+source_digest_sha256 = "8d2b212ace75a8777dfbae05eb32aa5da25f3071e788838e98a544ec0f996bbc"
+tuple_arity_method_count = 31
+tuple_component_method_count = 31
+
+[[method]]
+fingerprint = "CI|vararg:Any||"
+keyword = []
+name = "CI"
+positional = ["a\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "DistTransposePlan|required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "DistTransposePlan"
+positional = ["cfg\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "LM_cplx_index|required:Int,required:Int,required:Int,required:Int||"
+keyword = []
+name = "LM_cplx_index"
+positional = ["lmax\u001fInt\u001frequired\u001f", "mmax\u001fInt\u001frequired\u001f", "l\u001fInt\u001frequired\u001f", "m\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "LM_cplx|required:SHTConfig,required:Integer,required:Integer||"
+keyword = []
+name = "LM_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "l\u001fInteger\u001frequired\u001f", "m\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "LM_index|required:Int,required:Int,required:Int,required:Int||"
+keyword = []
+name = "LM_index"
+positional = ["lmax\u001fInt\u001frequired\u001f", "mres\u001fInt\u001frequired\u001f", "l\u001fInt\u001frequired\u001f", "m\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "LiM_index|required:Int,required:Int,required:Int,required:Int||"
+keyword = []
+name = "LiM_index"
+positional = ["lmax\u001fInt\u001frequired\u001f", "mres\u001fInt\u001frequired\u001f", "l\u001fInt\u001frequired\u001f", "im\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SHTConfig||NP_tables:AbstractVector=Matrix{Float64}[],NdP_tables:AbstractVector=Matrix{Float64}[],Nlm:AbstractMatrix,_m_order:AbstractVector{<:Integer}=Int[],_otf_scratch_P:AbstractVector=Vector{Float64}[],_otf_scratch_Pb:AbstractVector=Vector{Float64}[],_otf_scratch_Ps:AbstractVector=Vector{Float64}[],_otf_scratch_dP:AbstractVector=Vector{Float64}[],allow_padding:Bool=false,cphi:Real,cs_phase:Bool,dplm_tables:AbstractVector=Matrix{Float64}[],grid_type:Symbol=:gauss,howmany:Integer=1,li:AbstractVector{<:Integer},lmax:Integer,mi:AbstractVector{<:Integer},mmax:Integer,mres:Integer,nlat:Integer,nlat_padded:Integer=0,nlm:Integer,nlon:Integer,norm:Symbol,norm_scale_matrix:AbstractMatrix=Matrix{Float64}(undef, 0, 0),nspat:Integer,on_the_fly:Bool=false,phi_scale:Symbol=:auto,plm_tables:AbstractVector=Matrix{Float64}[],real_norm:Bool,robert_form:Bool,south_pole_first:Bool=false,spat_dist:Integer=0,spec_dist:Integer=0,st:AbstractVector,use_plm_tables:Bool=false,w:AbstractVector,x:AbstractVector,θ:AbstractVector,φ:AbstractVector|"
+keyword = ["lmax\u001fInteger\u001fkeyword\u001f", "mmax\u001fInteger\u001fkeyword\u001f", "mres\u001fInteger\u001fkeyword\u001f", "nlat\u001fInteger\u001fkeyword\u001f", "nlon\u001fInteger\u001fkeyword\u001f", "θ\u001fAbstractVector\u001fkeyword\u001f", "φ\u001fAbstractVector\u001fkeyword\u001f", "x\u001fAbstractVector\u001fkeyword\u001f", "w\u001fAbstractVector\u001fkeyword\u001f", "Nlm\u001fAbstractMatrix\u001fkeyword\u001f", "cphi\u001fReal\u001fkeyword\u001f", "st\u001fAbstractVector\u001fkeyword\u001f", "nlm\u001fInteger\u001fkeyword\u001f", "li\u001fAbstractVector{<:Integer}\u001fkeyword\u001f", "mi\u001fAbstractVector{<:Integer}\u001fkeyword\u001f", "nspat\u001fInteger\u001fkeyword\u001f", "norm\u001fSymbol\u001fkeyword\u001f", "cs_phase\u001fBool\u001fkeyword\u001f", "real_norm\u001fBool\u001fkeyword\u001f", "robert_form\u001fBool\u001fkeyword\u001f", "grid_type\u001fSymbol\u001fkeyword\u001f:gauss", "phi_scale\u001fSymbol\u001fkeyword\u001f:auto", "on_the_fly\u001fBool\u001fkeyword\u001ffalse", "use_plm_tables\u001fBool\u001fkeyword\u001ffalse", "plm_tables\u001fAbstractVector\u001fkeyword\u001fMatrix{Float64}[]", "dplm_tables\u001fAbstractVector\u001fkeyword\u001fMatrix{Float64}[]", "NP_tables\u001fAbstractVector\u001fkeyword\u001fMatrix{Float64}[]", "NdP_tables\u001fAbstractVector\u001fkeyword\u001fMatrix{Float64}[]", "norm_scale_matrix\u001fAbstractMatrix\u001fkeyword\u001fMatrix{Float64}(undef, 0, 0)", "_otf_scratch_P\u001fAbstractVector\u001fkeyword\u001fVector{Float64}[]", "_otf_scratch_dP\u001fAbstractVector\u001fkeyword\u001fVector{Float64}[]", "_otf_scratch_Ps\u001fAbstractVector\u001fkeyword\u001fVector{Float64}[]", "_otf_scratch_Pb\u001fAbstractVector\u001fkeyword\u001fVector{Float64}[]", "_m_order\u001fAbstractVector{<:Integer}\u001fkeyword\u001fInt[]", "howmany\u001fInteger\u001fkeyword\u001f1", "spec_dist\u001fInteger\u001fkeyword\u001f0", "south_pole_first\u001fBool\u001fkeyword\u001ffalse", "allow_padding\u001fBool\u001fkeyword\u001ffalse", "nlat_padded\u001fInteger\u001fkeyword\u001f0", "spat_dist\u001fInteger\u001fkeyword\u001f0"]
+name = "SHTConfig"
+positional = []
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SHTPlan|required:SHTConfig|use_rfft:Bool=false|"
+keyword = ["use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "SHTPlan"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SHTRotation|required:Integer,required:Integer|conv:Symbol=:ZYZ,α:Real=0.0,β:Real=0.0,γ:Real=0.0|"
+keyword = ["α\u001fReal\u001fkeyword\u001f0.0", "β\u001fReal\u001fkeyword\u001f0.0", "γ\u001fReal\u001fkeyword\u001f0.0", "conv\u001fSymbol\u001fkeyword\u001f:ZYZ"]
+name = "SHTRotation"
+positional = ["lmax\u001fInteger\u001frequired\u001f", "mmax\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SH_Xrotate90|required:SHTConfig,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex}||"
+keyword = []
+name = "SH_Xrotate90"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Rlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SH_Yrotate90|required:SHTConfig,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex}||"
+keyword = []
+name = "SH_Yrotate90"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Rlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SH_Yrotate|required:SHTConfig,required:AbstractVector{<:Complex},required:Real,required:AbstractVector{<:Complex}||"
+keyword = []
+name = "SH_Yrotate"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "alpha\u001fReal\u001frequired\u001f", "Rlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SH_Zrotate|required:SHTConfig,required:AbstractVector{<:Complex},required:Real,required:AbstractVector{<:Complex}||"
+keyword = []
+name = "SH_Zrotate"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "alpha\u001fReal\u001frequired\u001f", "Rlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SH_mul_mx|required:SHTConfig,required:AbstractVector{<:Real},required:AbstractVector{<:Complex},required:AbstractVector{<:Complex}||"
+keyword = []
+name = "SH_mul_mx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "mx\u001fAbstractVector{<:Real}\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Rlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SH_to_lat|required:SHTConfig,required:AbstractVector{<:Complex},required:Real|ltr:Int=cfg.lmax,mtr:Int=cfg.mmax,nphi:Int=cfg.nlon|"
+keyword = ["nphi\u001fInt\u001fkeyword\u001fcfg.nlon", "ltr\u001fInt\u001fkeyword\u001fcfg.lmax", "mtr\u001fInt\u001fkeyword\u001fcfg.mmax"]
+name = "SH_to_lat"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "cost\u001fReal\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "SHqst_to_lat|required:SHTConfig,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:Real|ltr:Int=cfg.lmax,mtr:Int=cfg.mmax,nphi:Int=cfg.nlon|"
+keyword = ["nphi\u001fInt\u001fkeyword\u001fcfg.nlon", "ltr\u001fInt\u001fkeyword\u001fcfg.lmax", "mtr\u001fInt\u001fkeyword\u001fcfg.mmax"]
+name = "SHqst_to_lat"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Slm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Tlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "cost\u001fReal\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Vr", "Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "allocate_padded_spatial_batch|required:SHTConfig,required:Int,optional:Type=Float64||"
+keyword = []
+name = "allocate_padded_spatial_batch"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "nfields\u001fInt\u001frequired\u001f", "T\u001fType\u001foptional\u001fFloat64"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "allocate_padded_spatial|required:SHTConfig,optional:Type=Float64||"
+keyword = []
+name = "allocate_padded_spatial"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "T\u001fType\u001foptional\u001fFloat64"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "allocate_spatial|required:Any||"
+keyword = []
+name = "allocate_spatial"
+positional = ["plan\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "allocate_spectral|required:Any||"
+keyword = []
+name = "allocate_spectral"
+positional = ["plan\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis!|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|fft_scratch:Union{Nothing, AbstractMatrix{<:Complex}}=nothing,use_rfft:Bool=false|"
+keyword = ["fft_scratch\u001fUnion{Nothing, AbstractMatrix{<:Complex}}\u001fkeyword\u001fnothing", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "analysis!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm_out\u001fAbstractMatrix\u001frequired\u001f", "f\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis!|required:SHTPlan,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "analysis!"
+positional = ["plan\u001fSHTPlan\u001frequired\u001f", "alm_out\u001fAbstractMatrix\u001frequired\u001f", "f\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_axisym_l|required:SHTConfig,required:AbstractVector{<:Real},required:Int||"
+keyword = []
+name = "analysis_axisym_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr\u001fAbstractVector{<:Real}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_axisym|required:SHTConfig,required:AbstractVector{<:Real}||"
+keyword = []
+name = "analysis_axisym"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr\u001fAbstractVector{<:Real}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_batch!|required:SHTConfig,required:AbstractArray{<:Complex, 3},required:AbstractArray{<:Real, 3}|fft_batch:Union{Nothing, AbstractArray{<:Complex, 3}}=nothing,use_rfft:Bool=false|"
+keyword = ["fft_batch\u001fUnion{Nothing, AbstractArray{<:Complex, 3}}\u001fkeyword\u001fnothing", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "analysis_batch!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm_out\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f", "fields\u001fAbstractArray{<:Real, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_batch|required:SHTConfig,required:AbstractArray{<:Real, 3}|use_rfft:Bool=false|"
+keyword = ["use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "analysis_batch"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "fields\u001fAbstractArray{<:Real, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_packed_cplx|required:SHTConfig,required:AbstractMatrix{<:Complex}||"
+keyword = []
+name = "analysis_packed_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "z\u001fAbstractMatrix{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_packed_l|required:SHTConfig,required:AbstractVector{<:Real},required:Integer||"
+keyword = []
+name = "analysis_packed_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr\u001fAbstractVector{<:Real}\u001frequired\u001f", "ltr\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_packed_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "analysis_packed_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "im\u001fInt\u001frequired\u001f", "Vr_m\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_packed|required:SHTConfig,required:AbstractVector{<:Real}||"
+keyword = []
+name = "analysis_packed"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr\u001fAbstractVector{<:Real}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis_qst_batch|required:SHTConfig,required:AbstractArray{<:Real, 3},required:AbstractArray{<:Real, 3},required:AbstractArray{<:Real, 3}||"
+keyword = []
+name = "analysis_qst_batch"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr_batch\u001fAbstractArray{<:Real, 3}\u001frequired\u001f", "Vt_batch\u001fAbstractArray{<:Real, 3}\u001frequired\u001f", "Vp_batch\u001fAbstractArray{<:Real, 3}\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Qlm_batch", "Slm_batch", "Tlm_batch"]]
+where = []
+[[method]]
+fingerprint = "analysis_qst_cplx|required:SHTConfig,required:AbstractMatrix{<:Complex},required:AbstractMatrix{<:Complex},required:AbstractMatrix{<:Complex}||"
+keyword = []
+name = "analysis_qst_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr\u001fAbstractMatrix{<:Complex}\u001frequired\u001f", "Vt\u001fAbstractMatrix{<:Complex}\u001frequired\u001f", "Vp\u001fAbstractMatrix{<:Complex}\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Qlm", "Slm", "Tlm"]]
+where = []
+[[method]]
+fingerprint = "analysis_qst_l|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix,required:Int||"
+keyword = []
+name = "analysis_qst_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr\u001fAbstractMatrix\u001frequired\u001f", "Vt\u001fAbstractMatrix\u001frequired\u001f", "Vp\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Q2", "S2", "T2"], ["Qlm", "Slm", "Tlm"]]
+where = []
+[[method]]
+fingerprint = "analysis_qst_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "analysis_qst_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "im\u001fInt\u001frequired\u001f", "Vr_m\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Vt_m\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Vp_m\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Ql", "Sl", "Tl"]]
+where = []
+[[method]]
+fingerprint = "analysis_qst|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "analysis_qst"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vr\u001fAbstractMatrix\u001frequired\u001f", "Vt\u001fAbstractMatrix\u001frequired\u001f", "Vp\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Qlm", "Slm", "Tlm"]]
+where = []
+[[method]]
+fingerprint = "analysis_sphtor!|required:SHTPlan,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "analysis_sphtor!"
+positional = ["plan\u001fSHTPlan\u001frequired\u001f", "Slm_out\u001fAbstractMatrix\u001frequired\u001f", "Tlm_out\u001fAbstractMatrix\u001frequired\u001f", "Vt\u001fAbstractMatrix\u001frequired\u001f", "Vp\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Slm_out", "Tlm_out"]]
+where = []
+[[method]]
+fingerprint = "analysis_sphtor_batch|required:SHTConfig,required:AbstractArray{<:Real, 3},required:AbstractArray{<:Real, 3}||"
+keyword = []
+name = "analysis_sphtor_batch"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vt_batch\u001fAbstractArray{<:Real, 3}\u001frequired\u001f", "Vp_batch\u001fAbstractArray{<:Real, 3}\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Slm_batch", "Tlm_batch"]]
+where = []
+[[method]]
+fingerprint = "analysis_sphtor_cplx|required:SHTConfig,required:AbstractMatrix{<:Complex},required:AbstractMatrix{<:Complex}||"
+keyword = []
+name = "analysis_sphtor_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vt\u001fAbstractMatrix{<:Complex}\u001frequired\u001f", "Vp\u001fAbstractMatrix{<:Complex}\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Slm", "Tlm"]]
+where = []
+[[method]]
+fingerprint = "analysis_sphtor_l|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:Int||"
+keyword = []
+name = "analysis_sphtor_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vt\u001fAbstractMatrix\u001frequired\u001f", "Vp\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Slm", "Tlm"]]
+where = []
+[[method]]
+fingerprint = "analysis_sphtor_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "analysis_sphtor_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "mval\u001fInt\u001frequired\u001f", "Vt_m\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Vp_m\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Sl", "Tl"]]
+where = []
+[[method]]
+fingerprint = "analysis_sphtor|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|use_rfft:Bool=false|"
+keyword = ["use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "analysis_sphtor"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vt\u001fAbstractMatrix\u001frequired\u001f", "Vp\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Slm", "Tlm"], ["Slm_int", "Tlm_int"]]
+where = []
+[[method]]
+fingerprint = "analysis_turbo|required:Any,required:Any||"
+keyword = []
+name = "analysis_turbo"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "analysis|required:SHTConfig,required:AbstractMatrix|fft_scratch:Union{Nothing, AbstractMatrix{<:Complex}}=nothing,use_rfft:Bool=false|"
+keyword = ["fft_scratch\u001fUnion{Nothing, AbstractMatrix{<:Complex}}\u001fkeyword\u001fnothing", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "analysis"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "f\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "benchmark_turbo_vs_simd|required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "benchmark_turbo_vs_simd"
+positional = ["_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "build_li_mi|required:Int,required:Int,required:Int||"
+keyword = []
+name = "build_li_mi"
+positional = ["lmax\u001fInt\u001frequired\u001f", "mmax\u001fInt\u001frequired\u001f", "mres\u001fInt\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["li", "mi"]]
+where = []
+[[method]]
+fingerprint = "check_gpu_memory|required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "check_gpu_memory"
+positional = ["_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "compute_optimal_padding|required:Int,required:Int|sizeof_real:Int=8|"
+keyword = ["sizeof_real\u001fInt\u001fkeyword\u001f8"]
+name = "compute_optimal_padding"
+positional = ["nlat\u001fInt\u001frequired\u001f", "nlon\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "copy_from_padded!|required:AbstractMatrix,required:AbstractMatrix,required:SHTConfig||"
+keyword = []
+name = "copy_from_padded!"
+positional = ["dest\u001fAbstractMatrix\u001frequired\u001f", "src\u001fAbstractMatrix\u001frequired\u001f", "cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "copy_to_padded!|required:AbstractMatrix,required:AbstractMatrix,required:SHTConfig||"
+keyword = []
+name = "copy_to_padded!"
+positional = ["dest\u001fAbstractMatrix\u001frequired\u001f", "src\u001fAbstractMatrix\u001frequired\u001f", "cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_config|required:Int|cs_phase:Bool=true,grid_type:Symbol=:gauss,include_poles:Bool=false,mmax:Int=lmax,mres:Int=1,nlat:Int=lmax + 2,nlon:Int=_default_nlon(lmax),norm:Symbol=:orthonormal,precompute_plm:Bool=grid_type != :gauss,real_norm:Bool=false,robert_form:Bool=false|"
+keyword = ["mmax\u001fInt\u001fkeyword\u001flmax", "mres\u001fInt\u001fkeyword\u001f1", "nlat\u001fInt\u001fkeyword\u001flmax + 2", "nlon\u001fInt\u001fkeyword\u001f_default_nlon(lmax)", "norm\u001fSymbol\u001fkeyword\u001f:orthonormal", "cs_phase\u001fBool\u001fkeyword\u001ftrue", "real_norm\u001fBool\u001fkeyword\u001ffalse", "robert_form\u001fBool\u001fkeyword\u001ffalse", "grid_type\u001fSymbol\u001fkeyword\u001f:gauss", "include_poles\u001fBool\u001fkeyword\u001ffalse", "precompute_plm\u001fBool\u001fkeyword\u001fgrid_type != :gauss"]
+name = "create_config"
+positional = ["lmax\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_config|required:Type{T},required:Int,required:Int,optional:Int=1|kwargs:Any...|T"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "create_config"
+positional = ["_\u001fType{T}\u001frequired\u001f", "lmax\u001fInt\u001frequired\u001f", "nlat\u001fInt\u001frequired\u001f", "mres\u001fInt\u001foptional\u001f1"]
+tuple_arities = []
+tuple_component_signatures = []
+where = ["T"]
+[[method]]
+fingerprint = "create_gauss_config_spf|required:Int,required:Int|cs_phase:Bool=true,mmax:Int=lmax,mres:Int=1,nlon:Int=_default_nlon(lmax),norm:Symbol=:orthonormal,real_norm:Bool=false,robert_form:Bool=false|"
+keyword = ["mmax\u001fInt\u001fkeyword\u001flmax", "mres\u001fInt\u001fkeyword\u001f1", "nlon\u001fInt\u001fkeyword\u001f_default_nlon(lmax)", "norm\u001fSymbol\u001fkeyword\u001f:orthonormal", "cs_phase\u001fBool\u001fkeyword\u001ftrue", "real_norm\u001fBool\u001fkeyword\u001ffalse", "robert_form\u001fBool\u001fkeyword\u001ffalse"]
+name = "create_gauss_config_spf"
+positional = ["lmax\u001fInt\u001frequired\u001f", "nlat\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_gauss_config|required:Int,required:Int|cs_phase:Bool=true,mmax:Int=lmax,mres:Int=1,nlon:Int=_default_nlon(lmax),norm:Symbol=:orthonormal,real_norm:Bool=false,robert_form:Bool=false|"
+keyword = ["mmax\u001fInt\u001fkeyword\u001flmax", "mres\u001fInt\u001fkeyword\u001f1", "nlon\u001fInt\u001fkeyword\u001f_default_nlon(lmax)", "norm\u001fSymbol\u001fkeyword\u001f:orthonormal", "cs_phase\u001fBool\u001fkeyword\u001ftrue", "real_norm\u001fBool\u001fkeyword\u001ffalse", "robert_form\u001fBool\u001fkeyword\u001ffalse"]
+name = "create_gauss_config"
+positional = ["lmax\u001fInt\u001frequired\u001f", "nlat\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_gauss_fly_config|required:Int,required:Int|cs_phase:Bool=true,mmax:Int=lmax,mres:Int=1,nlon:Int=_default_nlon(lmax),norm:Symbol=:orthonormal,real_norm:Bool=false,robert_form:Bool=false|"
+keyword = ["mmax\u001fInt\u001fkeyword\u001flmax", "mres\u001fInt\u001fkeyword\u001f1", "nlon\u001fInt\u001fkeyword\u001f_default_nlon(lmax)", "norm\u001fSymbol\u001fkeyword\u001f:orthonormal", "cs_phase\u001fBool\u001fkeyword\u001ftrue", "real_norm\u001fBool\u001fkeyword\u001ffalse", "robert_form\u001fBool\u001fkeyword\u001ffalse"]
+name = "create_gauss_fly_config"
+positional = ["lmax\u001fInt\u001frequired\u001f", "nlat\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_regular_config|required:Int,required:Int|cs_phase:Bool=true,include_poles:Bool=false,mmax:Int=lmax,mres:Int=1,nlon:Int=_default_nlon(lmax),norm:Symbol=:orthonormal,precompute_plm:Bool=true,real_norm:Bool=false,robert_form:Bool=false,use_dh_weights:Bool=false|"
+keyword = ["mmax\u001fInt\u001fkeyword\u001flmax", "mres\u001fInt\u001fkeyword\u001f1", "nlon\u001fInt\u001fkeyword\u001f_default_nlon(lmax)", "norm\u001fSymbol\u001fkeyword\u001f:orthonormal", "cs_phase\u001fBool\u001fkeyword\u001ftrue", "real_norm\u001fBool\u001fkeyword\u001ffalse", "robert_form\u001fBool\u001fkeyword\u001ffalse", "include_poles\u001fBool\u001fkeyword\u001ffalse", "precompute_plm\u001fBool\u001fkeyword\u001ftrue", "use_dh_weights\u001fBool\u001fkeyword\u001ffalse"]
+name = "create_regular_config"
+positional = ["lmax\u001fInt\u001frequired\u001f", "nlat\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_spatial_array|required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "create_spatial_array"
+positional = ["cfg\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_spatial_pencil|required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "create_spatial_pencil"
+positional = ["cfg\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_spectral_array|required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "create_spectral_array"
+positional = ["cfg\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "create_spectral_pencil|required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "create_spectral_pencil"
+positional = ["cfg\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "destroy_config|required:SHTConfig||"
+keyword = []
+name = "destroy_config"
+positional = ["_\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "disable_fft_plan_cache!||clear:Bool=true|"
+keyword = ["clear\u001fBool\u001fkeyword\u001ftrue"]
+name = "disable_fft_plan_cache!"
+positional = []
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "disable_padding!|required:SHTConfig||"
+keyword = []
+name = "disable_padding!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "disable_plm_tables!|required:SHTConfig||"
+keyword = []
+name = "disable_plm_tables!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SH_Xrotate90_packed|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_SH_Xrotate90_packed"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SH_Yrotate90_packed|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_SH_Yrotate90_packed"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SH_Yrotate_packed|required:SHTConfig,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_SH_Yrotate_packed"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SH_Zrotate_packed|required:SHTConfig,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_SH_Zrotate_packed"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SH_rotate_euler|required:SHTConfig,required:Any,required:Any,required:Any,required:Any,required:Any||"
+keyword = []
+name = "dist_SH_rotate_euler"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SH_to_lat|required:SHTConfig,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_SH_to_lat"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SH_to_point|required:SHTConfig,required:Any,required:Any,required:Any||"
+keyword = []
+name = "dist_SH_to_point"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SHqst_to_lat|required:SHTConfig,required:Any,required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_SHqst_to_lat"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_SHqst_to_point|required:SHTConfig,required:Any,required:Any,required:Any,required:Any,required:Any||"
+keyword = []
+name = "dist_SHqst_to_point"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_analysis!|required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_analysis!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_analysis_packed_cplx|required:SHTConfig,required:Any||"
+keyword = []
+name = "dist_analysis_packed_cplx"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_analysis_packed|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_analysis_packed"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_analysis_qst!|required:Any,required:Any,required:Any,required:Any,required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_analysis_qst!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_analysis_sphtor!|required:Any,required:Any,required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_analysis_sphtor!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_analysis|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_analysis"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_scalar_laplacian!|required:SHTConfig,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_scalar_laplacian!"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_scalar_laplacian|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_scalar_laplacian"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_scalar_roundtrip!|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_scalar_roundtrip!"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_spatial_divergence|required:SHTConfig,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_spatial_divergence"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_spatial_vorticity|required:SHTConfig,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_spatial_vorticity"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_synthesis!|required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_synthesis!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_synthesis_packed_cplx|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_synthesis_packed_cplx"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_synthesis_packed|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_synthesis_packed"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_synthesis_qst!|required:Any,required:Any,required:Any,required:Any,required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_synthesis_qst!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_synthesis_sphtor!|required:Any,required:Any,required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_synthesis_sphtor!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_synthesis_sphtor!|required:Any,required:Any,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_synthesis_sphtor!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_synthesis|required:SHTConfig,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_synthesis"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "dist_vector_roundtrip!|required:SHTConfig,required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "dist_vector_roundtrip!"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "divergence_from_spheroidal!|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "divergence_from_spheroidal!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "δ\u001fAbstractMatrix\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "divergence_from_spheroidal|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "divergence_from_spheroidal"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "enable_fft_plan_cache!|||"
+keyword = []
+name = "enable_fft_plan_cache!"
+positional = []
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "enable_plm_tables!|required:SHTConfig||"
+keyword = []
+name = "enable_plm_tables!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_scalar_l_spectrum|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_scalar_l_spectrum"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_scalar_lm|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_scalar_lm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_scalar_m_spectrum|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_scalar_m_spectrum"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_scalar_packed|required:SHTConfig,required:AbstractVector{<:Complex}|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_scalar_packed"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_scalar|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_scalar"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_vector_l_spectrum|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_vector_l_spectrum"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_vector_lm|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_vector_lm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_vector_m_spectrum|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_vector_m_spectrum"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_vector_packed|required:SHTConfig,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex}|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_vector_packed"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Spacked\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Tpacked\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "energy_vector|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "energy_vector"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "enstrophy_l_spectrum|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "enstrophy_l_spectrum"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "enstrophy_lm|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "enstrophy_lm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "enstrophy_m_spectrum|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "enstrophy_m_spectrum"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "enstrophy|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "enstrophy"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "estimate_memory_usage|required:SHTConfig,required:Any||"
+keyword = []
+name = "estimate_memory_usage"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "estimate_padding_overhead|required:SHTConfig||"
+keyword = []
+name = "estimate_padding_overhead"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "estimate_table_memory|required:Int,required:Int,required:Int||"
+keyword = []
+name = "estimate_table_memory"
+positional = ["lmax\u001fInt\u001frequired\u001f", "mmax\u001fInt\u001frequired\u001f", "nlat\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "estimate_table_memory|required:SHTConfig||"
+keyword = []
+name = "estimate_table_memory"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "fdgrad_scalar_energy|required:SHTConfig,required:Any||"
+keyword = []
+name = "fdgrad_scalar_energy"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "fdgrad_vector_energy|required:SHTConfig,required:Any,required:Any||"
+keyword = []
+name = "fdgrad_vector_energy"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "fft_phi_backend|||"
+keyword = []
+name = "fft_phi_backend"
+positional = []
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "fft_plan_cache_enabled|||"
+keyword = []
+name = "fft_plan_cache_enabled"
+positional = []
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "get_available_gpus|vararg:Any||"
+keyword = []
+name = "get_available_gpus"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "get_batch_size|required:SHTConfig||"
+keyword = []
+name = "get_batch_size"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "get_device|||"
+keyword = []
+name = "get_device"
+positional = []
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "get_nlat_padded|required:SHTConfig||"
+keyword = []
+name = "get_nlat_padded"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "get_spat_dist|required:SHTConfig||"
+keyword = []
+name = "get_spat_dist"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_analysis_safe|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_analysis_safe"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_analysis_sphtor|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_analysis_sphtor"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_analysis|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_analysis"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_apply_laplacian!|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_apply_laplacian!"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_clear_cache!|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_clear_cache!"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_memory_info|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_memory_info"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_synthesis_safe|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_synthesis_safe"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_synthesis_sphtor|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_synthesis_sphtor"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "gpu_synthesis|vararg:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "gpu_synthesis"
+positional = ["args\u001fAny\u001fvararg\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grad_energy_scalar_alm|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "grad_energy_scalar_alm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grad_energy_scalar_packed|required:SHTConfig,required:AbstractVector{<:Complex}|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "grad_energy_scalar_packed"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grad_energy_vector_Slm_Tlm|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "grad_energy_vector_Slm_Tlm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["grad_S", "grad_T"]]
+where = []
+[[method]]
+fingerprint = "grad_energy_vector_packed|required:SHTConfig,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex}|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "grad_energy_vector_packed"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Spacked\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Tpacked\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["grad_S", "grad_T"]]
+where = []
+[[method]]
+fingerprint = "grad_enstrophy_Tlm|required:SHTConfig,required:AbstractMatrix|real_field:Bool=true|"
+keyword = ["real_field\u001fBool\u001fkeyword\u001ftrue"]
+name = "grad_enstrophy_Tlm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grad_grid_energy_scalar_field|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "grad_grid_energy_scalar_field"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "f\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grad_grid_energy_vector_fields|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "grad_grid_energy_vector_fields"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vt\u001fAbstractMatrix\u001frequired\u001f", "Vp\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["grad_Vt", "grad_Vp"]]
+where = []
+[[method]]
+fingerprint = "grad_grid_enstrophy_zeta|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "grad_grid_enstrophy_zeta"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "ζ\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grad_loss_vorticity_Tlm|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "grad_loss_vorticity_Tlm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ζ_target\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grid_energy_scalar|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "grid_energy_scalar"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "f\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grid_energy_vector|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "grid_energy_vector"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Vt\u001fAbstractMatrix\u001frequired\u001f", "Vp\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "grid_enstrophy|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "grid_enstrophy"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "ζ\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "im_from_lm|required:Int,required:Int,required:Int||"
+keyword = []
+name = "im_from_lm"
+positional = ["lm\u001fInt\u001frequired\u001f", "lmax\u001fInt\u001frequired\u001f", "mres\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "inside|required:AbstractArray|buff:Any=1|"
+keyword = ["buff\u001fAny\u001fkeyword\u001f1"]
+name = "inside"
+positional = ["a\u001fAbstractArray\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "is_on_the_fly|required:SHTConfig||"
+keyword = []
+name = "is_on_the_fly"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "is_padding_enabled|required:SHTConfig||"
+keyword = []
+name = "is_padding_enabled"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "is_south_pole_first|required:SHTConfig||"
+keyword = []
+name = "is_south_pole_first"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "latitude_range|required:Int||"
+keyword = []
+name = "latitude_range"
+positional = ["nlat\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "local_range|required:AbstractArray||"
+keyword = []
+name = "local_range"
+positional = ["arr\u001fAbstractArray\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "local_size|required:AbstractArray||"
+keyword = []
+name = "local_size"
+positional = ["arr\u001fAbstractArray\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "loop_backend|||"
+keyword = []
+name = "loop_backend"
+positional = []
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "loss_and_grad_vorticity_Tlm|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "loss_and_grad_vorticity_Tlm"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ζ_target\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["loss", "gT"], ["loss", "grad"]]
+where = []
+[[method]]
+fingerprint = "loss_vorticity_grid|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "loss_vorticity_grid"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ζ_target\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "matrix_to_spectral_pencil|required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "matrix_to_spectral_pencil"
+positional = ["cfg\u001fAny\u001frequired\u001f", "Alm\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "mode_range|required:Int||"
+keyword = []
+name = "mode_range"
+positional = ["mmax\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "mul_ct_matrix|required:SHTConfig,required:AbstractVector{<:Real}||"
+keyword = []
+name = "mul_ct_matrix"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "mx\u001fAbstractVector{<:Real}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "nlm_calc|required:Integer,required:Integer,required:Integer||"
+keyword = []
+name = "nlm_calc"
+positional = ["lmax\u001fInteger\u001frequired\u001f", "mmax\u001fInteger\u001frequired\u001f", "mres\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "nlm_cplx_calc|required:Integer,required:Integer,required:Integer||"
+keyword = []
+name = "nlm_cplx_calc"
+positional = ["lmax\u001fInteger\u001frequired\u001f", "mmax\u001fInteger\u001frequired\u001f", "mres\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "on_device|required:AbstractArray||"
+keyword = []
+name = "on_device"
+positional = ["_\u001fAbstractArray\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "prepare_plm_tables!|required:SHTConfig||"
+keyword = []
+name = "prepare_plm_tables!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "reset_batch_size!|required:SHTConfig||"
+keyword = []
+name = "reset_batch_size!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "scratch_fft|required:SHTConfig,optional:Type=ComplexF64||"
+keyword = []
+name = "scratch_fft"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "T\u001fType\u001foptional\u001fComplexF64"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "scratch_spatial|required:SHTConfig,optional:Type=Float64||"
+keyword = []
+name = "scratch_spatial"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "T\u001fType\u001foptional\u001fFloat64"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_allow_padding!|required:SHTConfig|auto_compute:Bool=true|"
+keyword = ["auto_compute\u001fBool\u001fkeyword\u001ftrue"]
+name = "set_allow_padding!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_batch_size!|required:SHTConfig,required:Int|spec_dist:Int=0|"
+keyword = ["spec_dist\u001fInt\u001fkeyword\u001f0"]
+name = "set_batch_size!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "howmany\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_device!|required:ComputeDevice||"
+keyword = []
+name = "set_device!"
+positional = ["device\u001fComputeDevice\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_fft_plan_cache!|required:Bool|clear:Bool=true|"
+keyword = ["clear\u001fBool\u001fkeyword\u001ftrue"]
+name = "set_fft_plan_cache!"
+positional = ["flag\u001fBool\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_gpu_device|required:Any||"
+keyword = []
+name = "set_gpu_device"
+positional = ["_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_loop_backend|required:String||"
+keyword = []
+name = "set_loop_backend"
+positional = ["backend\u001fString\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_north_pole_first!|required:SHTConfig||"
+keyword = []
+name = "set_north_pole_first!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_on_the_fly!|required:SHTConfig||"
+keyword = []
+name = "set_on_the_fly!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_south_pole_first!|required:SHTConfig||"
+keyword = []
+name = "set_south_pole_first!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "set_use_tables!|required:SHTConfig||"
+keyword = []
+name = "set_use_tables!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_apply_cplx|required:SHTRotation,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex}||"
+keyword = []
+name = "shtns_rotation_apply_cplx"
+positional = ["r\u001fSHTRotation\u001frequired\u001f", "Zlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Rlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_apply_real|required:SHTRotation,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex}||"
+keyword = []
+name = "shtns_rotation_apply_real"
+positional = ["r\u001fSHTRotation\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Rlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_create|required:Integer,required:Integer,required:Integer||"
+keyword = []
+name = "shtns_rotation_create"
+positional = ["lmax\u001fInteger\u001frequired\u001f", "mmax\u001fInteger\u001frequired\u001f", "norm\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_destroy|required:SHTRotation||"
+keyword = []
+name = "shtns_rotation_destroy"
+positional = ["_\u001fSHTRotation\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_set_angle_axis|required:SHTRotation,required:Real,required:Real,required:Real,required:Real||"
+keyword = []
+name = "shtns_rotation_set_angle_axis"
+positional = ["r\u001fSHTRotation\u001frequired\u001f", "theta\u001fReal\u001frequired\u001f", "Vx\u001fReal\u001frequired\u001f", "Vy\u001fReal\u001frequired\u001f", "Vz\u001fReal\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_set_angles_ZXZ|required:SHTRotation,required:Real,required:Real,required:Real||"
+keyword = []
+name = "shtns_rotation_set_angles_ZXZ"
+positional = ["r\u001fSHTRotation\u001frequired\u001f", "alpha\u001fReal\u001frequired\u001f", "beta\u001fReal\u001frequired\u001f", "gamma\u001fReal\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_set_angles_ZYZ|required:SHTRotation,required:Real,required:Real,required:Real||"
+keyword = []
+name = "shtns_rotation_set_angles_ZYZ"
+positional = ["r\u001fSHTRotation\u001frequired\u001f", "alpha\u001fReal\u001frequired\u001f", "beta\u001fReal\u001frequired\u001f", "gamma\u001fReal\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "shtns_rotation_wigner_d_matrix|required:SHTRotation,required:Integer,required:AbstractVector{<:Real}||"
+keyword = []
+name = "shtns_rotation_wigner_d_matrix"
+positional = ["r\u001fSHTRotation\u001frequired\u001f", "l\u001fInteger\u001frequired\u001f", "mx\u001fAbstractVector{<:Real}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "spatial_range|required:Int,required:Int||"
+keyword = []
+name = "spatial_range"
+positional = ["nlat\u001fInt\u001frequired\u001f", "nlon\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "spectral_pencil_to_matrix|required:Any,required:Any|kwargs:Any...|"
+keyword = ["kwargs\u001fAny\u001fkeyword_vararg\u001f"]
+name = "spectral_pencil_to_matrix"
+positional = ["cfg\u001fAny\u001frequired\u001f", "Alm_p\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "spectral_range|required:Int,required:Int||"
+keyword = []
+name = "spectral_range"
+positional = ["lmax\u001fInt\u001frequired\u001f", "mmax\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "spheroidal_from_divergence!|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "spheroidal_from_divergence!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "δlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "spheroidal_from_divergence|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "spheroidal_from_divergence"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "δlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "st_dt_matrix|required:SHTConfig,required:AbstractVector{<:Real}||"
+keyword = []
+name = "st_dt_matrix"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "mx\u001fAbstractVector{<:Real}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "suggest_pencil_grid|required:Any,required:Integer,required:Integer|allow_one_dim:Bool=true,prefer_square:Bool=true|"
+keyword = ["prefer_square\u001fBool\u001fkeyword\u001ftrue", "allow_one_dim\u001fBool\u001fkeyword\u001ftrue"]
+name = "suggest_pencil_grid"
+positional = ["comm_or_nprocs\u001fAny\u001frequired\u001f", "nlat\u001fInteger\u001frequired\u001f", "nlon\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis!|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|fft_scratch:Union{Nothing, AbstractMatrix{<:Complex}}=nothing,real_output:Bool=true,use_rfft:Bool=false|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue", "fft_scratch\u001fUnion{Nothing, AbstractMatrix{<:Complex}}\u001fkeyword\u001fnothing", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "synthesis!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "f_out\u001fAbstractMatrix\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis!|required:SHTPlan,required:AbstractMatrix,required:AbstractMatrix|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis!"
+positional = ["plan\u001fSHTPlan\u001frequired\u001f", "f_out\u001fAbstractMatrix\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_axisym_l|required:SHTConfig,required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "synthesis_axisym_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_axisym|required:SHTConfig,required:AbstractVector{<:Complex}||"
+keyword = []
+name = "synthesis_axisym"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_batch!|required:SHTConfig,required:AbstractArray,required:AbstractArray{<:Complex, 3}|fft_batch:Union{Nothing, AbstractArray{<:Complex, 3}}=nothing,real_output:Bool=true,use_rfft:Bool=false|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue", "fft_batch\u001fUnion{Nothing, AbstractArray{<:Complex, 3}}\u001fkeyword\u001fnothing", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "synthesis_batch!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "f_out\u001fAbstractArray\u001frequired\u001f", "alm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_batch_cplx|required:SHTConfig,required:AbstractArray{<:Complex, 3}||"
+keyword = []
+name = "synthesis_batch_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_batch|required:SHTConfig,required:AbstractArray{<:Complex, 3}|real_output:Bool=true,use_rfft:Bool=false|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "synthesis_batch"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_cplx|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "synthesis_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_packed_cplx|required:SHTConfig,required:AbstractVector{<:Complex}||"
+keyword = []
+name = "synthesis_packed_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm_packed\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_packed_l|required:SHTConfig,required:AbstractVector{<:Complex},required:Integer||"
+keyword = []
+name = "synthesis_packed_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInteger\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_packed_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "synthesis_packed_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "im\u001fInt\u001frequired\u001f", "Ql\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_packed|required:SHTConfig,required:AbstractVector{<:Complex}||"
+keyword = []
+name = "synthesis_packed"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractVector{<:Complex}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_point_cplx|required:SHTConfig,required:AbstractVector{<:Complex},required:Real,required:Real||"
+keyword = []
+name = "synthesis_point_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractVector{<:Complex}\u001frequired\u001f", "cost\u001fReal\u001frequired\u001f", "phi\u001fReal\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_point|required:SHTConfig,required:AbstractMatrix{<:Complex},required:Real,required:Real||"
+keyword = []
+name = "synthesis_point"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractMatrix{<:Complex}\u001frequired\u001f", "cost\u001fReal\u001frequired\u001f", "phi\u001fReal\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_qst_batch_cplx|required:SHTConfig,required:AbstractArray{<:Complex, 3},required:AbstractArray{<:Complex, 3},required:AbstractArray{<:Complex, 3}||"
+keyword = []
+name = "synthesis_qst_batch_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f", "Slm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f", "Tlm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_qst_batch|required:SHTConfig,required:AbstractArray{<:Complex, 3},required:AbstractArray{<:Complex, 3},required:AbstractArray{<:Complex, 3}|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_qst_batch"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f", "Slm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f", "Tlm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_qst_cplx|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "synthesis_qst_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractMatrix\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Vr", "Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_qst_l_cplx|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix,required:Int||"
+keyword = []
+name = "synthesis_qst_l_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractMatrix\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_qst_l|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix,required:Int|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_qst_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractMatrix\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Vr", "Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_qst_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "synthesis_qst_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "im\u001fInt\u001frequired\u001f", "Ql\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Sl\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Tl\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Vr_m", "Vt_m", "Vp_m"]]
+where = []
+[[method]]
+fingerprint = "synthesis_qst|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_qst"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Qlm\u001fAbstractMatrix\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [3]
+tuple_component_signatures = [["Vr", "Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_sph_cplx|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "synthesis_sph_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_sph_l_cplx|required:SHTConfig,required:AbstractMatrix,required:Int||"
+keyword = []
+name = "synthesis_sph_l_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_sph_l|required:SHTConfig,required:AbstractMatrix,required:Int|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_sph_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_sph_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "synthesis_sph_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "im\u001fInt\u001frequired\u001f", "Sl\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor!|required:SHTPlan,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix,required:AbstractMatrix|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_sphtor!"
+positional = ["plan\u001fSHTPlan\u001frequired\u001f", "Vt_out\u001fAbstractMatrix\u001frequired\u001f", "Vp_out\u001fAbstractMatrix\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt_out", "Vp_out"]]
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor_batch_cplx|required:SHTConfig,required:AbstractArray{<:Complex, 3},required:AbstractArray{<:Complex, 3}||"
+keyword = []
+name = "synthesis_sphtor_batch_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f", "Tlm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor_batch|required:SHTConfig,required:AbstractArray{<:Complex, 3},required:AbstractArray{<:Complex, 3}|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_sphtor_batch"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f", "Tlm_batch\u001fAbstractArray{<:Complex, 3}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor_cplx|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "synthesis_sphtor_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor_l_cplx|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:Int||"
+keyword = []
+name = "synthesis_sphtor_l_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor_l|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix,required:Int|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_sphtor_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "synthesis_sphtor_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "mval\u001fInt\u001frequired\u001f", "Sl\u001fAbstractVector{<:Complex}\u001frequired\u001f", "Tl\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt_m", "Vp_m"]]
+where = []
+[[method]]
+fingerprint = "synthesis_sphtor|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix|real_output:Bool=true,use_rfft:Bool=false|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "synthesis_sphtor"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_sph|required:SHTConfig,required:AbstractMatrix|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_sph"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Slm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_tor_cplx|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "synthesis_tor_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_tor_l_cplx|required:SHTConfig,required:AbstractMatrix,required:Int||"
+keyword = []
+name = "synthesis_tor_l_cplx"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_tor_l|required:SHTConfig,required:AbstractMatrix,required:Int|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_tor_l"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_tor_ml|required:SHTConfig,required:Int,required:AbstractVector{<:Complex},required:Int||"
+keyword = []
+name = "synthesis_tor_ml"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "im\u001fInt\u001frequired\u001f", "Tl\u001fAbstractVector{<:Complex}\u001frequired\u001f", "ltr\u001fInt\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis_tor|required:SHTConfig,required:AbstractMatrix|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_tor"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = [2]
+tuple_component_signatures = [["Vt", "Vp"]]
+where = []
+[[method]]
+fingerprint = "synthesis_turbo|required:Any,required:Any|real_output:Bool=true|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue"]
+name = "synthesis_turbo"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "synthesis|required:SHTConfig,required:AbstractMatrix|fft_scratch:Union{Nothing, AbstractMatrix{<:Complex}}=nothing,real_output:Bool=true,use_rfft:Bool=false|"
+keyword = ["real_output\u001fBool\u001fkeyword\u001ftrue", "fft_scratch\u001fUnion{Nothing, AbstractMatrix{<:Complex}}\u001fkeyword\u001fnothing", "use_rfft\u001fBool\u001fkeyword\u001ffalse"]
+name = "synthesis"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "alm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "to_device|required:AbstractArray,required:CPU||"
+keyword = []
+name = "to_device"
+positional = ["arr\u001fAbstractArray\u001frequired\u001f", "_\u001fCPU\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "to_device|required:AbstractArray,required:GPU||"
+keyword = []
+name = "to_device"
+positional = ["arr\u001fAbstractArray\u001frequired\u001f", "_\u001fGPU\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "to_device|required:AbstractArray||"
+keyword = []
+name = "to_device"
+positional = ["arr\u001fAbstractArray\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "toroidal_from_vorticity!|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "toroidal_from_vorticity!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f", "ζlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "toroidal_from_vorticity|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "toroidal_from_vorticity"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "ζlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "turbo_apply_laplacian!|required:Any,required:Any||"
+keyword = []
+name = "turbo_apply_laplacian!"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "vorticity_from_toroidal!|required:SHTConfig,required:AbstractMatrix,required:AbstractMatrix||"
+keyword = []
+name = "vorticity_from_toroidal!"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "ζ\u001fAbstractMatrix\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "vorticity_from_toroidal|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "vorticity_from_toroidal"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "vorticity_grid|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "vorticity_grid"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "vorticity_spectral|required:SHTConfig,required:AbstractMatrix||"
+keyword = []
+name = "vorticity_spectral"
+positional = ["cfg\u001fSHTConfig\u001frequired\u001f", "Tlm\u001fAbstractMatrix\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "zgrad_enstrophy_Tlm|required:SHTConfig,required:Any||"
+keyword = []
+name = "zgrad_enstrophy_Tlm"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "zgrad_rotation_angles_cplx|required:Any,required:Any,required:Any,required:Any,required:Any,required:Any||"
+keyword = []
+name = "zgrad_rotation_angles_cplx"
+positional = ["_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "zgrad_rotation_angles_real|required:SHTConfig,required:Any,required:Any,required:Any,required:Any||"
+keyword = []
+name = "zgrad_rotation_angles_real"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "zgrad_scalar_energy|required:SHTConfig,required:Any||"
+keyword = []
+name = "zgrad_scalar_energy"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "zgrad_vector_energy|required:SHTConfig,required:Any,required:Any||"
+keyword = []
+name = "zgrad_vector_energy"
+positional = ["_\u001fSHTConfig\u001frequired\u001f", "_\u001fAny\u001frequired\u001f", "_\u001fAny\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = []
+[[method]]
+fingerprint = "δ|required:Any,required:CartesianIndex{N}||N"
+keyword = []
+name = "δ"
+positional = ["i\u001fAny\u001frequired\u001f", "I\u001fCartesianIndex{N}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = ["N"]
+[[method]]
+fingerprint = "δ|required:Any,required:Val{N}||N"
+keyword = []
+name = "δ"
+positional = ["i\u001fAny\u001frequired\u001f", "_\u001fVal{N}\u001frequired\u001f"]
+tuple_arities = []
+tuple_component_signatures = []
+where = ["N"]
+
+[[probe]]
+defaults = "mmax=lmax, mres=1, nlon=_default_nlon(lmax), norm=:orthonormal, cs_phase=true, real_norm=false, robert_form=false"
+id = "gauss_configuration_defaults"
+return_contract = "SHTConfig"
+signature = "create_gauss_config(lmax::Int, nlat::Int; ...)"
+[[probe]]
+defaults = "mmax=lmax, mres=1, nlon=_default_nlon(lmax), norm=:orthonormal, cs_phase=true, real_norm=false, robert_form=false, include_poles=false, precompute_plm=true, use_dh_weights=false"
+id = "regular_configuration_defaults"
+return_contract = "SHTConfig with regular grid"
+signature = "create_regular_config(lmax::Int, nlat::Int; ...)"
+[[probe]]
+defaults = "real synthesis, complex analysis coefficients, ordinary FFT path"
+id = "scalar_transform_keywords"
+return_contract = "single matrix"
+signature = "analysis(cfg, field; fft_scratch=nothing, use_rfft=false); synthesis(cfg, coefficients; real_output=true, fft_scratch=nothing, use_rfft=false)"
+[[probe]]
+defaults = "real_output=true, use_rfft=false"
+id = "vector_transform_tuple_order"
+return_contract = "(Vt, Vp) and (S, T)"
+signature = "synthesis_sphtor(cfg, S, T; real_output=true, use_rfft=false); analysis_sphtor(cfg, Vt, Vp; use_rfft=false)"
+[[probe]]
+defaults = "real_output=true"
+id = "qst_transform_tuple_order"
+return_contract = "(Vr, Vt, Vp) and (Q, S, T)"
+signature = "synthesis_qst(cfg, Q, S, T; real_output=true); analysis_qst(cfg, Vr, Vt, Vp)"
+[[probe]]
+defaults = "real_output=true, use_rfft=false"
+id = "batch_transform_keywords"
+return_contract = "three-dimensional array"
+signature = "analysis_batch(cfg, fields; use_rfft=false); synthesis_batch(cfg, coefficients; real_output=true, use_rfft=false)"
+[[probe]]
+defaults = "none"
+id = "packed_transform_signatures"
+return_contract = "matrix, packed vector, scalar"
+signature = "synthesis_packed(cfg, Qlm); analysis_packed(cfg, vec(field)); synthesis_point(cfg, Q, cost, phi)"
+[[probe]]
+defaults = "none"
+id = "rotation_mutation_contract"
+return_contract = "setter returns nothing; apply returns the supplied output"
+signature = "shtns_rotation_create(lmax, mmax, norm); shtns_rotation_set_angles_ZYZ(rotation, alpha, beta, gamma); shtns_rotation_apply_real(rotation, input, output)"
+[[probe]]
+defaults = "to_device(value) uses get_device()"
+id = "device_value_first_order"
+return_contract = "CPU placement preserves an Array"
+signature = "to_device(value::AbstractArray, device::ComputeDevice); to_device(value::AbstractArray)"
+
+[[runtime_probe]]
+classification = "macro"
+name = "@sht_inside"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "macro"
+name = "@sht_loop"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "method_family"
+name = "CI"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "type"
+name = "CPU"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "type"
+name = "ComputeDevice"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "generated_or_extension"
+name = "DistAnalysisPlan"
+proof = "extension_source_and_mpi_runner_probe"
+[[runtime_probe]]
+classification = "generated_or_extension"
+name = "DistPlan"
+proof = "extension_source_and_mpi_runner_probe"
+[[runtime_probe]]
+classification = "generated_or_extension"
+name = "DistQstPlan"
+proof = "extension_source_and_mpi_runner_probe"
+[[runtime_probe]]
+classification = "generated_or_extension"
+name = "DistSphtorPlan"
+proof = "extension_source_and_mpi_runner_probe"
+[[runtime_probe]]
+classification = "method_family"
+name = "DistTransposePlan"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "type"
+name = "GPU"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "method_family"
+name = "LM_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "LM_cplx_index"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "LM_index"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "LiM_index"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "type"
+name = "SHTConfig"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "type"
+name = "SHTPlan"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "type"
+name = "SHTRotation"
+proof = "explicit_core_family_probe"
+[[runtime_probe]]
+classification = "method_family"
+name = "SH_Xrotate90"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "SH_Yrotate"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "SH_Yrotate90"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "SH_Zrotate"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "SH_mul_mx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "SH_to_lat"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "SHqst_to_lat"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "allocate_padded_spatial"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "allocate_padded_spatial_batch"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "allocate_spatial"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "allocate_spectral"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_axisym"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_axisym_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_batch"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_batch!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_packed_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_packed_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_packed_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_qst"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_qst_batch"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_qst_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_qst_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_qst_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_sphtor"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_sphtor!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_sphtor_batch"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_sphtor_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_sphtor_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_sphtor_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "analysis_turbo"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "benchmark_turbo_vs_simd"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "build_li_mi"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "check_gpu_memory"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "compute_optimal_padding"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "copy_from_padded!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "copy_to_padded!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_config"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_gauss_config"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_gauss_config_spf"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_gauss_fly_config"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_regular_config"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_spatial_array"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_spatial_pencil"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_spectral_array"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "create_spectral_pencil"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "destroy_config"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "disable_fft_plan_cache!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "disable_padding!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "disable_plm_tables!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SH_Xrotate90_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SH_Yrotate90_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SH_Yrotate_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SH_Zrotate_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SH_rotate_euler"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SH_to_lat"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SH_to_point"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SHqst_to_lat"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_SHqst_to_point"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_analysis"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_analysis!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_analysis_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_analysis_packed_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_analysis_qst!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_analysis_sphtor!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_scalar_laplacian"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_scalar_laplacian!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_scalar_roundtrip!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_spatial_divergence"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_spatial_vorticity"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_synthesis"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_synthesis!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_synthesis_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_synthesis_packed_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_synthesis_qst!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_synthesis_sphtor!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "dist_vector_roundtrip!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "divergence_from_spheroidal"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "divergence_from_spheroidal!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "enable_fft_plan_cache!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "enable_plm_tables!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_scalar"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_scalar_l_spectrum"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_scalar_lm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_scalar_m_spectrum"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_scalar_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_vector"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_vector_l_spectrum"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_vector_lm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_vector_m_spectrum"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "energy_vector_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "enstrophy"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "enstrophy_l_spectrum"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "enstrophy_lm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "enstrophy_m_spectrum"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "estimate_memory_usage"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "estimate_padding_overhead"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "estimate_table_memory"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "fdgrad_scalar_energy"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "fdgrad_vector_energy"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "fft_phi_backend"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "fft_plan_cache_enabled"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "get_available_gpus"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "get_batch_size"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "get_device"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "get_nlat_padded"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "get_spat_dist"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_analysis"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_analysis_safe"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_analysis_sphtor"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_apply_laplacian!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_clear_cache!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_memory_info"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_synthesis"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_synthesis_safe"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "gpu_synthesis_sphtor"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_energy_scalar_alm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_energy_scalar_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_energy_vector_Slm_Tlm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_energy_vector_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_enstrophy_Tlm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_grid_energy_scalar_field"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_grid_energy_vector_fields"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_grid_enstrophy_zeta"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grad_loss_vorticity_Tlm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grid_energy_scalar"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grid_energy_vector"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "grid_enstrophy"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "im_from_lm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "inside"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "is_on_the_fly"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "is_padding_enabled"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "is_south_pole_first"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "latitude_range"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "local_range"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "local_size"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "loop_backend"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "loss_and_grad_vorticity_Tlm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "loss_vorticity_grid"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "matrix_to_spectral_pencil"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "mode_range"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "mul_ct_matrix"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "nlm_calc"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "nlm_cplx_calc"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "on_device"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "prepare_plm_tables!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "reset_batch_size!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "scratch_fft"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "scratch_spatial"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_allow_padding!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_batch_size!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_device!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_fft_plan_cache!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_gpu_device"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_loop_backend"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_north_pole_first!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_on_the_fly!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_south_pole_first!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "set_use_tables!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_apply_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_apply_real"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_create"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_destroy"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_set_angle_axis"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_set_angles_ZXZ"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_set_angles_ZYZ"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "shtns_rotation_wigner_d_matrix"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "spatial_range"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "spectral_pencil_to_matrix"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "spectral_range"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "spheroidal_from_divergence"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "spheroidal_from_divergence!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "st_dt_matrix"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "suggest_pencil_grid"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_axisym"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_axisym_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_batch"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_batch!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_batch_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_packed"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_packed_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_packed_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_packed_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_point"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_point_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_qst"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_qst_batch"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_qst_batch_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_qst_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_qst_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_qst_l_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_qst_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sph"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sph_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sph_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sph_l_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sph_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor_batch"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor_batch_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor_l_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_sphtor_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_tor"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_tor_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_tor_l"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_tor_l_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_tor_ml"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "synthesis_turbo"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "to_device"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "toroidal_from_vorticity"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "toroidal_from_vorticity!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "turbo_apply_laplacian!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "vorticity_from_toroidal"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "vorticity_from_toroidal!"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "vorticity_grid"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "vorticity_spectral"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "zgrad_enstrophy_Tlm"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "zgrad_rotation_angles_cplx"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "zgrad_rotation_angles_real"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "zgrad_scalar_energy"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "zgrad_vector_energy"
+proof = "static_structural_and_hasmethod"
+[[runtime_probe]]
+classification = "method_family"
+name = "δ"
+proof = "static_structural_and_hasmethod"

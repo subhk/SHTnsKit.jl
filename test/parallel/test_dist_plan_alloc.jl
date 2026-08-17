@@ -10,18 +10,18 @@ const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
 const ParExt = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
 
-function band_limited_field(cfg, pen)
+function band_limited_field(cfg, pen, ::Type{T}=Float64) where {T<:AbstractFloat}
     lmax, mmax = cfg.lmax, cfg.mmax
     rng = MersenneTwister(7)
-    alm = zeros(ComplexF64, lmax + 1, mmax + 1)
+    alm = zeros(Complex{T}, lmax + 1, mmax + 1)
     for m in 0:mmax, l in m:lmax
-        alm[l+1, m+1] = randn(rng) + im * randn(rng)
+        alm[l+1, m+1] = Complex{T}(randn(rng), randn(rng))
     end
     alm[:, 1] .= real.(alm[:, 1])
     MPI.Bcast!(alm, 0, comm)
-    f_full = SHTnsKit.synthesis(cfg, alm; real_output=true)
+    f_full = T.(SHTnsKit.synthesis(cfg, alm; real_output=true))
     ranges = PencilArrays.range_local(pen)
-    flocal = zeros(Float64, PencilArrays.size_local(pen)...)
+    flocal = zeros(T, PencilArrays.size_local(pen)...)
     for (i_local, i_global) in enumerate(ranges[1])
         for (j_local, j_global) in enumerate(ranges[2])
             flocal[i_local, j_local] = f_full[i_global, j_global]
@@ -34,19 +34,18 @@ end
     lmax = 24; nlat = 32; nlon = 72
     cfg = create_gauss_config(lmax, nlat; nlon=nlon)
     pen = Pencil((nlat, nlon), (1,), comm)   # decompose θ — the scaling layout
-    f_pa, f_full = band_limited_field(cfg, pen)
-
-    a_ref = SHTnsKit.analysis(cfg, f_full)
-
-    for use_rfft in (false, true)
+    for T in (Float32, Float64), use_rfft in (false, true)
+        f_pa, f_full = band_limited_field(cfg, pen, T)
+        a_ref = SHTnsKit.analysis(cfg, f_full)
         plan = ParExt.DistAnalysisPlan(cfg, f_pa; use_rfft)
-        Alm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
+        Alm_out = zeros(Complex{T}, lmax + 1, cfg.mmax + 1)
         SHTnsKit.dist_analysis!(plan, Alm_out, f_pa)
-        @test maximum(abs.(Alm_out .- a_ref)) < 1e-10
+        tolerance = T === Float32 ? 3f-4 : 1e-10
+        @test maximum(abs.(Alm_out .- a_ref)) < tolerance
 
         # match the cfg-form distributed result too
         Alm_direct = SHTnsKit.dist_analysis(cfg, f_pa; use_rfft)
-        @test maximum(abs.(Alm_out .- Alm_direct)) < 1e-12
+        @test maximum(abs.(Alm_out .- Alm_direct)) < tolerance
 
         # Allocation budget: plan owns FFT buffer, Legendre scratch, work
         # matrix, index/weight caches, and the cached reduction subcomm —
@@ -54,8 +53,20 @@ end
         # path burns (Fθm + Alm zeros + collects + Comm_split).
         SHTnsKit.dist_analysis!(plan, Alm_out, f_pa)  # warmup
         a = @allocated SHTnsKit.dist_analysis!(plan, Alm_out, f_pa)
-        rank == 0 && println("dist_analysis! (use_rfft=$use_rfft): $a B/call")
+        rank == 0 && println(
+            "dist_analysis! ($T, use_rfft=$use_rfft): $a B/call",
+        )
         @test a < 8192
+
+        # The ordinary same-name API is the public plan surface for Pencil
+        # input and must retain the established warmed allocation contract.
+        SHTnsKit.analysis!(plan, Alm_out, f_pa)
+        a_same_name = @allocated SHTnsKit.analysis!(plan, Alm_out, f_pa)
+        rank == 0 && println(
+            "analysis! distributed ($T, use_rfft=$use_rfft): " *
+            "$a_same_name B/call",
+        )
+        @test a_same_name < 8192
     end
 end
 
@@ -195,6 +206,33 @@ end
     Alm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
     SHTnsKit.dist_analysis!(plan, Alm_out, f_pa)
     @test maximum(abs.(Alm_out .- a_ref)) < 1e-10
+end
+
+@testset "batch layout validation is metadata-only" begin
+    # Keep the candidate large enough that allocating a duplicate expected
+    # PencilArray would be unambiguously visible in the allocation count.
+    cfg = create_gauss_config(16, 24; nlon=48)
+    nfields = 512
+    expected_pen = create_spectral_pencil(cfg; comm)
+    output = PencilArray{ComplexF64}(undef, expected_pen, nfields)
+    expected_global = (cfg.lmax + 1, cfg.mmax + 1, nfields)
+    expected_local = (PencilArrays.size_local(expected_pen)..., nfields)
+
+    ParExt._validate_pencil_layout_description!(
+        expected_pen, expected_global, expected_local, output,
+        :batch_allocation_probe; comm,
+    )
+    allocated = @allocated ParExt._validate_pencil_layout_description!(
+        expected_pen, expected_global, expected_local, output,
+        :batch_allocation_probe; comm,
+    )
+    candidate_bytes = sizeof(eltype(output)) * length(parent(output))
+    rank == 0 && println(
+        "metadata-only batch validation: $allocated B " *
+        "(candidate payload $candidate_bytes B)",
+    )
+    @test allocated < 65_536
+    @test allocated * 8 < candidate_bytes
 end
 
 rank == 0 && println("test_dist_plan_alloc: all testsets done on $(MPI.Comm_size(comm)) rank(s)")

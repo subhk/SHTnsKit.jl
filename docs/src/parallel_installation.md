@@ -15,20 +15,22 @@ SHTnsKit.jl supports multiple levels of performance optimization:
 
 ### Package Version Compatibility
 
-SHTnsKit.jl's distributed extension requires specific minimum versions due to API changes:
+SHTnsKit.jl's distributed extension supports the versions declared in
+`Project.toml`:
 
-| Package | Minimum Version | Notes |
+| Package | Supported Version | Notes |
 |---------|----------------|-------|
-| **MPI.jl** | v0.20+ | Uses `Allgatherv!` with `VBuffer` API |
-| **PencilArrays.jl** | v0.19+ | Uses `range_local`, `size_local`, `get_comm` API |
-| **PencilFFTs.jl** | v0.15+ | Compatible distributed FFT support |
-| **Julia** | 1.9+ | 1.11+ recommended for best performance |
+| **MPI.jl** | v0.20 | Uses `Allgatherv!` with `VBuffer` API |
+| **PencilArrays.jl** | v0.19 | Uses `range_local`, `size_local`, `get_comm` API |
+| **PencilFFTs.jl** | v0.15 | Compatible distributed FFT support |
+| **Julia** | 1.10, 1.11, or 1.12 | Matches package compatibility bounds |
 
-**Important**: Older versions of PencilArrays (< v0.19) used different APIs (`communicator`, `globalindices`) that are no longer supported.
+**Important**: PencilArrays releases outside the declared v0.19 compatibility
+range are not supported.
 
 ### Minimum Requirements
 - **Operating System**: Linux, macOS, or Windows with WSL
-- **Julia**: Version 1.9+ (1.11+ recommended)
+- **Julia**: Version 1.10, 1.11, or 1.12
 - **Memory**: 8GB RAM (32GB+ for large parallel problems)
 - **Network**: Fast interconnect recommended for multi-node MPI
 
@@ -399,20 +401,20 @@ ERROR: MethodError: no method matching communicator(::Pencil{...})
 ERROR: MethodError: no method matching globalindices(::PencilArray{...})
 ```
 
-**Cause:** You have an older version of PencilArrays (< v0.19) that uses different API names.
+**Cause:** The environment resolved a PencilArrays version outside the package's
+declared v0.19 compatibility range.
 
 **Solution:**
 ```julia
-# Update to PencilArrays v0.19+
+# Resolve the versions declared by SHTnsKit
 using Pkg
-Pkg.update("PencilArrays")
-Pkg.update("PencilFFTs")
+Pkg.resolve()
 
 # Verify version
-Pkg.status("PencilArrays")  # Should show v0.19+
+Pkg.status("PencilArrays")  # Should show v0.19.x
 ```
 
-The new PencilArrays v0.19+ API uses:
+The supported PencilArrays v0.19 API uses:
 - `get_comm(pen)` instead of `communicator(pen)`
 - `range_local(pen)` instead of `globalindices(arr, dim)`
 - `size_local(pen)` instead of other size functions

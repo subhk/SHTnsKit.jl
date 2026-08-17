@@ -36,8 +36,9 @@ Prefer this over the bare `Pencil((nlat, nlon), comm)`: PencilArrays splits the
 analysis path `Allgatherv!`s the full longitude onto every rank and then
 replicates the Legendre transform, so it does NOT scale (it usually gets slower
 with more ranks). Latitude decomposition instead divides the Legendre work per
-rank and only reduces the small `(lmax+1, mmax+1)` spectral matrix, which
-strong-scales.
+rank. Ordinary `analysis(cfg, pencil)` reduces only each destination rank's
+owned m-columns; pass `return_pencil=false` explicitly for the replicated dense
+compatibility result.
 """
 function SHTnsKit.create_spatial_pencil(cfg::SHTnsKit.SHTConfig; comm=MPI.COMM_WORLD)
     # Decompose dimension 1 (θ / latitude). The (1,) tuple selects which global
@@ -65,11 +66,15 @@ Convert a dense spectral coefficient matrix to a distributed PencilArray.
 Each rank receives its local portion of the m-distributed array.
 """
 function SHTnsKit.matrix_to_spectral_pencil(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix; comm=MPI.COMM_WORLD)
-    size(Alm) == (cfg.lmax + 1, cfg.mmax + 1) || throw(DimensionMismatch(
-        "Alm size $(size(Alm)) does not match expected ($((cfg.lmax + 1, cfg.mmax + 1)))"))
-
+    _record_pencil_scalar_stat!(:full_matrix_helper_calls, 1)
     pen = SHTnsKit.create_spectral_pencil(cfg; comm)
-    Alm_p = PencilArray{ComplexF64}(undef, pen)
+    known_comm = PencilArrays.get_comm(pen)
+    _validate_explicit_comm!(known_comm, comm, :matrix_to_spectral_pencil)
+    _validate_cfg_replicated(cfg, known_comm)
+    _validate_spectral_pencil_plan!(cfg, pen, known_comm, :matrix_to_spectral_pencil)
+    _validate_dense_spectral_matrix!(cfg, Alm, known_comm, :matrix_to_spectral_pencil)
+
+    Alm_p = PencilArray{eltype(Alm)}(undef, pen)
 
     # Copy only the local portion
     lloc = axes(Alm_p, 1)
@@ -89,16 +94,23 @@ function SHTnsKit.matrix_to_spectral_pencil(cfg::SHTnsKit.SHTConfig, Alm::Abstra
 end
 
 """
-    spectral_pencil_to_matrix(cfg, Alm_p::PencilArray; comm=MPI.COMM_WORLD)
+    spectral_pencil_to_matrix(cfg, Alm_p::PencilArray; comm=nothing)
 
 Gather a distributed spectral PencilArray to a dense matrix on all ranks.
 """
 function SHTnsKit.spectral_pencil_to_matrix(cfg::SHTnsKit.SHTConfig, Alm_p::PencilArray; comm=nothing)
-    if comm === nothing
-        comm = communicator(Alm_p)
-    end
+    _record_pencil_scalar_stat!(:full_matrix_helper_calls, 1)
+    known_comm = communicator(Alm_p)
+    _validate_cfg_replicated(cfg, known_comm)
+    _validate_explicit_comm!(known_comm, comm, :spectral_pencil_to_matrix)
+    _validate_scalar_pencil!(
+        cfg, Alm_p, (cfg.lmax + 1, cfg.mmax + 1),
+        :spectral_pencil_to_matrix;
+        comm=known_comm, require_full_first_dim=true,
+        required_decomposition=(2,), require_complex_input=true,
+    )
 
-    Alm = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    Alm = zeros(eltype(Alm_p), cfg.lmax + 1, cfg.mmax + 1)
 
     # Copy local portion
     lloc = axes(Alm_p, 1)
@@ -115,7 +127,10 @@ function SHTnsKit.spectral_pencil_to_matrix(cfg::SHTnsKit.SHTConfig, Alm_p::Penc
     end
 
     # Allreduce to combine contributions from all ranks
-    MPI.Allreduce!(Alm, +, comm)
+    # Always use the Pencil's communicator. An explicitly supplied congruent
+    # communicator is accepted above, but may be a different duplicate on each
+    # rank; using the known communicator keeps collective context ordering safe.
+    MPI.Allreduce!(Alm, +, known_comm)
 
     return Alm
 end
@@ -125,18 +140,35 @@ end
 ##########
 
 function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
-                            prototype_θφ::PencilArray, real_output::Bool=true)
-    return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output)
+                            prototype_θφ::PencilArray, real_output::Bool=true,
+                            use_rfft::Bool=false)
+    local_result = SHTnsKit.dist_synthesis(
+        cfg, Alm; prototype_θφ, real_output, use_rfft,
+    )
+    result = PencilArray{eltype(local_result)}(undef, pencil(prototype_θφ))
+    copyto!(parent(result), local_result)
+    return result
 end
 
-function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
-                           use_rfft::Bool=false, return_pencil::Bool=false)
-    Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)
+function SHTnsKit.synthesis_cplx(cfg::SHTnsKit.SHTConfig, Alm::PencilArray;
+                                 prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis(
+        cfg, Alm; prototype_θφ, real_output=false,
+    )
+end
 
+"""
+Analyze a distributed field. The ordinary/default result is a spectral
+`PencilArray`; `return_pencil=false` preserves the replicated dense
+compatibility result from `dist_analysis`.
+"""
+function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
+                           use_rfft::Bool=false, return_pencil::Bool=true)
     if return_pencil
-        return SHTnsKit.matrix_to_spectral_pencil(cfg, Alm; comm=communicator(fθφ))
+        return dist_analysis_pencil(cfg, fθφ; use_rfft)
     else
-        return Alm
+        # Dense return is the preserved compatibility path.
+        return SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)
     end
 end
 
@@ -145,28 +177,557 @@ end
 ##########
 
 function SHTnsKit.analysis_sphtor(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray;
-                                   use_tables=cfg.use_plm_tables, return_pencil::Bool=false)
-    Slm, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; use_tables)
-
+                                   use_tables=cfg.use_plm_tables,
+                                   use_rfft::Bool=false,
+                                   return_pencil::Bool=true)
+    comm = communicator(Vtθφ)
+    return_pencil = _validate_collective_bool_option!(
+        comm, return_pencil, :analysis_sphtor, UInt32(0x1000),
+    )
     if return_pencil
-        comm = communicator(Vtθφ)
-        return SHTnsKit.matrix_to_spectral_pencil(cfg, Slm; comm),
-               SHTnsKit.matrix_to_spectral_pencil(cfg, Tlm; comm)
+        return dist_analysis_sphtor_pencil(cfg, Vtθφ, Vpθφ; use_rfft)
     else
-        return Slm, Tlm
+        return SHTnsKit.dist_analysis_sphtor(
+            cfg, Vtθφ, Vpθφ; use_tables, use_rfft,
+        )
     end
 end
 
-function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig, Vrθφ::PencilArray, Vtθφ::PencilArray, Vpθφ::PencilArray;
-                                return_pencil::Bool=false)
-    Qlm, Slm, Tlm = SHTnsKit.dist_analysis_qst(cfg, Vrθφ, Vtθφ, Vpθφ)
+function SHTnsKit.analysis_sphtor_cplx(cfg::SHTnsKit.SHTConfig,
+                                        Vtθφ::PencilArray,
+                                        Vpθφ::PencilArray;
+                                        return_pencil::Bool=true)
+    return SHTnsKit.analysis_sphtor(
+        cfg, Vtθφ, Vpθφ; return_pencil, use_rfft=false,
+    )
+end
 
+function SHTnsKit.synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
+                                    Slm::PencilArray, Tlm::PencilArray;
+                                    prototype_θφ::PencilArray,
+                                    real_output::Bool=true,
+                                    use_rfft::Bool=false)
+    Vt_local, Vp_local = dist_synthesis_sphtor_pencil(
+        cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft,
+    )
+    Vt = PencilArray{eltype(Vt_local)}(undef, pencil(prototype_θφ))
+    Vp = PencilArray{eltype(Vp_local)}(undef, pencil(prototype_θφ))
+    copyto!(parent(Vt), Vt_local); copyto!(parent(Vp), Vp_local)
+    return Vt, Vp
+end
+
+
+function SHTnsKit.synthesis_sphtor_cplx(cfg::SHTnsKit.SHTConfig,
+                                         Slm::PencilArray,
+                                         Tlm::PencilArray;
+                                         prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_sphtor(
+        cfg, Slm, Tlm; prototype_θφ, real_output=false,
+    )
+end
+
+function _zero_spectral_pencil_like(reference::PencilArray)
+    result = PencilArray{eltype(reference)}(undef, pencil(reference))
+    fill!(parent(result), zero(eltype(result)))
+    return result
+end
+
+function SHTnsKit.synthesis_sph(cfg::SHTnsKit.SHTConfig,
+                                Slm::PencilArray;
+                                prototype_θφ::PencilArray,
+                                real_output::Bool=true)
+    return SHTnsKit.synthesis_sphtor(
+        cfg, Slm, _zero_spectral_pencil_like(Slm);
+        prototype_θφ, real_output,
+    )
+end
+
+
+function SHTnsKit.synthesis_sph_cplx(cfg::SHTnsKit.SHTConfig,
+                                     Slm::PencilArray;
+                                     prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_sph(
+        cfg, Slm; prototype_θφ, real_output=false,
+    )
+end
+
+function SHTnsKit.synthesis_tor(cfg::SHTnsKit.SHTConfig,
+                                Tlm::PencilArray;
+                                prototype_θφ::PencilArray,
+                                real_output::Bool=true)
+    return SHTnsKit.synthesis_sphtor(
+        cfg, _zero_spectral_pencil_like(Tlm), Tlm;
+        prototype_θφ, real_output,
+    )
+end
+
+
+function SHTnsKit.synthesis_tor_cplx(cfg::SHTnsKit.SHTConfig,
+                                     Tlm::PencilArray;
+                                     prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_tor(
+        cfg, Tlm; prototype_θφ, real_output=false,
+    )
+end
+
+function SHTnsKit.analysis_sphtor_l(cfg::SHTnsKit.SHTConfig,
+                                    Vt::PencilArray, Vp::PencilArray,
+                                    ltr::Integer)
+    return dist_analysis_sphtor_pencil(cfg, Vt, Vp; ltr)
+end
+
+function SHTnsKit.synthesis_sphtor_l(cfg::SHTnsKit.SHTConfig,
+                                     S::PencilArray, Tlm::PencilArray,
+                                     ltr::Integer;
+                                     prototype_θφ::PencilArray,
+                                     real_output::Bool=true,
+                                     use_rfft::Bool=false)
+    local_vt, local_vp = dist_synthesis_sphtor_pencil(
+        cfg, S, Tlm; prototype_θφ, real_output, use_rfft, ltr,
+    )
+    outputs = map((local_vt, local_vp)) do local_value
+        result = PencilArray{eltype(local_value)}(undef, pencil(prototype_θφ))
+        copyto!(parent(result), local_value)
+        result
+    end
+    return outputs
+end
+
+function SHTnsKit.synthesis_sphtor_l_cplx(cfg::SHTnsKit.SHTConfig,
+                                          S::PencilArray, Tlm::PencilArray,
+                                          ltr::Integer;
+                                          prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_sphtor_l(
+        cfg, S, Tlm, ltr; prototype_θφ, real_output=false,
+    )
+end
+
+function SHTnsKit.synthesis_sph_l(cfg::SHTnsKit.SHTConfig,
+                                  S::PencilArray, ltr::Integer;
+                                  prototype_θφ::PencilArray,
+                                  real_output::Bool=true)
+    return SHTnsKit.synthesis_sphtor_l(
+        cfg, S, _zero_spectral_pencil_like(S), ltr;
+        prototype_θφ, real_output,
+    )
+end
+
+function SHTnsKit.synthesis_tor_l(cfg::SHTnsKit.SHTConfig,
+                                  Tlm::PencilArray, ltr::Integer;
+                                  prototype_θφ::PencilArray,
+                                  real_output::Bool=true)
+    return SHTnsKit.synthesis_sphtor_l(
+        cfg, _zero_spectral_pencil_like(Tlm), Tlm, ltr;
+        prototype_θφ, real_output,
+    )
+end
+
+SHTnsKit.synthesis_grad(cfg::SHTnsKit.SHTConfig, S::PencilArray;
+                        prototype_θφ::PencilArray,
+                        real_output::Bool=true) =
+    SHTnsKit.synthesis_sph(cfg, S; prototype_θφ, real_output)
+SHTnsKit.synthesis_grad_l(cfg::SHTnsKit.SHTConfig, S::PencilArray,
+                          ltr::Integer; prototype_θφ::PencilArray,
+                          real_output::Bool=true) =
+    SHTnsKit.synthesis_sph_l(cfg, S, ltr; prototype_θφ, real_output)
+
+SHTnsKit.analysis_sphtor_ml(cfg::SHTnsKit.SHTConfig, im::Integer,
+                            Vt::PencilArray, Vp::PencilArray,
+                            ltr::Integer) =
+    _analysis_sphtor_mode_pencil(cfg, im, Vt, Vp, ltr)
+SHTnsKit.synthesis_sphtor_ml(cfg::SHTnsKit.SHTConfig, im::Integer,
+                             S::PencilArray, Tlm::PencilArray,
+                             ltr::Integer) =
+    _synthesis_sphtor_mode_pencil(cfg, im, S, Tlm, ltr)
+SHTnsKit.synthesis_sph_ml(cfg::SHTnsKit.SHTConfig, im::Integer,
+                          S::PencilArray, ltr::Integer) =
+    SHTnsKit.synthesis_sphtor_ml(
+        cfg, im, S, _zero_spectral_pencil_like(S), ltr,
+    )
+SHTnsKit.synthesis_tor_ml(cfg::SHTnsKit.SHTConfig, im::Integer,
+                          Tlm::PencilArray, ltr::Integer) =
+    SHTnsKit.synthesis_sphtor_ml(
+        cfg, im, _zero_spectral_pencil_like(Tlm), Tlm, ltr,
+    )
+SHTnsKit.synthesis_grad_ml(cfg::SHTnsKit.SHTConfig, im::Integer,
+                           S::PencilArray, ltr::Integer) =
+    SHTnsKit.synthesis_sph_ml(cfg, im, S, ltr)
+
+function _pencil_vector_diagonal!(output::PencilArray,
+                                  cfg::SHTnsKit.SHTConfig,
+                                  input::PencilArray;
+                                  inverse::Bool,
+                                  operation::Symbol)
+    comm = communicator(input)
+    _validate_qst_pencil_communicators!(
+        comm, (input, output), operation,
+    )
+    _validate_cfg_replicated(cfg, comm)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    _validate_scalar_pencil!(
+        cfg, input, expected, operation; comm, peer=output,
+        require_full_first_dim=true, required_decomposition=(2,),
+    )
+    _validate_scalar_pencil!(
+        cfg, output, expected, operation; comm, peer=input,
+        require_full_first_dim=true, required_decomposition=(2,),
+    )
+    _validate_identical_pencil_layout!(input, output, operation; comm)
+    flags = eltype(input) === eltype(output) ? UInt32(0) : UInt32(0x0004)
+    _collective_validation_error(comm, flags, operation)
+
+    l_globals = collect(Int, globalindices(input, 1))
+    m_globals = collect(Int, globalindices(input, 2))
+    source = parent(input); destination = parent(output)
+    @inbounds for (local_m, m_index) in pairs(m_globals),
+                  (local_l, l_index) in pairs(l_globals)
+        l = l_index - 1; m = m_index - 1
+        if l >= max(1, m) && m % cfg.mres == 0
+            ll1 = l * (l + 1)
+            destination[local_l, local_m] = inverse ?
+                -(source[local_l, local_m] / ll1) :
+                -ll1 * source[local_l, local_m]
+        else
+            destination[local_l, local_m] = zero(eltype(destination))
+        end
+    end
+    return output
+end
+
+function _pencil_vector_diagonal(cfg::SHTnsKit.SHTConfig,
+                                 input::PencilArray;
+                                 inverse::Bool,
+                                 operation::Symbol)
+    output = PencilArray{eltype(input)}(undef, pencil(input))
+    return _pencil_vector_diagonal!(
+        output, cfg, input; inverse, operation,
+    )
+end
+
+SHTnsKit.divergence_from_spheroidal(cfg::SHTnsKit.SHTConfig,
+                                    input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=false, operation=:divergence_from_spheroidal,
+    )
+SHTnsKit.divergence_from_spheroidal!(cfg::SHTnsKit.SHTConfig,
+                                     output::PencilArray,
+                                     input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=false, operation=:divergence_from_spheroidal!,
+    )
+SHTnsKit.spheroidal_from_divergence(cfg::SHTnsKit.SHTConfig,
+                                    input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=true, operation=:spheroidal_from_divergence,
+    )
+SHTnsKit.spheroidal_from_divergence!(cfg::SHTnsKit.SHTConfig,
+                                     output::PencilArray,
+                                     input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=true, operation=:spheroidal_from_divergence!,
+    )
+SHTnsKit.vorticity_from_toroidal(cfg::SHTnsKit.SHTConfig,
+                                 input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=false, operation=:vorticity_from_toroidal,
+    )
+SHTnsKit.vorticity_from_toroidal!(cfg::SHTnsKit.SHTConfig,
+                                  output::PencilArray,
+                                  input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=false, operation=:vorticity_from_toroidal!,
+    )
+SHTnsKit.toroidal_from_vorticity(cfg::SHTnsKit.SHTConfig,
+                                 input::PencilArray) =
+    _pencil_vector_diagonal(
+        cfg, input; inverse=true, operation=:toroidal_from_vorticity,
+    )
+SHTnsKit.toroidal_from_vorticity!(cfg::SHTnsKit.SHTConfig,
+                                  output::PencilArray,
+                                  input::PencilArray) =
+    _pencil_vector_diagonal!(
+        output, cfg, input;
+        inverse=true, operation=:toroidal_from_vorticity!,
+    )
+
+function SHTnsKit.analysis_qst(cfg::SHTnsKit.SHTConfig,
+                               Vrθφ::PencilArray,
+                               Vtθφ::PencilArray,
+                               Vpθφ::PencilArray;
+                               use_rfft::Bool=false,
+                               return_pencil::Bool=true)
+    comm = _validate_qst_spatial_inputs!(
+        cfg, Vrθφ, Vtθφ, Vpθφ; use_rfft,
+    )
+    return_pencil = _validate_collective_bool_option!(
+        comm, return_pencil, :analysis_qst, UInt32(0x1000),
+    )
     if return_pencil
-        comm = communicator(Vrθφ)
-        return SHTnsKit.matrix_to_spectral_pencil(cfg, Qlm; comm),
-               SHTnsKit.matrix_to_spectral_pencil(cfg, Slm; comm),
-               SHTnsKit.matrix_to_spectral_pencil(cfg, Tlm; comm)
-    else
-        return Qlm, Slm, Tlm
+        return dist_analysis_pencil(cfg, Vrθφ; use_rfft),
+               dist_analysis_sphtor_pencil(cfg, Vtθφ, Vpθφ; use_rfft)...
+    end
+    return SHTnsKit.dist_analysis_qst(
+        cfg, Vrθφ, Vtθφ, Vpθφ; use_rfft,
+    )
+end
+
+function SHTnsKit.analysis_qst_cplx(cfg::SHTnsKit.SHTConfig,
+                                    Vrθφ::PencilArray,
+                                    Vtθφ::PencilArray,
+                                    Vpθφ::PencilArray;
+                                    return_pencil::Bool=true)
+    return SHTnsKit.analysis_qst(
+        cfg, Vrθφ, Vtθφ, Vpθφ; return_pencil,
+    )
+end
+
+function SHTnsKit.synthesis_qst(cfg::SHTnsKit.SHTConfig,
+                                Qlm::PencilArray,
+                                Slm::PencilArray,
+                                Tlm::PencilArray;
+                                prototype_θφ::PencilArray,
+                                real_output::Bool=true,
+                                use_rfft::Bool=false)
+    _validate_qst_synthesis_inputs!(
+        cfg, Qlm, Slm, Tlm, prototype_θφ; real_output, use_rfft,
+    )
+    Vr_local = SHTnsKit.dist_synthesis(
+        cfg, Qlm; prototype_θφ, real_output, use_rfft,
+    )
+    Vt_local, Vp_local = dist_synthesis_sphtor_pencil(
+        cfg, Slm, Tlm; prototype_θφ, real_output, use_rfft,
+    )
+    outputs = map((Vr_local, Vt_local, Vp_local)) do local_value
+        result = PencilArray{eltype(local_value)}(undef, pencil(prototype_θφ))
+        copyto!(parent(result), local_value)
+        result
+    end
+    return outputs
+end
+
+function SHTnsKit.synthesis_qst_cplx(cfg::SHTnsKit.SHTConfig,
+                                     Qlm::PencilArray,
+                                     Slm::PencilArray,
+                                     Tlm::PencilArray;
+                                     prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_qst(
+        cfg, Qlm, Slm, Tlm; prototype_θφ, real_output=false,
+    )
+end
+
+function SHTnsKit.analysis_qst_l(cfg::SHTnsKit.SHTConfig,
+                                 Vr::PencilArray, Vt::PencilArray,
+                                 Vp::PencilArray, ltr::Integer)
+    comm = _validate_qst_spatial_inputs!(
+        cfg, Vr, Vt, Vp; use_rfft=false,
+    )
+    lcap = _collective_truncation(comm, ltr, cfg.lmax, :analysis_qst_l)
+    return dist_analysis_pencil(cfg, Vr; ltr=lcap),
+           dist_analysis_sphtor_pencil(cfg, Vt, Vp; ltr=lcap)...
+end
+
+function SHTnsKit.synthesis_qst_l(cfg::SHTnsKit.SHTConfig,
+                                  Q::PencilArray, S::PencilArray,
+                                  Tlm::PencilArray, ltr::Integer;
+                                  prototype_θφ::PencilArray,
+                                  real_output::Bool=true,
+                                  use_rfft::Bool=false)
+    comm = _validate_qst_synthesis_inputs!(
+        cfg, Q, S, Tlm, prototype_θφ; real_output, use_rfft,
+    )
+    lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_qst_l)
+    radial_local = SHTnsKit.dist_synthesis(
+        cfg, Q; prototype_θφ, real_output, use_rfft, ltr=lcap,
+    )
+    tangential_local = dist_synthesis_sphtor_pencil(
+        cfg, S, Tlm; prototype_θφ, real_output, use_rfft, ltr=lcap,
+    )
+    return map((radial_local, tangential_local...)) do local_value
+        result = PencilArray{eltype(local_value)}(undef, pencil(prototype_θφ))
+        copyto!(parent(result), local_value)
+        result
     end
 end
+
+function SHTnsKit.synthesis_qst_l_cplx(cfg::SHTnsKit.SHTConfig,
+                                       Q::PencilArray, S::PencilArray,
+                                       Tlm::PencilArray, ltr::Integer;
+                                       prototype_θφ::PencilArray)
+    return SHTnsKit.synthesis_qst_l(
+        cfg, Q, S, Tlm, ltr; prototype_θφ, real_output=false,
+    )
+end
+
+function SHTnsKit.analysis_qst_ml(cfg::SHTnsKit.SHTConfig,
+                                  stored_im::Integer, Vr::PencilArray,
+                                  Vt::PencilArray, Vp::PencilArray,
+                                  ltr::Integer)
+    comm = communicator(Vr)
+    _validate_cfg_replicated(cfg, comm)
+    stored, _, lcap = _collective_fixed_order(
+        comm, cfg, stored_im, ltr, :analysis_qst_ml,
+    )
+    _validate_mode_pencils!(comm, (Vr, Vt, Vp), cfg.nlat, :analysis_qst_ml)
+    Q = SHTnsKit.analysis_packed_ml(cfg, stored, Vr, lcap)
+    S, Tlm = _analysis_sphtor_mode_pencil(cfg, stored, Vt, Vp, lcap)
+    return Q, S, Tlm
+end
+
+function SHTnsKit.synthesis_qst_ml(cfg::SHTnsKit.SHTConfig,
+                                   stored_im::Integer, Q::PencilArray,
+                                   S::PencilArray, Tlm::PencilArray,
+                                   ltr::Integer)
+    comm = communicator(Q)
+    _validate_cfg_replicated(cfg, comm)
+    stored, physical_m, lcap = _collective_fixed_order(
+        comm, cfg, stored_im, ltr, :synthesis_qst_ml,
+    )
+    active_length = lcap - physical_m + 1
+    _validate_mode_pencils!(
+        comm, (Q, S, Tlm), active_length, :synthesis_qst_ml,
+    )
+    Vr = SHTnsKit.synthesis_packed_ml(cfg, stored, Q, lcap)
+    Vt, Vp = _synthesis_sphtor_mode_pencil(cfg, stored, S, Tlm, lcap)
+    return Vr, Vt, Vp
+end
+
+function _validate_pencil_batch!(cfg::SHTnsKit.SHTConfig, values::Tuple,
+                                 kind::Symbol, operation::Symbol)
+    comm = communicator(first(values))
+    _validate_qst_pencil_communicators!(comm, values, operation)
+    _validate_cfg_replicated(cfg, comm)
+    prefix = kind === :spatial ? (cfg.nlat, cfg.nlon) :
+                                (cfg.lmax + 1, cfg.mmax + 1)
+    reference = first(values)
+    global_shape = size_global(reference)
+    nfields = length(global_shape) == 3 ? global_shape[3] : 0
+    flags = length(global_shape) == 3 && global_shape[1:2] == prefix &&
+            nfields > 0 ? UInt32(0) : UInt32(0x0001)
+    for value in values
+        size_global(value) == global_shape || (flags |= 0x0001)
+        ndims(parent(value)) == 3 && size(parent(value), 3) == nfields ||
+            (flags |= 0x0002)
+        eltype(value) === eltype(reference) || (flags |= 0x0004)
+    end
+    for value in Iterators.drop(values, 1)
+        _validate_identical_pencil_layout!(reference, value, operation; comm)
+    end
+    kind === :spatial && !(eltype(reference) <: Real) && (flags |= 0x0400)
+    kind === :spectral && !(eltype(reference) <: Complex) && (flags |= 0x0004)
+    _collective_validation_error(comm, flags, operation)
+    return comm, nfields
+end
+
+function _pencil_batch_field(cfg::SHTnsKit.SHTConfig, batch::PencilArray,
+                             field_index::Int, kind::Symbol, comm)
+    pen = kind === :spatial ? SHTnsKit.create_spatial_pencil(cfg; comm) :
+                              SHTnsKit.create_spectral_pencil(cfg; comm)
+    field = PencilArray{eltype(batch)}(undef, pen)
+    copyto!(parent(field), @view(parent(batch)[:, :, field_index]))
+    return field
+end
+
+function _pencil_batch_output(cfg::SHTnsKit.SHTConfig, ::Type{T}, nfields::Int,
+                              kind::Symbol, comm) where {T}
+    global_shape = kind === :spatial ? (cfg.nlat, cfg.nlon, nfields) :
+                                       (cfg.lmax + 1, cfg.mmax + 1, nfields)
+    decomposition = kind === :spatial ? (1,) : (2,)
+    return PencilArray{T}(undef, Pencil(global_shape, decomposition, comm))
+end
+
+function SHTnsKit.analysis_sphtor_batch(cfg::SHTnsKit.SHTConfig,
+                                        Vt::PencilArray, Vp::PencilArray)
+    comm, nfields = _validate_pencil_batch!(
+        cfg, (Vt, Vp), :spatial, :analysis_sphtor_batch,
+    )
+    CT = Complex{float(eltype(Vt))}
+    S = _pencil_batch_output(cfg, CT, nfields, :spectral, comm)
+    Tlm = similar(S)
+    for field_index in 1:nfields
+        St, Tt = SHTnsKit.analysis_sphtor(
+            cfg,
+            _pencil_batch_field(cfg, Vt, field_index, :spatial, comm),
+            _pencil_batch_field(cfg, Vp, field_index, :spatial, comm),
+        )
+        copyto!(@view(parent(S)[:, :, field_index]), parent(St))
+        copyto!(@view(parent(Tlm)[:, :, field_index]), parent(Tt))
+    end
+    return S, Tlm
+end
+
+function SHTnsKit.synthesis_sphtor_batch(cfg::SHTnsKit.SHTConfig,
+                                         S::PencilArray, Tlm::PencilArray;
+                                         real_output::Bool=true)
+    comm, nfields = _validate_pencil_batch!(
+        cfg, (S, Tlm), :spectral, :synthesis_sphtor_batch,
+    )
+    CT = eltype(S); RT = typeof(real(zero(CT))); OT = real_output ? RT : CT
+    Vt = _pencil_batch_output(cfg, OT, nfields, :spatial, comm)
+    Vp = similar(Vt)
+    prototype = PencilArray{OT}(undef, SHTnsKit.create_spatial_pencil(cfg; comm))
+    for field_index in 1:nfields
+        vt, vp = SHTnsKit.synthesis_sphtor(
+            cfg,
+            _pencil_batch_field(cfg, S, field_index, :spectral, comm),
+            _pencil_batch_field(cfg, Tlm, field_index, :spectral, comm);
+            prototype_θφ=prototype, real_output,
+        )
+        copyto!(@view(parent(Vt)[:, :, field_index]), parent(vt))
+        copyto!(@view(parent(Vp)[:, :, field_index]), parent(vp))
+    end
+    return Vt, Vp
+end
+
+SHTnsKit.synthesis_sphtor_batch_cplx(cfg::SHTnsKit.SHTConfig,
+                                     S::PencilArray, Tlm::PencilArray) =
+    SHTnsKit.synthesis_sphtor_batch(cfg, S, Tlm; real_output=false)
+
+function SHTnsKit.analysis_qst_batch(cfg::SHTnsKit.SHTConfig,
+                                     Vr::PencilArray, Vt::PencilArray,
+                                     Vp::PencilArray)
+    _validate_pencil_batch!(cfg, (Vr, Vt, Vp), :spatial, :analysis_qst_batch)
+    Q = begin
+        comm = communicator(Vr); nfields = size_global(Vr)[3]
+        output = _pencil_batch_output(
+            cfg, Complex{float(eltype(Vr))}, nfields, :spectral, comm,
+        )
+        for k in 1:nfields
+            q = dist_analysis_pencil(
+                cfg, _pencil_batch_field(cfg, Vr, k, :spatial, comm),
+            )
+            copyto!(@view(parent(output)[:, :, k]), parent(q))
+        end
+        output
+    end
+    S, Tlm = SHTnsKit.analysis_sphtor_batch(cfg, Vt, Vp)
+    return Q, S, Tlm
+end
+
+function SHTnsKit.synthesis_qst_batch(cfg::SHTnsKit.SHTConfig,
+                                      Q::PencilArray, S::PencilArray,
+                                      Tlm::PencilArray;
+                                      real_output::Bool=true)
+    comm, nfields = _validate_pencil_batch!(
+        cfg, (Q, S, Tlm), :spectral, :synthesis_qst_batch,
+    )
+    CT = eltype(Q); RT = typeof(real(zero(CT))); OT = real_output ? RT : CT
+    Vr = _pencil_batch_output(cfg, OT, nfields, :spatial, comm)
+    prototype = PencilArray{OT}(undef, SHTnsKit.create_spatial_pencil(cfg; comm))
+    for k in 1:nfields
+        vr = SHTnsKit.dist_synthesis(
+            cfg, _pencil_batch_field(cfg, Q, k, :spectral, comm);
+            prototype_θφ=prototype, real_output,
+        )
+        copyto!(@view(parent(Vr)[:, :, k]), vr)
+    end
+    Vt, Vp = SHTnsKit.synthesis_sphtor_batch(cfg, S, Tlm; real_output)
+    return Vr, Vt, Vp
+end
+
+SHTnsKit.synthesis_qst_batch_cplx(cfg::SHTnsKit.SHTConfig,
+                                  Q::PencilArray, S::PencilArray,
+                                  Tlm::PencilArray) =
+    SHTnsKit.synthesis_qst_batch(cfg, Q, S, Tlm; real_output=false)

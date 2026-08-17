@@ -20,24 +20,14 @@ import SHTnsKit: wigner_d_matrix_deriv
 
     # ---- normalization in the adjoint -------------------------------------
     #
-    # There is NO normalization factor in any adjoint here, and adding one would
-    # be a bug. Every transform in the package — scalar, sphtor, QST, plan,
-    # distributed, GPU — now emits and consumes coefficients in the single
-    # INTERNAL (orthonormal + CS) convention, which is exactly the convention the
-    # `_adjoint_*` helpers work in. Primal and adjoint therefore agree with no
-    # scaling on either side, for every `cfg.norm`/`cs_phase`.
+    # Public transforms emit and consume the convention configured on `cfg`,
+    # while their Legendre kernels remain canonical orthonormal+CS. Dense scalar
+    # and vector adjoint helpers own their boundary maps. Specialized adjoints
+    # that operate directly on packed storage must apply the corresponding
+    # transpose map themselves before or after their canonical kernel.
     #
-    # This block used to say the opposite, because the sphtor pair once converted
-    # on the way in and out with a real diagonal scale `M`, which forced a
-    # matching `M`/`1/M` into the pullbacks. Those conversions are gone. If you
-    # reintroduce an `M ⊙ ȳ` here to "match the primal", every non-default-norm
-    # gradient becomes wrong by M[l,m] (finite differences: 40–180% relative
-    # error on :schmidt and :fourpi) and nothing in the suite will catch it —
-    # the regression tests assert forward equality only.
-    #
-    # `convert_alm_norm!` survives as a standalone public utility for callers who
-    # want coefficients in some other convention; no transform calls it. It does
-    # reach `_ensure_norm_scale_matrix!`, which lazily BUILDS and caches a
+    # `convert_alm_norm!` reaches `_ensure_norm_scale_matrix!`, which lazily
+    # builds and caches a
     # constant (l,m) table on the config. That `setindex!` is invisible to a
     # caller but fatal to Zygote ("Mutating arrays is not supported") if a
     # differentiated function ever reaches it. The table does not depend on any
@@ -258,7 +248,8 @@ import SHTnsKit: wigner_d_matrix_deriv
         lmax, mmax = cfg.lmax, cfg.mmax
         nlat, nlon = cfg.nlat, cfg.nlon
         length(ā) == SHTnsKit.nlm_cplx_calc(lmax, mmax, 1) || throw(DimensionMismatch("ā length"))
-        CT = complex(float(eltype(ā)))
+        ā_int = SHTnsKit._analysis_cotangent_to_canonical(ā, cfg)
+        CT = complex(float(eltype(ā_int)))
         F̄ = zeros(CT, nlat, nlon)
         P = Vector{Float64}(undef, lmax + 1)
         scaleφ = cfg.cphi
@@ -272,9 +263,9 @@ import SHTnsKit: wigner_d_matrix_deriv
                 gp = zero(CT); gn = zero(CT)
                 @inbounds for l in am:lmax
                     base = wi * P[l+1]
-                    gp += base * ā[LM_cplx_index(lmax, mmax, l, am) + 1]
+                    gp += base * ā_int[LM_cplx_index(lmax, mmax, l, am) + 1]
                     if am > 0
-                        gn += base * ā[LM_cplx_index(lmax, mmax, l, -am) + 1]
+                        gn += base * ā_int[LM_cplx_index(lmax, mmax, l, -am) + 1]
                     end
                 end
                 F̄[i, colp] += gp
@@ -311,6 +302,19 @@ import SHTnsKit: wigner_d_matrix_deriv
 # test/serial/test_rotation_gradients.jl; the angle (dα) gradients were already
 # correct and are unchanged.
 _rot_wm(cfg) = Float64[cfg.mi[k] == 0 ? 1.0 : 2.0 for k in 1:cfg.nlm]
+
+# Rotation kernels consume canonical ZYZ angles, which can differ from the
+# public/stored fields because setter-created rotations reverse the outer
+# angles and ZXZ adds constant phase offsets.  Pullbacks differentiate in the
+# canonical coordinates, then return the tangent in the stored parameter
+# order expected by callers of the setters.
+@inline _rotation_rrule_angles(r::SHTnsKit.SHTRotation) =
+    SHTnsKit._rotation_zyz_angles(r, Float64)
+
+@inline function _rotation_rrule_tangent(r::SHTnsKit.SHTRotation, gα, gβ, gγ)
+    αbar, βbar, γbar = r.reverse_outer ? (gγ, gβ, gα) : (gα, gβ, gγ)
+    return Tangent{SHTnsKit.SHTRotation}(; α=αbar, β=βbar, γ=γbar)
+end
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Zrotate), cfg::SHTnsKit.SHTConfig, Qlm, alpha::Real, Rlm)
     y = SHTnsKit.SH_Zrotate(cfg, Qlm, alpha, Rlm)
@@ -413,7 +417,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
         lmax, mmax = r.lmax, r.mmax
         Z̄ = similar(Zlm)
         fill!(Z̄, zero(eltype(Z̄)))
-        α, β, γ = r.α, r.β, r.γ
+        α, β, γ = _rotation_rrule_angles(r)
         # This pullback reimplements the Wigner engine, which works in the Y_l^m
         # basis, while the primal is `ε ∘ engine ∘ ε` in the packed LM_cplx layout
         # (see SHTnsKit._lmcplx_ybasis_signs). Convert both the input and the
@@ -494,7 +498,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_cplx), r::S
             end
         end
         Z̄ .*= ε   # back to the packed layout
-        rt = Tangent{SHTnsKit.SHTRotation}(; α=gα, β=gβ, γ=gγ)
+        rt = _rotation_rrule_tangent(r, gα, gβ, gγ)
         return NoTangent(), rt, Z̄, ZeroTangent()
     end
     return y, pullback
@@ -522,7 +526,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
         end
         # Compute adjoint of complex rotation (transpose of Wigner-d matrix)
         Z̄ = zeros(eltype(Zbar_full), length(Zbar_full))
-        α, β, γ = r.α, r.β, r.γ
+        α, β, γ = _rotation_rrule_angles(r)
         for l in 0:lmax
             mm = min(l, mmax)
             n = 2l + 1
@@ -549,8 +553,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
         gα = 0.0; gβ = 0.0; gγ = 0.0
         for l in 0:lmax
             mm = min(l, mmax)
-            dl = wigner_d_matrix(l, r.β)
-            ddl = wigner_d_matrix_deriv(l, r.β)  # depends only on (l,β); hoisted out of the m-loop below
+            dl = wigner_d_matrix(l, β)
+            ddl = wigner_d_matrix_deriv(l, β)  # depends only on (l,β); hoisted out of the m-loop below
             b = zeros(eltype(Z̄), 2l + 1)
             for mp in -mm:mm
                 idx = SHTnsKit.LM_cplx_index(lmax, mmax, l, mp) + 1
@@ -564,12 +568,12 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                         (-1)^(-mp) * conj(Qlm[SHTnsKit.LM_index(lmax, 1, l, -mp) + 1])
                     end
                 end) : 0
-                b[mp + l + 1] *= cis(-mp * r.γ)
+                b[mp + l + 1] *= cis(-mp * γ)
             end
             c = dl * b
             for m in 0:mm
                 idxp = SHTnsKit.LM_index(lmax, 1, l, m) + 1
-                Rm = c[m + l + 1] * cis(-m * r.α)
+                Rm = c[m + l + 1] * cis(-m * α)
                 gα += real(conj(ȳ[idxp]) * ((0 - 1im) * m * Rm))
                 # β
                 sβ = zero(eltype(Z̄))
@@ -578,8 +582,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                     sβ += ddl[m + l + 1, mp + l + 1] * b[mp + l + 1]
                     sγ += dl[m + l + 1, mp + l + 1] * ((0 - 1im) * mp * b[mp + l + 1])
                 end
-                gβ += real(conj(ȳ[idxp]) * (sβ * cis(-m * r.α)))
-                gγ += real(conj(ȳ[idxp]) * (sγ * cis(-m * r.α)))
+                gβ += real(conj(ȳ[idxp]) * (sβ * cis(-m * α)))
+                gγ += real(conj(ȳ[idxp]) * (sγ * cis(-m * α)))
             end
         end
         # Fold back to packed positive-m: q̄(m) = Z̄(m) + (-1)^m conj(Z̄(-m))
@@ -597,7 +601,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.shtns_rotation_apply_real), r::S
                 Q̄[idxp] = Z̄[idxc_p] + (-1)^m * conj(Z̄[idxc_n])
             end
         end
-        rt = Tangent{SHTnsKit.SHTRotation}(; α=gα, β=gβ, γ=gγ)
+        rt = _rotation_rrule_tangent(r, gα, gβ, gγ)
         return NoTangent(), rt, Q̄, ZeroTangent()
     end
     return y, pullback

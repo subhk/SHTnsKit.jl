@@ -1,0 +1,101 @@
+[gate]
+date = "2026-08-16"
+julia = "1.12.4"
+platform = "aarch64-apple-darwin"
+
+[local_gate]
+evidence_kind = "local_readiness"
+certifying = false
+audited_tree_digest = "881e71b42352e45b999425192958110e192e60af1e9d5fd1238cfba9f2af4c11"
+audited_scope = ["Project.toml", ".github/workflows", "docs/src/shtns37-parity.md", "ext", "src", "test"]
+audited_exclusions = ["test/fixtures/compatibility/task16_gate.toml", "test/fixtures/compatibility/task16_local_commands.txt", "test/fixtures/compatibility/task16_local_summary.log"]
+commands_file = "test/fixtures/compatibility/task16_local_commands.txt"
+commands_sha256 = "8f3eca535453b9d48709977bd9336fb723f6a8af6005ffeb4df13b132fec335c"
+summary_log = "test/fixtures/compatibility/task16_local_summary.log"
+summary_log_sha256 = "5d8a931bf707a92efc18ba4f8aded98f15839d4b1eb5d7b418621d3ad508455f"
+pkg_exit_code = 0
+serial_pass = 76027
+parallel_grid_pass = 1692
+jet_pass = 30
+aqua_pass = 3
+mpi_cpu_ranks = 4
+mpi_cpu_exit_code = 0
+mpi_cpu_fixture_pass_per_rank = 66
+
+[host_transfer_audit]
+allowlist = "test/fixtures/compatibility/host_transfer_allowlist.toml"
+scanner = "test/support/host_transfer_inventory.jl"
+entry_count = 662
+allowscalar_match_count = 0
+legacy_cuda_host_result_bridges = 2
+
+[[cell]]
+backend = "cpu"
+runner = "test/parity/runtests_cpu.jl"
+physical_hardware = true
+result = "passed"
+status = "required"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
+
+[[cell]]
+backend = "cuda"
+runner = "test/gpu/cuda/runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
+pass = 450
+skip = 2
+
+[[cell]]
+backend = "amdgpu"
+runner = "test/gpu/amdgpu/runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
+pass = 408
+skip = 2
+
+[[cell]]
+backend = "mpi_cpu"
+runner = "test/parity/runtests_mpi.jl"
+physical_hardware = true
+result = "passed"
+status = "required"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
+ranks = 4
+
+[[cell]]
+backend = "mpi_cuda"
+runner = "test/gpu/cuda/mpi_runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
+ranks = 2
+pass_per_rank = 900
+skip_per_rank = 1
+
+[[cell]]
+backend = "mpi_amdgpu"
+runner = "test/gpu/amdgpu/mpi_runtests.jl"
+physical_hardware = false
+result = "unavailable_hardware"
+status = "unverified_hardware"
+ci_artifact = ""
+ci_artifact_sha256 = ""
+ci_run_id = 0
+ranks = 2
+pass_per_rank = 900
+skip_per_rank = 1

@@ -2,345 +2,298 @@
 # PencilArray rotations
 ##########
 
-function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
-                            Alm_pencil::PencilArray, alpha::Real)
-    # Return a new PencilArray; do not mutate the input
-    R_pencil = similar(Alm_pencil)
-    return SHTnsKit.dist_SH_Zrotate(cfg, Alm_pencil, alpha, R_pencil)
-end
+const _ROTATION_STATS_LOCK = ReentrantLock()
+const _ROTATION_STATS = Dict{Symbol,Int}(
+    :z_payload_sent_elements => 0,
+    :general_payload_sent_elements => 0,
+    :general_max_message_elements => 0,
+)
 
-function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
-                            Alm_pencil::PencilArray, alpha::Real,
-                            R_pencil::PencilArray)
-    A_local = parent(Alm_pencil)
-    R_local = parent(R_pencil)
-    gl_m = collect(Int, globalindices(Alm_pencil, 2))  # concrete Vector{Int} barrier (avoids ::Any boxing of phase in loop)
-    nloc_l = size(A_local, 1)
-    for (jj, gm) in enumerate(gl_m)
-        mval = gm - 1
-        phase = cis(mval * alpha)
-        @inbounds for il in 1:nloc_l
-            R_local[il, jj] = phase * A_local[il, jj]
-        end
-    end
-    return R_pencil
-end
-
-function SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig, 
-                                            Alm_pencil::PencilArray, 
-                                            beta::Real, 
-                                            R_pencil::PencilArray)
-
-    lmax, mmax = cfg.lmax, cfg.mmax
-    
-    comm = communicator(Alm_pencil)
-
-    lloc = axes(Alm_pencil, 1)
-    mloc = axes(Alm_pencil, 2)
-    
-    gl_l = collect(Int, globalindices(Alm_pencil, 1))  # concrete Vector{Int} barrier (avoids ::Any boxing in loop)
-    gl_m = collect(Int, globalindices(Alm_pencil, 2))
-
-    nm_local = length(mloc)
-    counts_m = Allgather(nm_local, comm)
-    displs_m = cumsum([0; counts_m[1:end-1]])
-    a_full = Vector{ComplexF64}(undef, mmax + 1)
-
-    # Hoisted scratch buffers reused across l-rows.
-    a_local = Vector{ComplexF64}(undef, nm_local)
-    max_n2 = 2*lmax + 1
-    b_buf = Vector{ComplexF64}(undef, max_n2)
-    c_buf = Vector{ComplexF64}(undef, max_n2)
-    D_buf = Matrix{Float64}(undef, max_n2, max_n2)             # reused Wigner-d buffer (was alloc'd per l-row)
-    lg_buf = [SHTnsKit._loggamma(i + 1) for i in 0:(2*lmax)]   # hoisted log-factorial table
-
-    for (ii, il) in enumerate(lloc)
-        lval = gl_l[ii] - 1
-        copyto!(a_local, view(Alm_pencil, il, :))
-        Allgatherv!(a_local, VBuffer(a_full, counts_m), comm)
-        mm = min(lval, mmax)
-        n2 = 2*lval + 1
-        b = view(b_buf, 1:n2); fill!(b, 0.0 + 0.0im)
-        # NO norm/CS conversion: distributed spectral arrays are orthonormal
-        # (matching serial `analysis`/`synthesis`), and the serial rotations are
-        # themselves norm-agnostic. Converting in and back out does NOT cancel,
-        # because the Wigner rotation mixes m: R(M⊙a)/M != R(a).
-        if lval >= 0
-            b[0 + lval + 1] = a_full[1]
-        end
-
-        for m in 1:mm
-            a_int = a_full[m+1]
-            b[m + lval + 1] = a_int
-            b[-m + lval + 1] = (-1.0)^m * conj(a_int)
-        end
-
-        dl = view(D_buf, 1:n2, 1:n2)
-        SHTnsKit.wigner_d_matrix!(dl, lval, float(beta), lg_buf)
-        c = view(c_buf, 1:n2)
-        @inbounds for mi in -lval:lval
-            acc = 0.0 + 0.0im
-            for mp in -lval:lval
-                acc += dl[mi + lval + 1, mp + lval + 1] * b[mp + lval + 1]
-            end
-            c[mi + lval + 1] = acc
-        end
-
-        for (jj, jm) in enumerate(mloc)
-            mval = gl_m[jj] - 1
-            if mval <= lval
-                R_pencil[il, jm] = c[mval + lval + 1]
-            else
-                R_pencil[il, jm] = 0.0 + 0.0im
-            end
-        end
-    end
-    
-    return R_pencil
-end
-
-"""
-    dist_SH_Yrotate_truncgatherm!(cfg, Alm_pencil, beta, R_pencil)
-
-Allgather only m-columns with m ≤ l for each l-row, reducing communication for small l.
-"""
-function SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
-                                               Alm_pencil::PencilArray,
-                                               beta::Real,
-                                               R_pencil::PencilArray)
-    # Materialize concrete-typed inputs here and run the row loop behind a
-    # function barrier: the globalindices compat wrapper is type-unstable, and
-    # letting it poison the loop costs ~1 MB/call in boxing.
-    comm = communicator(Alm_pencil)
-    gl_l = collect(Int, globalindices(Alm_pencil, 1))
-    gl_m = collect(Int, globalindices(Alm_pencil, 2))
-    counts_m = collect(Int, Allgather(length(gl_m), comm))
-    _yrotate_truncgather_rows!(cfg, parent(Alm_pencil), parent(R_pencil),
-                               gl_l, gl_m, counts_m,
-                               MPI.Comm_size(comm), MPI.Comm_rank(comm),
-                               float(beta), comm)
-    return R_pencil
-end
-
-function _yrotate_truncgather_rows!(cfg::SHTnsKit.SHTConfig,
-                                    A_local::AbstractMatrix{ComplexF64},
-                                    R_local::AbstractMatrix{ComplexF64},
-                                    gl_l::Vector{Int}, gl_m::Vector{Int},
-                                    counts_m::Vector{Int}, nranks::Int, myrank::Int,
-                                    beta::Float64, comm)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    # Single exchange of m-ownership counts (done by the caller). The global m
-    # order is the ascending rank-block concatenation (the same invariant
-    # dist_SH_Zrotate's Allgatherv relies on), so each l-row's truncated
-    # per-rank counts are computable locally — one Allgatherv per row instead
-    # of three collectives.
-    nm_local = length(gl_m)
-    counts_l = Vector{Int}(undef, nranks)
-
-    # Hoisted scratch reused across l-rows.
-    max_n2 = 2*lmax + 1
-    a_local = Vector{ComplexF64}(undef, nm_local)
-    a_full = Vector{ComplexF64}(undef, mmax + 1)
-    b_buf = Vector{ComplexF64}(undef, max_n2)
-    c_buf = Vector{ComplexF64}(undef, max_n2)
-    D_buf = Matrix{Float64}(undef, max_n2, max_n2)
-    lg_buf = [SHTnsKit._loggamma(i + 1) for i in 0:(2*lmax)]   # hoisted log-factorial table (was realloc'd per l-row)
-
-    for ii in 1:size(A_local, 1)
-        il = ii
-        lval = gl_l[ii] - 1
-        mm = min(lval, mmax)
-        # Clip each rank's contiguous m block at mm+1 gathered elements total.
-        off = 0
-        @inbounds for r in 1:nranks
-            counts_l[r] = max(0, min(off + counts_m[r], mm + 1) - off)
-            off += counts_m[r]
-        end
-        count_local = counts_l[myrank + 1]
-        # Owned m values ascend, so the first count_local columns are m ≤ mm.
-        @inbounds for k in 1:count_local
-            a_local[k] = A_local[il, k]
-        end
-        # Gathered blocks land in m order: a_full[m+1] = A[l, m] for m = 0:mm.
-        Allgatherv!(view(a_local, 1:count_local), VBuffer(a_full, counts_l), comm)
-        # Build symmetric b of size 2l+1 from positive m part
-        n2 = 2*lval + 1
-        b = view(b_buf, 1:n2); fill!(b, 0.0 + 0.0im)
-        # No norm/CS conversion — see the sibling path above: distributed spectral
-        # arrays are orthonormal and the rotation mixes m, so converting in and
-        # back out would not cancel.
-        if lval >= 0
-            b[0 + lval + 1] = (mm >= 0 ? a_full[1] : 0.0 + 0.0im)
-        end
-        for m in 1:mm
-            a_int = a_full[m+1]
-            b[m + lval + 1] = a_int
-            b[-m + lval + 1] = (-1.0)^m * conj(a_int)
-        end
-        # d-matrix multiply (Wigner-d built into the hoisted buffer)
-        dl = view(D_buf, 1:n2, 1:n2)
-        SHTnsKit.wigner_d_matrix!(dl, lval, float(beta), lg_buf)
-        c = view(c_buf, 1:n2)
-        @inbounds for mi in -lval:lval
-            acc = 0.0 + 0.0im
-            for mp in -lval:lval
-                acc += dl[mi + lval + 1, mp + lval + 1] * b[mp + lval + 1]
-            end
-            c[mi + lval + 1] = acc
-        end
-        # Write back local columns
-        @inbounds for jj in 1:nm_local
-            mval = gl_m[jj] - 1
-            if mval <= lval
-                R_local[il, jj] = c[mval + lval + 1]
-            else
-                R_local[il, jj] = 0.0 + 0.0im
-            end
+function _reset_rotation_stats!()
+    lock(_ROTATION_STATS_LOCK) do
+        for key in keys(_ROTATION_STATS)
+            _ROTATION_STATS[key] = 0
         end
     end
     return nothing
 end
-function SHTnsKit.dist_SH_Yrotate(cfg::SHTnsKit.SHTConfig,
-                                  Alm_pencil::PencilArray,
-                                  beta::Real,
-                                  R_pencil::PencilArray)
-    # Truncated gather reduces bandwidth for small l
-    return SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg, Alm_pencil, beta, R_pencil)
+
+function _rotation_stats()
+    return lock(_ROTATION_STATS_LOCK) do
+        return (
+            z_payload_sent_elements=_ROTATION_STATS[:z_payload_sent_elements],
+            general_payload_sent_elements=_ROTATION_STATS[:general_payload_sent_elements],
+            general_max_message_elements=_ROTATION_STATS[:general_max_message_elements],
+        )
+    end
 end
 
-"""
-    dist_SH_Yrotate90(cfg, Alm_pencil::PencilArray, R_pencil::PencilArray)
-
-Rotate distributed Alm by +90° around Y in Pencil layout.
-"""
-function SHTnsKit.dist_SH_Yrotate90(cfg::SHTnsKit.SHTConfig,
-                                    Alm_pencil::PencilArray,
-                                    R_pencil::PencilArray)
-    return SHTnsKit.dist_SH_Yrotate(cfg, Alm_pencil, π/2, R_pencil)
+function _record_rotation_payload!(sent::Int, maximum::Int)
+    lock(_ROTATION_STATS_LOCK) do
+        _ROTATION_STATS[:general_payload_sent_elements] += sent
+        _ROTATION_STATS[:general_max_message_elements] = max(
+            _ROTATION_STATS[:general_max_message_elements], maximum,
+        )
+    end
+    return nothing
 end
 
-"""
-    dist_SH_Xrotate90(cfg, Alm_pencil::PencilArray, R_pencil::PencilArray)
+@inline _rotation_angle_code(::Type{Float32}) = 1
+@inline _rotation_angle_code(::Type{Float64}) = 2
+@inline _rotation_angle_code(::Type) = 0
 
-Rotate distributed Alm by +90° around X using Z(π/2) → Y(π/2) → Z(-π/2).
-"""
-function SHTnsKit.dist_SH_Xrotate90(cfg::SHTnsKit.SHTConfig,
-                                    Alm_pencil::PencilArray,
-                                    R_pencil::PencilArray)
-    return SHTnsKit.dist_SH_rotate_euler(cfg, Alm_pencil, π/2, π/2, -π/2, R_pencil)
+function _validate_rotation_angles!(comm, angles::Tuple, operation::Symbol)
+    flags = UInt32(0)
+    for angle in angles
+        code = _rotation_angle_code(typeof(angle))
+        code == 0 && (flags |= 0x8000)
+        MPI.Allreduce(code, min, comm) == MPI.Allreduce(code, max, comm) ||
+            (flags |= 0x8000)
+        value = code == 0 ? 0.0 : Float64(angle)
+        isfinite(value) || (flags |= 0x8000)
+        reference = Ref(value)
+        MPI.Bcast!(reference, 0, comm)
+        isequal(value, reference[]) || (flags |= 0x8000)
+    end
+    _collective_validation_error(comm, flags, operation)
+    return nothing
 end
 
-##########
-# Composite Euler rotation on PencilArrays: Z(α) then Y(β) then Z(γ)
-##########
+function _validate_rotation_pencils!(cfg, input::PencilArray,
+                                     output::PencilArray, angles::Tuple,
+                                     operation::Symbol; general::Bool)
+    # The first input is the communicator root of trust. Every rank in that
+    # communicator must enter with a compatible input; candidate outputs are
+    # then preflighted collectively before any mutation or data movement.
+    comm = communicator(input)
+    _validate_qst_pencil_communicators!(comm, (output,), operation)
+    _validate_cfg_replicated(cfg, comm)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    _validate_scalar_pencil!(
+        cfg, input, expected, operation; comm, peer=output,
+        require_full_first_dim=true, required_decomposition=(2,),
+        require_complex_input=true,
+    )
+    _validate_scalar_pencil!(
+        cfg, output, expected, operation; comm, peer=input,
+        require_full_first_dim=true, required_decomposition=(2,),
+        require_complex_input=true,
+    )
+    _validate_identical_pencil_layout!(input, output, operation; comm)
+    flags = eltype(input) === eltype(output) ? UInt32(0) : UInt32(0x0004)
+    general && cfg.mres != 1 && (flags |= 0x10000)
+    _collective_validation_error(comm, flags, operation)
+    _validate_rotation_angles!(comm, angles, operation)
+    return comm
+end
+
+function _dist_zrotate_local!(cfg, input::PencilArray, angle::Real,
+                              output::PencilArray)
+    source = parent(input); destination = parent(output)
+    orders = collect(Int, globalindices(input, 2))
+    RT = typeof(real(zero(eltype(input))))
+    @inbounds for (local_m, m_index) in pairs(orders)
+        m = m_index - 1
+        phase = cis(RT(m) * RT(angle))
+        for local_l in axes(source, 1)
+            destination[local_l, local_m] = phase * source[local_l, local_m]
+        end
+    end
+    return output
+end
+
+function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
+                                  input::PencilArray, angle::Real)
+    output = similar(input)
+    return SHTnsKit.dist_SH_Zrotate(cfg, input, angle, output)
+end
+
+function SHTnsKit.dist_SH_Zrotate(cfg::SHTnsKit.SHTConfig,
+                                  input::PencilArray, angle::Real,
+                                  output::PencilArray)
+    _validate_rotation_pencils!(
+        cfg, input, output, (angle,), :dist_SH_Zrotate; general=false,
+    )
+    return _dist_zrotate_local!(cfg, input, angle, output)
+end
+
+function _dist_yrotate_rows!(cfg, input::PencilArray, beta::Real,
+                             output::PencilArray, comm)
+    RT = typeof(real(zero(eltype(input))))
+    CT = eltype(input)
+    source = parent(input); destination = parent(output)
+    l_indices = collect(Int, globalindices(input, 1))
+    m_indices = collect(Int, globalindices(input, 2))
+    counts_m = collect(Int, MPI.Allgather(length(m_indices), comm))
+    nranks = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    counts_l = zeros(Int, nranks)
+    local_buffer = Vector{CT}(undef, length(m_indices))
+    full = Vector{CT}(undef, cfg.mmax + 1)
+    b = Vector{CT}(undef, 2cfg.lmax + 1)
+    c = similar(b)
+    d = Matrix{RT}(undef, 2cfg.lmax + 1, 2cfg.lmax + 1)
+    lg = RT[SHTnsKit._loggamma(i + 1) for i in 0:(2cfg.lmax)]
+    local_sent = 0
+    local_maximum = 0
+
+    for (local_l, l_index) in pairs(l_indices)
+        l = l_index - 1
+        mm = min(l, cfg.mmax)
+        offset = 0
+        @inbounds for r in 1:nranks
+            counts_l[r] = max(0, min(offset + counts_m[r], mm + 1) - offset)
+            offset += counts_m[r]
+        end
+        count_local = counts_l[rank + 1]
+        @inbounds for k in 1:count_local
+            local_buffer[k] = source[local_l, k]
+        end
+        MPI.Allgatherv!(
+            view(local_buffer, 1:count_local),
+            MPI.VBuffer(view(full, 1:(mm + 1)), counts_l), comm,
+        )
+        local_sent += count_local
+        local_maximum = max(local_maximum, count_local)
+
+        n = 2l + 1
+        fill!(view(b, 1:n), zero(CT))
+        @inbounds for m in 0:mm
+            scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+            canonical = scale * full[m + 1]
+            b[m + l + 1] = canonical
+            if m > 0
+                b[-m + l + 1] = (isodd(m) ? -one(RT) : one(RT)) * conj(canonical)
+            end
+        end
+        block = view(d, 1:n, 1:n)
+        SHTnsKit.wigner_d_matrix!(block, l, RT(beta), lg)
+        @inbounds for m in -l:l
+            acc = zero(CT)
+            for mp in -l:l
+                acc += block[m + l + 1, mp + l + 1] * b[mp + l + 1]
+            end
+            c[m + l + 1] = acc
+        end
+        @inbounds for (local_m, m_index) in pairs(m_indices)
+            m = m_index - 1
+            destination[local_l, local_m] = m <= l ?
+                c[m + l + 1] /
+                RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m)) :
+                zero(CT)
+        end
+    end
+    sent = MPI.Allreduce(local_sent, +, comm)
+    maximum = MPI.Allreduce(local_maximum, max, comm)
+    _record_rotation_payload!(sent, maximum)
+    return output
+end
+
+function _dist_yrotate!(cfg, input::PencilArray, beta::Real,
+                        output::PencilArray, operation::Symbol)
+    comm = _validate_rotation_pencils!(
+        cfg, input, output, (beta,), operation; general=true,
+    )
+    return _dist_yrotate_rows!(cfg, input, beta, output, comm)
+end
+
+SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg::SHTnsKit.SHTConfig,
+                                     input::PencilArray, beta::Real,
+                                     output::PencilArray) =
+    _dist_yrotate!(cfg, input, beta, output, :dist_SH_Yrotate_allgatherm!)
+
+SHTnsKit.dist_SH_Yrotate_truncgatherm!(cfg::SHTnsKit.SHTConfig,
+                                       input::PencilArray, beta::Real,
+                                       output::PencilArray) =
+    _dist_yrotate!(cfg, input, beta, output, :dist_SH_Yrotate_truncgatherm!)
+
+SHTnsKit.dist_SH_Yrotate(cfg::SHTnsKit.SHTConfig,
+                         input::PencilArray, beta::Real,
+                         output::PencilArray) =
+    _dist_yrotate!(cfg, input, beta, output, :dist_SH_Yrotate)
+
+SHTnsKit.dist_SH_Yrotate90(cfg::SHTnsKit.SHTConfig,
+                           input::PencilArray, output::PencilArray) =
+    SHTnsKit.dist_SH_Yrotate(cfg, input, pi / 2, output)
 
 function SHTnsKit.dist_SH_rotate_euler(cfg::SHTnsKit.SHTConfig,
-                                       Alm_pencil::PencilArray,
-                                       α::Real, β::Real, γ::Real,
-                                       R_pencil::PencilArray)
-    # Temp buffer with same layout
-    tmp1 = similar(Alm_pencil)
-    tmp2 = similar(Alm_pencil)
-    # Z(α)
-    SHTnsKit.dist_SH_Zrotate(cfg, Alm_pencil, α, tmp1)
-    # Y(β): requires allgather over m
-    SHTnsKit.dist_SH_Yrotate_allgatherm!(cfg, tmp1, β, tmp2)
-    # Z(γ)
-    SHTnsKit.dist_SH_Zrotate(cfg, tmp2, γ, R_pencil)
-    return R_pencil
+                                      input::PencilArray,
+                                      alpha::Real, beta::Real, gamma::Real,
+                                      output::PencilArray)
+    comm = _validate_rotation_pencils!(
+        cfg, input, output, (alpha, beta, gamma),
+        :dist_SH_rotate_euler; general=true,
+    )
+    first = similar(input); second = similar(input)
+    _dist_zrotate_local!(cfg, input, alpha, first)
+    _dist_yrotate_rows!(cfg, first, beta, second, comm)
+    return _dist_zrotate_local!(cfg, second, gamma, output)
 end
 
-##########
-# Convenience wrappers: packed Qlm vectors rotated via distributed Pencil operations
-##########
+SHTnsKit.dist_SH_Xrotate90(cfg::SHTnsKit.SHTConfig,
+                           input::PencilArray, output::PencilArray) =
+    SHTnsKit.dist_SH_rotate_euler(
+        cfg, input, -pi / 2, pi / 2, pi / 2, output,
+    )
 
-"""
-    dist_SH_Zrotate_packed(cfg, Qlm::AbstractVector{<:Complex}, α; prototype_lm::PencilArray) -> Rlm::Vector
+function _validate_packed_rotation!(cfg, coefficients, angles, prototype,
+                                    operation; general)
+    # Packed coefficients have no communicator, so the prototype is their
+    # trusted communicator anchor. All replication checks stay within it.
+    comm = communicator(prototype)
+    _validate_parallel_storage!(comm, operation, coefficients, prototype)
+    _validate_cfg_replicated(cfg, comm)
+    flags = length(coefficients) == cfg.nlm ? UInt32(0) : UInt32(0x0001)
+    code = _scalar_precision_code(eltype(coefficients))
+    code in (2, 4) || (flags |= 0x0004)
+    MPI.Allreduce(code, min, comm) == MPI.Allreduce(code, max, comm) ||
+        (flags |= 0x0004)
+    general && cfg.mres != 1 && (flags |= 0x10000)
+    _collective_validation_error(comm, flags, operation)
+    _validate_rotation_angles!(comm, angles, operation)
+    return nothing
+end
 
-Rotate packed real-field Qlm around Z by α using distributed Pencil operations.
-"""
 function SHTnsKit.dist_SH_Zrotate_packed(cfg::SHTnsKit.SHTConfig,
-                                         Qlm::AbstractVector{<:Complex}, α::Real;
+                                         coefficients::AbstractVector{<:Complex},
+                                         angle::Real;
                                          prototype_lm::PencilArray)
-    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be $(cfg.nlm)"))
-    # Z-rotation is diagonal in m; no communication needed
-    Rlm = similar(Qlm)
-    @inbounds for k in eachindex(Qlm)
-        m = cfg.mi[k]
-        Rlm[k] = cis(m * α) * Qlm[k]
-    end
-    return Rlm
+    _validate_packed_rotation!(
+        cfg, coefficients, (angle,), prototype_lm,
+        :dist_SH_Zrotate_packed; general=false,
+    )
+    output = similar(coefficients)
+    return SHTnsKit.SH_Zrotate(SHTnsKit.CPU(), cfg, coefficients, angle, output)
 end
 
-"""
-    dist_SH_Yrotate_packed(cfg, Qlm, β; prototype_lm) -> Rlm
-"""
 function SHTnsKit.dist_SH_Yrotate_packed(cfg::SHTnsKit.SHTConfig,
-                                         Qlm::AbstractVector{<:Complex}, β::Real;
+                                         coefficients::AbstractVector{<:Complex},
+                                         beta::Real;
                                          prototype_lm::PencilArray)
-    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be $(cfg.nlm)"))
-    lmax, mmax = cfg.lmax, cfg.mmax
-    Alm = zeros(ComplexF64, lmax+1, mmax+1)
-    @inbounds for m in 0:mmax, l in m:lmax
-        Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1]
-    end
-    # Create PencilArrays using the communicator from prototype_lm
-    comm = communicator(prototype_lm)
-    Alm_p = SHTnsKit.matrix_to_spectral_pencil(cfg, Alm; comm)
-    R_p = PencilArray{ComplexF64}(undef, pencil(Alm_p))
-    SHTnsKit.dist_SH_Yrotate(cfg, Alm_p, β, R_p)
-    Rlm_mat = zeros(ComplexF64, lmax+1, mmax+1)
-    lloc = axes(R_p, 1); mloc = axes(R_p, 2)
-    gl_l = globalindices(R_p, 1)
-    gl_m = globalindices(R_p, 2)
-    for (ii, il) in enumerate(lloc), (jj, jm) in enumerate(mloc)
-        Rlm_mat[gl_l[ii], gl_m[jj]] = R_p[il, jm]
-    end
-    MPI.Allreduce!(Rlm_mat, +, communicator(R_p))
-    Rlm = similar(Qlm)
-    @inbounds for m in 0:mmax, l in m:lmax
-        Rlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1] = Rlm_mat[l+1, m+1]
-    end
-    return Rlm
+    _validate_packed_rotation!(
+        cfg, coefficients, (beta,), prototype_lm,
+        :dist_SH_Yrotate_packed; general=true,
+    )
+    output = similar(coefficients)
+    return SHTnsKit.SH_Yrotate(SHTnsKit.CPU(), cfg, coefficients, beta, output)
 end
 
-"""
-    dist_SH_Yrotate90_packed(cfg, Qlm; prototype_lm) -> Rlm
-"""
-function SHTnsKit.dist_SH_Yrotate90_packed(cfg::SHTnsKit.SHTConfig,
-                                           Qlm::AbstractVector{<:Complex};
-                                           prototype_lm::PencilArray)
-    return SHTnsKit.dist_SH_Yrotate_packed(cfg, Qlm, π/2; prototype_lm)
-end
+SHTnsKit.dist_SH_Yrotate90_packed(cfg::SHTnsKit.SHTConfig,
+                                  coefficients::AbstractVector{<:Complex};
+                                  prototype_lm::PencilArray) =
+    SHTnsKit.dist_SH_Yrotate_packed(
+        cfg, coefficients, pi / 2; prototype_lm,
+    )
 
-"""
-    dist_SH_Xrotate90_packed(cfg, Qlm; prototype_lm) -> Rlm
-"""
 function SHTnsKit.dist_SH_Xrotate90_packed(cfg::SHTnsKit.SHTConfig,
-                                           Qlm::AbstractVector{<:Complex};
+                                           coefficients::AbstractVector{<:Complex};
                                            prototype_lm::PencilArray)
-    length(Qlm) == cfg.nlm || throw(DimensionMismatch("Qlm length must be $(cfg.nlm)"))
-    lmax, mmax = cfg.lmax, cfg.mmax
-    Alm = zeros(ComplexF64, lmax+1, mmax+1)
-    @inbounds for m in 0:mmax, l in m:lmax
-        Alm[l+1, m+1] = Qlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1]
-    end
-    # Create PencilArrays using the communicator from prototype_lm
-    comm = communicator(prototype_lm)
-    Alm_p = SHTnsKit.matrix_to_spectral_pencil(cfg, Alm; comm)
-    R_p = PencilArray{ComplexF64}(undef, pencil(Alm_p))
-    SHTnsKit.dist_SH_rotate_euler(cfg, Alm_p, π/2, π/2, -π/2, R_p)
-    Rlm_mat = zeros(ComplexF64, lmax+1, mmax+1)
-    lloc = axes(R_p, 1); mloc = axes(R_p, 2)
-    gl_l = globalindices(R_p, 1)
-    gl_m = globalindices(R_p, 2)
-    for (ii, il) in enumerate(lloc), (jj, jm) in enumerate(mloc)
-        Rlm_mat[gl_l[ii], gl_m[jj]] = R_p[il, jm]
-    end
-    MPI.Allreduce!(Rlm_mat, +, communicator(R_p))
-    Rlm = similar(Qlm)
-    @inbounds for m in 0:mmax, l in m:lmax
-        Rlm[SHTnsKit.LM_index(lmax, cfg.mres, l, m) + 1] = Rlm_mat[l+1, m+1]
-    end
-    return Rlm
+    _validate_packed_rotation!(
+        cfg, coefficients, (pi / 2,), prototype_lm,
+        :dist_SH_Xrotate90_packed; general=true,
+    )
+    output = similar(coefficients)
+    return SHTnsKit.SH_Xrotate90(
+        SHTnsKit.CPU(), cfg, coefficients, output,
+    )
 end

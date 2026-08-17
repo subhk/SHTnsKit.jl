@@ -7,104 +7,14 @@
 </div>
 ```
 
-Complete reference for all SHTnsKit.jl functions and types.
+Complete reference for every public SHTnsKit.jl function and type.
 
-## Configuration Management
+## Public API
 
-### Configuration Creation
-
-```@docs
-create_config
-create_gauss_config
-create_regular_config
-destroy_config
-```
-
-### Index Utilities
-
-```@docs
-nlm_calc
-LM_index
-```
-
-## Scalar Field Transforms
-
-### Forward Transform (Synthesis)
-
-```@docs
-synthesis
-synthesis!
-```
-
-### Backward Transform (Analysis)
-
-```@docs
-analysis
-analysis!
-```
-
-## Complex Field Transforms
-
-```@docs
-synthesis_packed_cplx
-analysis_packed_cplx
-```
-
-## Vector Field Transforms
-
-Vector fields on the sphere are decomposed into **spheroidal** and **toroidal** components:
-- **Spheroidal**: Poloidal component (has radial component)
-- **Toroidal**: Azimuthal component (purely horizontal)
-
-### Vector Synthesis
-
-```@docs
-synthesis_sphtor
-```
-
-### Vector Analysis
-
-```@docs
-analysis_sphtor
-```
-
-## QST Transforms (3D Vector Fields)
-
-```@docs
-synthesis_qst
-analysis_qst
-```
-
-## Rotations
-
-```@docs
-SH_Zrotate
-SH_Yrotate
-SH_Yrotate90
-SH_Xrotate90
-```
-
-## Energy/Power Spectrum Analysis
-
-```@docs
-energy_scalar_l_spectrum
-energy_vector_l_spectrum
-energy_scalar
-energy_vector
-enstrophy
-```
-
-## Threading Control
-
-```@docs
-shtns_use_threads
-```
-
-## Buffer Helpers
-
-```@docs
-scratch_spatial
-scratch_fft
+```@autodocs
+Modules = [SHTnsKit]
+Private = false
+Order = [:module, :constant, :type, :function, :macro]
 ```
 
 ## Distributed Transforms (MPI)
@@ -117,14 +27,6 @@ When using MPI with PencilArrays, the following functions are available via the 
 - `dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ)` - Distributed vector synthesis
 
 See the [Distributed Guide](../distributed.md) for detailed usage.
-
-## Gradient and Differential Operators
-
-```@docs
-synthesis_sph
-divergence_from_spheroidal
-vorticity_from_toroidal
-```
 
 ## Usage Examples
 

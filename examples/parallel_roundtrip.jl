@@ -9,8 +9,7 @@
 # - Initializes MPI and reports ranks
 # - Runs a spherical-harmonic analysis+synthesis roundtrip on each rank
 # - Reduces the max error across ranks and prints it on rank 0
-# - Demonstrates how to safely allocate arrays from a Pencil using
-#   PencilArrays.zeros(T, pencil) or similar(pencil, T) + fill!
+# - Demonstrates direct PencilArrays 0.19 construction and allocation
 
 using Random
 
@@ -80,15 +79,9 @@ let
         end
         MPI.Barrier(COMM)
         try
-            # Construct a 2D pencil decomposition matching the spatial grid
-            # Prefer named-axes API, fall back to older positional signature
-            pencil = try
-                PencilArrays.Pencil((:θ,:φ), (cfg.nlat, cfg.nlon); comm=COMM)
-            catch
-                PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
-            end
+            # Decompose latitude and keep each longitude row local.
+            pencil = PencilArrays.Pencil((cfg.nlat, cfg.nlon), (1,), COMM)
 
-            # For PencilArrays v0.19+, use PencilArray constructor with local array
             local_dims = PencilArrays.size_local(pencil)
             A = PencilArray(pencil, zeros(Float64, local_dims...))
             B = PencilArray(pencil, zeros(ComplexF64, local_dims...))
@@ -99,7 +92,7 @@ let
             end
         catch e
             if RANK == 0
-                @warn "PencilArrays allocation demo failed (version/API mismatch)" exception=(e, catch_backtrace())
+                @warn "PencilArrays allocation demo failed" exception=(e, catch_backtrace())
             end
         end
 
@@ -109,11 +102,7 @@ let
             if RANK == 0
                 println("Distributed packed roundtrip demo…")
             end
-            pencil = try
-                PencilArrays.Pencil((:θ,:φ), (cfg.nlat, cfg.nlon); comm=COMM)
-            catch
-                PencilArrays.Pencil((cfg.nlat, cfg.nlon), COMM)
-            end
+            pencil = PencilArrays.Pencil((cfg.nlat, cfg.nlon), (1,), COMM)
             local_dims = PencilArrays.size_local(pencil)
             fθφ = PencilArray(pencil, zeros(Float64, local_dims...))
             # Local fill (deterministic pattern)

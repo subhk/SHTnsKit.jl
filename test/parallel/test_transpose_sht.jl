@@ -3,6 +3,7 @@ using SHTnsKit, PencilArrays, PencilFFTs, Test
 
 const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
+const ParExt = Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)
 
 @testset "DistTransposePlan construction" begin
     lmax = 32; nlat = lmax + 2; nlon = 2 * lmax + 1
@@ -36,6 +37,122 @@ const rank = MPI.Comm_rank(comm)
     @test Alm isa PencilArray
 
     rank == 0 && println("DistTransposePlan construction OK on $(MPI.Comm_size(comm)) rank(s)")
+end
+
+@testset "DistTransposePlan collective constructor validation" begin
+    cfg = create_gauss_config(4, 7; nlon=10)
+    world_pen = PencilArrays.Pencil(
+        Array, (cfg.nlon, cfg.nlat), (2,), comm,
+    )
+    varying_prototype = if iseven(rank)
+        PencilArray{Float32}(undef, world_pen, 1)
+    else
+        PencilArray{Float64}(undef, world_pen, 1)
+    end
+    caught = false
+    try
+        DistTransposePlan(cfg; comm, nlev=1, prototype=varying_prototype)
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+
+    self_pen = PencilArrays.Pencil(
+        Array, (cfg.nlon, cfg.nlat), (2,), MPI.COMM_SELF,
+    )
+    self_prototype = PencilArray{Float64}(undef, self_pen, 1)
+    varying_comm_prototype = iseven(rank) ? self_prototype :
+                             PencilArray{Float64}(undef, world_pen, 1)
+    caught = false
+    try
+        DistTransposePlan(cfg; comm, nlev=1,
+                          prototype=varying_comm_prototype)
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+
+    # Presence and explicit array storage are collective constructor options;
+    # rank-local branching here used to strand peers in Pencil construction.
+    varying_presence = iseven(rank) ?
+        PencilArray{Float64}(undef, world_pen, 1) : nothing
+    caught = false
+    try
+        DistTransposePlan(
+            cfg; comm, nlev=1, prototype=varying_presence,
+            array_type=Array, real_type=Float64,
+        )
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+
+    varying_array_type = iseven(rank) ? Array : Matrix
+    caught = false
+    try
+        DistTransposePlan(
+            cfg; comm, nlev=1, array_type=varying_array_type,
+            real_type=Float64,
+        )
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    MPI.Barrier(comm)
+end
+
+@testset "DistTransposePlan exact call layouts" begin
+    cfg = create_gauss_config(4, 7; nlon=10)
+    plan = DistTransposePlan(cfg; comm, nlev=1)
+    output = allocate_spectral(plan)
+    input = allocate_spatial(plan)
+    @test isdefined(ParExt, :_transpose_spatial_reference)
+    if isdefined(ParExt, :_transpose_spatial_reference)
+        spatial_reference = ParExt._transpose_spatial_reference(plan)
+        @test spatial_reference === PencilFFTs.pencil_input(plan.fft_plan)
+        for _ in 1:8
+            ParExt._validate_transpose_call!(
+                plan, :reused_spatial_reference;
+                spatial=(input,), spectral=(output,),
+            )
+            @test ParExt._transpose_spatial_reference(plan) === spatial_reference
+        end
+    end
+    transpose_source = read(joinpath(
+        @__DIR__, "..", "..", "ext", "ParallelTransposeTransforms.jl",
+    ), String)
+    @test !occursin("spatial_reference = Pencil(", transpose_source)
+    @test occursin("PencilFFTs.pencil_input(plan.fft_plan)", transpose_source)
+    wrong_spatial_pen = PencilArrays.Pencil(
+        Array, (plan.nlon, plan.nlat), (1,), comm,
+    )
+    wrong_spatial = PencilArray{Float64}(undef, wrong_spatial_pen, 1)
+    fill!(parent(output), 19 + 3im)
+    spectral_sentinel = copy(parent(output))
+    @test_throws ArgumentError ParExt._validate_transpose_call!(
+        plan, :wrong_spatial_layout;
+        spatial=(wrong_spatial,), spectral=(output,),
+    )
+    @test parent(output) == spectral_sentinel
+    MPI.Barrier(comm)
+
+    wrong_spectral_pen = PencilArrays.Pencil(
+        Array, PencilArrays.size_global(plan.spectral_pencil), (1,), comm,
+    )
+    wrong_spectral = PencilArray{ComplexF64}(
+        undef, wrong_spectral_pen, 1,
+    )
+    fill!(parent(input), 23.0)
+    spatial_sentinel = copy(parent(input))
+    @test_throws ArgumentError ParExt._validate_transpose_call!(
+        plan, :wrong_spectral_layout;
+        spatial=(input,), spectral=(wrong_spectral,),
+    )
+    @test parent(input) == spatial_sentinel
+    MPI.Barrier(comm)
 end
 
 @testset "transpose dist_analysis! vs serial (scalar)" begin
@@ -199,6 +316,58 @@ end
     e = max(maximum(abs.(parent(Vr2).-parent(Vr))), maximum(abs.(parent(Vt2).-parent(Vt))), maximum(abs.(parent(Vp2).-parent(Vp))))
     gerr=MPI.Allreduce(e, MPI.MAX, comm); MPI.Comm_rank(comm)==0 && println("qst round-trip gerr=$gerr")
     @test gerr < 1e-7
+end
+
+@testset "transpose QST validates all six arrays before mutation" begin
+    cfg = create_gauss_config(4, 7; nlon=12)
+    plan = DistTransposePlan(
+        cfg; comm=comm, nlev=1, use_rfft=true, with_vector=true,
+    )
+    Vr = allocate_spatial(plan)
+    Vt = allocate_spatial(plan)
+    Vp = allocate_spatial(plan)
+    fill!(parent(Vr), 0.25)
+    fill!(parent(Vt), -0.125)
+    fill!(parent(Vp), 0.0625)
+    Q = allocate_spectral(plan)
+    S = allocate_spectral(plan)
+    Tlm = allocate_spectral(plan)
+    spectral_sentinel = ComplexF64(73, -19)
+    fill!(parent(Q), spectral_sentinel)
+    fill!(parent(S), spectral_sentinel)
+    fill!(parent(Tlm), spectral_sentinel)
+    bad_vp = PencilArray{Float32}(undef, pencil(Vp))
+    fill!(parent(bad_vp), 0.0625f0)
+
+    caught = false
+    try
+        dist_analysis_qst!(plan, Q, S, Tlm, Vr, Vt, bad_vp)
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    @test all(==(spectral_sentinel), parent(Q))
+    @test all(==(spectral_sentinel), parent(S))
+    @test all(==(spectral_sentinel), parent(Tlm))
+    MPI.Barrier(comm)
+
+    spatial_sentinel = 91.0
+    fill!(parent(Vr), spatial_sentinel)
+    fill!(parent(Vt), spatial_sentinel)
+    fill!(parent(Vp), spatial_sentinel)
+    bad_t = PencilArray{ComplexF32}(undef, pencil(Tlm))
+    fill!(parent(bad_t), ComplexF32(0.1, -0.2))
+    caught = false
+    try
+        dist_synthesis_qst!(plan, Vr, Vt, Vp, Q, S, bad_t)
+    catch error
+        caught = error isa ArgumentError
+    end
+    @test MPI.Allreduce(caught ? 1 : 0, min, comm) == 1
+    @test all(==(spatial_sentinel), parent(Vr))
+    @test all(==(spatial_sentinel), parent(Vt))
+    @test all(==(spatial_sentinel), parent(Vp))
+    MPI.Barrier(comm)
 end
 
 MPI.Finalize()

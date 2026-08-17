@@ -5,20 +5,17 @@ using SHTnsKit
 println("Building SHTnsKit.jl documentation...")
 
 # Check for optional documentation dependencies
-has_literate = false
-has_plots = false
-
-try
-    using Literate
-    has_literate = true
+const HAS_LITERATE = try
+    @eval using Literate
     println(" Literate.jl available for example generation")
+    true
 catch
     println(" Literate.jl not available - skipping example generation")
+    false
 end
 
 try
-    using Plots
-    has_plots = true
+    @eval using Plots
     println(" Plots.jl available for documentation plots")
 catch
     println(" Plots.jl not available - plots will be skipped in examples")
@@ -28,7 +25,7 @@ end
 ##### Generate literated examples (if available)
 #####
 
-if has_literate
+if HAS_LITERATE
     const EXAMPLES_DIR = joinpath(@__DIR__, "..", "examples")
     const OUTPUT_DIR   = joinpath(@__DIR__, "src/literated")
     
@@ -58,8 +55,9 @@ if has_literate
                 # Generate markdown with Documenter flavor
                 Literate.markdown(example_filepath, OUTPUT_DIR;
                                 flavor = Literate.DocumenterFlavor(),
+                                codefence = "````julia" => "````",
                                 documenter = true,
-                                execute = false)  # Set to true if examples should be executed
+                                execute = false)  # Render optional/MPI examples without executing them
                                 
                 println("OK Generated: $(replace(example, ".jl" => ".md"))")
             catch e
@@ -107,12 +105,13 @@ pages = Any[
     ],
     "Reference" => Any[
         "API Reference" => "api/index.md",
+        "SHTns 3.7 Parity" => "shtns37-parity.md",
         "Examples Gallery" => "examples/index.md"
     ]
 ]
 
 # Add literated examples if they exist
-if has_literate && isdir(joinpath(@__DIR__, "src/literated"))
+if HAS_LITERATE && isdir(joinpath(@__DIR__, "src/literated"))
     literated_files = []
     literated_dir = joinpath(@__DIR__, "src/literated")
     

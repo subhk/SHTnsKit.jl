@@ -7,6 +7,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  shtns37-mpi-cpu-parity:
+    name: SHTns 3.7 MPI/CPU parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - name: Instantiate MPI parity environment
+        run: julia --project=. -e 'using Pkg; Pkg.add(["MPI", "PencilArrays", "PencilFFTs"]); Pkg.instantiate()'
+      - name: Run two-rank MPI/CPU parity
+        run: |
+          julia --project=. -e '
+            using MPI
+            run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=. test/parity/runtests_mpi.jl`)
+          '
+
   run-mpi-examples:
     name: Julia ${{ matrix.version }} - Ubuntu - MPI Examples
     runs-on: ubuntu-latest
@@ -41,8 +59,14 @@ jobs:
 
       - name: Run parallel example (scalar)
         run: |
-          mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl
+          julia --project=. -e '
+            using MPI
+            run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=. examples/parallel_roundtrip.jl`)
+          '
 
       - name: Run parallel example (vector)
         run: |
-          mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl --vector
+          julia --project=. -e '
+            using MPI
+            run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=. examples/parallel_roundtrip.jl --vector`)
+          '

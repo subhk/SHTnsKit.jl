@@ -100,13 +100,52 @@ function SHTnsKit.DistTransposePlan(
         comm        :: MPI.Comm = MPI.COMM_WORLD,
         nlev        :: Int      = 1,
         use_rfft    :: Bool     = true,
-        with_vector :: Bool     = true)
+        with_vector :: Bool     = true,
+        prototype   :: Union{Nothing,PencilArray} = nothing,
+        array_type  :: Type = prototype === nothing ? Array :
+                                _parallel_array_type(prototype),
+        real_type   :: Type = prototype === nothing ? Float64 :
+                                typeof(float(real(zero(eltype(prototype))))))
 
     nlat = cfg.nlat
     nlon = cfg.nlon
     lmax = cfg.lmax
     mmax = cfg.mmax
 
+    _validate_cfg_replicated(cfg, comm)
+    constructor_flags = UInt32(0)
+    nlev > 0 || (constructor_flags |= 0x0001)
+    use_rfft || (constructor_flags |= 0x0010)
+    precision_code = _scalar_precision_code(real_type)
+    prototype_present = prototype === nothing ? 0 : 1
+    array_type_code = _parallel_array_type_code(array_type)
+    precision_code in (1, 3) || (constructor_flags |= 0x0004)
+    array_type <: AbstractArray || (constructor_flags |= 0x20000)
+    MPI.Allreduce(nlev, min, comm) == MPI.Allreduce(nlev, max, comm) ||
+        (constructor_flags |= 0x0001)
+    MPI.Allreduce(Int(with_vector), min, comm) ==
+        MPI.Allreduce(Int(with_vector), max, comm) ||
+        (constructor_flags |= 0x0004)
+    MPI.Allreduce(precision_code, min, comm) ==
+        MPI.Allreduce(precision_code, max, comm) ||
+        (constructor_flags |= 0x0004)
+    MPI.Allreduce(prototype_present, min, comm) ==
+        MPI.Allreduce(prototype_present, max, comm) ||
+        (constructor_flags |= 0x20000)
+    MPI.Allreduce(array_type_code, min, comm) ==
+        MPI.Allreduce(array_type_code, max, comm) ||
+        (constructor_flags |= 0x20000)
+    if prototype !== nothing
+        prototype_array_type = _parallel_array_type(prototype)
+        array_type === prototype_array_type || (constructor_flags |= 0x20000)
+    end
+    _collective_validation_error(comm, constructor_flags, :DistTransposePlan)
+    if prototype !== nothing
+        _validate_explicit_comm!(
+            comm, communicator(prototype), :DistTransposePlan,
+        )
+        _validate_parallel_storage!(comm, :DistTransposePlan, prototype)
+    end
     use_rfft || error("DistTransposePlan currently requires use_rfft=true")
     # The transpose Legendre stages do not apply the Robert-form sinθ scaling that
     # the cfg-form paths do; guard rather than silently return wrong results.
@@ -115,19 +154,29 @@ function SHTnsKit.DistTransposePlan(
     # 1. Build the PencilFFTs plan: global (φ, θ) = (nlon, nlat),
     #    rFFT on dim1 (φ), NoTransform on dim2 (θ).
     #    extra_dims=(nlev,) carries radial levels as a trailing LOCAL dimension.
-    proc     = (MPI.Comm_size(comm),)
-    fft_plan = PencilFFTPlan(
-        (nlon, nlat),
-        (Transforms.RFFT(), Transforms.NoTransform()),
-        proc,
-        comm;
-        extra_dims = (nlev,),
-    )
-
-    # 2. Allocate the spectral output buffer: shape (m_local, θ_ALL, nlev),
-    #    decomposed on dim1 (m).
-    F_buf  = allocate_output(fft_plan)
-    F_buf2 = allocate_output(fft_plan)   # second buffer for vector (sphtor) component
+    construct_plans = function()
+        input_pencil = Pencil(array_type, (nlon, nlat), (2,), comm)
+        fft_plan = PencilFFTPlan(
+            input_pencil,
+            (Transforms.RFFT(), Transforms.NoTransform()),
+            real_type;
+            extra_dims = (nlev,),
+        )
+        F_buf = allocate_output(fft_plan)
+        F_buf2 = allocate_output(fft_plan)
+        spectral_pencil = Pencil(
+            array_type, (lmax + 1, nlon ÷ 2 + 1), (2,), comm,
+        )
+        (; fft_plan, F_buf, F_buf2, spectral_pencil)
+    end
+    constructed = if prototype === nothing
+        construct_plans()
+    else
+        adapter = _parallel_gpu_adapter(parent(prototype))
+        adapter === nothing ? construct_plans() :
+            _with_owner_device(construct_plans, adapter, prototype)
+    end
+    (; fft_plan, F_buf, F_buf2, spectral_pencil) = constructed
 
     # 3. Determine which m values this rank owns (from F_buf's pencil).
     #    dim1 of F_buf's pencil is the m dimension (after the internal FFT+transpose).
@@ -153,8 +202,6 @@ function SHTnsKit.DistTransposePlan(
     #    For the canonical grid nbin == mmax+1 so this is bitwise-identical to the old
     #    (lmax+1, mmax+1) pencil; for dealiased grids the extra (m > mmax) columns are
     #    unused/zero and the irFFT zero-pads them on synthesis.
-    spectral_pencil = Pencil((lmax + 1, nbin), (2,), comm)
-
     # 5. Assert alignment: the leading m-columns of spectral_pencil (dim2, 0-based,
     #    restricted to ≤ mmax) must equal m_local.  This catches any future
     #    divergence in distribution strategies between the FFT and spectral pencils.
@@ -216,6 +263,87 @@ function SHTnsKit.DistTransposePlan(
     )
 end
 
+@inline _transpose_spatial_reference(plan::DistTransposePlan) =
+    PencilFFTs.pencil_input(plan.fft_plan)
+
+function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
+                                   spatial=(), spectral=())
+    comm = plan.comm
+    _validate_cfg_replicated(plan.cfg, comm)
+    all_values = (spatial..., spectral...)
+    isempty(all_values) || _validate_parallel_storage!(
+        comm, operation, plan.F_buf, plan.F_buf2, all_values...,
+    )
+    flags = UInt32(0)
+    spatial_type = Transforms.eltype_input(plan.fft_plan)
+    spectral_type = eltype(plan.F_buf)
+    spatial_reference = _transpose_spatial_reference(plan)
+    layout_matches = function(reference, value)
+        candidate = pencil(value)
+        try
+            size_global(candidate) == size_global(reference) &&
+            PencilArrays.decomposition(candidate) ==
+                PencilArrays.decomposition(reference) &&
+            size(PencilArrays.topology(candidate)) ==
+                size(PencilArrays.topology(reference)) &&
+            PencilArrays.range_local(candidate) ==
+                PencilArrays.range_local(reference) &&
+            size(parent(value)) ==
+                (PencilArrays.size_local(reference)..., plan.nlev)
+        catch
+            false
+        end
+    end
+    for value in spatial
+        layout_matches(spatial_reference, value) || (flags |= 0x0002)
+        eltype(value) === spatial_type || (flags |= 0x0004)
+        communicator(value) === comm || begin
+            compatible = try
+                MPI.Comm_compare(communicator(value), comm) in (MPI.IDENT, MPI.CONGRUENT)
+            catch
+                false
+            end
+            compatible || (flags |= 0x0008)
+        end
+    end
+    for value in spectral
+        layout_matches(plan.spectral_pencil, value) || (flags |= 0x0002)
+        eltype(value) === spectral_type || (flags |= 0x0004)
+        communicator(value) === comm || begin
+            compatible = try
+                MPI.Comm_compare(communicator(value), comm) in (MPI.IDENT, MPI.CONGRUENT)
+            catch
+                false
+            end
+            compatible || (flags |= 0x0008)
+        end
+    end
+    for i in eachindex(all_values), j in (i + 1):length(all_values)
+        Base.mightalias(parent(all_values[i]), parent(all_values[j])) &&
+            (flags |= 0x2000)
+    end
+    _collective_validation_error(comm, flags, operation)
+    return nothing
+end
+
+function _validate_transpose_qst_call!(
+        plan::DistTransposePlan, operation::Symbol;
+        spatial::Tuple, spectral::Tuple)
+    length(spatial) == 3 && length(spectral) == 3 || throw(ArgumentError(
+        "$operation requires three spatial and three spectral arrays",
+    ))
+    # Validate the complete Q/S/T call before delegating to either scalar or
+    # tangential transforms. In particular, no output may be changed when a
+    # later vector argument has invalid storage, layout, precision, or comm.
+    _validate_transpose_call!(
+        plan, operation; spatial, spectral,
+    )
+    plan.with_vector || throw(ArgumentError(
+        "DistTransposePlan requires with_vector=true for QST transforms",
+    ))
+    return nothing
+end
+
 # ---------------------------------------------------------------------------
 # Analysis: spatial → spectral
 # ---------------------------------------------------------------------------
@@ -236,6 +364,10 @@ The forward pass is:
    `Alm[l+1, mi, lev] = Σ_i w[i] · NP[mi][l+1, i] · cphi · F[mi, i, lev]`
 """
 function SHTnsKit.dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::PencilArray)
+    _validate_transpose_call!(plan, :dist_analysis_transpose;
+                              spatial=(f,), spectral=(Alm,))
+    adapter = _parallel_gpu_adapter(parent(f))
+    adapter === nothing || return _dist_transpose_gpu_analysis!(adapter, plan, Alm, f)
     # Step 1: rFFT(φ) + internal pencil transpose.
     # After mul!, F_buf has logical dims (m, θ) with permutation (2,1), so the
     # physical parent storage order is (θ, m, lev):
@@ -296,6 +428,10 @@ The reverse pass is:
 2. `ldiv!(f, fft_plan, F_buf)` — inverse transpose + irFFT(φ) → real spatial field.
 """
 function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::PencilArray)
+    _validate_transpose_call!(plan, :dist_synthesis_transpose;
+                              spatial=(f,), spectral=(Alm,))
+    adapter = _parallel_gpu_adapter(parent(f))
+    adapter === nothing || return _dist_transpose_gpu_synthesis!(adapter, plan, f, Alm)
     A = parent(Alm)           # (lmax+1, n_m_local, nlev)
     F = parent(plan.F_buf)    # (nlat, n_m_local, nlev)  — physical storage (θ fast)
 
@@ -348,7 +484,13 @@ Legendre contraction over (lev, m, θ, l) using the pre-built dP and Pos tables.
 function SHTnsKit.dist_analysis_sphtor!(plan::DistTransposePlan,
                                          Slm::PencilArray, Tlm::PencilArray,
                                          Vt::PencilArray,  Vp::PencilArray)
+    _validate_transpose_call!(plan, :dist_analysis_sphtor_transpose;
+                              spatial=(Vt, Vp), spectral=(Slm, Tlm))
     plan.with_vector || error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
+    adapter = _parallel_gpu_adapter(parent(Vt))
+    adapter === nothing || return _dist_transpose_gpu_vector_analysis!(
+        adapter, plan, Slm, Tlm, Vt, Vp,
+    )
     # Step 1: rFFT(φ) + internal transpose for both components.
     mul!(plan.F_buf,  plan.fft_plan, Vt)
     mul!(plan.F_buf2, plan.fft_plan, Vp)
@@ -411,7 +553,13 @@ Local Legendre expansion Slm,Tlm → Ft,Fp, then two inverse FFT+transpose colle
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
                                           Vt::PencilArray,  Vp::PencilArray,
                                           Slm::PencilArray, Tlm::PencilArray)
+    _validate_transpose_call!(plan, :dist_synthesis_sphtor_transpose;
+                              spatial=(Vt, Vp), spectral=(Slm, Tlm))
     plan.with_vector || error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
+    adapter = _parallel_gpu_adapter(parent(Vt))
+    adapter === nothing || return _dist_transpose_gpu_vector_synthesis!(
+        adapter, plan, Vt, Vp, Slm, Tlm,
+    )
     S = parent(Slm)            # (lmax+1, n_m_local, nlev)
     T = parent(Tlm)
 
@@ -474,6 +622,10 @@ spheroidal/toroidal components (S,T) via `dist_analysis_sphtor!`.
 function SHTnsKit.dist_analysis_qst!(plan::DistTransposePlan,
                                       Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray,
                                       Vr::PencilArray,  Vt::PencilArray,  Vp::PencilArray)
+    _validate_transpose_qst_call!(
+        plan, :dist_analysis_qst_transpose;
+        spatial=(Vr, Vt, Vp), spectral=(Qlm, Slm, Tlm),
+    )
     SHTnsKit.dist_analysis!(plan, Qlm, Vr)
     SHTnsKit.dist_analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)
     return Qlm, Slm, Tlm
@@ -488,6 +640,10 @@ spheroidal/toroidal components (S,T) via `dist_synthesis_sphtor!`.
 function SHTnsKit.dist_synthesis_qst!(plan::DistTransposePlan,
                                        Vr::PencilArray,  Vt::PencilArray,  Vp::PencilArray,
                                        Qlm::PencilArray, Slm::PencilArray, Tlm::PencilArray)
+    _validate_transpose_qst_call!(
+        plan, :dist_synthesis_qst_transpose;
+        spatial=(Vr, Vt, Vp), spectral=(Qlm, Slm, Tlm),
+    )
     SHTnsKit.dist_synthesis!(plan, Vr, Qlm)
     SHTnsKit.dist_synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)
     return Vr, Vt, Vp
@@ -536,5 +692,5 @@ kernels do), and treat the local column count as possibly exceeding
 `length(plan.m_local)` on dealiased grids.
 """
 function SHTnsKit.allocate_spectral(plan::DistTransposePlan)
-    return PencilArray{ComplexF64}(undef, plan.spectral_pencil, plan.nlev)
+    return PencilArray{eltype(plan.F_buf)}(undef, plan.spectral_pencil, plan.nlev)
 end

@@ -168,7 +168,8 @@ end
     analysis(cfg::SHTConfig, f::AbstractMatrix) -> Matrix{ComplexF64}
 
 Forward transform on Gauss-Legendre x equiangular grid.
-Returns coefficients `alm[l+1, m+1]` with orthonormal normalization.
+Returns coefficients `alm[l+1, m+1]` in the normalization, real-normalization,
+and phase convention configured by `cfg`.
 
 Parallelizes over m-modes using static scheduling for consistent performance.
 """
@@ -203,7 +204,7 @@ function analysis(cfg::SHTConfig, f::AbstractMatrix; fft_scratch::Union{Nothing,
     CT = eltype(Fph)
     alm = zeros(CT, cfg.lmax + 1, cfg.mmax + 1)
     _analysis_scalar_mloop!(alm, cfg, Fph)
-    return alm
+    return _externalize_coefficients!(alm, cfg)
 end
 
 """
@@ -250,7 +251,7 @@ function _analysis!(cfg::SHTConfig, alm_out::AbstractMatrix, f::AbstractMatrix,
         end
     end
     _analysis_scalar_mloop!(alm_out, cfg, Fph)
-    return alm_out
+    return _externalize_coefficients!(alm_out, cfg)
 end
 
 """
@@ -282,6 +283,7 @@ function _synthesis(cfg::SHTConfig, alm::AbstractMatrix, ::Val{real_output},
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
     if use_rfft
@@ -297,7 +299,8 @@ function _synthesis(cfg::SHTConfig, alm::AbstractMatrix, ::Val{real_output},
             fft_scratch
         end
         fill!(Fph, zero(CT))
-        _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=false, use_rfft=true)
+        _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=false, use_rfft=true,
+                                 scale_matrix)
         RT = real(CT)
         out = Matrix{RT}(undef, nlat, nlon)
         irfft_phi!(out, Fph, nlon)
@@ -306,7 +309,7 @@ function _synthesis(cfg::SHTConfig, alm::AbstractMatrix, ::Val{real_output},
     Fph = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
     size(Fph, 1) == nlat && size(Fph, 2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
     fill!(Fph, zero(CT))
-    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output)
+    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output, scale_matrix)
     ifft_phi!(Fph, Fph)
     if real_output
         RT = typeof(real(zero(CT)))
@@ -324,11 +327,13 @@ function _synthesis_l(cfg::SHTConfig, alm::AbstractMatrix, ltr::Int, ::Val{real_
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
     Fph = Matrix{CT}(undef, nlat, nlon)
     fill!(Fph, zero(CT))
-    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output, ltr=ltr)
+    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output, ltr=ltr,
+                             scale_matrix)
     ifft_phi!(Fph, Fph)
     if real_output
         RT = typeof(real(zero(CT)))
@@ -362,6 +367,7 @@ function _synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix,
     lmax, mmax = cfg.lmax, cfg.mmax
     size(alm, 1) == lmax + 1 || throw(DimensionMismatch("first dim must be lmax+1=$(lmax+1)"))
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(alm)
     if use_rfft
@@ -376,14 +382,15 @@ function _synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix,
             fft_scratch
         end
         fill!(Fph, zero(eltype(Fph)))
-        _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=false, use_rfft=true)
+        _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=false, use_rfft=true,
+                                 scale_matrix)
         irfft_phi!(f_out, Fph, nlon)
         return f_out
     end
     Fph = fft_scratch === nothing ? Matrix{CT}(undef, nlat, nlon) : fft_scratch
     size(Fph, 1) == nlat && size(Fph, 2) == nlon || throw(DimensionMismatch("fft_scratch wrong size"))
     fill!(Fph, zero(eltype(Fph)))
-    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output)
+    _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output, scale_matrix)
     ifft_phi!(Fph, Fph)
     if real_output
         @inbounds for j in 1:nlon, i in 1:nlat
@@ -458,7 +465,7 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
     # `:dft` mode — under `:quad` it is `1/2π`, and assuming it cancelled made
     # every synthesis-family gradient exactly 2π too large. See the docstring.
     φadj = phi_inv_scale(cfg) / cfg.nlon
-    for m in 0:mmax
+    for m in 0:cfg.mres:mmax
         col = m + 1
         wm = ((m == 0 || !real_output) ? 1.0 : 2.0) * φadj
         if use_tbl
@@ -479,7 +486,7 @@ function _adjoint_synthesis(cfg::SHTConfig, f̄::AbstractMatrix;
             end
         end
     end
-    return ālm
+    return _synthesis_cotangent_to_configured!(ālm, cfg)
 end
 
 """
@@ -540,6 +547,8 @@ function _adjoint_synthesis_sphtor(cfg::SHTConfig, V̄t::AbstractMatrix, V̄p::A
             end
         end
     end
+    _synthesis_cotangent_to_configured!(S̄, cfg)
+    _synthesis_cotangent_to_configured!(T̄, cfg)
     return S̄, T̄
 end
 
@@ -560,26 +569,27 @@ function _adjoint_analysis(cfg::SHTConfig, Alm̄::AbstractMatrix;
                            φ_window::Union{Nothing,UnitRange{Int}}=nothing)
     nlon = cfg.nlon
     nlat_local = length(θ_globals)
+    Alm̄_int = _analysis_cotangent_to_canonical(Alm̄, cfg)
     # eltype-derived buffers so Float32 / ForwardDiff.Dual cotangents survive.
-    CT = complex(float(eltype(Alm̄)))
+    CT = complex(float(eltype(Alm̄_int)))
     Fφ = Matrix{CT}(undef, nlat_local, nlon)
     fill!(Fφ, zero(eltype(Fφ)))
     lmax, mmax = cfg.lmax, cfg.mmax
     φadj = 2π  # nlon (ifft adjoint) × cphi (2π/nlon) = 2π
     use_tbl = has_fused_scalar_tables(cfg)
     P = use_tbl ? nothing : Vector{Float64}(undef, lmax + 1)
-    for m in 0:mmax
+    for m in 0:cfg.mres:mmax
         col = m + 1
         if use_tbl
             NP = cfg.NP_tables[m+1]
             @inbounds for (ii, iglob) in pairs(θ_globals)
                 Fφ[ii, col] = (φadj * cfg.w[iglob]) *
-                    _scalar_synthesis_kernel(cfg, Alm̄, NP, iglob, col, m, lmax)
+                    _scalar_synthesis_kernel(cfg, Alm̄_int, NP, iglob, col, m, lmax)
             end
         else
             @inbounds for (ii, iglob) in pairs(θ_globals)
                 Fφ[ii, col] = (φadj * cfg.w[iglob]) *
-                    _scalar_synthesis_kernel_otf(cfg, Alm̄, P, iglob, col, m, lmax)
+                    _scalar_synthesis_kernel_otf(cfg, Alm̄_int, P, iglob, col, m, lmax)
             end
         end
     end
@@ -625,6 +635,7 @@ end
     nlat = cfg.nlat
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         for i in 1:nlat
@@ -639,6 +650,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         @inbounds for i in 1:nlat
@@ -665,6 +677,7 @@ end
     P = thread_local_P[1]
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         for i in 1:nlat
             _scalar_analysis_kernel_otf!(alm, cfg, Fph, P, i, col, m, lmax, scale_phi)
@@ -677,6 +690,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         P = thread_local_P[Threads.threadid()]
         @inbounds for i in 1:nlat
@@ -689,16 +703,18 @@ end
 """Scalar synthesis orchestrator. Parallelizes Legendre summation over m-modes."""
 function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::AbstractMatrix;
                                    real_output::Bool=true, use_rfft::Bool=false,
-                                   ltr::Int=cfg.lmax)
+                                   ltr::Int=cfg.lmax, scale_matrix=nothing)
     lmax, mmax = cfg.lmax, cfg.mmax
     ltr_eff = min(lmax, ltr)
     nlat, nlon = cfg.nlat, cfg.nlon
     inv_scale_phi = phi_inv_scale(cfg)
     m_order = cached_m_order(cfg)
     if has_fused_scalar_tables(cfg)
-        _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+        _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                     ltr_eff, scale_matrix)
     else
-        _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+        _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                     ltr_eff, scale_matrix)
     end
     # Fill Hermitian conjugate columns for real-output IFFT — only the full
     # complex buffer (size nlon) can hold these. rfft's output half has no
@@ -715,73 +731,91 @@ function _synthesis_scalar_mloop!(Fph::AbstractMatrix, cfg::SHTConfig, alm::Abst
     return Fph
 end
 
-@inline function _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+@inline function _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                              ltr_eff, scale_matrix)
     # Keep the single-thread path free of @threads overhead. This matters for
     # allocation-sensitive small transforms and scalar in-place APIs.
     if Threads.nthreads() == 1
-        return _synthesis_scalar_mloop_tbl_serial!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+        return _synthesis_scalar_mloop_tbl_serial!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                   ltr_eff, scale_matrix)
     else
-        return _synthesis_scalar_mloop_tbl_threaded!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+        return _synthesis_scalar_mloop_tbl_threaded!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                     ltr_eff, scale_matrix)
     end
 end
 
-@inline function _synthesis_scalar_mloop_tbl_serial!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+@inline function _synthesis_scalar_mloop_tbl_serial!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                     ltr_eff, scale_matrix)
     nlat = cfg.nlat
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         for i in 1:nlat
-            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, ltr_eff)
+            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(
+                cfg, alm, NP, i, col, m, ltr_eff, scale_matrix)
         end
     end
     return nothing
 end
 
-@inline function _synthesis_scalar_mloop_tbl_threaded!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+@inline function _synthesis_scalar_mloop_tbl_threaded!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                       ltr_eff, scale_matrix)
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[m+1]
         @inbounds for i in 1:nlat
-            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(cfg, alm, NP, i, col, m, ltr_eff)
+            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel(
+                cfg, alm, NP, i, col, m, ltr_eff, scale_matrix)
         end
     end
 end
 
-@inline function _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff)
+@inline function _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                              ltr_eff, scale_matrix)
     thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, max(ltr_eff, 0))
     # `thread_local_P[1]` is valid in serial mode because _ensure_otf_scratch!
     # sizes scratch for maxthreadid().
     if Threads.nthreads() == 1
-        return _synthesis_scalar_mloop_otf_serial!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff, thread_local_P)
+        return _synthesis_scalar_mloop_otf_serial!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                   ltr_eff, thread_local_P, scale_matrix)
     else
-        return _synthesis_scalar_mloop_otf_threaded!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff, thread_local_P)
+        return _synthesis_scalar_mloop_otf_threaded!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                     ltr_eff, thread_local_P, scale_matrix)
     end
 end
 
-@inline function _synthesis_scalar_mloop_otf_serial!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff, thread_local_P)
+@inline function _synthesis_scalar_mloop_otf_serial!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                     ltr_eff, thread_local_P, scale_matrix)
     nlat = cfg.nlat
     P = thread_local_P[1]
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         for i in 1:nlat
-            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, ltr_eff)
+            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(
+                cfg, alm, P, i, col, m, ltr_eff, scale_matrix)
         end
     end
     return nothing
 end
 
-@inline function _synthesis_scalar_mloop_otf_threaded!(Fph, cfg, alm, m_order, inv_scale_phi, ltr_eff, thread_local_P)
+@inline function _synthesis_scalar_mloop_otf_threaded!(Fph, cfg, alm, m_order, inv_scale_phi,
+                                                       ltr_eff, thread_local_P, scale_matrix)
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         P = thread_local_P[Threads.threadid()]
         @inbounds for i in 1:nlat
-            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(cfg, alm, P, i, col, m, ltr_eff)
+            Fph[i, col] = inv_scale_phi * _scalar_synthesis_kernel_otf(
+                cfg, alm, P, i, col, m, ltr_eff, scale_matrix)
         end
     end
 end

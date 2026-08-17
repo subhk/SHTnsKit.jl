@@ -26,7 +26,9 @@ using SHTnsKit
 
         # Schmidt semi-normalized: m>0 case
         for l in 1:10, m in 1:l
-            expected = sqrt(2.0 * 4π / (2l + 1))
+            # The real-basis sqrt(2) is controlled independently by
+            # cfg.real_norm; it is not part of Schmidt normalization itself.
+            expected = sqrt(4π / (2l + 1))
             @test SHTnsKit.norm_scale_from_orthonormal(l, m, :schmidt) ≈ expected
         end
 
@@ -105,5 +107,41 @@ using SHTnsKit
         dest_wrong = zeros(ComplexF64, lmax+2, lmax+1)
 
         @test_throws DimensionMismatch SHTnsKit.convert_alm_norm!(dest_wrong, src, cfg)
+    end
+
+    @testset "real_norm cache invalidation" begin
+        cfg = create_gauss_config(3, 5)
+        src = zeros(ComplexF64, 4, 4)
+        src[2, 2] = 1
+        dest = similar(src)
+        SHTnsKit.convert_alm_norm!(dest, src, cfg; to_internal=true)
+        @test dest[2, 2] == 1
+
+        cfg.real_norm = true
+        SHTnsKit.convert_alm_norm!(dest, src, cfg; to_internal=true)
+        @test dest[2, 2] ≈ inv(sqrt(2))
+    end
+
+    @testset "grouped normalization mutation refreshes cache" begin
+        cfg = create_gauss_config(3, 5)
+        src = zeros(ComplexF64, 4, 4)
+        src[2, 1] = 1
+        src[2, 2] = 1
+        dest = similar(src)
+
+        # Build the canonical-convention cache, then mutate through the public
+        # grouped sub-struct (which intentionally remains mutable).
+        SHTnsKit.convert_alm_norm!(dest, src, cfg; to_internal=true)
+        cfg.normalization.real_norm = true
+        SHTnsKit.convert_alm_norm!(dest, src, cfg; to_internal=true)
+        @test dest[2, 2] ≈ inv(sqrt(2))
+
+        cfg.normalization.norm = :schmidt
+        SHTnsKit.convert_alm_norm!(dest, src, cfg; to_internal=true)
+        @test dest[2, 1] ≈ sqrt(4π / 3)
+
+        cfg.normalization.cs_phase = false
+        SHTnsKit.convert_alm_norm!(dest, src, cfg; to_internal=true)
+        @test dest[2, 2] ≈ -sqrt(4π / 3) / sqrt(2)
     end
 end

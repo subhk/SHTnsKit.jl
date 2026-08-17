@@ -38,10 +38,10 @@ Key concepts
 ### Version Compatibility
 
 SHTnsKit.jl's distributed extension is tested with the following package versions:
-- **MPI.jl**: v0.20+ (uses the new `Allgatherv!` with `VBuffer` API)
-- **PencilArrays.jl**: v0.19+ (uses `range_local`, `size_local`, `get_comm` API)
-- **PencilFFTs.jl**: v0.15+
-- **Julia**: 1.9+ (1.11+ recommended)
+- **MPI.jl**: v0.20 (uses `Allgatherv!` with `VBuffer` API)
+- **PencilArrays.jl**: v0.19 (uses `range_local`, `size_local`, `get_comm` API)
+- **PencilFFTs.jl**: v0.15
+- **Julia**: 1.10, 1.11, or 1.12
 
 ```julia
 using Pkg
@@ -270,7 +270,8 @@ Testing
 - Optional MPI tests can be run by setting `ENV["SHTNSKIT_RUN_MPI_TESTS"]=1` before running package tests.
 
 Conventions & tips
-- Use `axes(A, dim)` and `PencilArrays.globalindices(A, dim)` to iterate local/global coordinates.
+- Use `axes(A, dim)` for local indices and
+  `PencilArrays.range_local(PencilArrays.pencil(A))[dim]` for their global coordinates.
 - Reduce with `MPI.Allreduce!`/`MPI.Allreduce` where appropriate; avoid gathering full matrices unless required by the algorithm.
 - Keep normalization/phase conversions consistent by reusing `convert_alm_norm!` helpers.
 

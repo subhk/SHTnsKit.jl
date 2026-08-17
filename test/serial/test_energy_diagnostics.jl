@@ -8,6 +8,36 @@ using SHTnsKit
 @isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 @testset "Energy Diagnostics" begin
+    @testset "Convention metrics use the cached scale matrix" begin
+        lmax = 8
+        alm = zeros(ComplexF64, lmax + 1, lmax + 1)
+        alm[3, 2] = 0.4 - 0.2im
+
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2lmax + 1,
+                                  norm=:schmidt, real_norm=true, cs_phase=false)
+        @test isempty(cfg.norm_scale_matrix)
+        energy_scalar(cfg, alm)
+        @test size(cfg.norm_scale_matrix) == (lmax + 1, lmax + 1)
+        cached = cfg.norm_scale_matrix
+        energy_vector(cfg, alm, alm)
+        @test cfg.norm_scale_matrix === cached
+
+        cfg.norm_scale_matrix = Matrix{Float64}(undef, 0, 0)
+        energy_scalar_l_spectrum(cfg, alm)
+        @test size(cfg.norm_scale_matrix) == (lmax + 1, lmax + 1)
+
+        cfg.norm_scale_matrix = Matrix{Float64}(undef, 0, 0)
+        enstrophy_l_spectrum(cfg, alm)
+        @test size(cfg.norm_scale_matrix) == (lmax + 1, lmax + 1)
+
+        canonical = create_gauss_config(lmax, lmax + 2; nlon=2lmax + 1)
+        @test isempty(canonical.norm_scale_matrix)
+        energy_scalar(canonical, alm)
+        energy_scalar_l_spectrum(canonical, alm)
+        enstrophy(canonical, alm)
+        @test isempty(canonical.norm_scale_matrix)
+    end
+
     @testset "Scalar Parseval identity" begin
         lmax = 10
         nlat = lmax + 2

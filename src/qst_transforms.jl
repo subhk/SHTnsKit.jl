@@ -93,27 +93,37 @@ velocity fields in spherical coordinates (Vr, Vt, Vp).
 """
 
 """
-    synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true) -> (Vr, Vt, Vp)
+    synthesis_qst(cfg, Qlm, Slm, Tlm; real_output=true, use_rfft=false) -> (Vr, Vt, Vp)
 
 Transform QST spectral coefficients to 3D spatial vector field components.
 Returns radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
-Base.@constprop :aggressive function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix; real_output::Bool=true)
+Base.@constprop :aggressive function synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                                                   real_output::Bool=true,
+                                                   use_rfft::Bool=false)
+    any(value -> on_device(value) isa GPU, (Qlm, Slm, Tlm)) &&
+        return synthesis_qst(GPU(), cfg, Qlm, Slm, Tlm; real_output, use_rfft)
     # QST synthesis is scalar Q plus horizontal S/T synthesis. Use a Val
     # barrier so all returned component arrays have concrete element types.
-    return _synthesis_qst(cfg, Qlm, Slm, Tlm, Val(real_output))
+    return _synthesis_qst(cfg, Qlm, Slm, Tlm, Val(real_output), Val(use_rfft))
 end
 
 function _synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
-                        ::Val{real_output}) where {real_output}
+                        ::Val{real_output}, ::Val{use_rfft}) where {real_output,use_rfft}
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-    # Reuse the scalar and sphtor implementations; both are orthonormal, so the
-    # triple needs no normalization handling here.
-    Vr = _synthesis(cfg, Qlm, Val(real_output), nothing, Val(false))
-    Vt, Vp = _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(false))
+    # Reuse the scalar and sphtor public-boundary implementations. Each converts
+    # exactly its own component from the configured coefficient convention.
+    Vr = _synthesis(cfg, Qlm, Val(real_output), nothing, Val(use_rfft))
+    Vt, Vp = _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(use_rfft))
 
     return Vr, Vt, Vp
 end
+
+# Internal compatibility for the batch implementation; full-grid QST used the
+# complex FFT path before the `use_rfft` keyword became part of this boundary.
+_synthesis_qst(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix,
+               Tlm::AbstractMatrix, real_output::Val) =
+    _synthesis_qst(cfg, Qlm, Slm, Tlm, real_output, Val(false))
 
 """
     analysis_qst(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
@@ -121,17 +131,85 @@ end
 Transform 3D spatial vector field to QST spectral coefficients.
 Input: radial (Vr), colatitude (Vt), and azimuthal (Vp) components.
 """
-function analysis_qst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix)
-    nlat, nlon = cfg.nlat, cfg.nlon
-
+function analysis_qst(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix,
+                      Vp::AbstractMatrix; use_rfft::Bool=false)
+    any(value -> on_device(value) isa GPU, (Vr, Vt, Vp)) &&
+        return analysis_qst(GPU(), cfg, Vr, Vt, Vp; use_rfft)
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
 
-    # Everything is orthonormal, so the triple is just the two sub-transforms.
-    Qlm = analysis(cfg, Vr)
-    Slm, Tlm = analysis_sphtor(cfg, Vt, Vp)
+    # Each sub-transform returns configured coefficients exactly once.
+    Qlm = use_rfft ? analysis(cfg, Vr; use_rfft=true) : analysis(cfg, Vr)
+    Slm, Tlm = use_rfft ?
+        analysis_sphtor(cfg, Vt, Vp; use_rfft=true) :
+        analysis_sphtor(cfg, Vt, Vp)
 
     return Qlm, Slm, Tlm
+end
+
+function _qst_gpu_operands(operation::Symbol, prototype, values::Tuple)
+    selection = prototype
+    if selection === nothing
+        index = findfirst(value -> on_device(value) isa GPU, values)
+        index === nothing || (selection = values[index])
+    end
+    adapter = _gpu_adapter(selection; operation)
+    for value in values
+        if on_device(value) isa GPU && !_gpu_adapter_matches(adapter, value)
+            throw(ArgumentError("$operation operands and GPU prototype use different vendors"))
+        end
+    end
+    operands = map(values) do value
+        _gpu_adapter_matches(adapter, value) ? value : _gpu_adapter_adapt(adapter, value)
+    end
+    return adapter, operands
+end
+
+function synthesis_qst(::GPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                       Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                       prototype=nothing, real_output::Bool=true,
+                       use_rfft::Bool=false)
+    validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
+    adapter, (Qd, Sd, Td) = _qst_gpu_operands(
+        :synthesis_qst, prototype, (Qlm, Slm, Tlm),
+    )
+    Vr = _gpu_adapter_synthesis(
+        adapter, cfg, Qd; real_output, use_rfft,
+    )
+    Vt, Vp = _gpu_adapter_synthesis_sphtor(
+        adapter, cfg, Sd, Td; real_output, use_rfft,
+    )
+    return Vr, Vt, Vp
+end
+
+function analysis_qst(::GPU, cfg::SHTConfig, Vr::AbstractMatrix,
+                      Vt::AbstractMatrix, Vp::AbstractMatrix;
+                      prototype=nothing, use_rfft::Bool=false)
+    validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
+    adapter, (Vrd, Vtd, Vpd) = _qst_gpu_operands(
+        :analysis_qst, prototype, (Vr, Vt, Vp),
+    )
+    Qlm = _gpu_adapter_analysis(adapter, cfg, Vrd; use_rfft)
+    Slm, Tlm = _gpu_adapter_analysis_sphtor(
+        adapter, cfg, Vtd, Vpd; use_rfft,
+    )
+    return Qlm, Slm, Tlm
+end
+
+function synthesis_qst(::CPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                       Slm::AbstractMatrix, Tlm::AbstractMatrix; kwargs...)
+    for value in (Qlm, Slm, Tlm)
+        _require_cpu_storage(:synthesis_qst, value)
+    end
+    return synthesis_qst(cfg, Qlm, Slm, Tlm; kwargs...)
+end
+
+function analysis_qst(::CPU, cfg::SHTConfig, Vr::AbstractMatrix,
+                      Vt::AbstractMatrix, Vp::AbstractMatrix; kwargs...)
+    for value in (Vr, Vt, Vp)
+        _require_cpu_storage(:analysis_qst, value)
+    end
+    return analysis_qst(cfg, Vr, Vt, Vp; kwargs...)
 end
 
 """
@@ -140,15 +218,24 @@ end
 Complex version of QST to spatial transform, preserving complex values.
 """
 function synthesis_qst_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix)
+    any(value -> on_device(value) isa GPU, (Qlm, Slm, Tlm)) &&
+        return synthesis_qst_cplx(GPU(), cfg, Qlm, Slm, Tlm)
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-    # No conversion on either component: `synthesis_cplx` and the `_synthesis_sphtor`
-    # that `synthesis_sphtor_cplx` delegates to are both orthonormal-only, so Q/S/T
-    # enter on one convention. Matches the real-output `_synthesis_qst`.
+    # Each component delegates to the same converting boundary as the real path.
     Vr = synthesis_cplx(cfg, Qlm)
     Vt, Vp = synthesis_sphtor_cplx(cfg, Slm, Tlm)
 
     return Vr, Vt, Vp
 end
+
+synthesis_qst_cplx(::CPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                   Slm::AbstractMatrix, Tlm::AbstractMatrix) =
+    synthesis_qst(CPU(), cfg, Qlm, Slm, Tlm; real_output=false)
+
+synthesis_qst_cplx(::GPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                   Slm::AbstractMatrix, Tlm::AbstractMatrix;
+                   prototype=nothing) =
+    synthesis_qst(GPU(), cfg, Qlm, Slm, Tlm; prototype, real_output=false)
 
 """
     analysis_qst_cplx(cfg, Vr, Vt, Vp) -> (Qlm, Slm, Tlm)
@@ -156,26 +243,36 @@ end
 Transform complex spatial vector field to QST coefficients.
 """
 function analysis_qst_cplx(cfg::SHTConfig, Vr::AbstractMatrix{<:Complex}, Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex})
-    nlat, nlon = cfg.nlat, cfg.nlon
+    any(value -> on_device(value) isa GPU, (Vr, Vt, Vp)) &&
+        return analysis_qst_cplx(GPU(), cfg, Vr, Vt, Vp)
 
     # Validate input dimensions
     validate_vector_spatial_dimensions(Vr, Vt, Vp, cfg)
 
-    # Transform each component. `analysis` and the `analysis_sphtor` that
-    # `analysis_sphtor_cplx` delegates to are both orthonormal-only, so the
-    # returned triple sits on one convention (see `analysis_qst`).
+    # Transform each component through its configured-convention boundary.
     Qlm = analysis(cfg, Vr)
     Slm, Tlm = analysis_sphtor_cplx(cfg, Vt, Vp)
 
     return Qlm, Slm, Tlm
 end
 
+
+analysis_qst_cplx(::CPU, cfg::SHTConfig, Vr::AbstractMatrix{<:Complex},
+                  Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex}) =
+    analysis_qst(CPU(), cfg, Vr, Vt, Vp)
+
+analysis_qst_cplx(::GPU, cfg::SHTConfig, Vr::AbstractMatrix{<:Complex},
+                  Vt::AbstractMatrix{<:Complex}, Vp::AbstractMatrix{<:Complex};
+                  prototype=nothing) =
+    analysis_qst(GPU(), cfg, Vr, Vt, Vp; prototype)
+
 """
     analysis_qst_l(cfg, Vr, Vt, Vp, ltr) -> (Qlm, Slm, Tlm)
 
 Degree-limited version of analysis_qst, computing coefficients only up to degree ltr.
 """
-function analysis_qst_l(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
+function analysis_qst_l(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Integer)
+    ltr = _validate_degree_limit(cfg, ltr)
     # Get full transforms first
     Qlm, Slm, Tlm = analysis_qst(cfg, Vr, Vt, Vp)
 
@@ -186,27 +283,48 @@ function analysis_qst_l(cfg::SHTConfig, Vr::AbstractMatrix, Vt::AbstractMatrix, 
     return Q2, S2, T2
 end
 
+function analysis_qst_l(::CPU, cfg::SHTConfig, Vr::AbstractMatrix,
+                        Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Integer)
+    for value in (Vr, Vt, Vp)
+        _require_cpu_storage(:analysis_qst_l, value)
+    end
+    return analysis_qst_l(cfg, Vr, Vt, Vp, ltr)
+end
+
 """
     synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; real_output=true) -> (Vr, Vt, Vp)
 
 Degree-limited version of synthesis_qst, using coefficients only up to degree ltr.
 """
-Base.@constprop :aggressive function synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+Base.@constprop :aggressive function synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     return _synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr, Val(real_output))
 end
 
-function synthesis_qst_l_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int)
+function synthesis_qst_l(::CPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                         Slm::AbstractMatrix, Tlm::AbstractMatrix,
+                         ltr::Integer; kwargs...)
+    for value in (Qlm, Slm, Tlm)
+        _require_cpu_storage(:synthesis_qst_l, value)
+    end
+    return synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr; kwargs...)
+end
+
+function synthesis_qst_l_cplx(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer)
     # Dedicated helper mirrors `synthesis_qst_l(...; real_output=false)` while
     # keeping the output tuple concrete for inference-sensitive code.
     return _synthesis_qst_l(cfg, Qlm, Slm, Tlm, ltr, Val(false))
 end
 
+synthesis_qst_l_cplx(::CPU, cfg::SHTConfig, Qlm::AbstractMatrix,
+                     Slm::AbstractMatrix, Tlm::AbstractMatrix,
+                     ltr::Integer) =
+    synthesis_qst_l(CPU(), cfg, Qlm, Slm, Tlm, ltr; real_output=false)
+
 function _synthesis_qst_l(cfg::SHTConfig, Qlm::AbstractMatrix, Slm::AbstractMatrix, Tlm::AbstractMatrix,
-                          ltr::Int, ::Val{real_output}) where {real_output}
+                          ltr::Integer, ::Val{real_output}) where {real_output}
+    ltr = _validate_degree_limit(cfg, ltr)
     validate_qst_dimensions(Qlm, Slm, Tlm, cfg)
-    # Same single convention as `_synthesis_qst`: neither `_synthesis_l` nor
-    # `_synthesis_sphtor_l` converts, and `analysis_qst_l` returns Q orthonormal,
-    # so the degree-limited round trip closes for every `cfg.norm`.
+    # The scalar and horizontal degree-limited boundaries each convert once.
     Vr = _synthesis_l(cfg, Qlm, ltr, Val(real_output))
     Vt, Vp = _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(real_output))
     return Vr, Vt, Vp
@@ -217,15 +335,24 @@ end
 
 Mode-limited transform for specific azimuthal mode im.
 """
-function analysis_qst_ml(cfg::SHTConfig, im::Int, Vr_m::AbstractVector{<:Complex}, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
+function analysis_qst_ml(cfg::SHTConfig, im::Integer, Vr_m::AbstractVector{<:Complex}, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Integer)
+    stored_im, _, lcap = _validate_stored_order(cfg, im, ltr)
     # Transform each component for this specific mode
-    Ql = analysis_packed_ml(cfg, im, Vr_m, ltr)
-    Sl, Tl = analysis_sphtor_ml(cfg, im, Vt_m, Vp_m, ltr)
-    # `analysis_packed_ml` and `analysis_sphtor_ml` are both orthonormal-only, so
-    # the returned triple sits on one convention — no scaling here, matching
-    # `analysis_qst`.
+    Ql = analysis_packed_ml(cfg, stored_im, Vr_m, lcap)
+    Sl, Tl = analysis_sphtor_ml(cfg, stored_im, Vt_m, Vp_m, lcap)
+    # Both fixed-mode sub-transforms already return configured coefficients.
 
     return Ql, Sl, Tl
+end
+
+function analysis_qst_ml(::CPU, cfg::SHTConfig, im::Integer,
+                         Vr::AbstractVector{<:Complex},
+                         Vt::AbstractVector{<:Complex},
+                         Vp::AbstractVector{<:Complex}, ltr::Integer)
+    for value in (Vr, Vt, Vp)
+        _require_cpu_storage(:analysis_qst_ml, value)
+    end
+    return analysis_qst_ml(cfg, im, Vr, Vt, Vp, ltr)
 end
 
 """
@@ -233,12 +360,21 @@ end
 
 Mode-limited synthesis for specific azimuthal mode im.
 """
-function synthesis_qst_ml(cfg::SHTConfig, im::Int, Ql::AbstractVector{<:Complex}, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
-    # Synthesize each component for this specific mode. Exact inverse of
-    # `analysis_qst_ml`: Q/S/T all arrive orthonormal, which is what
-    # `synthesis_packed_ml` and `synthesis_sphtor_ml` expect — nothing to convert.
-    Vr_m = synthesis_packed_ml(cfg, im, Ql, ltr)
-    Vt_m, Vp_m = synthesis_sphtor_ml(cfg, im, Sl, Tl, ltr)
+function synthesis_qst_ml(cfg::SHTConfig, im::Integer, Ql::AbstractVector{<:Complex}, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Integer)
+    stored_im, _, lcap = _validate_stored_order(cfg, im, ltr)
+    # Each fixed-mode sub-transform converts its component to canonical once.
+    Vr_m = synthesis_packed_ml(cfg, stored_im, Ql, lcap)
+    Vt_m, Vp_m = synthesis_sphtor_ml(cfg, stored_im, Sl, Tl, lcap)
 
     return Vr_m, Vt_m, Vp_m
+end
+
+function synthesis_qst_ml(::CPU, cfg::SHTConfig, im::Integer,
+                          Q::AbstractVector{<:Complex},
+                          S::AbstractVector{<:Complex},
+                          Tlm::AbstractVector{<:Complex}, ltr::Integer)
+    for value in (Q, S, Tlm)
+        _require_cpu_storage(:synthesis_qst_ml, value)
+    end
+    return synthesis_qst_ml(cfg, im, Q, S, Tlm, ltr)
 end

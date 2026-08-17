@@ -43,11 +43,27 @@ using SHTnsKit
 
         # Regular grid with Driscoll-Healy weights
         cfg_dh = create_regular_config(lmax, nlat; nlon=nlon, include_poles=true, use_dh_weights=true)
-        @test cfg_dh.grid_type in (:regular, :regular_poles, :driscoll_healy)
+        @test cfg_dh.grid_type == :driscoll_healy
+        @test cfg_dh.θ[1] == 0.0
+
+        # DH weights without the DH pole-inclusive nodes would create a midpoint
+        # grid mislabeled as :driscoll_healy.
+        @test_throws ArgumentError create_regular_config(
+            lmax, nlat; nlon=nlon, include_poles=false, use_dh_weights=true,
+        )
 
         # Regular grid without poles
         cfg_nopole = create_regular_config(lmax, nlat; nlon=nlon, include_poles=false)
         @test cfg_nopole.nlat == nlat
+        @test cfg_nopole.grid_type == :regular
+        @test sum(cfg_nopole.w) ≈ 2.0
+
+        # The ordinary pole-inclusive grid is Clenshaw–Curtis, distinct from
+        # the north-pole-inclusive Driscoll–Healy compatibility grid above.
+        cfg_poles = create_regular_config(lmax, nlat; nlon=nlon, include_poles=true)
+        @test cfg_poles.grid_type == :regular_poles
+        @test cfg_poles.x[[1, end]] == [1.0, -1.0]
+        @test sum(cfg_poles.w) ≈ 2.0
     end
 
     @testset "Generic create_config" begin
@@ -68,28 +84,6 @@ using SHTnsKit
         # Test with mres
         cfg_mres = create_config(lmax; mres=2, nlat=nlat, nlon=nlon)
         @test cfg_mres.mres == 2
-    end
-
-    @testset "shtns_init compatibility" begin
-        lmax = 6
-        mmax = 6
-        mres = 1
-        nlat = lmax + 2
-        nphi = 2*lmax + 1
-
-        # Test shtns_init with default flags
-        cfg = shtns_init(0, lmax, mmax, mres, nlat, nphi)
-        @test cfg.lmax == lmax
-        @test cfg.mmax == mmax
-        @test cfg.mres == mres
-
-        # Test with SHT_GAUSS flag
-        cfg_gauss = shtns_init(SHTnsKit.SHT_GAUSS, lmax, mmax, mres, nlat, nphi)
-        @test cfg_gauss.grid_type == :gauss
-
-        # Test with SHT_REGULAR flag
-        cfg_reg = shtns_init(SHTnsKit.SHT_REGULAR, lmax, mmax, mres, 2*(lmax+1), 2*nphi)
-        @test cfg_reg.grid_type in (:regular, :regular_poles)
     end
 
     @testset "On-the-fly mode" begin

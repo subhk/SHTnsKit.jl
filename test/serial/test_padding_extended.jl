@@ -1,6 +1,6 @@
 # SHTnsKit.jl - Padded spatial allocation tests
 # Exercises set_allow_padding!, allocate_padded_spatial, allocate_padded_spatial_batch,
-# copy_to_padded! / copy_from_padded!, estimate_padding_overhead, NSPAT_ALLOC.
+# copy_to_padded! / copy_from_padded!, estimate_padding_overhead, get_spat_dist.
 
 using Test
 using SHTnsKit
@@ -25,8 +25,8 @@ using SHTnsKit
         nlat_p = get_nlat_padded(cfg)
         @test nlat_p ≥ cfg.nlat
 
-        # NSPAT_ALLOC tracks padded spat_dist if > 0
-        n_spat = NSPAT_ALLOC(cfg)
+        # get_spat_dist tracks padded spat_dist if > 0
+        n_spat = get_spat_dist(cfg)
         @test n_spat ≥ cfg.nspat
 
         # Overhead ≥ 0%

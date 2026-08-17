@@ -100,9 +100,9 @@ end
 ### Package Version Requirements
 
 SHTnsKit.jl's distributed extension requires:
-- **MPI.jl**: v0.20+ (uses `Allgatherv!` with `VBuffer` API)
-- **PencilArrays.jl**: v0.19+ (uses `range_local`, `size_local`, `get_comm` API)
-- **PencilFFTs.jl**: v0.15+
+- **MPI.jl**: v0.20 (uses `Allgatherv!` with `VBuffer` API)
+- **PencilArrays.jl**: v0.19 (uses `range_local`, `size_local`, `get_comm` API)
+- **PencilFFTs.jl**: v0.15
 
 Check your versions:
 ```julia
@@ -113,13 +113,13 @@ Pkg.status(["MPI", "PencilArrays", "PencilFFTs"])
 ### Common MPI Errors
 
 - `MethodError: no method matching communicator(::Pencil{...})`
-  - **Cause**: PencilArrays < v0.19 used different API
-  - **Fix**: Update PencilArrays: `Pkg.update("PencilArrays")`
-  - The new API uses `get_comm(pen)` instead of `communicator(pen)`
+  - **Cause**: The environment resolved PencilArrays outside the supported v0.19 range
+  - **Fix**: Run `Pkg.resolve()` in the project environment
+  - The supported API uses `get_comm(pen)`
 
 - `MethodError: no method matching globalindices(::PencilArray{...})`
-  - **Cause**: Old PencilArrays API
-  - **Fix**: Use `range_local(pen)` instead of `globalindices(arr, dim)`
+  - **Cause**: The same dependency mismatch
+  - **Fix**: Resolve PencilArrays v0.19; its local ranges come from `range_local(pen)`
 
 - `Permission denied @ mkdir_pid_file` or random `InexactError`
   - **Cause**: Multiple MPI processes competing for precompilation cache
@@ -135,7 +135,7 @@ Pkg.status(["MPI", "PencilArrays", "PencilFFTs"])
 
 ### Distributed Transform Usage
 
-Correct pattern for PencilArrays v0.19+:
+Correct pattern for PencilArrays v0.19:
 ```julia
 using MPI, PencilArrays, SHTnsKit
 
@@ -226,4 +226,3 @@ versioninfo()  # Include this in bug reports
 
 - File an issue with the minimal reproducer and `versioninfo()` output:
   https://github.com/subhk/SHTnsKit.jl/issues
-

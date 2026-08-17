@@ -57,6 +57,46 @@ max_local_error(pa::PencilArray, F::AbstractMatrix) =
 
 @testset "MPI audit-fix regressions ($nprocs ranks)" begin
 
+    @testset "PencilArrays 0.19 API" begin
+        pen = Pencil((4, 5), (1,), comm)
+        a = scatter_field(pen, zeros(4, 5))
+        @test ParExt.communicator(a) == PencilArrays.get_comm(a)
+        @test ParExt.globalindices(a, 1) == PencilArrays.range_local(pen)[1]
+        @test ParExt.globalindices(a, 2) == PencilArrays.range_local(pen)[2]
+        @test !isdefined(ParExt, :pencilarray_version_info)
+    end
+
+    @testset "single distributed analysis path" begin
+        @test !isdefined(ParExt, :_ParallelExtState)
+        @test !isdefined(ParExt, :dist_analysis_cache_blocked)
+        @test !isdefined(ParExt, :dist_analysis_fused_cache_blocked)
+    end
+
+    @testset "equivalent pencils have rank-symmetric topology lookup" begin
+        nlat, nlon = 4, 5
+        pen1 = Pencil((nlat, nlon), (1,), comm)
+        pen2 = Pencil((nlat, nlon), (1,), comm)
+        @test pen1 !== pen2
+
+        F = zeros(nlat, nlon)
+        a1 = scatter_field(pen1, F)
+        a2 = scatter_field(pen2, F)
+        topo1 = ParExt._pencil_topology(
+            a1, comm, size(parent(a1), 1), size(parent(a1), 2), nlat, nlon,
+        )
+        MPI.Barrier(comm)
+
+        # Equivalent decompositions may legitimately have different object-reuse
+        # histories on different ranks. No rank may skip a collective because its
+        # local Pencil object happened to be cached.
+        selected = rank == 0 ? a1 : a2
+        topo2 = ParExt._pencil_topology(
+            selected, comm, size(parent(selected), 1), size(parent(selected), 2), nlat, nlon,
+        )
+        @test topo2 == topo1 == (true, true)
+        root_println("    [PASS] equivalent-pencil topology lookup")
+    end
+
     @testset "dist_analysis_packed_cplx LM_cplx layout" begin
         lmax = 5
         nlat, nlon = lmax + 2, 2*lmax + 1

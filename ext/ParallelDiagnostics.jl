@@ -65,6 +65,9 @@ function SHTnsKit.energy_scalar_m_spectrum(cfg::SHTnsKit.SHTConfig, Alm::PencilA
 end
 
 function SHTnsKit.energy_vector_l_spectrum(cfg::SHTnsKit.SHTConfig, Slm::PencilArray, Tlm::PencilArray; real_field::Bool=true)
+    _validate_parallel_storage!(
+        communicator(Slm), :energy_vector_l_spectrum, Slm, Tlm,
+    )
     lmax = cfg.lmax
     E = zeros(Float64, lmax + 1)
     lloc = axes(Slm, 1); mloc = axes(Slm, 2)
@@ -86,6 +89,9 @@ function SHTnsKit.energy_vector_l_spectrum(cfg::SHTnsKit.SHTConfig, Slm::PencilA
 end
 
 function SHTnsKit.energy_vector_m_spectrum(cfg::SHTnsKit.SHTConfig, Slm::PencilArray, Tlm::PencilArray; real_field::Bool=true)
+    _validate_parallel_storage!(
+        communicator(Slm), :energy_vector_m_spectrum, Slm, Tlm,
+    )
     mmax = cfg.mmax
     E = zeros(Float64, mmax + 1)
     lloc = axes(Slm, 1); mloc = axes(Slm, 2)
@@ -169,6 +175,9 @@ function SHTnsKit.grid_energy_scalar(cfg::SHTnsKit.SHTConfig, fθφ::PencilArray
 end
 
 function SHTnsKit.grid_energy_vector(cfg::SHTnsKit.SHTConfig, Vtθφ::PencilArray, Vpθφ::PencilArray)
+    _validate_parallel_storage!(
+        communicator(Vtθφ), :grid_energy_vector, Vtθφ, Vpθφ,
+    )
     θloc = axes(Vtθφ, 1)
     gl_θ = collect(Int, globalindices(Vtθφ, 1))
     φscale = 2π / cfg.nlon

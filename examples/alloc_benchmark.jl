@@ -47,7 +47,7 @@ function bench_distributed(lmax::Int)
     nlon = 2*lmax + 1
     cfg = create_gauss_config(lmax, nlat; nlon=nlon)
     Pθφ = Pencil((nlat, nlon), (MPI.Comm_size(comm), 1), comm)
-    paalloc(t; eltype=Float64) = (try PencilArrays.zeros(t; eltype=eltype) catch; try PencilArrays.zeros(t) catch; try SHTnsKitParallelExt.allocate(t; eltype=eltype) catch; SHTnsKitParallelExt.allocate(t) end end end)
+    paalloc(t; eltype=Float64) = PencilArray{eltype}(undef, t)
     fθφ = paalloc(Pθφ; eltype=Float64)
     fill!(fθφ, 0)
     # Fill deterministic content

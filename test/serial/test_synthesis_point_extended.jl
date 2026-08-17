@@ -8,7 +8,7 @@ using SHTnsKit
 
 @isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
-function _real_field_alm(rng, lmax)
+function _point_real_field_alm(rng, lmax)
     alm = randn(rng, ComplexF64, lmax + 1, lmax + 1)
     alm[:, 1] .= real.(alm[:, 1])
     for m in 0:lmax, l in 0:(m - 1)
@@ -22,7 +22,7 @@ end
         lmax = 6
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
         rng = MersenneTwister(700)
-        alm = _real_field_alm(rng, lmax)
+        alm = _point_real_field_alm(rng, lmax)
 
         f = synthesis(cfg, alm; real_output=true)
         # Sample several (i, j) grid nodes
@@ -38,8 +38,8 @@ end
         lmax = 4
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
         rng = MersenneTwister(701)
-        a = _real_field_alm(rng, lmax)
-        b = _real_field_alm(rng, lmax)
+        a = _point_real_field_alm(rng, lmax)
+        b = _point_real_field_alm(rng, lmax)
         cost = 0.3; phi = 1.1
 
         va = synthesis_point(cfg, a, cost, phi)
@@ -52,7 +52,7 @@ end
         lmax = 6
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
         rng = MersenneTwister(702)
-        alm_dense = _real_field_alm(rng, lmax)
+        alm_dense = _point_real_field_alm(rng, lmax)
 
         # Pack dense → cfg.nlm packed form
         Qlm = zeros(ComplexF64, cfg.nlm)
@@ -74,7 +74,7 @@ end
         lmax = 8
         cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
         rng = MersenneTwister(703)
-        alm_dense = _real_field_alm(rng, lmax)
+        alm_dense = _point_real_field_alm(rng, lmax)
 
         Qlm = zeros(ComplexF64, cfg.nlm)
         for m in 0:cfg.mmax, l in m:lmax

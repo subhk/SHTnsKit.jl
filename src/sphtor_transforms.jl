@@ -165,14 +165,21 @@ Base.@constprop :aggressive function synthesis_sphtor(cfg::SHTConfig, Slm::Abstr
     return _synthesis_sphtor(cfg, Slm, Tlm, Val(real_output), Val(use_rfft))
 end
 
+function synthesis_sphtor(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                           Tlm::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:synthesis_sphtor, Slm)
+    _require_cpu_storage(:synthesis_sphtor, Tlm)
+    return synthesis_sphtor(cfg, Slm, Tlm; kwargs...)
+end
+
 function _synthesis_sphtor(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix,
                            ::Val{real_output}, ::Val{use_rfft}) where {real_output, use_rfft}
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
 
-    # Orthonormal-only: no normalization conversion anywhere in the package.
-    Slm_int, Tlm_int = Slm, Tlm
+    Slm_int = _internal_coefficients(Slm, cfg)
+    Tlm_int = _internal_coefficients(Tlm, cfg)
 
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(Slm_int)
@@ -231,10 +238,6 @@ end
 Transform horizontal vector field components to spheroidal/toroidal coefficients.
 """
 function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix; use_rfft::Bool=false)
-    if is_gpu_config(cfg)
-        return gpu_analysis_sphtor(cfg, Vt, Vp)
-    end
-
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
@@ -264,7 +267,107 @@ function analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix;
 
     _analysis_sphtor_mloop!(Slm_int, Tlm_int, cfg, Fthetam, Fphim; ltr=lmax)
 
+    _externalize_coefficients!(Slm_int, cfg)
+    _externalize_coefficients!(Tlm_int, cfg)
     return Slm_int, Tlm_int
+end
+
+function analysis_sphtor(::CPU, cfg::SHTConfig, Vt::AbstractMatrix,
+                          Vp::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:analysis_sphtor, Vt)
+    _require_cpu_storage(:analysis_sphtor, Vp)
+    return analysis_sphtor(cfg, Vt, Vp; kwargs...)
+end
+
+function _gpu_adapter_analysis_sphtor(adapter, cfg::SHTConfig, Vt, Vp; kwargs...)
+    throw(BackendUnavailableError(
+        :analysis_sphtor,
+        "the selected GPU adapter does not implement vector analysis",
+    ))
+end
+
+function _gpu_adapter_synthesis_sphtor(adapter, cfg::SHTConfig, Slm, Tlm;
+                                        kwargs...)
+    throw(BackendUnavailableError(
+        :synthesis_sphtor,
+        "the selected GPU adapter does not implement vector synthesis",
+    ))
+end
+
+function analysis_sphtor(::GPU, cfg::SHTConfig, Vt::AbstractMatrix,
+                          Vp::AbstractMatrix; prototype=nothing, kwargs...)
+    selection = prototype
+    selection === nothing && on_device(Vt) isa GPU && (selection = Vt)
+    selection === nothing && on_device(Vp) isa GPU && (selection = Vp)
+    adapter = _gpu_adapter(selection; operation=:analysis_sphtor)
+    for value in (Vt, Vp)
+        if on_device(value) isa GPU && !_gpu_adapter_matches(adapter, value)
+            throw(ArgumentError("vector inputs and GPU prototype use different vendors"))
+        end
+    end
+    Vtd = _gpu_adapter_matches(adapter, Vt) ? Vt : _gpu_adapter_adapt(adapter, Vt)
+    Vpd = _gpu_adapter_matches(adapter, Vp) ? Vp : _gpu_adapter_adapt(adapter, Vp)
+    return _gpu_adapter_analysis_sphtor(adapter, cfg, Vtd, Vpd; kwargs...)
+end
+
+function synthesis_sphtor(::GPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                           Tlm::AbstractMatrix; prototype=nothing, kwargs...)
+    selection = prototype
+    selection === nothing && on_device(Slm) isa GPU && (selection = Slm)
+    selection === nothing && on_device(Tlm) isa GPU && (selection = Tlm)
+    adapter = _gpu_adapter(selection; operation=:synthesis_sphtor)
+    for value in (Slm, Tlm)
+        if on_device(value) isa GPU && !_gpu_adapter_matches(adapter, value)
+            throw(ArgumentError("vector coefficients and GPU prototype use different vendors"))
+        end
+    end
+    Sd = _gpu_adapter_matches(adapter, Slm) ? Slm : _gpu_adapter_adapt(adapter, Slm)
+    Td = _gpu_adapter_matches(adapter, Tlm) ? Tlm : _gpu_adapter_adapt(adapter, Tlm)
+    return _gpu_adapter_synthesis_sphtor(adapter, cfg, Sd, Td; kwargs...)
+end
+
+"""
+    gpu_analysis_sphtor(cfg, Vt, Vp; device=GPU(), prototype=nothing)
+
+Compatibility wrapper for the historical host-returning GPU vector API.
+Ordinary `analysis_sphtor(GPU(), ...)` remains device-resident; this legacy
+entry point deliberately copies its two results back to CPU storage.
+"""
+function gpu_analysis_sphtor(cfg::SHTConfig, Vt::AbstractMatrix,
+                             Vp::AbstractMatrix;
+                             device::ComputeDevice=GPU(), prototype=nothing)
+    device isa GPU || throw(ArgumentError(
+        "gpu_analysis_sphtor is strict and requires GPU()",
+    ))
+    result = try
+        analysis_sphtor(device, cfg, Vt, Vp; prototype)
+    catch err
+        err isa BackendUnavailableError || rethrow()
+        throw(BackendUnavailableError(:gpu_analysis_sphtor, err.detail))
+    end
+    return to_device(CPU(), result[1]), to_device(CPU(), result[2])
+end
+
+"""
+    gpu_synthesis_sphtor(cfg, S, T; device=GPU(), real_output=true,
+                         prototype=nothing)
+
+Compatibility wrapper for the historical host-returning GPU vector API.
+"""
+function gpu_synthesis_sphtor(cfg::SHTConfig, S::AbstractMatrix,
+                              T::AbstractMatrix;
+                              device::ComputeDevice=GPU(),
+                              real_output::Bool=true, prototype=nothing)
+    device isa GPU || throw(ArgumentError(
+        "gpu_synthesis_sphtor is strict and requires GPU()",
+    ))
+    result = try
+        synthesis_sphtor(device, cfg, S, T; prototype, real_output)
+    catch err
+        err isa BackendUnavailableError || rethrow()
+        throw(BackendUnavailableError(:gpu_synthesis_sphtor, err.detail))
+    end
+    return to_device(CPU(), result[1]), to_device(CPU(), result[2])
 end
 
 # ============================================================================
@@ -286,6 +389,8 @@ function _adjoint_analysis_sphtor(cfg::SHTConfig, Slm̄::AbstractMatrix, Tlm̄::
     nlon = cfg.nlon
     lmax, mmax = cfg.lmax, cfg.mmax
     nlat_local = length(θ_globals)
+    Slm̄_int = _analysis_cotangent_to_canonical(Slm̄, cfg)
+    Tlm̄_int = _analysis_cotangent_to_canonical(Tlm̄, cfg)
 
     F̄θ = Matrix{ComplexF64}(undef, nlat_local, nlon)
     F̄φ = Matrix{ComplexF64}(undef, nlat_local, nlon)
@@ -308,7 +413,7 @@ function _adjoint_analysis_sphtor(cfg::SHTConfig, Slm̄::AbstractMatrix, Tlm̄::
                 Y_over_sθ = P_over_sinth[l+1]
                 ll1 = l * (l + 1)
                 term = 1.0im * m * Y_over_sθ
-                S_bar = Slm̄[l+1, col]; T_bar = Tlm̄[l+1, col]
+                S_bar = Slm̄_int[l+1, col]; T_bar = Tlm̄_int[l+1, col]
                 sθ += (dθY * S_bar + conj(term) * T_bar) / ll1
                 sφ += (-conj(term) * S_bar + dθY * T_bar) / ll1
             end
@@ -372,6 +477,7 @@ end
     nlat = cfg.nlat
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         NP = cfg.NP_tables[col]
         NdP = cfg.NdP_tables[col]
@@ -392,6 +498,7 @@ end
     thread_Pb = _ensure_otf_scratch!(cfg._otf_scratch_Pb, lmax + 1)  # lmax+2 for extended P̄ row
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         tid = Threads.threadid()
         P = thread_P[tid]; dP = thread_dP[tid]; Ps = thread_Ps[tid]; Pb = thread_Pb[tid]
@@ -433,6 +540,7 @@ end
     # output eltype, so AD types (e.g. ForwardDiff.Dual) still propagate.
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         Sacc = view(Slm, :, col)
         Tacc = view(Tlm, :, col)
@@ -468,6 +576,7 @@ end
     # pre-zeroed, one m per column → race-free, alloc-free, AD eltype preserved.
     @threads :static for idx in 1:length(m_order)
         m = m_order[idx]
+        m % cfg.mres == 0 || continue
         col = m + 1
         tid = Threads.threadid()
         Sacc = view(Slm, :, col)
@@ -497,6 +606,11 @@ function synthesis_sphtor_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::Abstrac
     return _synthesis_sphtor(cfg, Slm, Tlm, Val(false), Val(false))
 end
 
+function synthesis_sphtor_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                                Tlm::AbstractMatrix)
+    return synthesis_sphtor(CPU(), cfg, Slm, Tlm; real_output=false)
+end
+
 """
     analysis_sphtor_cplx(cfg, Vt, Vp) -> (Slm, Tlm)
 
@@ -506,6 +620,20 @@ function analysis_sphtor_cplx(cfg::SHTConfig, Vt::AbstractMatrix{<:Complex}, Vp:
     return analysis_sphtor(cfg, Vt, Vp)  # Same implementation works for complex
 end
 
+function analysis_sphtor_cplx(::CPU, cfg::SHTConfig,
+                               Vt::AbstractMatrix{<:Complex},
+                               Vp::AbstractMatrix{<:Complex})
+    return analysis_sphtor(CPU(), cfg, Vt, Vp)
+end
+
+analysis_sphtor_cplx(::GPU, cfg::SHTConfig, Vt::AbstractMatrix{<:Complex},
+                     Vp::AbstractMatrix{<:Complex}; prototype=nothing) =
+    analysis_sphtor(GPU(), cfg, Vt, Vp; prototype)
+
+synthesis_sphtor_cplx(::GPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                      Tlm::AbstractMatrix; prototype=nothing) =
+    synthesis_sphtor(GPU(), cfg, Slm, Tlm; prototype, real_output=false)
+
 """
     synthesis_sph(cfg, Slm; real_output=true) -> (Vt, Vp)
 
@@ -514,6 +642,18 @@ Transform only spheroidal component to spatial vector field (Tlm = 0).
 function synthesis_sph(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
     Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return synthesis_sphtor(cfg, Slm, Tlm_zero; real_output=real_output)
+end
+
+function synthesis_sph(::CPU, cfg::SHTConfig, Slm::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:synthesis_sph, Slm)
+    return synthesis_sph(cfg, Slm; kwargs...)
+end
+
+function synthesis_sph(::GPU, cfg::SHTConfig, Slm::AbstractMatrix;
+                       prototype=nothing, kwargs...)
+    zeroT = similar(Slm)
+    fill!(zeroT, zero(eltype(zeroT)))
+    return synthesis_sphtor(GPU(), cfg, Slm, zeroT; prototype, kwargs...)
 end
 
 """
@@ -527,6 +667,12 @@ function synthesis_sph_cplx(cfg::SHTConfig, Slm::AbstractMatrix)
     return _synthesis_sphtor(cfg, Slm, Tlm_zero, Val(false), Val(false))
 end
 
+synthesis_sph_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix) =
+    synthesis_sph(CPU(), cfg, Slm; real_output=false)
+synthesis_sph_cplx(::GPU, cfg::SHTConfig, Slm::AbstractMatrix;
+                   prototype=nothing) =
+    synthesis_sph(GPU(), cfg, Slm; prototype, real_output=false)
+
 """
     synthesis_tor(cfg, Tlm; real_output=true) -> (Vt, Vp)
 
@@ -535,6 +681,18 @@ Transform only toroidal component to spatial vector field (Slm = 0).
 function synthesis_tor(cfg::SHTConfig, Tlm::AbstractMatrix; real_output::Bool=true)
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return synthesis_sphtor(cfg, Slm_zero, Tlm; real_output=real_output)
+end
+
+function synthesis_tor(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix; kwargs...)
+    _require_cpu_storage(:synthesis_tor, Tlm)
+    return synthesis_tor(cfg, Tlm; kwargs...)
+end
+
+function synthesis_tor(::GPU, cfg::SHTConfig, Tlm::AbstractMatrix;
+                       prototype=nothing, kwargs...)
+    zeroS = similar(Tlm)
+    fill!(zeroS, zero(eltype(zeroS)))
+    return synthesis_sphtor(GPU(), cfg, zeroS, Tlm; prototype, kwargs...)
 end
 
 """
@@ -548,6 +706,12 @@ function synthesis_tor_cplx(cfg::SHTConfig, Tlm::AbstractMatrix)
     return _synthesis_sphtor(cfg, Slm_zero, Tlm, Val(false), Val(false))
 end
 
+synthesis_tor_cplx(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix) =
+    synthesis_tor(CPU(), cfg, Tlm; real_output=false)
+synthesis_tor_cplx(::GPU, cfg::SHTConfig, Tlm::AbstractMatrix;
+                   prototype=nothing) =
+    synthesis_tor(GPU(), cfg, Tlm; prototype, real_output=false)
+
 """
     divergence_from_spheroidal(cfg, Slm) -> Matrix
 
@@ -559,13 +723,21 @@ function divergence_from_spheroidal(cfg::SHTConfig, Slm::AbstractMatrix)
     return divergence_from_spheroidal!(cfg, δ, Slm)
 end
 
+divergence_from_spheroidal(::CPU, cfg::SHTConfig, Slm::AbstractMatrix) =
+    divergence_from_spheroidal(cfg, Slm)
+divergence_from_spheroidal!(::CPU, cfg::SHTConfig, δ::AbstractMatrix,
+                            Slm::AbstractMatrix) =
+    divergence_from_spheroidal!(cfg, δ, Slm)
+
 function divergence_from_spheroidal!(cfg::SHTConfig, δ::AbstractMatrix, Slm::AbstractMatrix)
     size(δ) == size(Slm) || throw(DimensionMismatch("divergence output dims"))
-    fill!(δ, zero(eltype(δ)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(Slm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = δ !== Slm && Base.mightalias(δ, Slm) ? copy(Slm) : Slm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
-        δ[row, col] = -(l * (l + 1)) * Slm[row, col]
+    @inbounds for m in 0:mmax, l in 0:lmax
+        δ[l + 1, m + 1] = m % cfg.mres == 0 && l >= max(1, m) ?
+            -(l * (l + 1)) * source[l + 1, m + 1] : zero(eltype(δ))
     end
     return δ
 end
@@ -580,14 +752,23 @@ function spheroidal_from_divergence(cfg::SHTConfig, δlm::AbstractMatrix)
     return spheroidal_from_divergence!(cfg, Slm, δlm)
 end
 
+spheroidal_from_divergence(::CPU, cfg::SHTConfig, δlm::AbstractMatrix) =
+    spheroidal_from_divergence(cfg, δlm)
+spheroidal_from_divergence!(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                            δlm::AbstractMatrix) =
+    spheroidal_from_divergence!(cfg, Slm, δlm)
+
 function spheroidal_from_divergence!(cfg::SHTConfig, Slm::AbstractMatrix, δlm::AbstractMatrix)
     size(Slm) == size(δlm) || throw(DimensionMismatch("spheroidal output dims"))
-    fill!(Slm, zero(eltype(Slm)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(δlm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = Slm !== δlm && Base.mightalias(Slm, δlm) ? copy(δlm) : δlm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
+    @inbounds for m in 0:mmax, l in 0:lmax
+        valid = m % cfg.mres == 0 && l >= max(1, m)
         ll1 = l * (l + 1)
-        Slm[row, col] = ll1 == 0 ? zero(eltype(Slm)) : -(δlm[row, col] / ll1)
+        Slm[l + 1, m + 1] = valid ? -(source[l + 1, m + 1] / ll1) :
+            zero(eltype(Slm))
     end
     return Slm
 end
@@ -602,13 +783,21 @@ function vorticity_from_toroidal(cfg::SHTConfig, Tlm::AbstractMatrix)
     return vorticity_from_toroidal!(cfg, ζ, Tlm)
 end
 
+vorticity_from_toroidal(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix) =
+    vorticity_from_toroidal(cfg, Tlm)
+vorticity_from_toroidal!(::CPU, cfg::SHTConfig, ζ::AbstractMatrix,
+                         Tlm::AbstractMatrix) =
+    vorticity_from_toroidal!(cfg, ζ, Tlm)
+
 function vorticity_from_toroidal!(cfg::SHTConfig, ζ::AbstractMatrix, Tlm::AbstractMatrix)
     size(ζ) == size(Tlm) || throw(DimensionMismatch("vorticity output dims"))
-    fill!(ζ, zero(eltype(ζ)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(Tlm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = ζ !== Tlm && Base.mightalias(ζ, Tlm) ? copy(Tlm) : Tlm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
-        ζ[row, col] = -(l * (l + 1)) * Tlm[row, col]
+    @inbounds for m in 0:mmax, l in 0:lmax
+        ζ[l + 1, m + 1] = m % cfg.mres == 0 && l >= max(1, m) ?
+            -(l * (l + 1)) * source[l + 1, m + 1] : zero(eltype(ζ))
     end
     return ζ
 end
@@ -623,34 +812,49 @@ function toroidal_from_vorticity(cfg::SHTConfig, ζlm::AbstractMatrix)
     return toroidal_from_vorticity!(cfg, Tlm, ζlm)
 end
 
+toroidal_from_vorticity(::CPU, cfg::SHTConfig, ζlm::AbstractMatrix) =
+    toroidal_from_vorticity(cfg, ζlm)
+toroidal_from_vorticity!(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix,
+                         ζlm::AbstractMatrix) =
+    toroidal_from_vorticity!(cfg, Tlm, ζlm)
+
 function toroidal_from_vorticity!(cfg::SHTConfig, Tlm::AbstractMatrix, ζlm::AbstractMatrix)
     size(Tlm) == size(ζlm) || throw(DimensionMismatch("toroidal output dims"))
-    fill!(Tlm, zero(eltype(Tlm)))
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    size(ζlm) == expected || throw(DimensionMismatch("spectral input dims"))
+    source = Tlm !== ζlm && Base.mightalias(Tlm, ζlm) ? copy(ζlm) : ζlm
     lmax, mmax = cfg.lmax, cfg.mmax
-    @inbounds for m in 0:mmax, l in max(1, m):lmax
-        row = l + 1; col = m + 1
+    @inbounds for m in 0:mmax, l in 0:lmax
+        valid = m % cfg.mres == 0 && l >= max(1, m)
         ll1 = l * (l + 1)
-        Tlm[row, col] = ll1 == 0 ? zero(eltype(Tlm)) : -(ζlm[row, col] / ll1)
+        Tlm[l + 1, m + 1] = valid ? -(source[l + 1, m + 1] / ll1) :
+            zero(eltype(Tlm))
     end
     return Tlm
 end
 
-Base.@constprop :aggressive function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+Base.@constprop :aggressive function synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     return _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(real_output))
 end
 
-function synthesis_sphtor_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int)
+function synthesis_sphtor_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer)
     # Dedicated complex helper avoids inference depending on a runtime keyword.
     return _synthesis_sphtor_l(cfg, Slm, Tlm, ltr, Val(false))
 end
 
-function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Int,
+synthesis_sphtor_l_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                         Tlm::AbstractMatrix, ltr::Integer) =
+    synthesis_sphtor_l(CPU(), cfg, Slm, Tlm, ltr; real_output=false)
+
+function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix, ltr::Integer,
                              ::Val{real_output}) where {real_output}
+    ltr = _validate_degree_limit(cfg, ltr)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Slm,1) == lmax+1 && size(Slm,2) == mmax+1 || throw(DimensionMismatch("Slm dims"))
     size(Tlm,1) == lmax+1 && size(Tlm,2) == mmax+1 || throw(DimensionMismatch("Tlm dims"))
 
-    Slm_int, Tlm_int = Slm, Tlm
+    Slm_int = _internal_coefficients(Slm, cfg)
+    Tlm_int = _internal_coefficients(Tlm, cfg)
 
     nlat, nlon = cfg.nlat, cfg.nlon
     CT = eltype(Slm_int)
@@ -687,7 +891,8 @@ function _synthesis_sphtor_l(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractM
     return Vt, Vp
 end
 
-function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Int)
+function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatrix, ltr::Integer)
+    ltr = _validate_degree_limit(cfg, ltr)
     nlat, nlon = cfg.nlat, cfg.nlon
     size(Vt,1) == nlat && size(Vt,2) == nlon || throw(DimensionMismatch("Vt dims"))
     size(Vp,1) == nlat && size(Vp,2) == nlon || throw(DimensionMismatch("Vp dims"))
@@ -701,8 +906,23 @@ function analysis_sphtor_l(cfg::SHTConfig, Vt::AbstractMatrix, Vp::AbstractMatri
     Tlm = zeros(CT, lmax + 1, mmax + 1)
     _analysis_sphtor_mloop!(Slm, Tlm, cfg, Fthetam, Fphim; ltr=ltr)
 
-    # Normalization conversion — must match analysis_sphtor behavior
+    _externalize_coefficients!(Slm, cfg)
+    _externalize_coefficients!(Tlm, cfg)
     return Slm, Tlm
+end
+
+function analysis_sphtor_l(::CPU, cfg::SHTConfig, Vt::AbstractMatrix,
+                            Vp::AbstractMatrix, ltr::Integer)
+    _require_cpu_storage(:analysis_sphtor_l, Vt)
+    _require_cpu_storage(:analysis_sphtor_l, Vp)
+    return analysis_sphtor_l(cfg, Vt, Vp, ltr)
+end
+
+function synthesis_sphtor_l(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                             Tlm::AbstractMatrix, ltr::Integer; kwargs...)
+    _require_cpu_storage(:synthesis_sphtor_l, Slm)
+    _require_cpu_storage(:synthesis_sphtor_l, Tlm)
+    return synthesis_sphtor_l(cfg, Slm, Tlm, ltr; kwargs...)
 end
 
 """
@@ -710,45 +930,71 @@ end
 
 Degree-limited spheroidal-only transform.
 """
-function synthesis_sph_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_sph_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     # Use a zero-view toroidal spectrum so the shared S/T implementation does
     # not pay for an all-zero dense allocation.
     Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr; real_output=real_output)
 end
 
-function synthesis_sph_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int)
+function synthesis_sph_l(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                         ltr::Integer; kwargs...)
+    _require_cpu_storage(:synthesis_sph_l, Slm)
+    return synthesis_sph_l(cfg, Slm, ltr; kwargs...)
+end
+
+function synthesis_sph_l_cplx(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Integer)
     Tlm_zero = _zero_spectral_matrix(eltype(Slm), cfg)
     return _synthesis_sphtor_l(cfg, Slm, Tlm_zero, ltr, Val(false))
 end
+
+synthesis_sph_l_cplx(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                      ltr::Integer) =
+    synthesis_sph_l(CPU(), cfg, Slm, ltr; real_output=false)
 
 """
     synthesis_tor_l(cfg, Tlm, ltr; real_output=true) -> (Vt, Vp)
 
 Degree-limited toroidal-only transform.
 """
-function synthesis_tor_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_tor_l(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     # Use a zero-view spheroidal spectrum so the shared S/T implementation
     # stays allocation-light.
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr; real_output=real_output)
 end
 
-function synthesis_tor_l_cplx(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Int)
+function synthesis_tor_l(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix,
+                         ltr::Integer; kwargs...)
+    _require_cpu_storage(:synthesis_tor_l, Tlm)
+    return synthesis_tor_l(cfg, Tlm, ltr; kwargs...)
+end
+
+function synthesis_tor_l_cplx(cfg::SHTConfig, Tlm::AbstractMatrix, ltr::Integer)
     Slm_zero = _zero_spectral_matrix(eltype(Tlm), cfg)
     return _synthesis_sphtor_l(cfg, Slm_zero, Tlm, ltr, Val(false))
 end
+
+synthesis_tor_l_cplx(::CPU, cfg::SHTConfig, Tlm::AbstractMatrix,
+                      ltr::Integer) =
+    synthesis_tor_l(CPU(), cfg, Tlm, ltr; real_output=false)
 
 """
     synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
 
 Mode-limited spheroidal-only synthesis wrapper.
 """
-function synthesis_sph_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_sph_ml(cfg::SHTConfig, im::Integer, Sl::AbstractVector{<:Complex}, ltr::Integer)
     # Mode-limited wrappers use zero-vector views for the missing component;
     # this avoids an O(ltr-im) allocation on repeated per-mode calls.
     Tl_zero = _zero_spectral_vector(eltype(Sl), length(Sl))
     return synthesis_sphtor_ml(cfg, im, Sl, Tl_zero, ltr)
+end
+
+function synthesis_sph_ml(::CPU, cfg::SHTConfig, im::Integer,
+                          Sl::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:synthesis_sph_ml, Sl)
+    return synthesis_sph_ml(cfg, im, Sl, ltr)
 end
 
 """
@@ -756,11 +1002,17 @@ end
 
 Mode-limited toroidal-only synthesis wrapper.
 """
-function synthesis_tor_ml(cfg::SHTConfig, im::Int, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_tor_ml(cfg::SHTConfig, im::Integer, Tl::AbstractVector{<:Complex}, ltr::Integer)
     # Mode-limited wrappers use zero-vector views for the missing component;
     # this avoids an O(ltr-im) allocation on repeated per-mode calls.
     Sl_zero = _zero_spectral_vector(eltype(Tl), length(Tl))
     return synthesis_sphtor_ml(cfg, im, Sl_zero, Tl, ltr)
+end
+
+function synthesis_tor_ml(::CPU, cfg::SHTConfig, im::Integer,
+                          Tl::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:synthesis_tor_ml, Tl)
+    return synthesis_tor_ml(cfg, im, Tl, ltr)
 end
 
 """
@@ -774,7 +1026,29 @@ the synthesis formulas:
     Vθ = ∂S/∂θ - (im/sinθ) * T
     Vφ = (im/sinθ) * S + ∂T/∂θ
 """
-function analysis_sphtor_ml(cfg::SHTConfig, mval::Int, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Int)
+@inline function _validate_stored_order(cfg::SHTConfig, stored_im::Integer,
+                                        ltr::Integer)
+    im_value, representable = _degree_limit_candidate(stored_im)
+    max_im = cfg.mmax ÷ cfg.mres
+    representable && 0 <= im_value <= max_im || throw(ArgumentError(
+        "im must be an Int-representable stored-order index satisfying 0 <= im <= $max_im",
+    ))
+    lcap = _validate_degree_limit(cfg, ltr)
+    physical_m = im_value * cfg.mres
+    lcap >= physical_m || throw(ArgumentError(
+        "ltr must satisfy ltr >= im*mres=$physical_m",
+    ))
+    return im_value, physical_m, lcap
+end
+
+@inline function _validate_vector_fixed_order(cfg::SHTConfig, stored_im::Integer,
+                                              ltr::Integer)
+    _, physical_m, lcap = _validate_stored_order(cfg, stored_im, ltr)
+    return physical_m, lcap
+end
+
+function analysis_sphtor_ml(cfg::SHTConfig, stored_im::Integer, Vt_m::AbstractVector{<:Complex}, Vp_m::AbstractVector{<:Complex}, ltr::Integer)
+    mval, ltr = _validate_vector_fixed_order(cfg, stored_im, ltr)
     nlat = cfg.nlat
     length(Vt_m) == nlat || throw(DimensionMismatch("Vt_m length must be nlat"))
     length(Vp_m) == nlat || throw(DimensionMismatch("Vp_m length must be nlat"))
@@ -822,7 +1096,17 @@ function analysis_sphtor_ml(cfg::SHTConfig, mval::Int, Vt_m::AbstractVector{<:Co
         end
     end
 
+    _convert_mode_norm!(Sl, Sl, cfg, mval, ltr; to_internal=false)
+    _convert_mode_norm!(Tl, Tl, cfg, mval, ltr; to_internal=false)
     return Sl, Tl
+end
+
+function analysis_sphtor_ml(::CPU, cfg::SHTConfig, stored_im::Integer,
+                            Vt::AbstractVector{<:Complex},
+                            Vp::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:analysis_sphtor_ml, Vt)
+    _require_cpu_storage(:analysis_sphtor_ml, Vp)
+    return analysis_sphtor_ml(cfg, stored_im, Vt, Vp, ltr)
 end
 
 """
@@ -836,12 +1120,16 @@ The order argument is named `mval`, NOT `im`: a binding called `im` shadows
 Julia's imaginary unit, and `1.0im` is juxtaposition (`1.0 * im`), so the
 coupling terms above silently became real. Do not rename it back.
 """
-function synthesis_sphtor_ml(cfg::SHTConfig, mval::Int, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_sphtor_ml(cfg::SHTConfig, stored_im::Integer, Sl::AbstractVector{<:Complex}, Tl::AbstractVector{<:Complex}, ltr::Integer)
+    mval, ltr = _validate_vector_fixed_order(cfg, stored_im, ltr)
     nlat = cfg.nlat
     expected_len = ltr - mval + 1
     length(Sl) == expected_len || throw(DimensionMismatch("Sl length mismatch"))
     length(Tl) == expected_len || throw(DimensionMismatch("Tl length mismatch"))
-    Sl_int = Sl; Tl_int = Tl
+    Sl_int = _uses_canonical_convention(cfg) ? Sl :
+             _convert_mode_norm!(similar(Sl), Sl, cfg, mval, ltr; to_internal=true)
+    Tl_int = _uses_canonical_convention(cfg) ? Tl :
+             _convert_mode_norm!(similar(Tl), Tl, cfg, mval, ltr; to_internal=true)
 
     CT = complex(float(promote_type(eltype(Sl), eltype(Tl))))  # AD/Float32-safe output eltype
     inv_scaleφ = phi_inv_scale(cfg)  # Match full transform normalization
@@ -890,6 +1178,14 @@ function synthesis_sphtor_ml(cfg::SHTConfig, mval::Int, Sl::AbstractVector{<:Com
     return Vt_m, Vp_m
 end
 
+function synthesis_sphtor_ml(::CPU, cfg::SHTConfig, stored_im::Integer,
+                             Sl::AbstractVector{<:Complex},
+                             Tl::AbstractVector{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:synthesis_sphtor_ml, Sl)
+    _require_cpu_storage(:synthesis_sphtor_ml, Tl)
+    return synthesis_sphtor_ml(cfg, stored_im, Sl, Tl, ltr)
+end
+
 """
     synthesis_grad(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=true)
 
@@ -899,20 +1195,31 @@ function synthesis_grad(cfg::SHTConfig, Slm::AbstractMatrix; real_output::Bool=t
     return synthesis_sph(cfg, Slm; real_output=real_output)
 end
 
+synthesis_grad(::CPU, cfg::SHTConfig, Slm::AbstractMatrix; kwargs...) =
+    synthesis_sph(CPU(), cfg, Slm; kwargs...)
+
 """
     synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
 
 Degree-limited gradient synthesis alias.
 """
-function synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Int; real_output::Bool=true)
+function synthesis_grad_l(cfg::SHTConfig, Slm::AbstractMatrix, ltr::Integer; real_output::Bool=true)
     return synthesis_sph_l(cfg, Slm, ltr; real_output=real_output)
 end
+
+synthesis_grad_l(::CPU, cfg::SHTConfig, Slm::AbstractMatrix,
+                 ltr::Integer; kwargs...) =
+    synthesis_sph_l(CPU(), cfg, Slm, ltr; kwargs...)
 
 """
     synthesis_grad_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
 
 Mode-limited gradient synthesis alias.
 """
-function synthesis_grad_ml(cfg::SHTConfig, im::Int, Sl::AbstractVector{<:Complex}, ltr::Int)
+function synthesis_grad_ml(cfg::SHTConfig, im::Integer, Sl::AbstractVector{<:Complex}, ltr::Integer)
     return synthesis_sph_ml(cfg, im, Sl, ltr)
 end
+
+synthesis_grad_ml(::CPU, cfg::SHTConfig, im::Integer,
+                  Sl::AbstractVector{<:Complex}, ltr::Integer) =
+    synthesis_sph_ml(CPU(), cfg, im, Sl, ltr)

@@ -11,8 +11,9 @@ In-place multiply by -l(l+1) for dense (l×m) coefficients.
 function dist_apply_laplacian!(cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix)
     lmax, mmax = cfg.lmax, cfg.mmax
     size(Alm,1)==lmax+1 && size(Alm,2)==mmax+1 || throw(DimensionMismatch("Alm dims"))
-    @inbounds for m in 0:mmax, l in m:lmax
-        Alm[l+1, m+1] *= -(l*(l+1))
+    @inbounds for m in 0:mmax, l in 0:lmax
+        Alm[l+1, m+1] = m % cfg.mres == 0 && l >= max(1, m) ?
+            -(l*(l+1)) * Alm[l+1, m+1] : zero(eltype(Alm))
     end
     return Alm
 end
@@ -74,6 +75,9 @@ function dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Al
     size(Alm,1)==lmax+1 && size(Alm,2)==mmax+1 || throw(DimensionMismatch("Alm dims"))
     size(Rlm,1)==lmax+1 && size(Rlm,2)==mmax+1 || throw(DimensionMismatch("Rlm dims"))
     length(mx) == 2*cfg.nlm || throw(DimensionMismatch("mx length must be 2*nlm=$(2*cfg.nlm)"))
+    Base.mightalias(Alm, Rlm) && throw(ArgumentError(
+        "dist_SH_mul_mx! input and output must not alias",
+    ))
     fill!(Rlm, zero(eltype(Rlm)))
     # Key insight: mx stores coefficients describing how (l,m) contributes to its neighbors.
     # For R_l^m = (Op * A)_lm, we need coefficients from neighbors that contribute TO (l,m):
@@ -102,4 +106,3 @@ function dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig, mx::AbstractVector{<:Real}, Al
     end
     return Rlm
 end
-

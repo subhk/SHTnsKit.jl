@@ -190,7 +190,8 @@ function SHTPlan(cfg::SHTConfig; use_rfft::Bool=false)
         irfft_plan = nothing
     end
 
-    # No normalization scratch: the package is orthonormal-only, so nothing converts.
+    # Convention conversion is fused into synthesis accumulation, so planned
+    # transforms remain allocation-free for every configured convention.
     return SHTPlan(cfg, P, dPdx, dPdtheta, P_over_sinth, Pb, G, Fθk, Fθk_r, real_scratch,
                    fft_plan, ifft_plan, rfft_plan, irfft_plan, use_rfft)
 end
@@ -259,7 +260,7 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
         end
 
         xv = cfg.x; wv = cfg.w  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             for i in 1:nlat
                 Plm_norm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m, plan.Pb)
@@ -283,8 +284,8 @@ function analysis_sphtor!(plan::SHTPlan, Slm_out::AbstractMatrix, Tlm_out::Abstr
         end
     end
     
-    # No conversion: the package is orthonormal-only, and the scalar plan
-    # methods match `analysis`/`synthesis` the same way.
+    _externalize_coefficients!(Slm_out, cfg)
+    _externalize_coefficients!(Tlm_out, cfg)
     return Slm_out, Tlm_out
 end
 
@@ -305,8 +306,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
     
-    # No conversion — orthonormal-only; see `analysis_sphtor!`.
-    Slm_int = Slm; Tlm_int = Tlm
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     
     # Two sibling passes: build Vt's Fourier buffer then Vp's, each with its
     # own m-loop formula. rfft path writes to the half-spectrum buffer and uses
@@ -325,7 +325,7 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
         end
 
         xv = cfg.x  # hoist field reads out of the i/l loops (cfg is mutable, so not auto-hoisted)
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             for i in 1:nlat
                 Plm_norm_dPdtheta_over_sinth_row!(plan.P, plan.dPdtheta, plan.P_over_sinth, xv[i], lmax, m, plan.Pb)
@@ -333,7 +333,8 @@ function synthesis_sphtor!(plan::SHTPlan, Vt_out::AbstractMatrix, Vp_out::Abstra
                 @inbounds for l in max(1,m):lmax
                     dθY = plan.dPdtheta[l+1]       # already orthonormal-normalized
                     Y_over_sθ = plan.P_over_sinth[l+1]
-                    Sl = Slm_int[l+1, col]; Tl = Tlm_int[l+1, col]
+                    Sl = _canonical_coefficient(Slm, scale_matrix, l, col)
+                    Tl = _canonical_coefficient(Tlm, scale_matrix, l, col)
                     if pass == 1
                         # Vθ = ∂S/∂θ - (im/sinθ) * T
                         g += dθY * Sl - 1.0im * m * Y_over_sθ * Tl
@@ -407,16 +408,20 @@ end
 In-place forward scalar SHT writing coefficients into `alm_out`.
 """
 function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
+    _require_cpu_storage(:analysis!, alm_out)
+    _require_cpu_storage(:analysis!, f)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
     size(f,1)==nlat || throw(DimensionMismatch("f first dim must be nlat"))
     size(f,2)==nlon || throw(DimensionMismatch("f second dim must be nlon"))
     size(alm_out,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm_out,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
+    eltype(alm_out) <: Complex || throw(ArgumentError(
+        "analysis! requires complex coefficient output storage",
+    ))
 
     lmax, mmax = cfg.lmax, cfg.mmax
     scaleφ = cfg.cphi
-    fill!(alm_out, zero(eltype(alm_out)))
 
     if plan.use_rfft
         eltype(f) <: Real || throw(ArgumentError("use_rfft plan requires real-valued f"))
@@ -425,7 +430,10 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
         end
         # Half-spectrum FFT — bins 0..mmax match full-FFT values for real input.
         mul!(plan.Fθk_r, plan.rfft_plan, plan.real_scratch)
-        for m in 0:mmax
+        # Delay output mutation until the complete input has reached plan-owned
+        # scratch. This keeps legal overlapping views alias-safe.
+        fill!(alm_out, zero(eltype(alm_out)))
+        for m in 0:cfg.mres:mmax
             col = m + 1
             @inbounds for i in 1:nlat
                 _scalar_analysis_kernel_otf!(alm_out, cfg, plan.Fθk_r, plan.P, i, col, m, lmax, scaleφ)
@@ -436,7 +444,8 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
             plan.Fθk[i,j] = f[i,j]
         end
         plan.fft_plan * plan.Fθk
-        for m in 0:mmax
+        fill!(alm_out, zero(eltype(alm_out)))
+        for m in 0:cfg.mres:mmax
             col = m + 1
             @inbounds for i in 1:nlat
                 _scalar_analysis_kernel_otf!(alm_out, cfg, plan.Fθk, plan.P, i, col, m, lmax, scaleφ)
@@ -444,15 +453,7 @@ function analysis!(plan::SHTPlan, alm_out::AbstractMatrix, f::AbstractMatrix)
         end
     end
 
-    # NO normalization conversion: the scalar `SHTPlan` is a drop-in accelerator
-    # for `analysis`/`synthesis`, which are orthonormal-only by documented
-    # contract, so it must return exactly what they return. It previously
-    # converted to cfg's convention, which meant swapping the plan in silently
-    # changed the coefficients — plan∘plan and dense∘dense each round-tripped,
-    # but mixing them (e.g. `synthesis(cfg, analysis!(plan, alm, f))`) was off by
-    # M[l,m] plus a sign on odd m. The sphtor plan methods above do not convert
-    # either, for the same reason: their non-plan twins do not.
-    return alm_out
+    return _externalize_coefficients!(alm_out, cfg)
 end
 
 """
@@ -462,6 +463,8 @@ In-place inverse scalar SHT writing spatial field into `f_out`.
 Streams m→k directly without building a (θ×m) intermediate.
 """
 function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; real_output::Bool=true)
+    _require_cpu_storage(:synthesis!, f_out)
+    _require_cpu_storage(:synthesis!, alm)
     cfg = plan.cfg
     nlat, nlon = cfg.nlat, cfg.nlon
 
@@ -469,10 +472,11 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     size(f_out,2)==nlon || throw(DimensionMismatch("f_out second dim must be nlon"))
     size(alm,1)==cfg.lmax+1 || throw(DimensionMismatch("alm rows must be lmax+1"))
     size(alm,2)==cfg.mmax+1 || throw(DimensionMismatch("alm cols must be mmax+1"))
+    !real_output && eltype(f_out) <: Real && throw(ArgumentError(
+        "synthesis! with real_output=false requires complex output storage",
+    ))
 
-    # NO normalization conversion — see `analysis!(::SHTPlan, …)` above: this
-    # mirrors the orthonormal-only `synthesis`, not the converting sphtor plan.
-    alm_int = alm
+    scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
 
     lmax, mmax = cfg.lmax, cfg.mmax
     inv_scaleφ = phi_inv_scale(cfg)
@@ -483,10 +487,11 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         fill!(plan.Fθk_r, zero(eltype(plan.Fθk_r)))
         # Fill only nonnegative m bins. Unlike the complex path below, no
         # Hermitian mirror is written because irfft_plan reconstructs it.
-        for m in 0:mmax
+        for m in 0:cfg.mres:mmax
             col = m + 1
             @inbounds for i in 1:nlat
-                plan.Fθk_r[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(cfg, alm_int, plan.P, i, col, m, lmax)
+                plan.Fθk_r[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(
+                    cfg, alm, plan.P, i, col, m, lmax, scale_matrix)
             end
         end
         # No Hermitian fill — irfft reconstructs implicitly.
@@ -498,10 +503,11 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
     end
 
     fill!(plan.Fθk, zero(eltype(plan.Fθk)))
-    for m in 0:mmax
+    for m in 0:cfg.mres:mmax
         col = m + 1
         @inbounds for i in 1:nlat
-            plan.Fθk[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(cfg, alm_int, plan.P, i, col, m, lmax)
+            plan.Fθk[i, col] = inv_scaleφ * _scalar_synthesis_kernel_otf(
+                cfg, alm, plan.P, i, col, m, lmax, scale_matrix)
         end
         if real_output && m > 0
             conj_index = nlon - m + 1
@@ -522,4 +528,18 @@ function synthesis!(plan::SHTPlan, f_out::AbstractMatrix, alm::AbstractMatrix; r
         end
     end
     return f_out
+end
+
+function analysis!(::CPU, plan::SHTPlan, alm_out::AbstractMatrix,
+                   f::AbstractMatrix)
+    _require_cpu_storage(:analysis!, alm_out)
+    _require_cpu_storage(:analysis!, f)
+    return analysis!(plan, alm_out, f)
+end
+
+function synthesis!(::CPU, plan::SHTPlan, f_out::AbstractMatrix,
+                    alm::AbstractMatrix; real_output::Bool=true)
+    _require_cpu_storage(:synthesis!, f_out)
+    _require_cpu_storage(:synthesis!, alm)
+    return synthesis!(plan, f_out, alm; real_output)
 end

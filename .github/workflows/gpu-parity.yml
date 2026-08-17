@@ -1,0 +1,168 @@
+name: SHTns 3.7 GPU Parity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+jobs:
+  cuda-parity:
+    name: CUDA single-GPU parity
+    runs-on: [self-hosted, linux, x64, cuda]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Instantiate CUDA parity environment
+        run: julia --project=test/gpu/cuda -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Require CUDA hardware and run parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          {
+            julia --project=test/gpu/cuda -e '
+              using CUDA
+              CUDA.functional() || error("CUDA.functional() is false on a CUDA-labelled runner")
+              devices = collect(CUDA.devices())
+              length(devices) >= 1 || error("CUDA-labelled runner has no visible GPU")
+            '
+            julia --project=test/gpu/cuda test/gpu/cuda/runtests.jl
+          } 2>&1 | tee logs/cuda-parity.log
+      - name: Archive CUDA parity log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-parity-log
+          path: logs/cuda-parity.log
+
+  amdgpu-parity:
+    name: AMDGPU single-GPU parity
+    runs-on: [self-hosted, linux, x64, amdgpu]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Instantiate AMDGPU parity environment
+        run: julia --project=test/gpu/amdgpu -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Require AMDGPU hardware and run parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          {
+            julia --project=test/gpu/amdgpu -e '
+              using AMDGPU
+              AMDGPU.functional() || error("AMDGPU.functional() is false on an AMDGPU-labelled runner")
+              AMDGPU.functional(:rocfft) || error("rocFFT is unavailable on an AMDGPU-labelled runner")
+              devices = collect(AMDGPU.devices())
+              length(devices) >= 1 || error("AMDGPU-labelled runner has no visible GPU")
+            '
+            julia --project=test/gpu/amdgpu test/gpu/amdgpu/runtests.jl
+          } 2>&1 | tee logs/amdgpu-parity.log
+      - name: Archive AMDGPU parity log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amdgpu-parity-log
+          path: logs/amdgpu-parity.log
+
+  mpi-cuda-parity:
+    name: MPI/CUDA two-rank parity
+    runs-on: [self-hosted, linux, x64, cuda]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Instantiate CUDA MPI parity environment
+        run: julia --project=test/gpu/cuda -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Require two CUDA devices/ranks and run parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          {
+            julia --project=test/gpu/cuda -e '
+              using MPI
+              preflight = """
+              using MPI, CUDA
+              MPI.Init()
+              MPI.Comm_size(MPI.COMM_WORLD) == 2 || error("MPI/CUDA parity requires exactly two ranks")
+              CUDA.functional() || error("CUDA.functional() is false on a CUDA-labelled runner")
+              devices = collect(CUDA.devices())
+              length(devices) >= 2 || error("MPI/CUDA parity requires two visible GPUs")
+              CUDA.device!(devices[MPI.Comm_rank(MPI.COMM_WORLD) + 1])
+              MPI.Barrier(MPI.COMM_WORLD)
+              """
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/cuda -e $preflight`)
+            '
+            julia --project=test/gpu/cuda -e '
+              using MPI
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/cuda test/gpu/cuda/mpi_runtests.jl`)
+            '
+          } 2>&1 | tee logs/mpi-cuda-parity.log
+      - name: Archive MPI/CUDA parity log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpi-cuda-parity-log
+          path: logs/mpi-cuda-parity.log
+
+  mpi-amdgpu-parity:
+    name: MPI/AMDGPU two-rank parity
+    runs-on: [self-hosted, linux, x64, amdgpu]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Instantiate AMDGPU MPI parity environment
+        run: julia --project=test/gpu/amdgpu -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Require two AMDGPU devices/ranks and run parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          {
+            julia --project=test/gpu/amdgpu -e '
+              using MPI
+              preflight = """
+              using MPI, AMDGPU
+              MPI.Init()
+              MPI.Comm_size(MPI.COMM_WORLD) == 2 || error("MPI/AMDGPU parity requires exactly two ranks")
+              AMDGPU.functional() || error("AMDGPU.functional() is false on an AMDGPU-labelled runner")
+              AMDGPU.functional(:rocfft) || error("rocFFT is unavailable on an AMDGPU-labelled runner")
+              devices = collect(AMDGPU.devices())
+              length(devices) >= 2 || error("MPI/AMDGPU parity requires two visible GPUs")
+              AMDGPU.device!(devices[MPI.Comm_rank(MPI.COMM_WORLD) + 1])
+              MPI.Barrier(MPI.COMM_WORLD)
+              """
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/amdgpu -e $preflight`)
+            '
+            julia --project=test/gpu/amdgpu -e '
+              using MPI
+              run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=test/gpu/amdgpu test/gpu/amdgpu/mpi_runtests.jl`)
+            '
+          } 2>&1 | tee logs/mpi-amdgpu-parity.log
+      - name: Archive MPI/AMDGPU parity log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpi-amdgpu-parity-log
+          path: logs/mpi-amdgpu-parity.log

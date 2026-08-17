@@ -36,16 +36,40 @@ using PencilArrays: PencilArray
 using SHTnsKit
 using FFTW
 
-# ----- PencilArrays compat ---------------------------------------------------
+# Distributed reverse rules in this extension use CPU FFTW/Legendre adjoints.
+# Runtime storage classification accepts CPU wrappers (views, shared arrays,
+# and custom host arrays) while preventing a vendor PencilArray from reaching
+# an implicit host conversion. GPU-backed distributed AD requires a
+# vendor-native compound rule; until one is available, fail at the storage
+# boundary before running the forward transform.
+
+@inline function _require_host_pencil(operation::Symbol, value::PencilArray)
+    SHTnsKit.on_device(parent(value)) isa SHTnsKit.CPU && return value
+    throw(SHTnsKit.BackendUnavailableError(
+        operation,
+        "distributed reverse-mode AD for GPU-backed PencilArray storage requires a vendor-native compound rule",
+    ))
+end
+
+@inline function _materialize_host_coefficient(operation::Symbol, value, cfg)
+    value isa ChainRulesCore.AbstractZero &&
+        return zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+    SHTnsKit.on_device(value) isa SHTnsKit.CPU || throw(
+        SHTnsKit.BackendUnavailableError(
+            operation,
+            "distributed reverse-mode AD coefficient cotangents must remain on the CPU for a host-backed PencilArray",
+        ),
+    )
+    return ComplexF64.(value)
+end
+
+# ----- PencilArrays helpers -------------------------------------------------
 # `communicator` and `globalindices` are internal helpers of the sibling
 # SHTnsKitParallelExt module and are NOT exported by PencilArrays (verified
 # across 0.19.8–0.19.11). This is a SEPARATE extension module, so without local
 # definitions every rrule below throws `UndefVarError` the moment it fires.
-# These mirror the primary (v0.19+) resolution paths used by the main ext.
-@inline function communicator(A)
-    hasmethod(PencilArrays.get_comm, (typeof(A),)) && return PencilArrays.get_comm(A)
-    return PencilArrays.get_comm(PencilArrays.pencil(A))
-end
+# These mirror the primary 0.19 API used by the main extension.
+@inline communicator(A) = PencilArrays.get_comm(A)
 
 @inline globalindices(A, dim) = PencilArrays.range_local(PencilArrays.pencil(A))[dim]
 
@@ -89,6 +113,7 @@ end
 function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis),
                               cfg::SHTnsKit.SHTConfig, fθφ::PencilArray;
                               kwargs...)
+    _require_host_pencil(:dist_analysis_pullback, fθφ)
     y = SHTnsKit.dist_analysis(cfg, fθφ; kwargs...)
     θ_globals = collect(globalindices(fθφ, 1))
     φ_globals = collect(globalindices(fθφ, 2))
@@ -114,6 +139,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis),
                               prototype_θφ::PencilArray,
                               real_output::Bool=true,
                               use_rfft::Bool=false)
+    _require_host_pencil(:dist_synthesis_pullback, prototype_θφ)
     y = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ, real_output, use_rfft)
     comm = communicator(prototype_θφ)
     θ_globals = collect(globalindices(prototype_θφ, 1))
@@ -157,6 +183,8 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
                               cfg::SHTnsKit.SHTConfig,
                               Vtθφ::PencilArray, Vpθφ::PencilArray;
                               kwargs...)
+    _require_host_pencil(:dist_analysis_sphtor_pullback, Vtθφ)
+    _require_host_pencil(:dist_analysis_sphtor_pullback, Vpθφ)
     y = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; kwargs...)
     θ_globals = collect(globalindices(Vtθφ, 1))
     φ_globals = collect(globalindices(Vtθφ, 2))
@@ -165,16 +193,15 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_analysis_sphtor),
 
     function dist_analysis_sphtor_pullback(ȳ)
         ȳ = ChainRulesCore.unthunk(ȳ)
-        # unthunk EACH component — a Tuple/Tangent of Thunks would otherwise reach
-        # Matrix{ComplexF64}(::Thunk) below and error (matches the synthesis twin).
+        # Unthunk each component and materialise only after the host-storage
+        # guard. This preserves CPU AD without making a hidden vendor→host copy.
         Slm̄, Tlm̄ = ChainRulesCore.unthunk(ȳ[1]), ChainRulesCore.unthunk(ȳ[2])
-        # A loss consuming only one output leaves the other a ZeroTangent, and
-        # `Matrix{ComplexF64}(::ZeroTangent)` is a MethodError. Same treatment the
-        # serial sphtor rrules got.
-        _mz(A) = A isa ChainRulesCore.AbstractZero ?
-                 zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1) : Matrix{ComplexF64}(A)
-        S̄in = _mz(Slm̄)
-        T̄in = _mz(Tlm̄)
+        S̄in = _materialize_host_coefficient(
+            :dist_analysis_sphtor_pullback, Slm̄, cfg,
+        )
+        T̄in = _materialize_host_coefficient(
+            :dist_analysis_sphtor_pullback, Tlm̄, cfg,
+        )
         V̄t_parent, V̄p_parent = SHTnsKit._adjoint_analysis_sphtor(
             cfg, S̄in, T̄in;
             θ_globals=θ_globals, φ_window=φ_window)
@@ -195,6 +222,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.dist_synthesis_sphtor),
                               prototype_θφ::PencilArray,
                               real_output::Bool=true,
                               use_rfft::Bool=false)
+    _require_host_pencil(:dist_synthesis_sphtor_pullback, prototype_θφ)
     y = SHTnsKit.dist_synthesis_sphtor(cfg, Slm, Tlm;
                                         prototype_θφ=prototype_θφ,
                                         real_output=real_output,

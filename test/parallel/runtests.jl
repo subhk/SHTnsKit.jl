@@ -21,6 +21,7 @@
 #   mpiexec -n 2 julia --project test/parallel/test_disttranspose_dealiased.jl
 #   mpiexec -n 2 julia --project test/parallel/test_dist_plan_alloc.jl
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_audit_fixes.jl
+#   mpiexec -n 1 julia --project test/parallel/test_parallel_ad_storage.jl
 
 using Test
 
@@ -30,9 +31,11 @@ using Test
     include("test_qst_parametric.jl")
     include("test_packed_storage.jl")
     include("test_threading.jl")
+    include("test_parallel_ad_storage.jl")
 end
 
-# Note: MPI tests are not included here as they require mpiexec to run.
+# Multi-rank MPI tests are not included here; the single-rank ParallelAD
+# storage-boundary regression above is intentionally part of Pkg.test().
 # Run them separately with:
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_comprehensive.jl
 #   mpiexec -n 4 julia --project test/parallel/test_mpi_extended.jl

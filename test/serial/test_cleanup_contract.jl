@@ -1,0 +1,49 @@
+using Test
+using SHTnsKit
+
+@testset "Cleanup contract" begin
+    @test CPU() isa ComputeDevice
+    @test GPU() isa ComputeDevice
+    @test all(isdefined(SHTnsKit, name) for name in
+              (:get_device, :set_device!, :to_device, :on_device))
+
+    removed = (
+        :SHTBackend,
+        :SHTDevice,
+        :CPU_DEVICE,
+        :CUDA_DEVICE,
+        :set_backend!,
+        :current_backend,
+        :use_gpu,
+        :with_backend,
+        :reset_backend!,
+        :select_compute_device,
+        :device_transfer_arrays,
+        :dispatch_to_backend,
+        Symbol("@dispatch_backend"),
+        :device_info,
+        :ensure_backend_initialized,
+        :create_gauss_config_gpu,
+        :set_config_device!,
+        :get_config_device,
+        :is_gpu_config,
+        :MultiGPUConfig,
+        :create_multi_gpu_config,
+        :multi_gpu_analysis,
+        :multi_gpu_synthesis,
+        :multi_gpu_analysis_streaming,
+        :multi_gpu_synthesis_streaming,
+        :estimate_streaming_chunks,
+        :shtns_init,
+        :shtns_create,
+        :shtns_set_grid,
+        :shtns_malloc,
+        :SHT_GAUSS,
+        :SHT_ALLOW_GPU,
+    )
+    @test all(name -> !isdefined(SHTnsKit, name), removed)
+
+    cfg = create_gauss_config(3, 4; nlon=7)
+    @test !hasproperty(cfg, :compute_device)
+    @test !hasproperty(cfg, :device_preference)
+end

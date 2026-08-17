@@ -35,9 +35,16 @@ using SHTnsKit
 
         @test cfg2.use_plm_tables == true
         @test length(cfg2.plm_tables) == length(cfg.plm_tables)
+        @test cfg2.plm_tables === cfg2.NP_tables
+        @test cfg2.dplm_tables === cfg2.NdP_tables
+        @test cfg2.plm_tables !== cfg.plm_tables
+        @test cfg2.dplm_tables !== cfg.dplm_tables
+        @test cfg2.plm_tables[1] !== cfg.plm_tables[1]
+        @test cfg2.dplm_tables[1] !== cfg.dplm_tables[1]
         # Mutate copy's tables
         cfg2.plm_tables[1][1, 1] = 7.5
         @test cfg.plm_tables[1][1, 1] != 7.5
+        @test cfg2.NP_tables[1][1, 1] == 7.5
     end
 
     @testset "south_pole_first flag on copy independent of original" begin

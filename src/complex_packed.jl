@@ -88,14 +88,21 @@ end
 Synthesize complex spatial field from packed complex coefficients (LM_cplx order).
 Returns an `nlat × nlon` complex array.
 """
-function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
+@inline function _complex_packed_lcap(cfg::SHTConfig, ltr::Integer)
+    return _validate_degree_limit(cfg, ltr)
+end
+
+function _synthesis_packed_cplx(cfg::SHTConfig,
+                                alm_packed::AbstractVector{<:Complex},
+                                lcap::Int)
     mres = cfg.mres
     mres == 1 || throw(ArgumentError("LM_cplx layout only defined for mres==1"))
     expected = nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     length(alm_packed) == expected || throw(DimensionMismatch("alm length $(length(alm_packed)) != expected $(expected)"))
+    alm_int = _internal_coefficients(alm_packed, cfg)
 
     nlat, nlon = cfg.nlat, cfg.nlon
-    CT = eltype(alm_packed)
+    CT = eltype(alm_int)
     Fφ = Matrix{CT}(undef, nlat, nlon)
     fill!(Fφ, zero(CT))
 
@@ -111,18 +118,18 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     # Loop over |m| once: P̄_l^{|m|}, the CS-phase factor ((-1)^m == (-1)^{-m}) and
     # the norm scale all depend only on |m|, so the +m and -m Fourier bins share
     # the same Legendre row — compute it once instead of twice.
-    for am in 0:mmax
+    for am in 0:min(mmax, lcap)
         jp = am + 1                     # DFT bin for +am
         jn = nlon - am + 1              # DFT bin for -am ((j-1) ≡ -am mod nlon)
         for i in 1:nlat
             Plm_norm_row!(P, xv[i], lmax, am)
             gp = zero(CT); gn = zero(CT)
-            @inbounds for l in am:lmax
+            @inbounds for l in am:lcap
                 Pl = P[l+1]
-                ap = alm_packed[LM_cplx_index(lmax, mmax, l, am) + 1]
+                ap = alm_int[LM_cplx_index(lmax, mmax, l, am) + 1]
                 gp += Pl * ap
                 if am > 0
-                    an = alm_packed[LM_cplx_index(lmax, mmax, l, -am) + 1]
+                    an = alm_int[LM_cplx_index(lmax, mmax, l, -am) + 1]
                     gn += Pl * an
                 end
             end
@@ -135,13 +142,30 @@ function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Comp
     return z
 end
 
+function synthesis_packed_cplx(cfg::SHTConfig, alm_packed::AbstractVector{<:Complex})
+    return _synthesis_packed_cplx(cfg, alm_packed, cfg.lmax)
+end
+
+"""
+    synthesis_packed_cplx_l(cfg, alm_packed, ltr)
+
+Synthesize a complex spatial field from the LM_cplx coefficients with
+degrees `l > ltr` ignored. The input retains the full packed storage shape.
+"""
+function synthesis_packed_cplx_l(cfg::SHTConfig,
+                                 alm_packed::AbstractVector{<:Complex},
+                                 ltr::Integer)
+    return _synthesis_packed_cplx(cfg, alm_packed, _complex_packed_lcap(cfg, ltr))
+end
+
 """
     analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex}) -> Vector{ComplexF64}
 
 Analyze complex spatial field into packed complex coefficients (LM_cplx order).
 Input `z` must be `nlat × nlon` complex.
 """
-function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
+function _analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex},
+                               lcap::Int)
     size(z,1) == cfg.nlat || throw(DimensionMismatch("z first dim must be nlat"))
     size(z,2) == cfg.nlon || throw(DimensionMismatch("z second dim must be nlon"))
     mres = cfg.mres
@@ -162,7 +186,7 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
     # Negative modes live at DFT column nlon+m+1. Loop over |m| once — P̄_l^{|m|},
     # the CS-phase factor and the norm scale depend only on |m| — so the +m and
     # -m columns share one Legendre row instead of recomputing it twice.
-    for am in 0:mmax
+    for am in 0:min(mmax, lcap)
         colp = am + 1
         coln = cfg.nlon - am + 1
         for i in 1:cfg.nlat
@@ -170,7 +194,7 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
             wi = wv[i]
             Fip = Fφ[i, colp]
             Fin = am > 0 ? Fφ[i, coln] : zero(eltype(Fφ))
-            @inbounds for l in am:lmax
+            @inbounds for l in am:lcap
                 base = (wi * P[l+1]) * scaleφ
                 ap = base * Fip
                 alm[LM_cplx_index(lmax, mmax, l, am) + 1] += ap
@@ -181,38 +205,95 @@ function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
             end
         end
     end
-    return alm
+    return _externalize_coefficients!(alm, cfg)
+end
+
+
+function analysis_packed_cplx(cfg::SHTConfig, z::AbstractMatrix{<:Complex})
+    return _analysis_packed_cplx(cfg, z, cfg.lmax)
 end
 
 """
-    synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real) -> ComplexF64
+    analysis_packed_cplx_l(cfg, z, ltr)
+
+Analyze a complex spatial field into full LM_cplx storage while computing only
+degrees `l ≤ ltr`; entries above the limit are zero.
+"""
+function analysis_packed_cplx_l(cfg::SHTConfig, z::AbstractMatrix{<:Complex},
+                                ltr::Integer)
+    return _analysis_packed_cplx(cfg, z, _complex_packed_lcap(cfg, ltr))
+end
+
+function analysis_packed_cplx(::CPU, cfg::SHTConfig, field::AbstractMatrix{<:Complex})
+    _require_cpu_storage(:analysis_packed_cplx, field)
+    return analysis_packed_cplx(cfg, field)
+end
+function synthesis_packed_cplx(::CPU, cfg::SHTConfig,
+                               coefficients::AbstractVector{<:Complex})
+    _require_cpu_storage(:synthesis_packed_cplx, coefficients)
+    return synthesis_packed_cplx(cfg, coefficients)
+end
+function analysis_packed_cplx_l(::CPU, cfg::SHTConfig,
+                                field::AbstractMatrix{<:Complex}, ltr::Integer)
+    _require_cpu_storage(:analysis_packed_cplx_l, field)
+    return analysis_packed_cplx_l(cfg, field, ltr)
+end
+function synthesis_packed_cplx_l(::CPU, cfg::SHTConfig,
+                                 coefficients::AbstractVector{<:Complex},
+                                 ltr::Integer)
+    _require_cpu_storage(:synthesis_packed_cplx_l, coefficients)
+    return synthesis_packed_cplx_l(cfg, coefficients, ltr)
+end
+
+"""
+    synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real) -> Complex
 
 Evaluate a complex field represented by packed `alm` at a single point.
 """
 function synthesis_point_cplx(cfg::SHTConfig, alm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    on_device(alm) isa CPU || throw(ArgumentError(
+        "synthesis_point_cplx with GPU storage requires GPU() dispatch",
+    ))
     expected = nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     length(alm) == expected || throw(DimensionMismatch("alm length mismatch"))
-    x = float(cost)
+    cfg.mres == 1 || throw(ArgumentError("synthesis_point_cplx supports mres==1 only; got mres=$(cfg.mres)"))
+    _validate_local_coordinates(cost, phi, :synthesis_point_cplx)
+    alm_int = _internal_coefficients(alm, cfg)
+    CT = eltype(alm_int)
+    RT = typeof(real(zero(CT)))
+    PT = _local_basis_type(RT, cost, phi)
+    _, ACT = _local_accumulator_types(CT, PT)
+    x = convert(PT, cost)
+    ph = convert(PT, phi)
     lmax, mmax = cfg.lmax, cfg.mmax
-    CT = eltype(alm)
-    P = Vector{Float64}(undef, lmax + 1)
-    acc = zero(CT)
+    P = Vector{PT}(undef, lmax + 1)
+    acc = zero(ACT)
     # Loop over |m| once (P̄_l^{|m|}, CS-phase and norm scale depend only on |m|)
     # and accumulate the +m and -m contributions from the shared Legendre row.
     for am in 0:mmax
         Plm_norm_row!(P, x, lmax, am)
-        gp = zero(CT); gn = zero(CT)
+        gp = zero(ACT); gn = zero(ACT)
         @inbounds for l in am:lmax
             Pl = P[l+1]
-            ap = alm[LM_cplx_index(lmax, mmax, l, am) + 1]
+            ap = alm_int[LM_cplx_index(lmax, mmax, l, am) + 1]
             gp += Pl * ap
             if am > 0
-                an = alm[LM_cplx_index(lmax, mmax, l, -am) + 1]
+                an = alm_int[LM_cplx_index(lmax, mmax, l, -am) + 1]
                 gn += Pl * an
             end
         end
-        acc += gp * cis(am * phi)
-        am > 0 && (acc += gn * cis(-am * phi))
+        acc += gp * cis(convert(PT, am) * ph)
+        am > 0 && (acc += gn * cis(-convert(PT, am) * ph))
     end
     return acc
 end
+
+
+function synthesis_point_cplx(::CPU, cfg::SHTConfig,
+                              alm::AbstractVector{<:Complex}, cost::Real, phi::Real)
+    _require_cpu_storage(:synthesis_point_cplx, alm)
+    return synthesis_point_cplx(cfg, alm, cost, phi)
+end
+
+synthesis_point_cplx(::GPU, ::SHTConfig, ::AbstractVector{<:Complex}, ::Real, ::Real) =
+    throw(ArgumentError("synthesis_point_cplx(GPU(), ...) requires one supported GPU vendor's storage"))

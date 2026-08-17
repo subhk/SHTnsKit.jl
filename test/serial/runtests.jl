@@ -4,15 +4,24 @@
 using Test
 
 @testset "SHTnsKit Serial Tests" begin
+    include("test_baseline_compatibility.jl")
+    include("test_final_parity_gate.jl")
+    include("test_shtns37_contract.jl")
+    include(joinpath(@__DIR__, "..", "parity", "shtns37_fixtures.jl"))
+    test_shtns37_fixtures_cpu()
     include("test_configuration.jl")
+    include("test_grid_quadrature_parity.jl")
     include("test_indexing.jl")
     include("test_layout.jl")
     include("test_normalization.jl")
+    include("test_convention_parity.jl")
     include("test_legendre.jl")
     include("test_mathutils.jl")
     include("test_fft_utils.jl")
     include("test_buffer_utils.jl")
     include("test_device_utils.jl")
+    include("test_backend_routing.jl")
+    include("test_cleanup_contract.jl")
     include("test_loop_utils.jl")
     include("test_spectral_diagnostics.jl")
     include("test_edge_cases.jl")
@@ -35,7 +44,6 @@ using Test
     include("test_turbo.jl")
     include("test_complex_packed.jl")
     include("test_local.jl")
-    include("test_api_compat.jl")
     include("test_kernels.jl")
     include("test_plan.jl")
     include("test_sphtor_extended.jl")
@@ -47,5 +55,4 @@ using Test
     include("test_batch_qst.jl")
     include("test_config_copy.jl")
     include("test_plm_tables.jl")
-    include("test_flags.jl")
 end

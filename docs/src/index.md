@@ -16,6 +16,9 @@
 
 ## Features
 
+See the [SHTns 3.7 mathematical parity matrix](shtns37-parity.md) for the executable
+capability inventory and its backend certification status.
+
 ```@raw html
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin: 2rem 0;">
 

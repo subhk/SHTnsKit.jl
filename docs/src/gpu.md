@@ -72,7 +72,7 @@ println("Memory: ", CUDA.available_memory() / 1e9, " GB available")
 #### `gpu_analysis`
 
 ```julia
-gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
+gpu_analysis(cfg::SHTConfig, spatial_data; device=get_device())
 ```
 
 GPU-accelerated spherical harmonic analysis transform.
@@ -91,11 +91,8 @@ spatial = rand(cfg.nlat, cfg.nlon)
 # Basic usage
 Alm = gpu_analysis(cfg, spatial)
 
-# Complex output
-Alm_complex = gpu_analysis(cfg, spatial; real_output=false)
-
 # Force CPU fallback
-Alm_cpu = gpu_analysis(cfg, spatial; device=CPU_DEVICE)
+Alm_cpu = gpu_analysis(cfg, spatial; device=CPU())
 ```
 
 #### `gpu_synthesis`
@@ -130,7 +127,7 @@ spatial_complex = gpu_synthesis(cfg, Alm; real_output=false)
 #### `gpu_analysis_safe` / `gpu_synthesis_safe`
 
 ```julia
-gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device(), real_output=true)
+gpu_analysis_safe(cfg::SHTConfig, spatial_data; device=get_device())
 gpu_synthesis_safe(cfg::SHTConfig, coeffs; device=get_device(), real_output=true)
 ```
 
@@ -208,7 +205,7 @@ using SHTnsKit, CUDA
 
 # Get current device
 device = get_device()
-println("Current device: ", device)  # CUDA_DEVICE or CPU_DEVICE
+println("Current device: ", device)  # GPU() or CPU()
 
 # Available GPUs
 gpus = get_available_gpus()
@@ -224,8 +221,11 @@ end
 set_gpu_device(0)  # First GPU
 set_gpu_device(1)  # Second GPU (if available)
 
+# Select the GPU backend (or CPU backend)
+set_device!(GPU())
+
 # Force CPU execution
-Alm = gpu_analysis(cfg, spatial; device=CPU_DEVICE)
+Alm = gpu_analysis(cfg, spatial; device=CPU())
 ```
 
 ### Memory Management
@@ -250,52 +250,6 @@ end
 
 # Clear GPU cache
 gpu_clear_cache!()
-```
-
----
-
-## Multi-GPU Support
-
-For large problems, distribute work across multiple GPUs.
-
-### Setup
-
-```julia
-using SHTnsKit, CUDA
-
-# Create multi-GPU configuration
-mgpu = create_multi_gpu_config(128, 130;
-    strategy=:latitude,      # Split by latitude bands
-    gpu_ids=[0, 1]           # Use GPUs 0 and 1
-)
-
-println("Using $(length(mgpu.gpu_devices)) GPUs")
-```
-
-### Transforms
-
-```julia
-# Multi-GPU analysis
-spatial = rand(130, 257)
-Alm = multi_gpu_analysis(mgpu, spatial)
-
-# Multi-GPU synthesis
-recovered = multi_gpu_synthesis(mgpu, Alm)
-```
-
-### Memory Streaming
-
-For problems larger than GPU memory:
-
-```julia
-# Automatic chunking based on available memory
-Alm = multi_gpu_analysis_streaming(mgpu, huge_spatial_data;
-    max_memory_per_gpu = 4 * 1024^3  # 4 GB per GPU
-)
-
-# Estimate chunks needed
-n_chunks = estimate_streaming_chunks(mgpu, size(huge_spatial_data))
-println("Will use $n_chunks chunks per GPU")
 ```
 
 ---
@@ -425,8 +379,9 @@ Alm = gpu_analysis_safe(cfg, spatial)
 # Or reduce problem size
 cfg_small = create_gauss_config(64, 66)  # Instead of 256
 
-# Or use streaming
-Alm = multi_gpu_analysis_streaming(mgpu, spatial; max_memory_per_gpu=2*1024^3)
+# Check the estimate before running a large transform
+bytes = estimate_memory_usage(cfg, :analysis)
+check_gpu_memory(bytes)
 ```
 
 #### "Numerical differences from CPU"

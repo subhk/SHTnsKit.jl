@@ -12,8 +12,15 @@ results otherwise).
 """
 function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
     MPI.Comm_size(comm) > 1 || return
-    sig = hash((cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon,
-                cfg.norm, cfg.cs_phase, cfg.robert_form))
+    sig = hash((
+        cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon, cfg.nlm,
+        cfg.norm, cfg.cs_phase, cfg.real_norm, cfg.robert_form,
+        cfg.grid_type, cfg.phi_scale, cfg.south_pole_first,
+        cfg.cphi, cfg.use_plm_tables,
+        hash(cfg.θ), hash(cfg.φ), hash(cfg.x), hash(cfg.w), hash(cfg.st),
+        hash(cfg.Nlm), hash(cfg.norm_scale_matrix),
+        hash(cfg.plm_tables), hash(cfg.NP_tables),
+    ))
     root_sig = MPI.bcast(sig, 0, comm)
     # Decide the throw COLLECTIVELY: a lone throw on the mismatched rank(s) would
     # leave the matching ranks (incl. rank 0, which always matches) proceeding into
@@ -27,7 +34,7 @@ function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
     return
 end
 
-struct DistAnalysisPlan
+struct DistAnalysisPlan{CT<:Complex}
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
     use_rfft::Bool
@@ -41,8 +48,8 @@ struct DistAnalysisPlan
     weights_cache::Vector{Float64}
     x_cache::Vector{Float64}
     P::Vector{Float64}
-    Fθm::Matrix{ComplexF64}
-    Alm_work::Matrix{ComplexF64}
+    Fθm::Matrix{CT}
+    Alm_work::Matrix{CT}
     θ_is_distributed::Bool
     # θ-column subcomm for the partial-sum reduction (Comm_split once here
     # instead of every call). Equals the full communicator when θ is not
@@ -51,17 +58,37 @@ struct DistAnalysisPlan
     reduce_comm::MPI.Comm
 end
 
-function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false, use_packed_storage::Bool=true, with_spatial_scratch::Bool=false)
+@inline _plan_real_type(::Type{Float32}) = Float32
+@inline _plan_real_type(::Type{ComplexF32}) = Float32
+@inline _plan_real_type(::Type{Float64}) = Float64
+@inline _plan_real_type(::Type{ComplexF64}) = Float64
+@inline _plan_real_type(::Type) = nothing
+
+function _validate_plan_prototype_precision(prototype_θφ::PencilArray,
+                                            comm, operation::Symbol)
+    candidate = _plan_real_type(eltype(prototype_θφ))
+    code = candidate === Float32 ? 1 : candidate === Float64 ? 2 : 0
+    min_code = MPI.Allreduce(code, min, comm)
+    max_code = MPI.Allreduce(code, max, comm)
+    if code == 0 || min_code != max_code
+        throw(ArgumentError(
+            "$operation requires one replicated Float32/64 or " *
+            "ComplexF32/64 prototype precision on every rank",
+        ))
+    end
+    return candidate
+end
+
+function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
     # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
     # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
     _validate_cfg_replicated(cfg, comm)
-    # Keep the keywords for API compatibility; the planned path always uses
-    # dense coefficient storage.
-    _ = use_packed_storage
-    _ = with_spatial_scratch
+    RT = _validate_plan_prototype_precision(
+        prototype_θφ, comm, :DistAnalysisPlan,
+    )
     θ_globals = collect(Int, globalindices(prototype_θφ, 1))
     nθ_local = length(θ_globals)
     nlon_local = size(parent(prototype_θφ), 2)
@@ -75,8 +102,8 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     x_cache = Float64[cfg.x[i] for i in θ_globals]
     P = Vector{Float64}(undef, cfg.lmax + 1)
     nbins = use_rfft ? (cfg.nlon ÷ 2 + 1) : cfg.nlon
-    Fθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
-    Alm_work = Matrix{ComplexF64}(undef, cfg.lmax + 1, cfg.mmax + 1)
+    Fθm = Matrix{Complex{RT}}(undef, nθ_local, nbins)
+    Alm_work = Matrix{Complex{RT}}(undef, cfg.lmax + 1, cfg.mmax + 1)
     # Reduced, not per-rank. The consumers (`dist_analysis!`,
     # `dist_analysis_sphtor!`) guard a full-comm `MPI.Allreduce!` with this flag,
     # so a topology where one rank owns every latitude and the rest own none
@@ -106,21 +133,18 @@ function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft
     # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
-    _validate_cfg_replicated(cfg, communicator(prototype_θφ))
+    comm = communicator(prototype_θφ)
+    _validate_cfg_replicated(cfg, comm)
+    _validate_plan_prototype_precision(prototype_θφ, comm, :DistPlan)
     return DistPlan(cfg, prototype_θφ, use_rfft)
 end
 
-const _SphtorScratch = NamedTuple{(:Fθ, :Fφ, :Vtθ, :Vpθ, :P, :dPdx),
-                                   Tuple{Matrix{ComplexF64}, Matrix{ComplexF64},
-                                         Matrix{Float64}, Matrix{Float64},
-                                         Vector{Float64}, Vector{Float64}}}
-
-struct DistSphtorPlan
+struct DistSphtorPlan{CT<:Complex}
     cfg::SHTnsKit.SHTConfig
     prototype_θφ::PencilArray
     use_rfft::Bool
     with_spatial_scratch::Bool
-    spatial_scratch::Union{Nothing, _SphtorScratch}
+    spatial_scratch::Union{Nothing, NamedTuple}
     # --- analysis scratch (always allocated; see DistAnalysisPlan) ---
     fallback_standard::Bool
     θ_globals::Vector{Int}
@@ -132,10 +156,10 @@ struct DistSphtorPlan
     dPdtheta::Vector{Float64}
     P_over_sth::Vector{Float64}
     Pbuf::Vector{Float64}
-    Ftθm::Matrix{ComplexF64}
-    Fpθm::Matrix{ComplexF64}
-    Slm_work::Matrix{ComplexF64}
-    Tlm_work::Matrix{ComplexF64}
+    Ftθm::Matrix{CT}
+    Fpθm::Matrix{CT}
+    Slm_work::Matrix{CT}
+    Tlm_work::Matrix{CT}
     θ_is_distributed::Bool
     reduce_comm::MPI.Comm
 end
@@ -147,6 +171,10 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
     _validate_cfg_replicated(cfg, comm)
+    RT = _validate_plan_prototype_precision(
+        prototype_θφ, comm, :DistSphtorPlan,
+    )
+    CT = Complex{RT}
     θ_globals = collect(Int, globalindices(prototype_θφ, 1))
     nθ_local = length(θ_globals)
     nlon = cfg.nlon
@@ -154,12 +182,14 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     scratch = if with_spatial_scratch
         # Pre-allocate all scratch buffers needed for synthesis
         (
-            Fθ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vθ
-            Fφ = Matrix{ComplexF64}(undef, nθ_local, nlon),   # Fourier coeffs for Vφ
-            Vtθ = Matrix{Float64}(undef, nθ_local, nlon),     # Real output for Vθ
-            Vpθ = Matrix{Float64}(undef, nθ_local, nlon),     # Real output for Vφ
-            P = Vector{Float64}(undef, lmax + 1),             # Legendre polynomial buffer
-            dPdx = Vector{Float64}(undef, lmax + 1),          # Legendre derivative buffer
+            Fθ = Matrix{CT}(undef, nθ_local, nlon),   # Fourier coeffs for Vθ
+            Fφ = Matrix{CT}(undef, nθ_local, nlon),   # Fourier coeffs for Vφ
+            Vtθ = Matrix{RT}(undef, nθ_local, nlon),  # Real output for Vθ
+            Vpθ = Matrix{RT}(undef, nθ_local, nlon),  # Real output for Vφ
+            P = Vector{Float64}(undef, lmax + 1),
+            dPdtheta = Vector{Float64}(undef, lmax + 1),
+            P_over_sth = Vector{Float64}(undef, lmax + 1),
+            Pbuf = Vector{Float64}(undef, lmax + 2),
         )
     else
         nothing
@@ -181,10 +211,10 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
         weights_cache[ii] = cfg.w[iglob]
     end
     nbins = use_rfft ? (nlon ÷ 2 + 1) : nlon
-    Ftθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
-    Fpθm = Matrix{ComplexF64}(undef, nθ_local, nbins)
-    Slm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
-    Tlm_work = Matrix{ComplexF64}(undef, lmax + 1, cfg.mmax + 1)
+    Ftθm = Matrix{CT}(undef, nθ_local, nbins)
+    Fpθm = Matrix{CT}(undef, nθ_local, nbins)
+    Slm_work = Matrix{CT}(undef, lmax + 1, cfg.mmax + 1)
+    Tlm_work = Matrix{CT}(undef, lmax + 1, cfg.mmax + 1)
     # Reduced, not per-rank. The consumers (`dist_analysis!`,
     # `dist_analysis_sphtor!`) guard a full-comm `MPI.Allreduce!` with this flag,
     # so a topology where one rank owns every latitude and the rest own none

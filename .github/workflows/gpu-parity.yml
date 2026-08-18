@@ -1,9 +1,8 @@
 name: SHTns 3.7 GPU Parity
 
+# No compatible GPU runners are currently registered. Keep the strict hardware
+# matrix available on demand without leaving PR and push checks queued.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:

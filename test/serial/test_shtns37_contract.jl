@@ -143,6 +143,10 @@ end
     isfile(workflow_path) || return
     source = read(workflow_path, String)
 
+    @test occursin(r"(?m)^on:\n  workflow_dispatch:\s*$", source)
+    @test !occursin(r"(?m)^  push:\s*$", source)
+    @test !occursin(r"(?m)^  pull_request:\s*$", source)
+
     expected_jobs = (
         "cuda-parity" => "runs-on: [self-hosted, linux, x64, cuda]",
         "amdgpu-parity" => "runs-on: [self-hosted, linux, x64, amdgpu]",

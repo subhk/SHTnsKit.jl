@@ -98,8 +98,8 @@ end
 
 function _compatibility_coefficients(cfg)
     Q = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
-    S = similar(Q)
-    T = similar(Q)
+    S = zeros(ComplexF64, size(Q))
+    T = zeros(ComplexF64, size(Q))
     Q[2, 1] = 0.75
     Q[3, 2] = 0.125 - 0.25im
     S[2, 1] = -0.5

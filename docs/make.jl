@@ -94,9 +94,12 @@ pages = Any[
     "Home" => "index.md",
     "Getting Started" => Any[
         "Installation" => "installation.md",
-        "Quick Start" => "quickstart.md"
+        "Quick Start" => "quickstart.md",
+        "Migrating to v2.0" => "migration.md"
     ],
     "User Guide" => Any[
+        "Grid Types" => "grids.md",
+        "Normalization and Phase" => "norms.md",
         "GPU Acceleration" => "gpu.md",
         "Distributed Computing" => "distributed.md",
         "Performance Guide" => "performance.md",
@@ -128,7 +131,7 @@ if HAS_LITERATE && isdir(joinpath(@__DIR__, "src/literated"))
         # Insert literated examples into the User Guide section
         user_guide_idx = findfirst(p -> p[1] == "User Guide", pages)
         if user_guide_idx !== nothing
-            # Insert after Examples Gallery
+            # Keep generated recipes after the foundational grid/convention pages.
             examples_section = Any["Generated Examples" => literated_files]
             splice!(pages[user_guide_idx][2], 3:2, examples_section)
         end

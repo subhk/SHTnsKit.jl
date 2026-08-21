@@ -1984,10 +1984,10 @@ set_gpu_device(::SHTnsKit.GPU, device_id::Int) = set_gpu_device(device_id)
 
 Pre-planned cuFFT operations for efficient repeated transforms.
 """
-struct CuFFTPlan
-    forward_plan::CUFFT.CuFFTPlan
-    inverse_plan::CUFFT.CuFFTPlan
-    buffer::CuArray{ComplexF64, 2}
+struct CuFFTPlan{ForwardPlan,InversePlan,Buffer}
+    forward_plan::ForwardPlan
+    inverse_plan::InversePlan
+    buffer::Buffer
     nlat::Int
     nlon::Int
 end

@@ -1,367 +1,146 @@
-# Installation Guide
+# Installation
 
-```@raw html
-<div style="background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
-    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Installation</h2>
-    <p style="margin: 0; opacity: 0.9;">Get SHTnsKit.jl up and running in your Julia environment</p>
-</div>
-```
+SHTnsKit 2.0 supports Julia 1.10, 1.11, and 1.12 on Linux, macOS, and
+Windows. The serial package is pure Julia; FFTW.jl is installed automatically.
 
-This guide provides detailed instructions for installing SHTnsKit.jl and its dependencies.
-
-## Quick Installation
+## Core package
 
 ```julia
 using Pkg
 Pkg.add("SHTnsKit")
 ```
 
-## Prerequisites
+Verify the installation with a band-limited roundtrip:
 
-### System Requirements
-
-- **Operating System**: Linux, macOS, or Windows with WSL
-- **Julia**: Version 1.10, 1.11, or 1.12
-- **Memory**: At least 4GB RAM (16GB+ for large parallel problems)
-- **Storage**: 2GB free space for dependencies (including MPI)
-- **MPI Library**: OpenMPI or MPICH for parallel functionality
-
-### Required Dependencies
-
-SHTnsKit.jl is pure Julia and does not require an external C library. Core functionality uses Julia's standard libraries and FFTW.jl (installed automatically). Parallel features require additional packages.
-
-## Installing SHTnsKit.jl
-
-### Basic Installation (Serial Only)
-
-```julia
-using Pkg
-Pkg.add("SHTnsKit")
-```
-
-### With GPU Support
-
-```julia
-using Pkg
-Pkg.add(["SHTnsKit", "CUDA", "GPUArrays", "KernelAbstractions"])
-```
-
-### With MPI Support (Parallel)
-
-```julia
-using Pkg
-Pkg.add(["SHTnsKit", "MPI", "PencilArrays", "PencilFFTs"])
-```
-
-### Full Installation (GPU + Parallel + SIMD)
-
-```julia
-using Pkg
-Pkg.add([
-    "SHTnsKit",
-    "CUDA", "GPUArrays", "KernelAbstractions",           # GPU
-    "MPI", "PencilArrays", "PencilFFTs",                 # Distributed
-    "LoopVectorization",                                  # SIMD optimization
-    "ForwardDiff", "Zygote"                              # Auto-differentiation
-])
-```
-
-### Development Installation
-
-For the latest features or contributing:
-
-```julia
-using Pkg
-Pkg.add(url="https://github.com/username/SHTnsKit.jl.git")
-```
-
-### Local Development Setup
-
-```julia
-using Pkg
-Pkg.develop(path="/path/to/SHTnsKit.jl")
-```
-
-## GPU Setup
-
-### Requirements
-
-- NVIDIA GPU with CUDA Compute Capability 5.0+ (Maxwell or newer)
-- CUDA Toolkit (automatically installed via CUDA.jl)
-- 4GB+ GPU memory recommended
-
-### Installation
-
-```julia
-using Pkg
-Pkg.add(["CUDA", "GPUArrays", "KernelAbstractions"])
-```
-
-### Verify GPU Installation
-
-```julia
-using CUDA
-
-println("CUDA functional: ", CUDA.functional())
-println("CUDA version: ", CUDA.version())
-println("GPU: ", CUDA.name(CUDA.device()))
-println("Memory: ", CUDA.available_memory() / 1e9, " GB available")
-```
-
-### Test GPU Transforms
-
-```julia
-using SHTnsKit, CUDA
-
-# Create configuration
-cfg = create_gauss_config(32, 34)
-
-# Create test data
-spatial = rand(cfg.nlat, cfg.nlon)
-
-# GPU transform
-Alm = gpu_analysis(cfg, spatial)
-recovered = gpu_synthesis(cfg, Alm)
-
-# Verify
-error = maximum(abs.(spatial - recovered))
-println("GPU roundtrip error: $error")
-println(error < 1e-10 ? "GPU SUCCESS!" : "Check GPU installation")
-```
-
-### Troubleshooting GPU
-
-**"CUDA not available"**
-```julia
-# Check CUDA installation
-using CUDA
-println(CUDA.versioninfo())
-
-# Rebuild if needed
-using Pkg
-Pkg.build("CUDA")
-```
-
-**"Out of GPU memory"**
-- Use `gpu_analysis_safe()` for automatic CPU fallback
-- Reduce problem size
-- Call `gpu_clear_cache!()` to free memory
-
----
-
-## Parallel Computing Setup
-
-### MPI Installation
-
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get update
-sudo apt-get install libopenmpi-dev openmpi-bin
-```
-
-**macOS:**
-```bash
-brew install open-mpi
-```
-
-**Configure Julia MPI:**
-```julia
-using Pkg
-Pkg.add("MPI")
-Pkg.build("MPI")
-```
-
-### Verify MPI Installation
-
-```julia
-using MPI
-MPI.Init()
-rank = Comm_rank(COMM_WORLD)
-size = Comm_size(COMM_WORLD)
-println("Process $rank of $size")
-MPI.Finalize()
-```
-
-### Optional Performance Packages
-
-```julia
-using Pkg
-Pkg.add(["LoopVectorization", "BenchmarkTools"])
-```
-
-## Verification
-
-### Basic Functionality Test
-
-```julia
+```@example installation-core
 using SHTnsKit
 
-# Create simple configuration
-cfg = create_gauss_config(8, 8)
-println("lmax: ", get_lmax(cfg))
-println("nlat: ", cfg.nlat)  
-println("nphi: ", cfg.nlon)
+cfg = create_gauss_config(8, 10)
+coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+coefficients[3, 2] = 0.5 - 0.25im
+field = synthesis(cfg, coefficients)
+recovered = analysis(cfg, field)
 
-# Test basic transform
-# Create bandlimited test coefficients (avoids high-frequency errors)
-sh = zeros(cfg.nlm)
-sh[1] = 1.0
-if cfg.nlm > 3
-    sh[3] = 0.5
-end
-spat = synthesis(cfg, sh)
-println("Transform successful: ", size(spat))
-
-destroy_config(cfg)
-println("SHTnsKit.jl installation verified!")
+@assert maximum(abs, recovered - coefficients) < 1e-12
+(lmax=cfg.lmax, nlat=cfg.nlat, nlon=cfg.nlon)
 ```
 
-### Parallel Functionality Test
+`SHTConfig` values are managed by Julia's garbage collector.
+[`destroy_config`](@ref) remains as a no-op compatibility function; explicit
+teardown is not required.
 
-Save this as `test_mpi.jl` and run with `mpiexec -n 2 julia --project test_mpi.jl`:
+## Optional extensions
+
+SHTnsKit uses Julia package extensions. Install and load the packages in the
+row you need; no build step is required for SHTnsKit itself.
+
+| Capability | Packages to add and load |
+|---|---|
+| NVIDIA GPU | `CUDA`, `GPUArrays`, `GPUArraysCore`, `KernelAbstractions` |
+| AMD GPU | `AMDGPU`, `GPUArrays`, `GPUArraysCore`, `KernelAbstractions` |
+| MPI distributed | `MPI`, `PencilArrays`, `PencilFFTs` |
+| MPI + NVIDIA | MPI row plus CUDA row |
+| MPI + AMD | MPI row plus AMDGPU row |
+| SIMD helpers | `LoopVectorization` |
+| Forward-mode AD | `ForwardDiff` |
+| Reverse-mode AD | `Zygote`; add `ChainRulesCore` for advanced rules |
+
+For example:
 
 ```julia
-using MPI
-MPI.Init()
+using Pkg
 
-using SHTnsKit, PencilArrays, PencilFFTs
-
-# Create configuration
-lmax = 16
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-
-# Create distributed array
-pen = Pencil((nlat, nlon), (1,), MPI.COMM_WORLD)
-fθφ = PencilArray(pen, zeros(Float64, PencilArrays.size_local(pen)...))
-
-# Fill with test data (Y_2^0 pattern)
-ranges = PencilArrays.range_local(pen)
-for (i_local, i_global) in enumerate(ranges[1])
-    x = cfg.x[i_global]
-    for j in 1:length(ranges[2])
-        fθφ[i_local, j] = (3*x^2 - 1)/2
-    end
-end
-
-# Distributed roundtrip test
-Alm = SHTnsKit.dist_analysis(cfg, fθφ)
-fθφ_recovered = SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=fθφ, real_output=true)
-
-# Verify accuracy
-max_err = maximum(abs.(parent(fθφ_recovered) .- parent(fθφ)))
-global_max_err = MPI.Allreduce(max_err, MPI.MAX, MPI.COMM_WORLD)
-
-if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-    println("Parallel roundtrip error: $global_max_err")
-    println(global_max_err < 1e-10 ? "SUCCESS!" : "FAILED")
-end
-
-destroy_config(cfg)
-MPI.Finalize()
+Pkg.add(["CUDA", "GPUArrays", "GPUArraysCore", "KernelAbstractions"])
+Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
 ```
 
-### Extended Verification
+## GPU setup
+
+For NVIDIA:
 
 ```julia
-using SHTnsKit, Test, LinearAlgebra
+using SHTnsKit, CUDA, GPUArrays, GPUArraysCore, KernelAbstractions
+CUDA.functional() || error("CUDA is not functional")
 
-@testset "Installation Verification" begin
-    # Basic functionality
-    lmax = 16
-    cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
-
-    # Create bandlimited test pattern
-    spatial = zeros(cfg.nlat, cfg.nlon)
-    for i in 1:cfg.nlat
-        x = cfg.x[i]
-        spatial[i, :] .= (3*x^2 - 1)/2  # Y_2^0
-    end
-
-    # Roundtrip test
-    Alm = analysis(cfg, spatial)
-    recovered = synthesis(cfg, Alm)
-    @test norm(spatial - recovered) < 1e-12
-
-    # Memory management
-    destroy_config(cfg)
-    @test true  # No crash
-end
+cfg = create_gauss_config(32, 34)
+field_device = CUDA.rand(Float64, cfg.nlat, cfg.nlon)
+coefficients_device = analysis(cfg, field_device)
+recovered_device = synthesis(cfg, coefficients_device)
 ```
 
-## Troubleshooting
+For AMD:
 
-### Common Issues
-
-**1. Array size mismatch:**
-```
-ERROR: DimensionMismatch: spatial_data size (X, Y) must be (nlat, nlon)
-```
-
-**Fix:** Ensure `size(Alm) == (cfg.lmax+1, cfg.mmax+1)` and `size(spatial) == (cfg.nlat, cfg.nlon)`.
-
-**2. Memory issues:**
-```
-ERROR: Out of memory
-```
-
-**Solutions:**
-- Reduce problem size (lmax)
-- Increase system swap space
-- Reuse allocations with in‑place APIs (`synthesis!`, `analysis!`)
-
-### Advanced Debugging
-
-**Julia environment check:**
 ```julia
-using Libdl
-println(Libdl.dllist())  # List all loaded libraries
+using SHTnsKit, AMDGPU, GPUArrays, GPUArraysCore, KernelAbstractions
+AMDGPU.functional() || error("AMDGPU is not functional")
+
+cfg = create_gauss_config(32, 34)
+field_device = AMDGPU.ROCArray(rand(Float64, cfg.nlat, cfg.nlon))
+coefficients_device = analysis(cfg, field_device)
+recovered_device = synthesis(cfg, coefficients_device)
 ```
 
-## Performance Optimization
+These generic calls preserve device storage. See [GPU Acceleration](gpu.md)
+for strict `GPU()` dispatch, transfer helpers, plans, and the CUDA compatibility
+wrappers.
 
-### System-Level Optimizations
+## MPI setup
 
-Threading and memory tips:
 ```julia
-# Enable SHTnsKit internal threading and FFTW threads
-set_optimal_threads!()
-println((threads=get_threading(), fft_threads=get_fft_threads()))
-
-# Prevent oversubscription with BLAS/FFTW (optional)
-ENV["OPENBLAS_NUM_THREADS"] = "1"
+using Pkg
+Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
 ```
 
-### Julia-Specific
+MPI.jl can use its bundled MPI or a system MPI. Configure that choice through
+MPI.jl, then run Julia under the matching launcher. A minimal package check is:
 
-**Precompilation:**
-```julia
-using PackageCompiler
-create_sysimage([:SHTnsKit]; sysimage_path="shtns_sysimage.so")
-```
-
-**Memory:**
 ```bash
-julia --heap-size-hint=8G script.jl
+mpiexec -n 2 julia --project -e 'using MPI; MPI.Init(); println(MPI.Comm_rank(MPI.COMM_WORLD)); MPI.Finalize()'
 ```
 
-## Docker Installation
+Continue with [Distributed Computing](distributed.md) for array construction
+and transform plans. All ranks must construct identical `SHTConfig` values.
 
-For containerized environments:
+## Development checkout
 
-```dockerfile
-FROM julia:1.11
-
-# Install Julia packages
-RUN julia -e 'using Pkg; Pkg.add(["SHTnsKit"])'
-
-# Verify installation
-RUN julia -e 'using SHTnsKit; cfg = create_gauss_config(8,8); destroy_config(cfg)'
+```julia
+using Pkg
+Pkg.develop(url="https://github.com/subhk/SHTnsKit.jl.git")
+Pkg.test("SHTnsKit")
 ```
 
-## Getting Help
+To build the web documentation from a checkout:
 
-- **Documentation**: [SHTnsKit.jl Docs](https://subhk.github.io/SHTnsKit.jl/)
-- **Issues**: [GitHub Issues](https://github.com/subhk/SHTnsKit.jl/issues)
-- **Julia Discourse**: [Julia Community](https://discourse.julialang.org/)
+```bash
+julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+julia --project=docs docs/make.jl
+```
+
+## Common errors
+
+### Invalid grid size
+
+Gauss grids require `nlat >= lmax + 1` and `nlon >= 2*mmax + 1`.
+Regular grids have additional constraints described in [Grid Types](grids.md).
+Constructors now reject invalid combinations immediately.
+
+### GPU backend unavailable
+
+Strict `GPU()` dispatch raises [`BackendUnavailableError`](@ref) when no loaded
+adapter is functional. Confirm that the vendor package and the three shared GPU
+dependencies are loaded. If both CUDA and AMDGPU are functional, pass an
+existing device array as the input or as the `to_device` prototype so the
+vendor is unambiguous.
+
+### Distributed extension not loaded
+
+Load all three packages before calling distributed APIs:
+
+```julia
+using MPI, PencilArrays, PencilFFTs, SHTnsKit
+```
+
+### Migrating older code
+
+If an older application uses C-style flags, symbol devices, removed getters,
+or legacy plan keywords, see [Migrating to SHTnsKit v2.0](migration.md).

@@ -245,7 +245,7 @@ end
 
 # Solve ∇²ψ = ζ for stream function ψ
 # In spectral domain: -l(l+1) ψ_lm = ζ_lm
-ψ_lm = similar(ζ_lm)
+ψ_lm = zeros(ComplexF64, size(ζ_lm))
 for l in 0:cfg.lmax
     for m in 0:min(l, cfg.mmax)
         if l > 0
@@ -657,23 +657,25 @@ for i in 1:cfg.nlat, j in 1:cfg.nlon
     original_field[i,j] = sin(3θ) * cos(2φ)
 end
 
-# Transform to spectral domain
-f_lm = analysis(cfg, original_field)
+# Transform to SHTns-compatible packed spectral storage
+f_lm = analysis_packed(cfg, vec(original_field))
 
 # Rotate using Euler angles (ZYZ convention)
 α, β, γ = π/4, π/6, π/8
-f_rot = copy(f_lm)
-rotate_real!(cfg, f_rot; alpha=α, beta=β, gamma=γ)
+rotation = SHTRotation(cfg.lmax, cfg.mmax)
+shtns_rotation_set_angles_ZYZ(rotation, α, β, γ)
+f_rot = similar(f_lm)
+shtns_rotation_apply_real(rotation, f_lm, f_rot)
 
 # Transform back to spatial domain
-rotated_field = synthesis(cfg, f_rot)
+rotated_field = reshape(synthesis_packed(cfg, f_rot), cfg.nlat, cfg.nlon)
 
 println("Original field range: ", extrema(original_field))
 println("Rotated field range: ", extrema(rotated_field))
 
 # Verify rotation preserves power
-orig_power = sum(abs2, f_lm)
-rot_power = sum(abs2, f_rot)
+orig_power = energy_scalar_packed(cfg, f_lm)
+rot_power = energy_scalar_packed(cfg, f_rot)
 println("Power preserved: ", isapprox(orig_power, rot_power, rtol=1e-10))
 
 destroy_config(cfg)

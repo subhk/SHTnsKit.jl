@@ -11,7 +11,9 @@ This page summarizes practical tips to reduce allocations and improve locality a
 
 - Reuse plans: Construct `SHTPlan` (serial) and distributed plans (`DistAnalysisPlan`, `DistSphtorPlan`, `DistQstPlan`) once per size and reuse. Plans hold FFT plans and working buffers to avoid per-call allocations.
 
-- Grid defaults: Gauss grids use `phi_scale=:dft` (FFT scaling nlon). Regular/Driscoll-Healy grids use `phi_scale=:quad` (nlon/2π). You can override globally with `ENV["SHTNSKIT_PHI_SCALE"]=dft|quad` or per-config via `phi_scale` if you need a specific convention.
+- Longitude FFT scaling defaults to `:dft` in the public constructors. The
+  `SHTNSKIT_PHI_SCALE=dft|quad` environment variable is a low-level override;
+  use one setting consistently across every transform in an application.
 
 - Low-allocation serial recipe: preallocate FFT scratch and outputs.
   ```julia
@@ -41,7 +43,9 @@ This page summarizes practical tips to reduce allocations and improve locality a
 
 - Precomputed Legendre tables: On fixed grids, call `enable_plm_tables!(cfg)` to precompute `plm_tables` and `dplm_tables`. They provide identical results to on-the-fly recurrences and usually reduce CPU cost.
 
-- Threading inside rank: For large lmax, enable Julia threads and (optionally) FFTW threads. Use `set_optimal_threads!()` or tune with `set_threading!()` and `set_fft_threads()` to match your core layout.
+- Threading inside a rank: start Julia with the desired Julia thread count and
+  tune FFTW with `FFTW.set_num_threads`. The legacy SHTnsKit thread-control
+  wrappers are not part of the v2 API.
 
 - LoopVectorization: If available, `analysis_turbo`/`synthesis_turbo` and related helpers can accelerate inner loops. Guard with `using LoopVectorization`.
 

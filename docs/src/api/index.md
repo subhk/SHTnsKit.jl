@@ -1,13 +1,40 @@
 # API Reference
 
-```@raw html
-<div style="background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
-    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">API Reference</h2>
-    <p style="margin: 0; opacity: 0.9;">Complete function and type documentation</p>
-</div>
-```
+This page is generated from the docstrings of the public `SHTnsKit` module.
+Optional extension methods appear when their dependencies are loaded in the
+calling environment.
 
-Complete reference for every public SHTnsKit.jl function and type.
+## Calling conventions
+
+- Allocating transforms use `operation(cfg, input...)`.
+- In-place transforms place outputs before inputs, for example
+  `analysis!(plan, alm_out, field)` and
+  `synthesis!(plan, field_out, alm)`.
+- `analysis(CPU(), ...)` and `analysis(GPU(), ...)` request strict typed device
+  dispatch; ordinary calls infer the backend from array storage.
+- Dense coefficients have shape `(cfg.lmax + 1, cfg.mmax + 1)`. Entries with
+  `l < m` are unused.
+- Batch APIs add a third, field-index dimension.
+- A configuration's `norm`, `cs_phase`, `real_norm`, and `robert_form` options
+  apply at every public transform boundary.
+
+See [Migrating to v2.0](../migration.md) for removed compatibility signatures
+and numerical changes.
+
+## Extension activation
+
+| Extension | Load these packages |
+|---|---|
+| CUDA | `CUDA`, `GPUArrays`, `GPUArraysCore`, `KernelAbstractions` |
+| AMDGPU | `AMDGPU`, `GPUArrays`, `GPUArraysCore`, `KernelAbstractions` |
+| MPI | `MPI`, `PencilArrays`, `PencilFFTs` |
+| LoopVectorization | `LoopVectorization` |
+| ForwardDiff | `ForwardDiff` |
+| Zygote | `Zygote` |
+| Advanced AD | `ChainRulesCore` |
+
+Hardware-specific types such as the CUDA extension's `CuFFTPlan` live in their
+extension module and are documented in [GPU Acceleration](../gpu.md).
 
 ## Public API
 
@@ -17,88 +44,16 @@ Private = false
 Order = [:module, :constant, :type, :function, :macro]
 ```
 
-## Distributed Transforms (MPI)
+## Configuration lifecycle
 
-When using MPI with PencilArrays, the following functions are available via the parallel extension:
+`SHTConfig` is managed by Julia's garbage collector. `destroy_config(cfg)` is a
+no-op retained for API symmetry; callers do not need a `try`/`finally` teardown
+pattern.
 
-- `dist_analysis(cfg, fθφ)` - Distributed spatial to spectral transform
-- `dist_synthesis(cfg, Alm; prototype_θφ, real_output)` - Distributed spectral to spatial transform
-- `dist_analysis_sphtor(cfg, Vθ, Vφ)` - Distributed vector analysis
-- `dist_synthesis_sphtor(cfg, Slm, Tlm; prototype_θφ)` - Distributed vector synthesis
+## Related guides
 
-See the [Distributed Guide](../distributed.md) for detailed usage.
-
-## Usage Examples
-
-### Basic Transform
-
-```julia
-using SHTnsKit
-
-lmax = 16
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-
-# Create test pattern
-spatial = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat
-    x = cfg.x[i]
-    spatial[i, :] .= (3*x^2 - 1)/2
-end
-
-# Transform roundtrip
-Alm = analysis(cfg, spatial)
-recovered = synthesis(cfg, Alm)
-
-destroy_config(cfg)
-```
-
-### Vector Field Transform
-
-```julia
-using SHTnsKit
-
-lmax = 32
-nlat = lmax + 2
-nlon = 2*lmax + 1
-cfg = create_gauss_config(lmax, nlat; nlon=nlon)
-
-# Create velocity field
-Vθ = zeros(cfg.nlat, cfg.nlon)
-Vφ = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat, j in 1:cfg.nlon
-    θ = cfg.θ[i]
-    φ = cfg.φ[j]
-    Vθ[i,j] = cos(θ) * sin(φ)
-    Vφ[i,j] = cos(φ)
-end
-
-# Decompose into spheroidal/toroidal
-Slm, Tlm = analysis_sphtor(cfg, Vθ, Vφ)
-
-# Reconstruct
-Vθ_rec, Vφ_rec = synthesis_sphtor(cfg, Slm, Tlm)
-
-destroy_config(cfg)
-```
-
-## Error Handling
-
-### Common Errors
-
-- **`BoundsError`**: Invalid lmax/mmax values
-- **`AssertionError` / `DimensionMismatch`**: Array size mismatches
-
-### Best Practices
-
-```julia
-# Always check array sizes
-@assert size(Alm) == (cfg.lmax+1, cfg.mmax+1) "Wrong spectral array size"
-@assert size(spatial) == (cfg.nlat, cfg.nlon) "Wrong spatial array size"
-
-# Always destroy configurations
-cfg = create_gauss_config(32, 34; nlon=65)
-# ... work with cfg ...
-destroy_config(cfg)
-```
+- [Quick Start](../quickstart.md)
+- [Grid Types](../grids.md)
+- [Normalization and Phase](../norms.md)
+- [Advanced Usage](../advanced.md)
+- [Distributed Computing](../distributed.md)

@@ -1,372 +1,147 @@
-# Quick Start Guide
+# Quick Start
 
-```@raw html
-<div style="background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%); color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
-    <h2 style="margin: 0 0 0.5rem 0; color: white; border: none;">Get Started in 5 Minutes</h2>
-    <p style="margin: 0; opacity: 0.9;">From installation to your first spherical harmonic transform</p>
-</div>
-```
+This guide covers the stable v2 workflow: construct a configuration, transform
+between spatial and dense spectral arrays, and opt into plans or batches when
+the same grid is reused.
 
-Get up and running with SHTnsKit.jl in minutes. This guide covers the essential concepts and common workflows.
+## Data layout
 
----
+For an [`SHTConfig`](@ref) named `cfg`:
 
-## Installation
+| Representation | Shape | Indexing |
+|---|---:|---|
+| Spatial field | `(cfg.nlat, cfg.nlon)` | latitude × longitude |
+| Dense coefficients | `(cfg.lmax + 1, cfg.mmax + 1)` | `alm[l + 1, m + 1]` |
+| Batch of fields | `(cfg.nlat, cfg.nlon, nfields)` | field index last |
+| Batch of coefficients | `(cfg.lmax + 1, cfg.mmax + 1, nfields)` | field index last |
 
-```julia
-using Pkg
-Pkg.add("SHTnsKit")
-```
+Dense real-field storage keeps non-negative `m`; entries with `l < m` are
+unused. Packed APIs use the SHTns-compatible `cfg.nlm` layout instead.
 
-For GPU support, also add:
-```julia
-Pkg.add(["CUDA", "KernelAbstractions"])
-```
+## Scalar roundtrip
 
----
-
-## Core Concepts
-
-### Two Representations of Data
-
-Spherical harmonics provide two ways to represent functions on a sphere:
-
-| Domain | Description | Array Shape | Best For |
-|--------|-------------|-------------|----------|
-| **Spatial** | Values at grid points | `(nlat, nlon)` | Visualization, physical intuition |
-| **Spectral** | Coefficient amplitudes | `(lmax+1, mmax+1)` | Analysis, filtering, derivatives |
-
-**Think of it like audio:**
-- **Spatial** = the sound wave (amplitude over time)
-- **Spectral** = frequency components (which notes are playing)
-
-### Key Parameters
-
-| Parameter | Meaning | Typical Values |
-|-----------|---------|----------------|
-| `lmax` | Maximum spherical harmonic degree | 32, 64, 128, 256 |
-| `mmax` | Maximum azimuthal order (usually = lmax) | Same as lmax |
-| `nlat` | Number of latitude points | lmax + 2 or more |
-| `nlon` | Number of longitude points | 2*lmax + 1 or more |
-
----
-
-## Your First Transform
-
-```julia
+```@example quickstart-scalar
 using SHTnsKit
 
-# 1. Create configuration
 lmax = 32
 cfg = create_gauss_config(lmax, lmax + 2)
 
-# 2. Create a simple pattern (P_2 Legendre polynomial)
-spatial = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat
-    x = cfg.x[i]  # cos(θ) at this latitude
-    spatial[i, :] .= (3*x^2 - 1) / 2
-end
+alm = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+alm[3, 1] = 1.0
+alm[5, 3] = 0.25 - 0.1im
 
-# 3. Analysis: spatial → spectral
-Alm = analysis(cfg, spatial)
-
-# 4. Synthesis: spectral → spatial
-recovered = synthesis(cfg, Alm)
-
-# 5. Check accuracy
-error = maximum(abs.(spatial - recovered))
-println("Roundtrip error: $error")  # Should be ~1e-14
+field = synthesis(cfg, alm)
+alm_recovered = analysis(cfg, field)
+@assert maximum(abs, alm_recovered - alm) < 1e-12
+nothing
 ```
 
-**Output:**
-```
-Roundtrip error: 8.881784197001252e-15
-```
+Use `synthesis(...; real_output=false)` or [`synthesis_cplx`](@ref) when the
+desired spatial output is genuinely complex.
 
----
+## In-place and planned transforms
 
-## Common Workflows
+Output arguments come before input arguments:
 
-### Creating Test Fields
-
-```julia
-cfg = create_gauss_config(64, 66)
-
-# Method 1: From spherical harmonic coefficients
-Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-Alm[1, 1] = 1.0    # l=0, m=0: constant (mean value)
-Alm[3, 1] = 0.5    # l=2, m=0: latitude variation
-Alm[3, 3] = 0.3im  # l=2, m=2: longitude variation
-spatial = synthesis(cfg, Alm)
-
-# Method 2: From analytical function
-spatial2 = zeros(cfg.nlat, cfg.nlon)
-for i in 1:cfg.nlat, j in 1:cfg.nlon
-    θ = acos(cfg.x[i])           # Colatitude
-    φ = 2π * (j-1) / cfg.nlon    # Longitude
-    spatial2[i, j] = cos(θ) * sin(2φ)  # Some pattern
-end
-```
-
-### Spectral Filtering
-
-```julia
-cfg = create_gauss_config(64, 66)
-spatial = rand(cfg.nlat, cfg.nlon)
-
-# Transform to spectral space
-Alm = analysis(cfg, spatial)
-
-# Low-pass filter: keep only l ≤ 10
-l_cutoff = 10
-for l in (l_cutoff+1):cfg.lmax
-    for m in 0:min(l, cfg.mmax)
-        Alm[l+1, m+1] = 0
-    end
-end
-
-# Transform back
-smoothed = synthesis(cfg, Alm)
-```
-
-### Computing Derivatives
-
-```julia
-cfg = create_gauss_config(32, 34)
-
-# Create test function
-Alm = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-Alm[5, 3] = 1.0  # Y_4^2
-
-# Apply Laplacian: Δ Y_l^m = -l(l+1) Y_l^m
-Alm_laplacian = copy(Alm)
-for l in 0:cfg.lmax
-    for m in 0:min(l, cfg.mmax)
-        Alm_laplacian[l+1, m+1] *= -l * (l + 1)
-    end
-end
-
-laplacian_field = synthesis(cfg, Alm_laplacian)
-```
-
----
-
-## GPU Acceleration
-
-For large problems, use GPU acceleration:
-
-```julia
-using SHTnsKit, CUDA
-
-# Check GPU availability
-println("GPU available: ", CUDA.functional())
-
-cfg = create_gauss_config(128, 130)
-spatial = rand(cfg.nlat, cfg.nlon)
-
-# GPU transforms
-Alm = gpu_analysis(cfg, spatial)
-recovered = gpu_synthesis(cfg, Alm)
-
-# Safe version (auto-fallback to CPU if GPU fails)
-Alm_safe = gpu_analysis_safe(cfg, spatial)
-```
-
-### When to Use GPU
-
-GPU acceleration is most beneficial for larger problems. As a general guideline:
-- **lmax < 32**: CPU is typically faster due to data transfer overhead
-- **lmax 32-128**: GPU becomes beneficial
-- **lmax > 128**: GPU strongly recommended
-
----
-
-## Vector Fields
-
-Decompose vector fields into spheroidal (divergent) and toroidal (rotational) components:
-
-```julia
-cfg = create_gauss_config(32, 34)
-
-# Create vector field (θ and φ components)
-vθ = rand(cfg.nlat, cfg.nlon)
-vφ = rand(cfg.nlat, cfg.nlon)
-
-# Decompose: spatial → spectral
-Slm, Tlm = analysis_sphtor(cfg, vθ, vφ)
-
-# Reconstruct: spectral → spatial
-vθ_out, vφ_out = synthesis_sphtor(cfg, Slm, Tlm)
-
-# Check accuracy
-println("θ error: ", maximum(abs.(vθ - vθ_out)))
-println("φ error: ", maximum(abs.(vφ - vφ_out)))
-```
-
-### Physical Meaning
-
-| Component | Physical Meaning | Examples |
-|-----------|------------------|----------|
-| **Spheroidal (S)** | Divergent/compressible flow | Pressure gradients, density waves |
-| **Toroidal (T)** | Rotational/incompressible flow | Vortices, circulation patterns |
-
----
-
-## Grid Types
-
-### Gauss-Legendre Grid (Recommended)
-
-```julia
-cfg = create_gauss_config(lmax, nlat)
-```
-
-- **Points**: Non-uniform spacing (denser near poles)
-- **Accuracy**: Optimal for spectral transforms
-- **Use for**: Most scientific applications
-
-### Regular (Equiangular) Grid
-
-```julia
-cfg = create_regular_config(lmax, nlat)
-```
-
-- **Points**: Uniform spacing in θ and φ
-- **Accuracy**: Slightly lower than Gauss
-- **Use for**: Visualization, interfacing with GIS data
-
----
-
-## Performance Tips
-
-### 1. Preallocate Arrays
-
-```julia
-# Allocate once, reuse
-spatial_buffer = zeros(cfg.nlat, cfg.nlon)
-Alm_buffer = zeros(ComplexF64, cfg.lmax+1, cfg.mmax+1)
-
-# Multiple transforms without allocation
-for i in 1:100
-    fill!(spatial_buffer, 0)
-    # ... fill with data ...
-    Alm_buffer .= analysis(cfg, spatial_buffer)
-end
-```
-
-### 2. Use In-Place Operations
-
-```julia
-# Out-of-place (allocates new array)
-Alm = analysis(cfg, spatial)
-
-# In-place (writes to existing array)
-analysis!(cfg, spatial, Alm)
-```
-
-### 3. Choose Appropriate Resolution
-
-Rule of thumb for accuracy:
-- `nlat ≥ lmax + 2` (minimum)
-- `nlat ≈ 3/2 * lmax` (comfortable margin)
-- `nlon ≥ 2*lmax + 1` (Nyquist for longitude)
-
----
-
-## Unified Loop Abstraction
-
-For custom operations that need to work on both CPU and GPU:
-
-```julia
+```@example quickstart-inplace
 using SHTnsKit
 
-A = rand(100, 100)
-B = similar(A)
+cfg = create_gauss_config(32, 34)
+field = rand(cfg.nlat, cfg.nlon)
+alm = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+field_out = zeros(cfg.nlat, cfg.nlon)
 
-# Works on CPU arrays (uses SIMD)
-@sht_loop B[I] = sin(A[I]) over I ∈ CartesianIndices(A)
+fft_scratch = scratch_fft(cfg)
+analysis!(cfg, alm, field; fft_scratch)
+synthesis!(cfg, field_out, alm; fft_scratch)
 
-# Same code works on GPU arrays (uses CUDA kernels)
-using CUDA
-A_gpu = CuArray(A)
-B_gpu = similar(A_gpu)
-@sht_loop B_gpu[I] = sin(A_gpu[I]) over I ∈ CartesianIndices(A_gpu)
+plan = SHTPlan(cfg; use_rfft=true)
+analysis!(plan, alm, field)
+synthesis!(plan, field_out, alm)
+size(field_out)
 ```
 
-### Helper Functions
+A plan owns mutable scratch and is not safe for simultaneous use by multiple
+threads. Create one plan per worker or task when calls may overlap.
 
-```julia
-# Iterate over spectral coefficients
-for idx in spectral_range(lmax, mmax)
-    l, m = idx[1] - 1, idx[2] - 1
-    # ... work with Alm[l+1, m+1] ...
-end
+## Vector fields
 
-# Iterate over spatial grid
-for idx in spatial_range(nlat, nlon)
-    i_lat, i_lon = idx[1], idx[2]
-    # ... work with field[i_lat, i_lon] ...
-end
+Tangential fields use spheroidal (`S`) and toroidal (`T`) coefficients:
+
+```@example quickstart-vector
+using SHTnsKit
+
+cfg = create_gauss_config(24, 26)
+S = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+T = zeros(ComplexF64, size(S))
+S[4, 2] = 0.5 + 0.2im
+T[5, 3] = -0.3im
+
+vtheta, vphi = synthesis_sphtor(cfg, S, T)
+S_recovered, T_recovered = analysis_sphtor(cfg, vtheta, vphi)
+@assert maximum(abs, S_recovered - S) < 1e-11
+@assert maximum(abs, T_recovered - T) < 1e-11
+nothing
 ```
 
----
+For three-component vector fields use [`analysis_qst`](@ref) and
+[`synthesis_qst`](@ref).
 
-## Quick Reference
+## Batch transforms
 
-### Configuration
+```@example quickstart-batch
+using SHTnsKit
 
-```julia
-# Gauss-Legendre grid (recommended)
-cfg = create_gauss_config(lmax, nlat; nlon=nlon, mmax=mmax)
+cfg = create_gauss_config(16, 18)
+coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1, 3)
+coefficients[2, 1, 1] = 1
+coefficients[3, 2, 2] = 0.5im
+coefficients[4, 1, 3] = -0.25
 
-# Regular grid
-cfg = create_regular_config(lmax, nlat; nlon=nlon)
+fields = synthesis_batch(cfg, coefficients)
+recovered = analysis_batch(cfg, fields)
+size(recovered)
 ```
 
-### Scalar Transforms
+## Conventions and grids
 
-```julia
-# Forward (spectral → spatial)
-spatial = synthesis(cfg, Alm)
-spatial = synthesis(cfg, Alm; real_output=false)  # Complex output
+All transform families honor convention keywords stored in the configuration:
 
-# Backward (spatial → spectral)
-Alm = analysis(cfg, spatial)
+```@example quickstart-conventions
+using SHTnsKit
+
+cfg = create_gauss_config(
+    32, 34;
+    norm=:schmidt,
+    cs_phase=false,
+    real_norm=true,
+)
+(cfg.norm, cfg.cs_phase, cfg.real_norm)
 ```
 
-### Vector Transforms
+Use [`create_regular_config`](@ref) for equiangular sampling. See
+[Grid Types](grids.md) for latitude constraints and [Normalization and
+Phase](norms.md) before exchanging coefficients with another library.
 
-```julia
-# Spheroidal-Toroidal decomposition
-Slm, Tlm = analysis_sphtor(cfg, vθ, vφ)
-vθ, vφ = synthesis_sphtor(cfg, Slm, Tlm)
+## Device selection
 
-# Gradient
-dθ, dφ = synthesis_sph(cfg, Alm)
+CPU execution can be explicit or inferred:
+
+```@example quickstart-device
+using SHTnsKit
+
+cfg = create_gauss_config(8, 10)
+field = zeros(cfg.nlat, cfg.nlon)
+@assert analysis(cfg, field) == analysis(CPU(), cfg, field)
+on_device(field)
 ```
 
-### GPU Transforms
+For CUDA or AMDGPU, move the input to the device and call the same `analysis`
+and `synthesis` functions. See [GPU Acceleration](gpu.md).
 
-```julia
-Alm = gpu_analysis(cfg, spatial)
-spatial = gpu_synthesis(cfg, Alm)
-Alm = gpu_analysis_safe(cfg, spatial)  # With CPU fallback
-```
+## Next steps
 
-### Operators
-
-```julia
-# Laplacian in spectral space: Δf_lm = -l(l+1) f_lm
-for l in 0:cfg.lmax, m in 0:min(l, cfg.mmax)
-    Alm[l+1, m+1] *= -l * (l + 1)
-end
-```
-
----
-
-## Next Steps
-
-- **[GPU Guide](gpu.md)**: Detailed GPU acceleration documentation
-- **[Distributed Guide](distributed.md)**: MPI parallelization
-- **[API Reference](api/index.md)**: Complete function documentation
-- **[Examples](examples/index.md)**: Real-world applications
-- **[Performance Guide](performance.md)**: Optimization strategies
+- [Performance Guide](performance.md) for plans, scratch, tables, and batches.
+- [Advanced Usage](advanced.md) for packed layouts, operators, and diagnostics.
+- [Distributed Computing](distributed.md) for MPI execution.
+- [API Reference](api/index.md) for method signatures.

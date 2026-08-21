@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Parallel Fft Roundtrip · SHTnsKit.jl</title><meta name="title" content="Parallel Fft Roundtrip · SHTnsKit.jl"/><meta property="og:title" content="Parallel Fft Roundtrip · SHTnsKit.jl"/><meta property="twitter:title" content="Parallel Fft Roundtrip · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/literated/parallel_fft_roundtrip/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/literated/parallel_fft_roundtrip/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/literated/parallel_fft_roundtrip/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../installation/">Installation</a></li><li><a class="tocitem" href="../../quickstart/">Quick Start</a></li><li><a class="tocitem" href="../../migration/">Migrating to v2.0</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../../grids/">Grid Types</a></li><li><a class="tocitem" href="../../norms/">Normalization and Phase</a></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox" checked/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Generated Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../alloc_benchmark/">Alloc Benchmark</a></li><li><a class="tocitem" href="../gpu_acceleration/">Gpu Acceleration</a></li><li><a class="tocitem" href="../loop_demo/">Loop Demo</a></li><li><a class="tocitem" href="../operator_parallel/">Operator Parallel</a></li><li class="is-active"><a class="tocitem" href>Parallel Fft Roundtrip</a></li><li><a class="tocitem" href="../parallel_roundtrip/">Parallel Roundtrip</a></li><li><a class="tocitem" href="../rotate_y_parallel/">Rotate Y Parallel</a></li><li><a class="tocitem" href="../shallow_water_prognostic_parallel/">Shallow Water Prognostic Parallel</a></li></ul></li><li><a class="tocitem" href="../../gpu/">GPU Acceleration</a></li><li><a class="tocitem" href="../../distributed/">Distributed Computing</a></li><li><a class="tocitem" href="../../performance/">Performance Guide</a></li><li><a class="tocitem" href="../../performance_tips/">Performance Tips</a></li><li><a class="tocitem" href="../../advanced/">Advanced Usage</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../../api/">API Reference</a></li><li><a class="tocitem" href="../../shtns37-parity/">SHTns 3.7 Parity</a></li><li><a class="tocitem" href="../../examples/">Examples Gallery</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li><a class="is-disabled">Generated Examples</a></li><li class="is-active"><a href>Parallel Fft Roundtrip</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Parallel Fft Roundtrip</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/examples/parallel_fft_roundtrip.jl#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><pre><code class="language-julia hljs">#!/usr/bin/env julia</code></pre><p>Distributed FFT roundtrip with PencilArrays + FFTW</p><p>Run:   mpiexec -n 2 julia –project=. examples/parallel<em>fft</em>roundtrip.jl</p><p>Notes:</p><ul><li>Uses PencilArrays for distributed array management</li><li>Uses FFTW for 1D FFTs along the longitude dimension (local operations)</li><li>This matches the approach used in SHTnsKit&#39;s parallel extension</li></ul><pre><code class="language-julia hljs">using Random
+
+try
+    using MPI
+    using PencilArrays
+    using FFTW
+catch e
+    @error &quot;This example requires MPI, PencilArrays, and FFTW&quot; exception=(e, catch_backtrace())
+    exit(1)
+end
+
+MPI.Init()
+const COMM = MPI.COMM_WORLD
+const RANK = MPI.Comm_rank(COMM)
+const SIZE = MPI.Comm_size(COMM)
+
+if RANK == 0
+    println(&quot;Distributed FFT roundtrip with PencilArrays + FFTW ($SIZE ranks)&quot;)
+end</code></pre><p>Choose a modest 2D grid (θ × φ)</p><pre><code class="language-julia hljs">lmax = 24
+nlat = lmax + 8
+nlon = 2*lmax + 2</code></pre><p>Build a balanced 2D processor grid (pθ × pφ)</p><pre><code class="language-julia hljs">function procgrid(p)
+    best = (1, p); diff = p - 1
+    for d in 1:p
+        p % d == 0 || continue
+        d2 = div(p, d)
+        if abs(d - d2) &lt; diff
+            best = (d, d2); diff = abs(d - d2)
+        end
+    end
+    return best
+end
+
+pθ, pφ = procgrid(SIZE)
+topo = PencilArrays.Pencil((nlat, nlon), (pθ, pφ), COMM)</code></pre><p>Allocation helper for PencilArrays v0.19</p><pre><code class="language-julia hljs">function pa_zeros(::Type{T}, pen::Pencil) where {T}
+    local_dims = PencilArrays.size_local(pen)
+    local_data = zeros(T, local_dims...)
+    return PencilArray(pen, local_data)
+end</code></pre><p>Build a real-valued distributed field f(θ,φ)</p><pre><code class="language-julia hljs">Random.seed!(1234)
+fθφ = pa_zeros(Float64, topo)</code></pre><p>Get local data and fill with a smooth, separable pattern</p><pre><code class="language-julia hljs">local_data = parent(fθφ)
+for iθ in axes(local_data, 1), iφ in axes(local_data, 2)
+    local_data[iθ, iφ] = sin(0.3 * (iθ + 1)) * cos(0.2 * (iφ + 1))
+end</code></pre><p>Store original for comparison</p><pre><code class="language-julia hljs">fθφ_orig = copy(local_data)</code></pre><p>Perform FFT → IFFT roundtrip along φ (dimension 2) using FFTW on local data</p><pre><code class="language-julia hljs">function fft_roundtrip(data::Matrix{Float64})
+    nlat_loc, nlon_loc = size(data)</code></pre><p>Forward FFT along dimension 2 (longitude) for each row</p><pre><code class="language-julia hljs">    fft_result = Matrix{ComplexF64}(undef, nlat_loc, nlon_loc)
+    for i in 1:nlat_loc
+        row = data[i, :]
+        fft_result[i, :] = FFTW.fft(row)
+    end</code></pre><p>Inverse FFT to recover original</p><pre><code class="language-julia hljs">    recovered = Matrix{Float64}(undef, nlat_loc, nlon_loc)
+    for i in 1:nlat_loc
+        row = fft_result[i, :]
+        recovered[i, :] = real.(FFTW.ifft(row))
+    end
+
+    return recovered
+end</code></pre><p>Real-to-complex FFT roundtrip (more efficient for real data)</p><pre><code class="language-julia hljs">function rfft_roundtrip(data::Matrix{Float64})
+    nlat_loc, nlon_loc = size(data)
+    nk = nlon_loc ÷ 2 + 1</code></pre><p>Forward RFFT along dimension 2 (longitude) for each row</p><pre><code class="language-julia hljs">    rfft_result = Matrix{ComplexF64}(undef, nlat_loc, nk)
+    for i in 1:nlat_loc
+        row = data[i, :]
+        rfft_result[i, :] = FFTW.rfft(row)
+    end</code></pre><p>Inverse RFFT to recover original</p><pre><code class="language-julia hljs">    recovered = Matrix{Float64}(undef, nlat_loc, nlon_loc)
+    for i in 1:nlat_loc
+        row = rfft_result[i, :]
+        recovered[i, :] = FFTW.irfft(row, nlon_loc)
+    end
+
+    return recovered
+end</code></pre><p>Test complex FFT roundtrip</p><pre><code class="language-julia hljs">fθφ_recovered_c2c = fft_roundtrip(local_data)
+local_err_c2c = maximum(abs.(fθφ_recovered_c2c .- fθφ_orig))</code></pre><p>Test real FFT roundtrip</p><pre><code class="language-julia hljs">fθφ_recovered_r2c = rfft_roundtrip(local_data)
+local_err_r2c = maximum(abs.(fθφ_recovered_r2c .- fθφ_orig))</code></pre><p>Reduce across ranks to get global max error</p><pre><code class="language-julia hljs">global_err_c2c = MPI.Allreduce(local_err_c2c, MPI.MAX, COMM)
+global_err_r2c = MPI.Allreduce(local_err_r2c, MPI.MAX, COMM)
+
+if RANK == 0
+    println(&quot;[C2C] FFT roundtrip max error: $global_err_c2c (expected ~1e-14 to 1e-15)&quot;)
+    println(&quot;[R2C] FFT roundtrip max error: $global_err_r2c (expected ~1e-14 to 1e-15)&quot;)
+
+    if global_err_c2c &lt; 1e-10 &amp;&amp; global_err_r2c &lt; 1e-10
+        println(&quot;✓ FFT roundtrip test PASSED&quot;)
+    else
+        println(&quot;✗ FFT roundtrip test FAILED&quot;)
+        exit(1)
+    end
+end
+
+MPI.Barrier(COMM)
+if RANK == 0
+    println(&quot;Done.&quot;)
+end
+MPI.Finalize()</code></pre><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operator_parallel/">« Operator Parallel</a><a class="docs-footer-nextpage" href="../parallel_roundtrip/">Parallel Roundtrip »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 21 August 2026 13:39">Friday 21 August 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

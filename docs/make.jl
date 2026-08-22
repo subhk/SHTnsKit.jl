@@ -1,72 +1,7 @@
 using Documenter
 using SHTnsKit
 
-# Set up documentation generation
 println("Building SHTnsKit.jl documentation...")
-
-# Check for optional documentation dependencies
-const HAS_LITERATE = try
-    @eval using Literate
-    println(" Literate.jl available for example generation")
-    true
-catch
-    println(" Literate.jl not available - skipping example generation")
-    false
-end
-
-try
-    @eval using Plots
-    println(" Plots.jl available for documentation plots")
-catch
-    println(" Plots.jl not available - plots will be skipped in examples")
-end
-
-#####
-##### Generate literated examples (if available)
-#####
-
-if HAS_LITERATE
-    const EXAMPLES_DIR = joinpath(@__DIR__, "..", "examples")
-    const OUTPUT_DIR   = joinpath(@__DIR__, "src/literated")
-    
-    # Create output directory if it doesn't exist
-    if !isdir(OUTPUT_DIR)
-        mkpath(OUTPUT_DIR)
-    end
-    
-    # List of example files to process
-    example_files = []
-    
-    if isdir(EXAMPLES_DIR)
-        for file in readdir(EXAMPLES_DIR)
-            if endswith(file, ".jl") && !startswith(file, ".")
-                push!(example_files, file)
-            end
-        end
-        
-        println("Found $(length(example_files)) example files to process")
-        
-        # Process each example file
-        for example in example_files
-            try
-                example_filepath = joinpath(EXAMPLES_DIR, example)
-                println("Processing example: $example")
-                
-                # Generate markdown with Documenter flavor
-                Literate.markdown(example_filepath, OUTPUT_DIR;
-                                flavor = Literate.DocumenterFlavor(),
-                                codefence = "````julia" => "````",
-                                execute = false)  # Render optional/MPI examples without executing them
-                                
-                println("OK Generated: $(replace(example, ".jl" => ".md"))")
-            catch e
-                println("Warning: Failed to process $example: $e")
-            end
-        end
-    else
-        println("Examples directory not found: $EXAMPLES_DIR")
-    end
-end
 
 #####
 ##### Documentation configuration
@@ -93,49 +28,22 @@ pages = Any[
     "Home" => "index.md",
     "Getting Started" => Any[
         "Installation" => "installation.md",
-        "Quick Start" => "quickstart.md",
-        "Migrating to v2.0" => "migration.md"
+        "Quick Start" => "quickstart.md"
     ],
     "User Guide" => Any[
         "Grid Types" => "grids.md",
-        "Normalization and Phase" => "norms.md",
+        "Examples Gallery" => "examples/index.md",
         "GPU Acceleration" => "gpu.md",
         "Distributed Computing" => "distributed.md",
         "Performance Guide" => "performance.md",
-        "Performance Tips" => "performance_tips.md",
         "Advanced Usage" => "advanced.md"
     ],
     "Reference" => Any[
+        "Normalization and Phase" => "norms.md",
         "API Reference" => "api/index.md",
-        "SHTns 3.7 Parity" => "shtns37-parity.md",
-        "Examples Gallery" => "examples/index.md"
+        "Migrating to v2.0" => "migration.md"
     ]
 ]
-
-# Add literated examples if they exist
-if HAS_LITERATE && isdir(joinpath(@__DIR__, "src/literated"))
-    literated_files = []
-    literated_dir = joinpath(@__DIR__, "src/literated")
-    
-    for file in readdir(literated_dir)
-        if endswith(file, ".md") && file != "index.md"
-            # Create nice titles from filenames
-            title = replace(replace(file, ".md" => ""), "_" => " ")
-            title = titlecase(title)
-            push!(literated_files, title => "literated/$file")
-        end
-    end
-    
-    if !isempty(literated_files)
-        # Insert literated examples into the User Guide section
-        user_guide_idx = findfirst(p -> p[1] == "User Guide", pages)
-        if user_guide_idx !== nothing
-            # Keep generated recipes after the foundational grid/convention pages.
-            examples_section = Any["Generated Examples" => literated_files]
-            splice!(pages[user_guide_idx][2], 3:2, examples_section)
-        end
-    end
-end
 
 #####
 ##### Build documentation
@@ -154,7 +62,7 @@ makedocs(;
     doctest = true,
     linkcheck = false,  # Set to true for link checking (slower)
     checkdocs = :exports,
-    warnonly = [:cross_references, :missing_docs],
+    warnonly = [:missing_docs],
     draft = false
 )
 
@@ -183,43 +91,3 @@ else
     println("Documentation built successfully!")
     println("Open docs/build/index.html to view locally")
 end
-
-#####
-##### Cleanup
-#####
-
-println("Cleaning up temporary files...")
-
-# Clean up any temporary files created during documentation build
-temp_patterns = [r"\.jld2$", r"\.h5$", r"\.tmp$"]
-temp_files = String[]
-
-function find_temp_files(dir, patterns)
-    files = String[]
-    if isdir(dir)
-        for (root, dirs, filenames) in walkdir(dir)
-            for filename in filenames
-                for pattern in patterns
-                    if occursin(pattern, filename)
-                        push!(files, joinpath(root, filename))
-                    end
-                end
-            end
-        end
-    end
-    return files
-end
-
-# Look for temporary files in docs directory
-temp_files = find_temp_files(@__DIR__, temp_patterns)
-
-for file in temp_files
-    try
-        rm(file)
-        println("Removed temporary file: $file")
-    catch e
-        println("Failed to remove $file: $e")
-    end
-end
-
-println("Documentation build complete!")

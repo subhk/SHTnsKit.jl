@@ -1,28 +1,16 @@
 # SHTnsKit.jl
 
-SHTnsKit.jl is a pure-Julia spherical harmonic transform library for scalar,
-vector, and QST fields. The same mathematical conventions are available across
-serial CPU, CUDA, AMDGPU, and MPI/PencilArrays backends.
+SHTnsKit.jl transforms scalar and vector fields between values on a spherical
+grid and spherical-harmonic coefficients. It is written in Julia and supports
+the same transform conventions on CPUs, NVIDIA and AMD GPUs, and MPI-distributed
+arrays.
 
-[![Build Status](https://github.com/subhk/SHTnsKit.jl/workflows/CI/badge.svg)](https://github.com/subhk/SHTnsKit.jl/actions)
-[![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://subhk.github.io/SHTnsKit.jl/stable)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+## What it provides
 
-## Highlights
-
-- Scalar, complex, spheroidal/toroidal, and QST transforms.
-- Gauss–Legendre, regular Fejér, pole-inclusive regular, and
-  Driscoll–Healy grids.
-- Orthonormal, four-pi, and Schmidt normalization; configurable
-  Condon–Shortley phase, real-field normalization, and Robert form.
-- Reusable serial and distributed plans, packed layouts, batch transforms,
-  rotations, differential operators, and diagnostics.
-- Vendor-native CUDA and AMDGPU array dispatch, plus MPI-distributed CPU/GPU
-  paths with explicitly tracked parity status.
-- ForwardDiff, Zygote, ChainRulesCore, and LoopVectorization extensions.
-
-See the [SHTns 3.7 parity matrix](shtns37-parity.md) for the executable
-capability inventory and backend certification status.
+- Scalar, tangential-vector, and three-component QST transforms.
+- Gauss–Legendre and equiangular grids, with explicit quadrature conventions.
+- Reusable plans, batch transforms, rotations, operators, and energy spectra.
+- Optional CUDA, AMDGPU, MPI, automatic-differentiation, and SIMD extensions.
 
 ## Install
 
@@ -31,73 +19,43 @@ using Pkg
 Pkg.add("SHTnsKit")
 ```
 
-Optional functionality is activated by loading its dependencies:
-
-```julia
-Pkg.add(["CUDA", "GPUArrays", "KernelAbstractions"])       # NVIDIA
-Pkg.add(["AMDGPU", "GPUArrays", "KernelAbstractions"])     # AMD
-Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])             # distributed
-```
+See [Installation](installation.md) only if you need a GPU, MPI, or help with
+setup.
 
 ## First transform
+
+Start with known band-limited coefficients so the roundtrip has an exact answer:
 
 ```@example home-roundtrip
 using SHTnsKit
 
 cfg = create_gauss_config(16, 18)
-
-# Start with band-limited coefficients so analysis/synthesis is an exact
-# roundtrip at the configured resolution.
 coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
-coefficients[3, 1] = 1.0
+coefficients[3, 1] = 1.0             # degree l=2, order m=0
+coefficients[5, 3] = 0.25 - 0.1im   # degree l=4, order m=2
+
 field = synthesis(cfg, coefficients)
 recovered = analysis(cfg, field)
 
 @assert maximum(abs, recovered - coefficients) < 1e-12
-nothing
+size(field)
 ```
 
-For repeated transforms, preallocate outputs and reuse an [`SHTPlan`](@ref):
+Spatial fields use `(latitude, longitude)` order. Dense coefficients use
+`(l + 1, m + 1)` indexing because Julia arrays start at one.
 
-```@example home-plan
-using SHTnsKit
+## Choose your path
 
-cfg = create_gauss_config(16, 18)
-plan = SHTPlan(cfg; use_rfft=true)
-field = rand(cfg.nlat, cfg.nlon)
-coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
-reconstructed = zeros(cfg.nlat, cfg.nlon)
+| I want to… | Read… |
+|---|---|
+| understand the basic arrays and transform direction | [Quick Start](quickstart.md) |
+| choose the right spherical sampling | [Grid Types](grids.md) |
+| adapt a working scientific recipe | [Examples Gallery](examples/index.md) |
+| keep transforms on an NVIDIA or AMD GPU | [GPU Acceleration](gpu.md) |
+| distribute fields across MPI ranks | [Distributed Computing](distributed.md) |
+| make repeated transforms faster | [Performance Guide](performance.md) |
+| use packed storage, operators, rotations, or AD | [Advanced Usage](advanced.md) |
+| exchange coefficients with another library | [Normalization and Phase](norms.md) |
 
-analysis!(plan, coefficients, field)
-synthesis!(plan, reconstructed, coefficients)
-size(reconstructed)
-```
-
-!!! note "GPU dispatch"
-    `analysis(cfg, device_array)` and `synthesis(cfg, device_coefficients)` keep
-    data on the detected CUDA or AMDGPU device. Strict `GPU()` dispatch never
-    silently falls back to the CPU. See [GPU Acceleration](gpu.md) for device
-    transfer and fallback details.
-
-## Where to go next
-
-- [Quick Start](quickstart.md) — scalar, vector, planned, and batch workflows.
-- [Grid Types](grids.md) — sampling constraints and constructor choices.
-- [Normalization and Phase](norms.md) — coefficient conventions.
-- [Migrating to v2.0](migration.md) — breaking API and numerical changes.
-- [GPU Acceleration](gpu.md) — CUDA and AMDGPU execution.
-- [Distributed Computing](distributed.md) — MPI/PencilArrays transforms.
-- [API Reference](api/index.md) — generated public API documentation.
-
-```@contents
-Pages = [
-    "quickstart.md",
-    "grids.md",
-    "norms.md",
-    "migration.md",
-    "gpu.md",
-    "distributed.md",
-    "api/index.md",
-]
-Depth = 1
-```
+The [API Reference](api/index.md) lists the complete public surface. Most users
+can begin with the default Gauss–Legendre grid and orthonormal convention.

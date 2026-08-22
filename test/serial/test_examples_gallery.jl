@@ -8,15 +8,35 @@ using Test
 const EXAMPLES_GALLERY = normpath(joinpath(
     @__DIR__, "..", "..", "docs", "src", "examples", "index.md"
 ))
+const DOCS_ROOT = normpath(joinpath(@__DIR__, "..", "..", "docs"))
 
 function gallery_julia_blocks(path::AbstractString=EXAMPLES_GALLERY)
     markdown = read(path, String)
     return [m.captures[1] for m in eachmatch(r"```julia\n(.*?)\n```"s, markdown)]
 end
 
+@testset "Web documentation structure" begin
+    makefile = read(joinpath(DOCS_ROOT, "make.jl"), String)
+    grids = read(joinpath(DOCS_ROOT, "src", "grids.md"), String)
+    gallery = read(EXAMPLES_GALLERY, String)
+
+    @test occursin("<picture>", grids)
+    @test occursin("grid-patterns.svg", grids)
+    @test occursin("grid-patterns-stacked.svg", grids)
+    @test occursin("alt=\"Four globes comparing", grids)
+
+    @test !occursin("Literate.markdown", makefile)
+    @test !occursin("Generated Examples", makefile)
+    @test !occursin("Performance Tips", makefile)
+    @test !occursin("SHTns 3.7 Parity", makefile)
+
+    @test length(gallery_julia_blocks()) == 6
+    @test !occursin("using MPI", gallery)
+end
+
 @testset "Examples Gallery serial snippets" begin
     blocks = gallery_julia_blocks()
-    @test length(blocks) == 14
+    @test length(blocks) == 6
 
     for (index, code) in enumerate(blocks)
         occursin("using MPI", code) && continue

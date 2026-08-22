@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples Gallery · SHTnsKit.jl</title><meta name="title" content="Examples Gallery · SHTnsKit.jl"/><meta property="og:title" content="Examples Gallery · SHTnsKit.jl"/><meta property="twitter:title" content="Examples Gallery · SHTnsKit.jl"/><meta name="description" content="Documentation for SHTnsKit.jl."/><meta property="og:description" content="Documentation for SHTnsKit.jl."/><meta property="twitter:description" content="Documentation for SHTnsKit.jl."/><meta property="og:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><meta property="twitter:url" content="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><link rel="canonical" href="https://subhk.github.io/SHTnsKit.jl/stable/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SHTnsKit.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../installation/">Installation</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../grids/">Grid Types</a></li><li class="is-active"><a class="tocitem" href>Examples Gallery</a><ul class="internal"><li><a class="tocitem" href="#Scalar-roundtrip"><span>Scalar roundtrip</span></a></li><li><a class="tocitem" href="#Power-spectrum"><span>Power spectrum</span></a></li><li><a class="tocitem" href="#Vector-decomposition"><span>Vector decomposition</span></a></li><li><a class="tocitem" href="#Stream-function"><span>Stream function</span></a></li><li><a class="tocitem" href="#Benchmark-repeated-transforms"><span>Benchmark repeated transforms</span></a></li><li><a class="tocitem" href="#Rotate-a-field"><span>Rotate a field</span></a></li><li><a class="tocitem" href="#Scale-out-with-MPI"><span>Scale out with MPI</span></a></li></ul></li><li><a class="tocitem" href="../gpu/">GPU Acceleration</a></li><li><a class="tocitem" href="../distributed/">Distributed Computing</a></li><li><a class="tocitem" href="../performance/">Performance Guide</a></li><li><a class="tocitem" href="../advanced/">Advanced Usage</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../norms/">Normalization and Phase</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../migration/">Migrating to v2.0</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Examples Gallery</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples Gallery</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/SHTnsKit.jl/blob/main/docs/src/examples/index.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples-Gallery"><a class="docs-heading-anchor" href="#Examples-Gallery">Examples Gallery</a><a id="Examples-Gallery-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-Gallery" title="Permalink"></a></h1><p>These six copy-ready examples cover the workflows most users need. Every Julia block is executed by the package test suite so it cannot silently drift from the public API.</p><table><tr><th style="text-align: left">Task</th><th style="text-align: left">Example</th></tr><tr><td style="text-align: left">transform a scalar field</td><td style="text-align: left"><a href="#Scalar-roundtrip">Scalar roundtrip</a></td></tr><tr><td style="text-align: left">inspect energy by degree</td><td style="text-align: left"><a href="#Power-spectrum">Power spectrum</a></td></tr><tr><td style="text-align: left">decompose a tangential vector field</td><td style="text-align: left"><a href="#Vector-decomposition">Vector decomposition</a></td></tr><tr><td style="text-align: left">recover a stream function from vorticity</td><td style="text-align: left"><a href="#Stream-function">Stream function</a></td></tr><tr><td style="text-align: left">measure local performance</td><td style="text-align: left"><a href="#Benchmark-repeated-transforms">Benchmark repeated transforms</a></td></tr><tr><td style="text-align: left">change coordinate orientation</td><td style="text-align: left"><a href="#Rotate-a-field">Rotate a field</a></td></tr></table><h2 id="Scalar-roundtrip"><a class="docs-heading-anchor" href="#Scalar-roundtrip">Scalar roundtrip</a><a id="Scalar-roundtrip-1"></a><a class="docs-heading-anchor-permalink" href="#Scalar-roundtrip" title="Permalink"></a></h2><p>This latitude-only temperature pattern is band-limited, so the configured transform can reconstruct it to floating-point accuracy:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(16, 18; nlon=33)
+temperature = [
+    273.15 + 30 * (1 - cfg.x[i]^2)
+    for i in 1:cfg.nlat, _ in 1:cfg.nlon
+]
+
+coefficients = analysis(cfg, temperature)
+reconstructed = synthesis(cfg, coefficients)
+error = maximum(abs, reconstructed - temperature)
+
+@assert error &lt; 1e-10
+println(&quot;roundtrip error: $error&quot;)</code></pre><p>Use the same <code>(latitude, longitude)</code> layout for measured data. Its roundtrip is the band-limited projection represented by <code>lmax</code> and <code>mmax</code>.</p><h2 id="Power-spectrum"><a class="docs-heading-anchor" href="#Power-spectrum">Power spectrum</a><a id="Power-spectrum-1"></a><a class="docs-heading-anchor-permalink" href="#Power-spectrum" title="Permalink"></a></h2><p><a href="../api/#SHTnsKit.energy_scalar_l_spectrum-Tuple{SHTConfig, AbstractMatrix}"><code>energy_scalar_l_spectrum</code></a> groups spectral energy by spherical-harmonic degree <code>l</code>:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(32, 34; nlon=65)
+coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+coefficients[3, 1] = 2.0          # l=2, m=0: dominant large scale
+coefficients[7, 4] = 0.5 - 0.1im # l=6, m=3: weaker small scale
+
+field = synthesis(cfg, coefficients)
+power = energy_scalar_l_spectrum(cfg, analysis(cfg, field))
+peak_degree = argmax(power) - 1
+
+@assert peak_degree == 2
+println(&quot;peak energy occurs at degree l=$peak_degree&quot;)</code></pre><h2 id="Vector-decomposition"><a class="docs-heading-anchor" href="#Vector-decomposition">Vector decomposition</a><a id="Vector-decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-decomposition" title="Permalink"></a></h2><p>Tangential components are ordered <code>(Vθ, Vφ)</code>: increasing colatitude first, increasing longitude second. Analysis separates divergent spheroidal modes from rotational toroidal modes:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(64, 66; nlon=129)
+Vθ = zeros(cfg.nlat, cfg.nlon)
+Vφ = zeros(cfg.nlat, cfg.nlon)
+
+for i in 1:cfg.nlat, j in 1:cfg.nlon
+    θ, φ = cfg.θ[i], cfg.φ[j]
+    Vθ[i, j] = 5 * cos(θ) * cos(φ)
+    Vφ[i, j] = -5 * sin(φ) + 20 * sin(θ)
+end
+
+S, T = analysis_sphtor(cfg, Vθ, Vφ)
+Vθ_reconstructed, Vφ_reconstructed = synthesis_sphtor(cfg, S, T)
+velocity_error = max(
+    maximum(abs, Vθ_reconstructed - Vθ),
+    maximum(abs, Vφ_reconstructed - Vφ),
+)
+
+@assert velocity_error &lt; 1e-10
+println(&quot;vector roundtrip error: $velocity_error&quot;)</code></pre><h2 id="Stream-function"><a class="docs-heading-anchor" href="#Stream-function">Stream function</a><a id="Stream-function-1"></a><a class="docs-heading-anchor-permalink" href="#Stream-function" title="Permalink"></a></h2><p>For a vorticity mode <code>ζ[l,m]</code>, solve <code>-l(l+1)ψ[l,m] = ζ[l,m]</code> in spectral space, leaving the undetermined constant mode at zero:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(24, 26; nlon=49)
+vorticity_coefficients = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+vorticity_coefficients[5, 3] = 1.0 - 0.25im # l=4, m=2
+
+stream_coefficients = similar(vorticity_coefficients)
+fill!(stream_coefficients, 0)
+for l in 1:cfg.lmax, m in 0:min(l, cfg.mmax)
+    stream_coefficients[l + 1, m + 1] =
+        -vorticity_coefficients[l + 1, m + 1] / (l * (l + 1))
+end
+
+stream_function = synthesis(cfg, stream_coefficients)
+zero_spheroidal = zero(stream_coefficients)
+Vθ, Vφ = synthesis_sphtor(cfg, zero_spheroidal, stream_coefficients)
+
+@assert all(isfinite, stream_function)
+println(&quot;stream-function range: &quot;, extrema(stream_function))
+println(&quot;maximum flow speed: &quot;, maximum(hypot.(Vθ, Vφ)))</code></pre><h2 id="Benchmark-repeated-transforms"><a class="docs-heading-anchor" href="#Benchmark-repeated-transforms">Benchmark repeated transforms</a><a id="Benchmark-repeated-transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Benchmark-repeated-transforms" title="Permalink"></a></h2><p>BenchmarkTools handles warmup and repeated samples. Keep setup values outside the timed expression and always pair a timing with an accuracy check:</p><pre><code class="language-julia hljs">using SHTnsKit, BenchmarkTools
+
+cfg = create_gauss_config(64, 66; nlon=129)
+spatial = [
+    sin(2cfg.θ[i]) * cos(cfg.φ[j]) +
+    0.5 * sin(cfg.θ[i])^3 * cos(3cfg.φ[j])
+    for i in 1:cfg.nlat, j in 1:cfg.nlon
+]
+
+analysis_time = @belapsed analysis($cfg, $spatial) seconds=0.2
+coefficients = analysis(cfg, spatial)
+synthesis_time = @belapsed synthesis($cfg, $coefficients) seconds=0.2
+
+recovered = synthesis(cfg, coefficients)
+max_error = maximum(abs, recovered - spatial)
+@assert max_error &lt; 1e-10
+
+println(&quot;analysis: $(round(analysis_time * 1e3, digits=2)) ms&quot;)
+println(&quot;synthesis: $(round(synthesis_time * 1e3, digits=2)) ms&quot;)</code></pre><p>For a long-running application, move next to reusable plans and batch calls in the <a href="../performance/">Performance Guide</a>.</p><h2 id="Rotate-a-field"><a class="docs-heading-anchor" href="#Rotate-a-field">Rotate a field</a><a id="Rotate-a-field-1"></a><a class="docs-heading-anchor-permalink" href="#Rotate-a-field" title="Permalink"></a></h2><p>Reusable Euler rotations operate on packed, SHTns-compatible real-field coefficients and preserve scalar energy:</p><pre><code class="language-julia hljs">using SHTnsKit
+
+cfg = create_gauss_config(32, 34; nlon=65)
+input = zeros(ComplexF64, cfg.nlm)
+input[LM_index(cfg.lmax, cfg.mres, 3, 2) + 1] = 1.0
+
+rotation = SHTRotation(cfg.lmax, cfg.mmax)
+shtns_rotation_set_angles_ZYZ(rotation, π / 4, π / 6, π / 8)
+rotated = similar(input)
+shtns_rotation_apply_real(rotation, input, rotated)
+
+rotated_field = reshape(synthesis_packed(cfg, rotated), cfg.nlat, cfg.nlon)
+orig_power = energy_scalar_packed(cfg, input)
+rot_power = energy_scalar_packed(cfg, rotated)
+
+@assert isapprox(orig_power, rot_power; rtol=1e-10)
+println(&quot;rotated field range: &quot;, extrema(rotated_field))</code></pre><h2 id="Scale-out-with-MPI"><a class="docs-heading-anchor" href="#Scale-out-with-MPI">Scale out with MPI</a><a id="Scale-out-with-MPI-1"></a><a class="docs-heading-anchor-permalink" href="#Scale-out-with-MPI" title="Permalink"></a></h2><p>The repository keeps two longer multi-process programs as executable scripts:</p><pre><code class="language-bash hljs">mpiexec -n 2 julia --project=. examples/parallel_roundtrip.jl
+mpiexec -n 2 julia --project=. examples/parallel_fft_roundtrip.jl</code></pre><p>See <a href="../distributed/">Distributed Computing</a> for package setup, data layout, and the choice between replicated and distributed spectral coefficients.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../grids/">« Grid Types</a><a class="docs-footer-nextpage" href="../gpu/">GPU Acceleration »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Saturday 22 August 2026 21:26">Saturday 22 August 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

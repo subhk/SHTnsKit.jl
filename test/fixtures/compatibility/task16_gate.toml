@@ -6,13 +6,13 @@ platform = "aarch64-apple-darwin"
 [local_gate]
 evidence_kind = "local_readiness"
 certifying = false
-audited_tree_digest = "6803ace848bfda8724c16230758b5dddebc9eb247a2ccb95f1c7e686696aec4b"
+audited_tree_digest = "01edf401912fe5ecbbc8b6b24ea03d94de04ac4214a46b4d98628cf77863b8d5"
 audited_scope = ["Project.toml", ".github/workflows", "docs/src/shtns37-parity.md", "ext", "src", "test"]
 audited_exclusions = ["test/fixtures/compatibility/task16_gate.toml", "test/fixtures/compatibility/task16_local_commands.txt", "test/fixtures/compatibility/task16_local_summary.log"]
 commands_file = "test/fixtures/compatibility/task16_local_commands.txt"
-commands_sha256 = "5ecb56be9a8baec0cc973874f097036eec9757f273fb6ee41a0bc2d968e12997"
+commands_sha256 = "96e77c24760d60fa170fb051bc8563452c68bad51cd90fdd53c5866c7a81a31b"
 summary_log = "test/fixtures/compatibility/task16_local_summary.log"
-summary_log_sha256 = "08ea83a9ea121c3cd8f2e46305e0e87fc8d31aad4030b5bb573cd8c18518b0be"
+summary_log_sha256 = "7a96d75fe6c8deef76323bf379a466164087e214914d6921bcd488e65b030b27"
 pkg_exit_code = 0
 serial_pass = 76055
 parallel_grid_pass = 1692

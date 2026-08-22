@@ -5,6 +5,23 @@ function _task16_sha256(path::AbstractString)
     return bytes2hex(sha256(read(path)))
 end
 
+const _TASK16_PROJECT_VERSION_LINE = r"(?m)^version = \"[^\"]+\"$"
+
+function _task16_audited_sha256(root::AbstractString, path::AbstractString)
+    file = joinpath(root, path)
+    path == "Project.toml" || return _task16_sha256(file)
+
+    project = read(file, String)
+    length(findall(_TASK16_PROJECT_VERSION_LINE, project)) == 1 ||
+        throw(ArgumentError("Task 16 audit requires one Project.toml version field"))
+    normalized = replace(
+        project,
+        _TASK16_PROJECT_VERSION_LINE => "version = \"<package-version>\"";
+        count=1,
+    )
+    return bytes2hex(sha256(codeunits(normalized)))
+end
+
 const _TASK16_AUDITED_SCOPE = [
     "Project.toml",
     ".github/workflows",
@@ -62,10 +79,12 @@ end
     task16_audited_tree_digest(root, scope, exclusions)
 
 Compute a Git-independent content identity. The outer SHA-256 covers a sorted
-manifest whose records are `relative-path NUL SHA256(file) newline`.
+manifest whose records are `relative-path NUL SHA256(file) newline`. The
+top-level `Project.toml` version is normalized before hashing so release-only
+version bumps do not invalidate otherwise identical readiness evidence.
 """
 function task16_audited_tree_digest(root::AbstractString, scope, exclusions)
-    records = [path * '\0' * _task16_sha256(joinpath(root, path))
+    records = [path * '\0' * _task16_audited_sha256(root, path)
                for path in _task16_audited_paths(root, scope, exclusions)]
     return bytes2hex(sha256(codeunits(join(records, '\n') * '\n')))
 end

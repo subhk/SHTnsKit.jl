@@ -1,10 +1,10 @@
 evidence_kind=local_readiness
 certifying=false
-audited_tree_digest=01edf401912fe5ecbbc8b6b24ea03d94de04ac4214a46b4d98628cf77863b8d5
+audited_tree_digest=b2fd7e6f2fb43479d522ed21ae84c35743b47bcecc78d04bb0254f79afc80e3c
 platform=aarch64-apple-darwin
 julia=1.12.4
 pkg_exit_code=0
-serial_pass=76055
+serial_pass=76057
 parallel_grid_pass=1692
 jet_pass=30
 aqua_pass=3

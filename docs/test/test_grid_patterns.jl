@@ -44,6 +44,9 @@ end
 @testset "grid page wiring" begin
     page = read(joinpath(ROOT, "docs", "src", "grids.md"), String)
     makefile = read(joinpath(ROOT, "docs", "make.jl"), String)
+    workflow = read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)
     @test occursin("assets/grid-patterns.svg", page)
     @test occursin("Grid Types\" => \"grids.md", makefile)
+    @test occursin("name: Test documentation plots", workflow)
+    @test occursin("julia --project=docs docs/test/test_grid_patterns.jl", workflow)
 end

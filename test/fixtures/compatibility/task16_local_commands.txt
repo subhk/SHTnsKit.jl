@@ -1,6 +1,6 @@
 evidence_kind=local_readiness
 certifying=false
-audited_tree_digest=0b98e74ea24ee81324afbf4fbeaa46188433a0388e72019a6fa1fb076ad5ff82
+audited_tree_digest=81e82fe3b9e1b943499c33819ee89c45745014b65ba6dde452c0438980679129
 audited_scope=Project.toml,.github/workflows,docs/src/shtns37-parity.md,ext,src,test
 audited_exclusions=test/fixtures/compatibility/task16_gate.toml,test/fixtures/compatibility/task16_local_commands.txt,test/fixtures/compatibility/task16_local_summary.log
 pkg_command=/usr/bin/env JULIA_DEPOT_PATH=/private/tmp/julia_depot_shtnskit:/Users/subha/.julia SHTNSKIT_RUN_JET_TESTS=1 SHTNSKIT_RUN_AQUA_TESTS=1 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'

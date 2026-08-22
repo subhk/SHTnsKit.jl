@@ -190,35 +190,37 @@ Ready to tackle more complex problems? These examples introduce vector fields, r
 
 ```julia
 using SHTnsKit
-using LinearAlgebra
 
 lmax = 64
 cfg = create_gauss_config(lmax, lmax+2; nlon=2*lmax+1)
 
-# Create a realistic atmospheric flow pattern
-u = zeros(cfg.nlat, cfg.nlon)  # Zonal wind (east-west)
-v = zeros(cfg.nlat, cfg.nlon)  # Meridional wind (north-south)
+# Create a smooth, band-limited atmospheric flow pattern. The first component
+# is meridional (increasing colatitude); the second is zonal (increasing
+# longitude). These l=1 patterns are represented exactly at this resolution.
+Vθ = zeros(cfg.nlat, cfg.nlon)
+Vφ = zeros(cfg.nlat, cfg.nlon)
 
 for i in 1:cfg.nlat, j in 1:cfg.nlon
     θ = cfg.θ[i]
     φ = cfg.φ[j]
-    u[i,j] = 20 * sin(2θ) * (1 + 0.4 * cos(4φ))  # Jet stream
-    v[i,j] = 5 * cos(3θ) * sin(2φ)                # Meridional flow
+    Vθ[i,j] = 5 * cos(θ) * cos(φ)             # Divergent circulation
+    Vφ[i,j] = -5 * sin(φ) + 20 * sin(θ)       # Circulation + solid-body jet
 end
 
 # Decompose into spheroidal (divergent) and toroidal (rotational)
-Slm, Tlm = analysis_sphtor(cfg, u, v)
+Slm, Tlm = analysis_sphtor(cfg, Vθ, Vφ)
 
 # Analyze energy distribution
-spheroidal_energy = sum(abs2, Slm)
-toroidal_energy = sum(abs2, Tlm)
+spheroidal_energy = energy_vector(cfg, Slm, zero(Tlm))
+toroidal_energy = energy_vector(cfg, zero(Slm), Tlm)
 println("Spheroidal (divergent) energy: $spheroidal_energy")
 println("Toroidal (rotational) energy: $toroidal_energy")
 
 # Reconstruct original velocity
-u_recon, v_recon = synthesis_sphtor(cfg, Slm, Tlm)
-velocity_error = norm(u - u_recon) + norm(v - v_recon)
+Vθ_recon, Vφ_recon = synthesis_sphtor(cfg, Slm, Tlm)
+velocity_error = max(maximum(abs.(Vθ - Vθ_recon)), maximum(abs.(Vφ - Vφ_recon)))
 println("Velocity reconstruction error: $velocity_error")
+@assert velocity_error < 1e-10
 
 destroy_config(cfg)
 ```
@@ -386,30 +388,31 @@ spatial = zeros(cfg.nlat, cfg.nlon)
 for i in 1:cfg.nlat, j in 1:cfg.nlon
     θ = cfg.θ[i]
     φ = cfg.φ[j]
-    spatial[i,j] = sin(2θ) * cos(φ) + 0.5 * sin(4θ) * cos(3φ)
+    spatial[i,j] = sin(2θ) * cos(φ) + 0.5 * sin(θ)^3 * cos(3φ)
 end
 
 # Benchmark analysis (spatial → spectral)
-analysis_time = @belapsed analysis($cfg, $spatial)
+analysis_time = @belapsed analysis($cfg, $spatial) seconds=0.2
 println("Analysis time: $(analysis_time*1000) ms")
 
 Alm = analysis(cfg, spatial)
 
 # Benchmark synthesis (spectral → spatial)
-synthesis_time = @belapsed synthesis($cfg, $Alm)
+synthesis_time = @belapsed synthesis($cfg, $Alm) seconds=0.2
 println("Synthesis time: $(synthesis_time*1000) ms")
 
 # Benchmark roundtrip
 roundtrip_time = @belapsed begin
     alm = analysis($cfg, $spatial)
     synthesis($cfg, alm)
-end
+end seconds=0.2
 println("Roundtrip time: $(roundtrip_time*1000) ms")
 
 # Verify accuracy
 recovered = synthesis(cfg, Alm)
 max_error = maximum(abs.(spatial - recovered))
 println("Roundtrip error: $max_error")
+@assert max_error < 1e-10
 
 # Threading info
 println("\nThreading configuration:")
@@ -676,7 +679,9 @@ println("Rotated field range: ", extrema(rotated_field))
 # Verify rotation preserves power
 orig_power = energy_scalar_packed(cfg, f_lm)
 rot_power = energy_scalar_packed(cfg, f_rot)
-println("Power preserved: ", isapprox(orig_power, rot_power, rtol=1e-10))
+power_preserved = isapprox(orig_power, rot_power, rtol=1e-10)
+println("Power preserved: ", power_preserved)
+@assert power_preserved
 
 destroy_config(cfg)
 ```
@@ -688,7 +693,6 @@ destroy_config(cfg)
 ```julia
 using SHTnsKit
 using Base.Threads
-using Statistics
 
 lmax = 64
 nlat = lmax + 2
@@ -725,8 +729,10 @@ results = Vector{Float64}(undef, n_batch)
     results[i] = sum(power)
 end
 
-println("Mean energy per field: ", mean(results))
-println("Energy std dev: ", std(results))
+mean_energy = sum(results) / length(results)
+sample_std = sqrt(sum(abs2, results .- mean_energy) / (length(results) - 1))
+println("Mean energy per field: ", mean_energy)
+println("Energy std dev: ", sample_std)
 
 destroy_config(cfg)
 ```

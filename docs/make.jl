@@ -56,7 +56,6 @@ if HAS_LITERATE
                 Literate.markdown(example_filepath, OUTPUT_DIR;
                                 flavor = Literate.DocumenterFlavor(),
                                 codefence = "````julia" => "````",
-                                documenter = true,
                                 execute = false)  # Render optional/MPI examples without executing them
                                 
                 println("OK Generated: $(replace(example, ".jl" => ".md"))")

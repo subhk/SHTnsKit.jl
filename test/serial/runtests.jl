@@ -9,6 +9,7 @@ using Test
     include("test_shtns37_contract.jl")
     include(joinpath(@__DIR__, "..", "parity", "shtns37_fixtures.jl"))
     test_shtns37_fixtures_cpu()
+    include("test_examples_gallery.jl")
     include("test_configuration.jl")
     include("test_grid_quadrature_parity.jl")
     include("test_indexing.jl")

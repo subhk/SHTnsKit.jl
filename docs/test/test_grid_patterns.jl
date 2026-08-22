@@ -60,6 +60,10 @@ end
     @test occursin("<picture>", page)
     @test occursin("media=\"(max-width: 700px)\"", page)
     @test occursin("```@raw html", page)
+    @test occursin("## Gauss–Legendre", page)
+    @test occursin("## Regular Fejér grid", page)
+    @test occursin("## Latitude order", page)
     @test occursin("@media (max-width: 700px)", stylesheet)
     @test occursin("Grid Types\" => \"grids.md", makefile)
+    @test occursin("Normalization and Phase\" => \"norms.md", makefile)
 end

@@ -390,3 +390,55 @@ h3 {
 [data-tooltip]:hover::after {
     opacity: 1;
 }
+
+/* ===== Grid Pattern Figure ===== */
+.grid-pattern-figure {
+    max-width: 960px;
+    margin: 1.75rem auto 2rem;
+    padding: 0.75rem 0.75rem 0.9rem;
+    overflow: hidden;
+    background: #f8fafc;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+
+.grid-pattern-figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 9px;
+}
+
+.grid-pattern-figure figcaption {
+    max-width: 74ch;
+    margin: 0.75rem auto 0;
+    padding: 0 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    text-align: center;
+}
+
+html.theme--documenter-dark .grid-pattern-figure {
+    background: #1e293b;
+    border-color: #475569;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+html.theme--documenter-dark .grid-pattern-figure figcaption {
+    color: #cbd5e1;
+}
+
+@media (max-width: 560px) {
+    .grid-pattern-figure {
+        margin-right: -0.35rem;
+        margin-left: -0.35rem;
+        padding: 0.4rem 0.4rem 0.7rem;
+        border-radius: 10px;
+    }
+
+    .grid-pattern-figure figcaption {
+        font-size: 0.82rem;
+    }
+}

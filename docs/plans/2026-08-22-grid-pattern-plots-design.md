@@ -18,9 +18,9 @@ The panels cover:
 1. Gauss–Legendre, with nonuniform latitude rings and no pole samples.
 2. Regular midpoint, with uniformly spaced rings offset from both poles.
 3. Regular with poles, with uniform spacing and explicit pole samples.
-4. Driscoll–Healy, whose pole-inclusive locations match the regular-poles grid.
-   Marker size will subtly encode its quadrature weights so the numerical
-   distinction remains visible without adding a separate chart.
+4. Driscoll–Healy, with uniform `θ = πj/nlat` spacing that includes the north
+   pole but excludes the south pole. Marker size will subtly encode its
+   quadrature weights without adding a separate chart.
 
 Each panel includes a concise title and identifying caption. A lightly shaded
 sphere, restrained reference lines, and high-contrast sample points preserve

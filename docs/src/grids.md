@@ -12,8 +12,8 @@ different latitude patterns are directly comparable.
 <figure class="grid-pattern-figure">
   <picture>
     <source media="(max-width: 700px)"
-            srcset="assets/grid-patterns-stacked.svg">
-    <img src="assets/grid-patterns.svg"
+            srcset="../assets/grid-patterns-stacked.svg">
+    <img src="../assets/grid-patterns.svg"
          alt="Four globes comparing Gauss–Legendre, regular midpoint, regular with poles, and Driscoll–Healy sampling grids.">
   </picture>
   <figcaption>Faint dots lie on the far side of each globe. Driscoll–Healy dot size reflects quadrature weight.</figcaption>

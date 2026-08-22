@@ -64,9 +64,9 @@ jobs:
             run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=. examples/parallel_roundtrip.jl`)
           '
 
-      - name: Run parallel example (vector)
+      - name: Run parallel FFT example
         run: |
           julia --project=. -e '
             using MPI
-            run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=. examples/parallel_roundtrip.jl --vector`)
+            run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --project=. examples/parallel_fft_roundtrip.jl`)
           '

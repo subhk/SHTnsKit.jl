@@ -7,11 +7,9 @@
 #
 # What it does:
 # - Initializes MPI and reports ranks
-# - Runs a spherical-harmonic analysis+synthesis roundtrip on each rank
+# - Runs accurate serial and distributed spherical-harmonic roundtrips
 # - Reduces the max error across ranks and prints it on rank 0
 # - Demonstrates direct PencilArrays 0.19 construction and allocation
-
-using Random
 
 # Load MPI and PencilArrays FIRST so that SHTnsKit's parallel extension is triggered
 try
@@ -22,12 +20,12 @@ catch e
 end
 
 # Load PencilArrays/PencilFFTs to enable the parallel extension
-const HAVE_PENCIL = try
+try
     @eval using PencilArrays
     @eval using PencilFFTs
-    true
-catch
-    false
+catch e
+    @error "This example requires PencilArrays.jl and PencilFFTs.jl" exception=(e, catch_backtrace())
+    exit(1)
 end
 
 # Now load SHTnsKit - the parallel extension will be loaded if MPI+PencilArrays+PencilFFTs are available
@@ -39,7 +37,7 @@ const RANK = MPI.Comm_rank(COMM)
 const SIZE = MPI.Comm_size(COMM)
 
 if RANK == 0
-    println("SHTnsKit parallel roundtrip (each rank runs a serial transform)")
+    println("SHTnsKit serial and distributed roundtrips")
     println("MPI processes: $SIZE")
 end
 
@@ -51,11 +49,14 @@ let
     nlon = 64
     cfg = create_gauss_config(lmax, nlat; mmax=lmax, nlon=nlon)
 
-    # Make deterministic across ranks
-    Random.seed!(1234)
-
-    # Create a real spatial field on the Gauss×equiangular grid
-    f = randn(Float64, cfg.nlat, cfg.nlon)
+    # Analytic, band-limited field: a constant plus l=1,m=1 and l=2,m=0 modes.
+    # A truncated transform cannot exactly reconstruct arbitrary random grid data.
+    field_value(iθ, iφ) = begin
+        x = cfg.x[iθ]
+        sinθ = sqrt(max(0.0, 1 - x^2))
+        1 + 0.25 * (3x^2 - 1) + 0.1 * sinθ * cos(cfg.φ[iφ])
+    end
+    f = [field_value(iθ, iφ) for iθ in 1:cfg.nlat, iφ in 1:cfg.nlon]
 
     # Roundtrip diagnostics
     alm = analysis(cfg, f)
@@ -71,61 +72,52 @@ let
     if RANK == 0
         println("Roundtrip: max|f̂−f|=$(gmax[]), rel=$(grel[])\n")
     end
+    gmax[] < 1e-10 && grel[] < 1e-10 || error("Serial roundtrip accuracy check failed")
 
-    # Optional: demonstrate safe PencilArrays allocation patterns
-    if HAVE_PENCIL
-        if RANK == 0
-            println("PencilArrays detected. Demonstrating safe allocation…")
-        end
-        MPI.Barrier(COMM)
-        try
-            # Decompose latitude and keep each longitude row local.
-            pencil = PencilArrays.Pencil((cfg.nlat, cfg.nlon), (1,), COMM)
-
-            local_dims = PencilArrays.size_local(pencil)
-            A = PencilArray(pencil, zeros(Float64, local_dims...))
-            B = PencilArray(pencil, zeros(ComplexF64, local_dims...))
-
-            # Avoid the problematic pattern: zeros(pencil; eltype=…)
-            if RANK == 0
-                println("Allocated A::$(typeof(A)) and B::$(typeof(B)) safely")
-            end
-        catch e
-            if RANK == 0
-                @warn "PencilArrays allocation demo failed" exception=(e, catch_backtrace())
-            end
-        end
-
-        # Optional: distributed packed roundtrip (uses extension helpers)
-        try
-            MPI.Barrier(COMM)
-            if RANK == 0
-                println("Distributed packed roundtrip demo…")
-            end
-            pencil = PencilArrays.Pencil((cfg.nlat, cfg.nlon), (1,), COMM)
-            local_dims = PencilArrays.size_local(pencil)
-            fθφ = PencilArray(pencil, zeros(Float64, local_dims...))
-            # Local fill (deterministic pattern)
-            for (iθ, iφ) in Iterators.product(axes(fθφ,1), axes(fθφ,2))
-                fθφ[iθ, iφ] = sin(0.11*Int(iθ)) + cos(0.07*Int(iφ))
-            end
-            Qlm = SHTnsKit.dist_analysis_packed(cfg, fθφ)
-            fθφ_rt = SHTnsKit.dist_synthesis_packed(cfg, Qlm; prototype_θφ=fθφ, real_output=true)
-            # Relative error across ranks
-            lrel = sqrt(sum(abs2, Array(fθφ_rt) .- Array(fθφ)) / (sum(abs2, Array(fθφ)) + eps()))
-            grel = Ref(0.0)
-            MPI.Allreduce!(Ref(lrel), grel, MPI.MAX, COMM)
-            if RANK == 0
-                println("Distributed packed roundtrip rel error: $(grel[])\n")
-            end
-        catch e
-            if RANK == 0
-                @warn "Distributed packed roundtrip demo skipped" exception=(e, catch_backtrace())
-            end
-        end
-    elseif RANK == 0
-        println("PencilArrays not available; skipping pencil allocation demo.")
+    if RANK == 0
+        println("PencilArrays detected. Demonstrating safe allocation…")
     end
+    MPI.Barrier(COMM)
+
+    # Decompose latitude and keep each longitude row local.
+    pencil = PencilArrays.Pencil((cfg.nlat, cfg.nlon), (1,), COMM)
+    local_dims = PencilArrays.size_local(pencil)
+    A = PencilArray(pencil, zeros(Float64, local_dims...))
+    B = PencilArray(pencil, zeros(ComplexF64, local_dims...))
+    if RANK == 0
+        println("Allocated A::$(typeof(A)) and B::$(typeof(B)) safely")
+        println("Distributed packed roundtrip demo…")
+    end
+
+    fθφ = PencilArray(pencil, zeros(Float64, local_dims...))
+    local_field = parent(fθφ)
+    ranges = PencilArrays.range_local(pencil)
+    for (i_local, i_global) in enumerate(ranges[1]),
+        (j_local, j_global) in enumerate(ranges[2])
+        local_field[i_local, j_local] = field_value(i_global, j_global)
+    end
+
+    Qlm = SHTnsKit.dist_analysis_packed(cfg, fθφ)
+    fθφ_rt = SHTnsKit.dist_synthesis_packed(
+        cfg, Qlm; prototype_θφ=fθφ, real_output=true
+    )
+
+    local_recovered = parent(fθφ_rt)
+    local_max = maximum(abs.(local_recovered .- local_field))
+    local_error2 = sum(abs2, local_recovered .- local_field)
+    local_norm2 = sum(abs2, local_field)
+    global_max = MPI.Allreduce(local_max, MPI.MAX, COMM)
+    global_error2 = MPI.Allreduce(local_error2, MPI.SUM, COMM)
+    global_norm2 = MPI.Allreduce(local_norm2, MPI.SUM, COMM)
+    global_rel = sqrt(global_error2 / (global_norm2 + eps()))
+
+    if RANK == 0
+        println("Distributed packed roundtrip: max error=$global_max, rel=$global_rel\n")
+    end
+    global_max < 1e-10 && global_rel < 1e-10 ||
+        error("Distributed packed roundtrip accuracy check failed")
+
+    destroy_config(cfg)
 end
 
 MPI.Barrier(COMM)

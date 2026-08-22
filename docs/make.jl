@@ -97,6 +97,7 @@ pages = Any[
         "Quick Start" => "quickstart.md"
     ],
     "User Guide" => Any[
+        "Grid Types" => "grids.md",
         "GPU Acceleration" => "gpu.md",
         "Distributed Computing" => "distributed.md",
         "Performance Guide" => "performance.md",

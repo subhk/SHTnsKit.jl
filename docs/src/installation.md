@@ -34,7 +34,7 @@ Install only the row your application needs. Loading those packages activates
 the matching SHTnsKit extension automatically.
 
 | Capability | Packages |
-|---|---|
+|:---|:---|
 | NVIDIA GPU | `CUDA`, `GPUArrays`, `GPUArraysCore`, `KernelAbstractions` |
 | AMD GPU | `AMDGPU`, `GPUArrays`, `GPUArraysCore`, `KernelAbstractions` |
 | MPI distributed | `MPI`, `PencilArrays`, `PencilFFTs` |

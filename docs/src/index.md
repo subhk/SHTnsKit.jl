@@ -47,7 +47,7 @@ Spatial fields use `(latitude, longitude)` order. Dense coefficients use
 ## Choose your path
 
 | I want to… | Read… |
-|---|---|
+|:---|:---|
 | understand the basic arrays and transform direction | [Quick Start](quickstart.md) |
 | choose the right spherical sampling | [Grid Types](grids.md) |
 | adapt a working scientific recipe | [Examples Gallery](examples/index.md) |

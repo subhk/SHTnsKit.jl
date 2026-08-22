@@ -64,7 +64,7 @@ or `analysis(GPU(), ...)` only when execution intent must be strict. `GPU()`
 raises [`BackendUnavailableError`](@ref) rather than silently moving the whole
 operation to the CPU.
 
-[`to_device`](@ref) performs an intentional transfer and [`on_device`](@ref)
+`to_device` performs an intentional transfer and [`on_device`](@ref)
 reports placement. If both CUDA and AMDGPU are loaded, pass an existing device
 array as the prototype when a transfer needs to select one vendor.
 

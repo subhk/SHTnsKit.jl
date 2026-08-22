@@ -70,9 +70,9 @@ same configuration.
 SHTnsKit offers two useful layouts:
 
 | Workflow | Spectral result | Choose it when… |
-|---|---|---|
+|:---|:---|:---|
 | `dist_analysis` / `dist_synthesis` | dense coefficients replicated on every rank | global spectral access and simpler post-processing matter most |
-| [`DistTransposePlan`](@ref) | coefficients distributed by order `m` | spectral memory or communication dominates at larger rank counts |
+| `DistTransposePlan` | coefficients distributed by order `m` | spectral memory or communication dominates at larger rank counts |
 
 A transpose plan also batches a local third dimension such as radial levels:
 
@@ -92,7 +92,7 @@ follow the same output-before-input convention as serial in-place transforms.
 
 ## Practical rules
 
-- Decompose latitude with [`create_spatial_pencil`](@ref); a longitude-split
+- Decompose latitude with `create_spatial_pencil`; a longitude-split
   input requires expensive gathering.
 - Pass a spatial prototype to allocating synthesis so the result uses the
   intended distribution and storage type.

@@ -5,7 +5,7 @@ block is executed by the package test suite so it cannot silently drift from
 the public API.
 
 | Task | Example |
-|---|---|
+|:---|:---|
 | transform a scalar field | [Scalar roundtrip](#Scalar-roundtrip) |
 | inspect energy by degree | [Power spectrum](#Power-spectrum) |
 | decompose a tangential vector field | [Vector decomposition](#Vector-decomposition) |

@@ -4,7 +4,7 @@ A spherical-harmonic transform moves between two representations of the same
 band-limited field:
 
 | Representation | Shape | Use |
-|---|---:|---|
+|:---|:---:|:---|
 | Spatial field | `(cfg.nlat, cfg.nlon)` | values at latitude × longitude points |
 | Dense coefficients | `(cfg.lmax + 1, cfg.mmax + 1)` | complex amplitudes indexed by `(l + 1, m + 1)` |
 

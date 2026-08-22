@@ -99,7 +99,6 @@ pages = Any[
     ],
     "User Guide" => Any[
         "Grid Types" => "grids.md",
-        "Normalization and Phase" => "norms.md",
         "GPU Acceleration" => "gpu.md",
         "Distributed Computing" => "distributed.md",
         "Performance Guide" => "performance.md",

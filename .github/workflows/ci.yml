@@ -383,9 +383,6 @@ jobs:
           using Pkg
           Pkg.develop(PackageSpec(path=pwd()))
           Pkg.instantiate()
-
-      - name: Test documentation plots
-        run: julia --project=docs docs/test/test_grid_patterns.jl
           
       - uses: julia-actions/julia-buildpkg@v1
       

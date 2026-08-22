@@ -18,19 +18,28 @@
 
 **High-Performance Spherical Harmonic Transforms in Julia**
 
-SHTnsKit.jl provides a comprehensive, pure-Julia implementation of spherical harmonic transforms with **parallel computing support** for scalable scientific computing. 
+SHTnsKit.jl provides a pure-Julia implementation of spherical harmonic
+transforms with serial CPU, CUDA, AMDGPU, and MPI/PencilArrays execution.
+
+SHTnsKit 2.0 uses typed `CPU()` / `GPU()` dispatch and consistent normalization
+and phase conventions across scalar, vector, QST, packed, batch, planned, GPU,
+and distributed transforms. See the [v2 migration
+guide](https://subhk.github.io/SHTnsKit.jl/dev/migration/) before upgrading an
+application that uses legacy flags, device symbols, or distributed plans.
 ## Key Features
 
 ### **High-Performance Computing**
 - **Pure Julia**: No C dependencies, seamless Julia ecosystem integration
 - **Multi-threading**: Optimized with Julia threads and FFTW parallelization
 - **MPI Parallel**: Distributed computing with MPI + PencilArrays + PencilFFTs
+- **GPU Native**: CUDA and AMDGPU device-array transforms through package extensions
 - **SIMD Optimized**: Vectorization with LoopVectorization.jl support
 - **Extensible**: Modular architecture for CPU/GPU/distributed computing
 
 ### **Complete Scientific Functionality**  
 - **Transform Types**: Scalar, vector, and complex field transforms
-- **Grid Support**: Gauss-Legendre and regular (equiangular) grids
+- **Grid Support**: Gauss-Legendre, regular Fejér, pole-inclusive, and Driscoll-Healy grids
+- **Conventions**: Orthonormal, four-pi, and Schmidt normalization with configurable Condon-Shortley phase
 - **Vector Analysis**: Spheroidal-toroidal decomposition for flow fields
 - **Differential Operators**: Laplacian, gradient, divergence, vorticity
 - **Spectral Analysis**: Power spectra, correlation functions, filtering
@@ -59,6 +68,18 @@ For high-performance parallel computing on clusters:
 using Pkg
 Pkg.add(["SHTnsKit", "MPI", "PencilArrays", "PencilFFTs", "LoopVectorization"])
 ```
+
+### GPU Extensions
+
+```julia
+using Pkg
+Pkg.add(["SHTnsKit", "CUDA", "GPUArrays", "GPUArraysCore", "KernelAbstractions"])   # NVIDIA
+Pkg.add(["SHTnsKit", "AMDGPU", "GPUArrays", "GPUArraysCore", "KernelAbstractions"]) # AMD
+```
+
+Generic `analysis(cfg, device_array)` and `synthesis(cfg, coefficients)` calls
+preserve the vendor device. Strict `GPU()` dispatch never silently falls back
+to CPU execution.
 
 ### System Requirements
 

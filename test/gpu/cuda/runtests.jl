@@ -186,6 +186,13 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     )
     test_angle_axis_pi_singularity()
     if CUDA.functional()
+        plan = extension.create_cufft_plan(2, 8)
+        input = CUDA.rand(ComplexF64, 2, 8)
+        transformed = copy(input)
+        extension.gpu_fft!(plan, transformed)
+        extension.gpu_ifft!(plan, transformed)
+        @test Array(transformed) ≈ Array(input)
+
         run_rotation_parity(CUDARotationAdapter())
         test_shtns37_gpu_fixtures(
             CuArray, value -> (@test value isa CUDA.AnyCuArray),

@@ -2767,7 +2767,7 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistSphtorPlan, Vtθφ_out::Penci
     if !real_output && (eltype(Vtθφ_out) <: Real || eltype(Vpθφ_out) <: Real)
         throw(ArgumentError("dist_synthesis_sphtor! with real_output=false needs complex output " *
                             "PencilArrays; got eltype(Vt)=$(eltype(Vtθφ_out)), eltype(Vp)=$(eltype(Vpθφ_out)). " *
-                            "If you are porting code that used this combination before v1.2.18: it used " *
+                            "If you are porting code that used this combination before v2.0.0: it used " *
                             "to return the REAL field wrapped as complex, so pass real_output=true to keep " *
                             "that result. Pass complex output PencilArrays to get the true complex synthesis."))
     end

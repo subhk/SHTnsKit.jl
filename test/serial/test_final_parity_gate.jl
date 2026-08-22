@@ -39,6 +39,30 @@ const _FINAL_GATE_FIXTURE = joinpath(
     end
 end
 
+@testset "Task 16 audit ignores package-version-only changes" begin
+    mktempdir() do root
+        project_path = joinpath(root, "Project.toml")
+        write(project_path, """
+        name = "SHTnsKit"
+        version = "2.0.1"
+
+        [deps]
+        FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+        """)
+
+        scope = ["Project.toml"]
+        baseline = task16_audited_tree_digest(root, scope, String[])
+
+        project = read(project_path, String)
+        write(project_path, replace(project, "2.0.1" => "2.0.2"))
+        @test task16_audited_tree_digest(root, scope, String[]) == baseline
+
+        project = read(project_path, String)
+        write(project_path, replace(project, "FFTW" => "OtherDependency"))
+        @test task16_audited_tree_digest(root, scope, String[]) != baseline
+    end
+end
+
 @testset "Task 16 audit uses reproducible checkout line endings" begin
     root = normpath(joinpath(@__DIR__, "..", ".."))
     attributes_path = joinpath(root, ".gitattributes")

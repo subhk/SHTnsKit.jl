@@ -1,4 +1,5 @@
 using Test
+using TOML
 using SHTnsKit
 
 @testset "Cleanup contract" begin
@@ -56,9 +57,9 @@ using SHTnsKit
 
     @testset "Breaking release uses a major version" begin
         package_root = dirname(dirname(pathof(SHTnsKit)))
-        project = read(joinpath(package_root, "Project.toml"), String)
+        project = TOML.parsefile(joinpath(package_root, "Project.toml"))
         changelog = read(joinpath(package_root, "CHANGELOG.md"), String)
-        @test occursin(r"(?m)^version = \"2\.0\.0\"$", project)
+        @test VersionNumber(project["version"]).major == 2
         @test occursin("## Unreleased (v2.0.0)", changelog)
     end
 end

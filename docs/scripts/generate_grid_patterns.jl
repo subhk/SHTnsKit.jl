@@ -94,7 +94,7 @@ function _marker_sizes(spec, points)
     return 2.5 .+ 2.5 .* sqrt.(max.(points.weight, 0) ./ maximum_weight)
 end
 
-function _grid_panel(spec)
+function _grid_panel(spec; stacked::Bool=false)
     p = plot(
         ; aspect_ratio=:equal,
         xlims=(-1.08, 1.08),
@@ -106,7 +106,7 @@ function _grid_panel(spec)
         legend=false,
         background_color="#FFFFFF",
         title=spec.title,
-        titlefontsize=15,
+        titlefontsize=stacked ? 22 : 15,
         titlefontcolor="#0F172A",
     )
 
@@ -136,12 +136,35 @@ function _grid_panel(spec)
 
     plot!(p, cos.(outline_t), sin.(outline_t);
           color="#64748B", linewidth=1.25, label=false)
-    annotate!(p, 0, -1.115, text(spec.detail, 9, "#475569", :center))
+    detail_size = stacked ? 15 : 9
+    annotate!(p, 0, -1.115, text(spec.detail, detail_size, "#475569", :center))
     return p
 end
 
 function _add_accessibility_metadata!(path::AbstractString)
     svg = read(path, String)
+
+    # GR can emit an unreferenced clip path on the first render in a process.
+    # Remove those backend artifacts before normalizing the process-global IDs.
+    clip_ids = [match.captures[1] for match in eachmatch(r"<clipPath id=\"(clip\d+)\">", svg)]
+    for clip_id in clip_ids
+        occursin("url(#$(clip_id))", svg) && continue
+        unused_clip = Regex(
+            "<defs>\\s*<clipPath id=\\\"$(clip_id)\\\">.*?</clipPath>\\s*</defs>\\s*",
+            "s",
+        )
+        svg = replace(svg, unused_clip => "")
+    end
+
+    clip_ids = [match.captures[1] for match in eachmatch(r"<clipPath id=\"(clip\d+)\">", svg)]
+    stable_ids = Dict(
+        clip_id => "shtnskit-grid-clip-$(index)"
+        for (index, clip_id) in pairs(clip_ids)
+    )
+    for clip_id in sort(clip_ids; by=length, rev=true)
+        svg = replace(svg, clip_id => stable_ids[clip_id])
+    end
+
     svg_range = findfirst("<svg", svg)
     svg_range === nothing && error("Plots did not produce an SVG root element")
     tag_end = findnext('>', svg, first(svg_range))
@@ -163,14 +186,18 @@ function _add_accessibility_metadata!(path::AbstractString)
     return path
 end
 
-"""Generate the responsive four-panel grid comparison as an SVG asset."""
-function generate_grid_patterns(output::AbstractString)
+"""Generate the four-panel grid comparison as a desktop or stacked SVG asset."""
+function generate_grid_patterns(output::AbstractString; layout::Symbol=:desktop)
+    layout in (:desktop, :stacked) ||
+        throw(ArgumentError("layout must be :desktop or :stacked"))
+
     gr()
-    panels = _grid_panel.(grid_specs())
+    stacked = layout === :stacked
+    panels = [_grid_panel(spec; stacked) for spec in grid_specs()]
     figure = plot(
         panels...;
-        layout=(2, 2),
-        size=(1120, 940),
+        layout=stacked ? (4, 1) : (2, 2),
+        size=stacked ? (560, 1900) : (1120, 940),
         background_color="#F8FAFC",
         plot_title="SHTnsKit spherical sampling grids",
         plot_titlefontsize=20,
@@ -184,9 +211,11 @@ function generate_grid_patterns(output::AbstractString)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    generate_grid_patterns(joinpath(
-        @__DIR__, "..", "src", "assets", "grid-patterns.svg",
-    ))
+    assets_dir = joinpath(@__DIR__, "..", "src", "assets")
+    generate_grid_patterns(joinpath(assets_dir, "grid-patterns.svg"))
+    generate_grid_patterns(
+        joinpath(assets_dir, "grid-patterns-stacked.svg"); layout=:stacked,
+    )
 end
 
 end

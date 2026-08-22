@@ -12,6 +12,8 @@ actual grid coordinates.
 Add a responsive 2-by-2 comparison figure to the Grid Types documentation page.
 Every panel uses the same sphere orientation, resolution, scale, and styling so
 that the sampling pattern is the only meaningful visual difference.
+At narrow widths, a one-column rendering replaces the 2-by-2 asset so titles and
+point patterns remain readable without horizontal scrolling.
 
 The panels cover:
 
@@ -29,15 +31,16 @@ the three-dimensional shape without competing with the grid.
 ## Generation and integration
 
 A Julia script will construct real `SHTConfig` objects, convert each `(theta,
-phi)` pair to Cartesian coordinates, and produce the comparison as a committed
-SVG asset. Committing the asset keeps the deployed page independent of plotting
-availability during a normal Documenter build. The Grid Types page will embed
-the SVG, explain the visible differences, and show minimal constructor examples.
-The page will also be added to the Documenter navigation.
+phi)` pair to Cartesian coordinates, and produce the comparison as committed
+desktop and stacked SVG assets. Committing the assets keeps the deployed page
+independent of plotting availability during a normal Documenter build. The Grid
+Types page will select between them with a responsive `picture`, explain the
+visible differences, and show minimal constructor examples. The page will also
+be added to the Documenter navigation.
 
 ## Verification
 
-Regenerate the SVG from a clean invocation, build the documentation, inspect
+Regenerate the SVGs from a clean invocation, build the documentation, inspect
 warnings, and visually check the resulting page at wide and narrow viewport
 sizes. Tests should also assert that the generator emits all four titled panels
 and uses coordinates obtained from the public constructors.

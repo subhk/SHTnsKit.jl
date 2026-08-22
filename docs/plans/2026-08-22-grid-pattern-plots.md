@@ -4,7 +4,7 @@
 
 **Goal:** Add a polished, sphere-only comparison of every supported SHTnsKit grid to the deployed web documentation.
 
-**Architecture:** A docs-only Julia module will construct four real `SHTConfig` objects, orthographically project their spherical sample points, and render a deterministic 2-by-2 SVG with Plots.jl. The committed SVG is embedded by `grids.md`, so Documenter never has to generate graphics during a normal build; a focused docs test verifies geometry, generation, accessibility metadata, and page wiring.
+**Architecture:** A docs-only Julia module will construct four real `SHTConfig` objects, orthographically project their spherical sample points, and render deterministic 2-by-2 desktop and one-column mobile SVGs with Plots.jl. The committed assets are selected by a responsive `picture` in `grids.md`, so Documenter never has to generate graphics during a normal build; a focused docs test verifies geometry, generation, accessibility metadata, and page wiring.
 
 **Tech Stack:** Julia 1.10+, SHTnsKit public configuration API, Plots.jl/GR SVG output, Documenter.jl, Julia `Test`, CSS.
 

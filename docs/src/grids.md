@@ -6,11 +6,17 @@ how points are placed in colatitude ``\theta`` from the north pole
 uses the same 12 latitude samples and 16 longitudes in every panel, so the
 different latitude patterns are directly comparable.
 
+```@raw html
 <figure class="grid-pattern-figure">
-  <img src="assets/grid-patterns.svg"
-       alt="Four globes comparing Gauss–Legendre, regular midpoint, regular with poles, and Driscoll–Healy sampling grids.">
+  <picture>
+    <source media="(max-width: 700px)"
+            srcset="assets/grid-patterns-stacked.svg">
+    <img src="assets/grid-patterns.svg"
+         alt="Four globes comparing Gauss–Legendre, regular midpoint, regular with poles, and Driscoll–Healy sampling grids.">
+  </picture>
   <figcaption>Faint dots lie on the far side of each globe. Driscoll–Healy dot size reflects quadrature weight.</figcaption>
 </figure>
+```
 
 At a pole, all longitudes describe the same physical point, so their markers
 overlap in the figure.

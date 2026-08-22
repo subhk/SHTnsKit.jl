@@ -31,6 +31,8 @@ using .GridPatternPlots
 
     mktempdir() do dir
         output = joinpath(dir, "grid-patterns.svg")
+        second_output = joinpath(dir, "grid-patterns-second.svg")
+        stacked_output = joinpath(dir, "grid-patterns-stacked.svg")
         @test generate_grid_patterns(output) == output
         @test isfile(output)
         svg = read(output, String)
@@ -38,14 +40,28 @@ using .GridPatternPlots
         @test occursin("<title id=\"grid-patterns-title\">", svg)
         @test occursin("<desc id=\"grid-patterns-description\">", svg)
         @test filesize(output) > 10_000
+        @test generate_grid_patterns(second_output) == second_output
+        @test read(second_output, String) == svg
+
+        @test generate_grid_patterns(stacked_output; layout=:stacked) == stacked_output
+        stacked_svg = read(stacked_output, String)
+        @test occursin("width=\"560\" height=\"1900\"", stacked_svg)
+        @test occursin("<title id=\"grid-patterns-title\">", stacked_svg)
+        @test filesize(stacked_output) > 10_000
     end
 end
 
 @testset "grid page wiring" begin
     page = read(joinpath(ROOT, "docs", "src", "grids.md"), String)
     makefile = read(joinpath(ROOT, "docs", "make.jl"), String)
+    stylesheet = read(joinpath(ROOT, "docs", "src", "assets", "custom.css"), String)
     workflow = read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)
     @test occursin("assets/grid-patterns.svg", page)
+    @test occursin("assets/grid-patterns-stacked.svg", page)
+    @test occursin("<picture>", page)
+    @test occursin("media=\"(max-width: 700px)\"", page)
+    @test occursin("```@raw html", page)
+    @test occursin("@media (max-width: 700px)", stylesheet)
     @test occursin("Grid Types\" => \"grids.md", makefile)
     @test occursin("name: Test documentation plots", workflow)
     @test occursin("julia --project=docs docs/test/test_grid_patterns.jl", workflow)

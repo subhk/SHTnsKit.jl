@@ -179,7 +179,7 @@ end
     @test all(entry -> !isempty(entry["reason"]), allowed)
     @test count(entry -> entry["token"] == "allowscalar", allowed) == 0
     similar_array_entries = filter(entry -> entry["token"] == "similar_array", allowed)
-    @test length(similar_array_entries) == 2
+    @test length(similar_array_entries) == 3
     @test all(entry -> entry["path"] == "ext/ParallelGPU.jl", similar_array_entries)
     @test all(entry -> entry["classification"] == "bounded_pinned_mpi_staging",
               similar_array_entries)

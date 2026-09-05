@@ -1,5 +1,5 @@
 [audit]
-entry_count = 682
+entry_count = 683
 scanner = "deterministic non-overlapping spelling scanner; longer transfer spellings win"
 scope = "src/device_utils.jl and every ext/*.jl file"
 
@@ -906,6 +906,14 @@ path = "ext/ParallelGPU.jl"
 reason = "explicit pinned MPI staging boundary; keep the transfer bounded, synchronized, and restored to the originating vendor before return"
 same_snippet_ordinal = 1
 snippet_sha256 = "6a8e594f63d86bc61b54dbc56c19d4805c44a24b282db0e576119367a4940434"
+token = "similar_array"
+[[entry]]
+classification = "bounded_pinned_mpi_staging"
+key = "ext/ParallelGPU.jl|similar_array|7db05834146722594062d9a19f98bb6842b18d1cb26e1c1585464eb101d7c7bf|1"
+path = "ext/ParallelGPU.jl"
+reason = "explicit pinned MPI staging boundary; keep the transfer bounded, synchronized, and restored to the originating vendor before return"
+same_snippet_ordinal = 1
+snippet_sha256 = "7db05834146722594062d9a19f98bb6842b18d1cb26e1c1585464eb101d7c7bf"
 token = "similar_array"
 [[entry]]
 classification = "bounded_pinned_mpi_staging"

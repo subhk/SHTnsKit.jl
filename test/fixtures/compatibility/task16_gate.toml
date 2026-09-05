@@ -6,15 +6,15 @@ platform = "aarch64-apple-darwin"
 [local_gate]
 evidence_kind = "local_readiness"
 certifying = false
-audited_tree_digest = "95c58722762133ca557fa00040e14b0c6b45324fc5ab26afa1561350c4a8f64c"
+audited_tree_digest = "8fe9484003eea77bdde6e46b60f13574e59c151e59b7377e76ff00d39625f62e"
 audited_scope = ["Project.toml", ".github/workflows", "docs/src/shtns37-parity.md", "ext", "src", "test"]
 audited_exclusions = ["test/fixtures/compatibility/task16_gate.toml", "test/fixtures/compatibility/task16_local_commands.txt", "test/fixtures/compatibility/task16_local_summary.log"]
 commands_file = "test/fixtures/compatibility/task16_local_commands.txt"
-commands_sha256 = "1fa74c829dd014d3df0ce5ab0f54e643f86f4563bb8068bb3bd99b93fa191fb6"
+commands_sha256 = "adde41f28b713f3179599be9b0bfd880e11033aa44a85eaf9481a790a34ad0fd"
 summary_log = "test/fixtures/compatibility/task16_local_summary.log"
-summary_log_sha256 = "04fd5cd892e5470f330c4833c03aa45e9c19659bff583abfaa2cf20dc8ace1c2"
+summary_log_sha256 = "32c11634d6ed8e7cf05c0232e6423bbf8900c93c8d03d277a32a2487b8256562"
 pkg_exit_code = 0
-serial_pass = 76340
+serial_pass = 76347
 parallel_grid_pass = 1714
 jet_pass = 30
 aqua_pass = 3
@@ -25,7 +25,7 @@ mpi_cpu_fixture_pass_per_rank = 66
 [host_transfer_audit]
 allowlist = "test/fixtures/compatibility/host_transfer_allowlist.toml"
 scanner = "test/support/host_transfer_inventory.jl"
-entry_count = 682
+entry_count = 683
 allowscalar_match_count = 0
 legacy_cuda_host_result_bridges = 2
 

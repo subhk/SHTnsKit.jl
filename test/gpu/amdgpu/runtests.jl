@@ -5,11 +5,14 @@ using GPUArrays
 using GPUArraysCore
 using KernelAbstractions
 
+include("../wrapper_reference.jl")
+
 include("../../parity/scalar_full.jl")
 include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
+include("../../parity/vector_batches.jl")
 include("../../parity/local_evaluation.jl")
 include("../../parity/operators.jl")
 include("../../parity/rotations.jl")
@@ -164,6 +167,7 @@ end
 @testset "AMDGPU backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitAMDGPUExt)
     @test extension !== nothing
+    @test isdefined(extension, :mul!)
     @test SHTnsKit._GPU_LOOP_AVAILABLE[]
     test_gpu_rotation_contract(
         extension, ROCArray{ComplexF32,1}, ROCArray{ComplexF32,1},
@@ -576,6 +580,10 @@ end
             real_norm_values=(false, true),
             cs_phase_values=(false, true),
             pole_orders=(false, true),
+        )
+        run_gpu_vector_batch_parity(AMDGPUVectorAdapter())
+        run_shared_legendre_precision_reference(
+            extension.GPUCommon, ROCBackend(); place=ROCArray,
         )
         run_sphtor_full_parity(AMDGPUVectorAdapter())
         run_qst_full_parity(AMDGPUQSTAdapter())

@@ -1,6 +1,6 @@
 evidence_kind=local_readiness
 certifying=false
-audited_tree_digest=95c58722762133ca557fa00040e14b0c6b45324fc5ab26afa1561350c4a8f64c
+audited_tree_digest=8fe9484003eea77bdde6e46b60f13574e59c151e59b7377e76ff00d39625f62e
 audited_scope=Project.toml,.github/workflows,docs/src/shtns37-parity.md,ext,src,test
 audited_exclusions=test/fixtures/compatibility/task16_gate.toml,test/fixtures/compatibility/task16_local_commands.txt,test/fixtures/compatibility/task16_local_summary.log
 pkg_command=/usr/bin/env JULIA_DEPOT_PATH=/private/tmp/julia_depot_shtnskit:/Users/subha/.julia SHTNSKIT_RUN_JET_TESTS=1 SHTNSKIT_RUN_AQUA_TESTS=1 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'
@@ -12,3 +12,7 @@ resume_mpi_gpu_policy_command=/usr/bin/env JULIA_BINDIR=/Users/subha/.julia/juli
 resume_plan_2_command=/usr/bin/env JULIA_BINDIR=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin /private/tmp/shtnskit-mpi-bin/mpiexecjl --project=/private/tmp/shtnskit-pr-env.2MnFRj -n 2 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=/private/tmp/shtnskit-pr-env.2MnFRj test/parallel/test_mpi_plan_preflight.jl
 resume_plan_4_command=/usr/bin/env JULIA_BINDIR=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin /private/tmp/shtnskit-mpi-bin/mpiexecjl --project=/private/tmp/shtnskit-pr-env.2MnFRj -n 4 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=/private/tmp/shtnskit-pr-env.2MnFRj test/parallel/test_mpi_plan_preflight.jl
 resume_threaded_command=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=/private/tmp/shtnskit-pr-env.2MnFRj -t 4 test/parallel/runtests.jl
+gpu_fix_date=2026-09-05
+gpu_fix_cuda_command=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=/private/tmp/shtnskit-envcheck.aXx0lB test/gpu/cuda/runtests.jl
+gpu_fix_wrapper_command=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=/private/tmp/shtnskit-envcheck.aXx0lB test/gpu/wrapper_reference.jl
+gpu_fix_plan_allocation_command=/usr/bin/env JULIA_BINDIR=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin /private/tmp/shtnskit-mpi-bin/mpiexecjl --project=/private/tmp/shtnskit-envcheck.aXx0lB -n 2 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=/private/tmp/shtnskit-envcheck.aXx0lB test/parallel/test_dist_plan_alloc.jl

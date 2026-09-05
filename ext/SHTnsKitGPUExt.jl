@@ -1216,7 +1216,8 @@ function _cuda_vector_batch_synthesis(cfg::SHTConfig,
     RTs === RTt || throw(ArgumentError("vector batches must use the same precision"))
     RT = RTs; CT = Complex{RT}
     tables = _cuda_vector_tables(cfg, RT)
-    Ft = CUDA.zeros(CT, cfg.nlat, cfg.nlon, nfields); Fp = similar(Ft)
+    Ft = CUDA.zeros(CT, cfg.nlat, cfg.nlon, nfields)
+    Fp = CUDA.zeros(CT, cfg.nlat, cfg.nlon, nfields)
     vector_batch_synthesis_kernel!(CUDABackend())(
         Ft, Fp, S, Tlm, tables.dtheta, tables.over_sin, tables.scales,
         tables.x, RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, cfg.lmax,
@@ -1734,7 +1735,7 @@ function _cuda_batch_analysis_direct!(cfg::SHTConfig,
     ))
     size(output) == (cfg.lmax + 1, cfg.mmax + 1, nfields) ||
         throw(DimensionMismatch("output batch shape mismatch"))
-    RT = typeof(float(eltype(fields)))
+    RT = float(eltype(fields))
     CT = Complex{RT}
     scratch = _cuda_batch_scratch(
         cfg, fft_batch, CT, nfields, use_rfft, output, fields,

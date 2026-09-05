@@ -398,40 +398,60 @@ function vector_host_tables(cfg::SHTnsKit.SHTConfig,
     return x, weights, scales, T.(cfg.Nlm)
 end
 
+# Preserve diagonal seeds that are smaller than the device format can store.
+# The recurrence uses a shared power-of-two exponent for its two mantissas;
+# only table writes restore the physical magnitude. Int32 selects the native
+# CUDA/ROCm ldexp intrinsic without widening Float32 arithmetic.
+@inline function _rescale_legendre_pair(previous2::T, previous1::T,
+                                         exponent::Int32) where {T}
+    magnitude = max(abs(previous2), abs(previous1))
+    if magnitude > T(0x1p32)
+        return previous2 * T(0x1p-64), previous1 * T(0x1p-64), exponent + Int32(64)
+    elseif !iszero(magnitude) && magnitude < T(0x1p-32)
+        return previous2 * T(0x1p64), previous1 * T(0x1p64), exponent - Int32(64)
+    end
+    return previous2, previous1, exponent
+end
+
+@inline function _legendre_table_row!(Plm, xi::T, i, m, lmax) where {T}
+    sint = sqrt(max(zero(T), one(T) - xi * xi))
+    pmm = inv(sqrt(T(4) * T(pi)))
+    exponent = Int32(0)
+    @inbounds for k in 1:m
+        tk = T(k)
+        pmm = -sqrt((T(2) * tk + one(T)) / (T(2) * tk)) * sint * pmm
+        if !iszero(pmm) && abs(pmm) < T(0x1p-32)
+            pmm *= T(0x1p64)
+            exponent -= Int32(64)
+        end
+    end
+    @inbounds Plm[i, m + 1, m + 1] = ldexp(pmm, exponent)
+    if m < lmax
+        pm1m = sqrt(T(2m + 3)) * xi * pmm
+        @inbounds Plm[i, m + 2, m + 1] = ldexp(pm1m, exponent)
+        previous2, previous1, exponent = _rescale_legendre_pair(pmm, pm1m, exponent)
+        @inbounds for l in (m + 2):lmax
+            tl = T(l)
+            tm = T(m)
+            a = sqrt(((T(2) * tl - one(T)) * (T(2) * tl + one(T))) /
+                     ((tl - tm) * (tl + tm)))
+            b = sqrt(((T(2) * tl + one(T)) * (tl - one(T) - tm) *
+                      (tl - one(T) + tm)) /
+                     ((T(2) * tl - T(3)) * (tl - tm) * (tl + tm)))
+            value = a * xi * previous1 - b * previous2
+            Plm[i, l + 1, m + 1] = ldexp(value, exponent)
+            previous2, previous1, exponent =
+                _rescale_legendre_pair(previous1, value, exponent)
+        end
+    end
+    return nothing
+end
+
 """Build orthonormal, Condon--Shortley associated Legendre values on device."""
 @kernel function legendre_table_kernel!(Plm, x, lmax, mmax)
     i, m_idx = @index(Global, NTuple)
     if i <= length(x) && m_idx <= mmax + 1
-        m = m_idx - 1
-        xi = x[i]
-        T = typeof(xi)
-        sint = sqrt(max(zero(T), one(T) - xi * xi))
-        pmm = inv(sqrt(T(4) * T(pi)))
-        @inbounds for k in 1:m
-            tk = T(k)
-            pmm = -sqrt((T(2) * tk + one(T)) / (T(2) * tk)) * sint * pmm
-        end
-        Plm[i, m + 1, m_idx] = pmm
-
-        if m < lmax
-            pm1m = sqrt(T(2m + 3)) * xi * pmm
-            Plm[i, m + 2, m_idx] = pm1m
-            previous2 = pmm
-            previous1 = pm1m
-            @inbounds for l in (m + 2):lmax
-                tl = T(l)
-                tm = T(m)
-                a = sqrt(((T(2) * tl - one(T)) * (T(2) * tl + one(T))) /
-                         ((tl - tm) * (tl + tm)))
-                b = sqrt(((T(2) * tl + one(T)) * (tl - one(T) - tm) *
-                          (tl - one(T) + tm)) /
-                         ((T(2) * tl - T(3)) * (tl - tm) * (tl + tm)))
-                value = a * xi * previous1 - b * previous2
-                Plm[i, l + 1, m_idx] = value
-                previous2 = previous1
-                previous1 = value
-            end
-        end
+        _legendre_table_row!(Plm, x[i], i, m_idx - 1, lmax)
     end
 end
 
@@ -448,30 +468,7 @@ ever forms a singular quotient and masks it afterwards.
         xi = x[i]
         T = typeof(xi)
         s = sqrt(max(zero(T), one(T) - xi * xi))
-        pmm = inv(sqrt(T(4) * T(pi)))
-        @inbounds for k in 1:m
-            tk = T(k)
-            pmm = -sqrt((T(2) * tk + one(T)) / (T(2) * tk)) * s * pmm
-        end
-        Plm[i, m + 1, m_idx] = pmm
-        if m < lmax
-            pm1m = sqrt(T(2m + 3)) * xi * pmm
-            Plm[i, m + 2, m_idx] = pm1m
-            previous2 = pmm
-            previous1 = pm1m
-            @inbounds for l in (m + 2):lmax
-                tl = T(l); tm = T(m)
-                a = sqrt(((T(2) * tl - one(T)) * (T(2) * tl + one(T))) /
-                         ((tl - tm) * (tl + tm)))
-                b = sqrt(((T(2) * tl + one(T)) * (tl - one(T) - tm) *
-                          (tl - one(T) + tm)) /
-                         ((T(2) * tl - T(3)) * (tl - tm) * (tl + tm)))
-                value = a * xi * previous1 - b * previous2
-                Plm[i, l + 1, m_idx] = value
-                previous2 = previous1
-                previous1 = value
-            end
-        end
+        _legendre_table_row!(Plm, xi, i, m, lmax)
 
         @inbounds for l in 0:lmax
             if l < m

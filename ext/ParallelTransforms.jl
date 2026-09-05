@@ -3242,9 +3242,19 @@ function _validate_qst_analysis_plan!(
     _validate_distinct_plan_outputs!(
         comm, (Qout, Sout, Tout), :dist_analysis_qst_plan,
     )
-    _validate_qst_spatial_inputs!(
-        plan.cfg, Vr, Vt, Vp; use_rfft=plan.use_rfft,
-        comm,
+    # The sphtor plan preflight below checks the tangential inputs, replicated
+    # cfg/options, and common precision. Validate only the radial plan here:
+    # repeating the cfg-form QST preflight would recheck all three pencils and
+    # allocate their collective storage/layout metadata a second time.
+    _validate_cached_plan_cfg(
+        plan.scalar_plan.cfg, plan.scalar_plan.cfg_fingerprint, comm,
+        "dist_analysis_qst!",
+    )
+    _validate_spatial_pencil_against_prototype(
+        plan.cfg, plan.prototype_θφ, Vr, "dist_analysis_qst!"; comm,
+    )
+    _validate_analysis_plan_input!(
+        plan.scalar_plan, Vr, :dist_analysis_qst_plan_input_type,
     )
     _validate_identical_pencil_layout!(
         plan.prototype_θφ, Vr, :dist_analysis_qst_plan_input;

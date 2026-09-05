@@ -295,8 +295,67 @@ function run_scalar_full_parity(adapter::ScalarParityAdapter;
     return nothing
 end
 
+"""High-degree table checks, also usable with device placement on vendor CI."""
+function run_shared_legendre_precision_reference(common, backend;
+                                                  place=identity, collect_result=Array)
+    @testset "Legendre recurrence retains underflowed seeds" begin
+        for (T, lmax, mmax, coords, orders) in (
+            (Float32, 512, 200, [-0.95, -0.9, 0.9, 0.95], (100, 150, 200)),
+            (Float64, 4096, 1000, [0.9], (1000,)),
+        )
+            x = T.(coords)
+            P = place(zeros(T, length(x), lmax + 1, mmax + 1))
+            event = common.legendre_table_kernel!(backend)(
+                P, place(x), lmax, mmax; ndrange=(length(x), mmax + 1),
+            )
+            event === nothing || wait(event)
+            host_P = collect_result(P)
+            tol = T === Float32 ? 2e-4 : 2e-11
+            for m in orders, i in eachindex(x)
+                # BigFloat preserves diagonal seeds far below both device
+                # formats. Later degrees are representable and must recover.
+                reference = setprecision(BigFloat, 192) do
+                    row = zeros(BigFloat, lmax + 1)
+                    SHTnsKit.Plm_norm_row!(row, BigFloat(x[i]), lmax, m)
+                    T.(row)
+                end
+                @test maximum(abs, reference) > sqrt(floatmin(T))
+                @test host_P[i, :, m + 1] ≈ reference rtol=tol
+            end
+
+            # Vector/QST tables independently construct the same recurrence.
+            # Keep their larger three-table case at Float32's practical failing
+            # degree; the Float64 scalar case checks wider exponent recovery.
+            T === Float32 || continue
+            dtheta = similar(P)
+            over_sin = similar(P)
+            Nlm = place(T.(SHTnsKit.Nlm_table(lmax, mmax)))
+            event = common.vector_derivative_table_kernel!(backend)(
+                P, dtheta, over_sin, place(x), Nlm, lmax, mmax;
+                ndrange=(length(x), mmax + 1),
+            )
+            event === nothing || wait(event)
+            host_P = collect_result(P)
+            host_dtheta = collect_result(dtheta)
+            host_over_sin = collect_result(over_sin)
+            for m in orders, i in eachindex(x)
+                reference = zeros(Float64, lmax + 1)
+                derivative = similar(reference)
+                quotient = similar(reference)
+                SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(
+                    reference, derivative, quotient, Float64(x[i]), lmax, m,
+                )
+                @test host_P[i, :, m + 1] ≈ reference rtol=tol
+                @test host_dtheta[i, :, m + 1] ≈ derivative rtol=tol
+                @test host_over_sin[i, :, m + 1] ≈ quotient rtol=tol
+            end
+        end
+    end
+end
+
 """Compile and numerically check the vendor-neutral kernels on a KA CPU backend."""
 function run_shared_scalar_kernel_reference(common, backend)
+    run_shared_legendre_precision_reference(common, backend)
     cfg = _scalar_config(
         :gauss, 3, 8;
         mres=2, norm=:schmidt, real_norm=true, cs_phase=false,

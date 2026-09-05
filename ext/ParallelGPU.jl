@@ -333,11 +333,12 @@ function parallel_gpu_clear_caches!()
 end
 
 function _build_gpu_transpose_host_entry(adapter, plan, device, plan_owner)
-    # Pencil/PencilFFT construction may itself enter MPI, so it must never run
-    # under the process-wide cache lock.
-    input_pencil = Pencil(
-        Array, (plan.nlon, plan.nlat), (2,), plan.comm,
-    )
+    # A cache miss is local: eviction, clearing, and subcommunicator use can
+    # differ across ranks. Reuse this plan's existing MPI topology so rebuilding
+    # a host mirror neither creates communicators collectively nor changes the
+    # communication context relative to mirrors still cached on other ranks.
+    # FFT planning and pinned allocation remain outside the registry lock.
+    input_pencil = similar(PencilFFTs.pencil_input(plan.fft_plan), Array)
     fft_plan = PencilFFTPlan(
         input_pencil,
         (Transforms.RFFT(), Transforms.NoTransform()),

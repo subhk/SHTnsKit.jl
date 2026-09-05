@@ -741,6 +741,65 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
     end
     return nothing
 end
+# Exercise the real distributed FFT staging boundary without requiring a GPU.
+# Cache pressure on a subcommunicator must not change the MPI contexts used by
+# a still-live plan on the parent communicator.
+function test_mpi_gpu_native_cache_collectives(extension)
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    adapter = extension.ParallelGPUAdapter(
+        :mock_native_cache_collectives,
+        value -> value isa Array, _ -> Array, _ -> 0,
+        (f, _device) -> f(), _ -> false, _ -> nothing,
+        (T, n) -> Vector{T}(undef, n),
+        (host, device) -> copyto!(host, device),
+        (device, host) -> copyto!(device, host),
+    )
+    cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
+    plan = SHTnsKit.DistTransposePlan(cfg; comm, nlev=2)
+    input = SHTnsKit.allocate_spatial(plan)
+    original = reshape(
+        sin.(collect(1:length(parent(input))) .+ rank), size(parent(input)),
+    )
+    copyto!(parent(input), original)
+    mul!(plan.F_buf, plan.fft_plan, input)
+    expected = copy(parent(plan.F_buf))
+
+    @testset "native host cache survives rank-local $disruption" for disruption in
+            (:clear, :eviction)
+        extension.parallel_gpu_clear_caches!()
+        extension._gpu_transpose_forward!(adapter, plan, plan.F_buf, input)
+        @test parent(plan.F_buf) ≈ expected
+        if rank == 0
+            if disruption === :clear
+                extension.parallel_gpu_clear_caches!()
+            else
+                # Keep all local plans alive so this deterministically exceeds
+                # the bounded cache capacity on rank zero only.
+                local_plans = [SHTnsKit.DistTransposePlan(
+                    cfg; comm=MPI.COMM_SELF, nlev=2,
+                ) for _ in 1:8]
+                for local_plan in local_plans
+                    local_input = SHTnsKit.allocate_spatial(local_plan)
+                    fill!(parent(local_input), 1)
+                    extension._gpu_transpose_forward!(
+                        adapter, local_plan, local_plan.F_buf, local_input,
+                    )
+                end
+            end
+        end
+        MPI.Barrier(comm)
+        # Rank zero rebuilds while peers retain their cached mirror. Both the
+        # forward and inverse transforms must still use matching communicators.
+        extension._gpu_transpose_forward!(adapter, plan, plan.F_buf, input)
+        @test parent(plan.F_buf) ≈ expected
+        extension._gpu_transpose_inverse!(adapter, plan, input, plan.F_buf)
+        @test parent(input) ≈ original
+    end
+    extension.parallel_gpu_clear_caches!()
+    return nothing
+end
+
 function test_mpi_gpu_policy(extension)
     @test isdefined(extension, :ParallelGPUAdapter)
     @test isdefined(extension, :exchange!)
@@ -1180,6 +1239,8 @@ function test_mpi_gpu_policy(extension)
         @test pending_native_allocations[] == 2
         @test length(extension._GPU_TRANSPOSE_HOST) == 0
     end
+
+    test_mpi_gpu_native_cache_collectives(extension)
 
     # Every sync/copy must run on the physical device owning that buffer while
     # host MPI/CPU callbacks run on the caller's original current device.

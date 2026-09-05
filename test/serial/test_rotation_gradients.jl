@@ -179,6 +179,58 @@ end
     end
 end
 
+@testset "Configured axis-wrapper rrules" begin
+    lmax = 5
+    cfg = create_gauss_config(lmax, lmax + 2; nlon=2lmax + 1,
+                              norm=:schmidt, real_norm=true, cs_phase=false)
+    rng = MersenneTwister(4257)
+    real_field_vector() = begin
+        value = randn(rng, ComplexF64, cfg.nlm)
+        @inbounds for index in eachindex(value)
+            cfg.mi[index] == 0 && (value[index] = real(value[index]))
+        end
+        value
+    end
+    Q = real_field_vector()
+    cotangent = real_field_vector()
+    direction = real_field_vector()
+    alpha = 0.43
+    epsilon = 1e-6
+
+    for (name, apply, arguments) in (
+        ("SH_Zrotate", SH_Zrotate, (alpha, similar(Q))),
+        ("SH_Yrotate", SH_Yrotate, (alpha, similar(Q))),
+        ("SH_Yrotate90", SH_Yrotate90, (similar(Q),)),
+        ("SH_Xrotate90", SH_Xrotate90, (similar(Q),)),
+    )
+        _, pullback = ChainRulesCore.rrule(apply, cfg, Q, arguments...)
+        result = pullback(cotangent)
+        Qbar = result[3]
+        loss(candidate) = real(sum(conj(cotangent) .* apply(
+            cfg, candidate, arguments...,
+        )))
+        fd = (loss(Q .+ epsilon .* direction) -
+              loss(Q .- epsilon .* direction)) / (2epsilon)
+        ad = real(sum(conj(Qbar) .* direction))
+        @testset "$name coefficients" begin
+            @test ad ≈ fd rtol=1e-4 atol=1e-8
+        end
+    end
+
+    for (name, apply) in (("SH_Zrotate", SH_Zrotate),
+                          ("SH_Yrotate", SH_Yrotate))
+        _, pullback = ChainRulesCore.rrule(apply, cfg, Q, alpha, similar(Q))
+        angle_bar = pullback(cotangent)[4]
+        loss(angle) = real(sum(conj(cotangent) .* apply(
+            cfg, Q, angle, similar(Q),
+        )))
+        fd = (loss(alpha + epsilon) - loss(alpha - epsilon)) / (2epsilon)
+        @testset "$name angle" begin
+            @test angle_bar ≈ fd rtol=1e-4 atol=1e-8
+        end
+    end
+end
+
 if _HAS_ZYGOTE_ROT
 @testset "Rotation AD adjoints vs finite differences" begin
     # Real-field-compatible packed vector: m=0 entries must be real.
@@ -232,6 +284,46 @@ if _HAS_ZYGOTE_ROT
 
         check_dα("SH_Zrotate α", (q, a) -> SH_Zrotate(cfg, q, a, similar(q)))
         check_dα("SH_Yrotate α", (q, a) -> SH_Yrotate(cfg, q, a, similar(q)))
+    end
+
+    @testset "configured axis-wrapper adjoints" begin
+        lmax = 5
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2lmax + 1,
+                                  norm=:schmidt, real_norm=true, cs_phase=false)
+        rng = MersenneTwister(4257)
+        Q = _rfvec(rng, cfg)
+        C = _rfvec(rng, cfg)
+        h = _rfvec(rng, cfg)
+        alpha = 0.43
+        ϵ = 1e-6
+
+        function check_configured_dQ(name, rot)
+            loss(q) = real(sum(conj(C) .* rot(q)))
+            g = Zygote.gradient(loss, Q)[1]
+            dL_ad = real(sum(conj(g) .* h))
+            dL_fd = (loss(Q .+ ϵ .* h) - loss(Q .- ϵ .* h)) / (2ϵ)
+            VERBOSE && @info "configured rotation dQ" name dL_ad dL_fd
+            @test isapprox(dL_ad, dL_fd; rtol=1e-4, atol=1e-8)
+        end
+
+        check_configured_dQ("SH_Yrotate", q -> SH_Yrotate(cfg, q, alpha, similar(q)))
+        check_configured_dQ("SH_Yrotate90", q -> SH_Yrotate90(cfg, q, similar(q)))
+        check_configured_dQ("SH_Xrotate90", q -> SH_Xrotate90(cfg, q, similar(q)))
+
+        loss_alpha(a) = real(sum(conj(C) .* SH_Yrotate(cfg, Q, a, similar(Q))))
+        g_alpha = Zygote.gradient(loss_alpha, alpha)[1]
+        fd_alpha = (loss_alpha(alpha + ϵ) - loss_alpha(alpha - ϵ)) / (2ϵ)
+        @test isapprox(g_alpha, fd_alpha; rtol=1e-4, atol=1e-8)
+
+        # Exercise the ChainRules rule directly too: Zygote has a dedicated
+        # adjoint for SH_Yrotate, while fixed-angle wrappers use this rrule.
+        _, pullback = ChainRulesCore.rrule(SH_Yrotate, cfg, Q, alpha, similar(Q))
+        _, _, Qbar, alpha_bar, _ = pullback(C)
+        directional = real(sum(conj(Qbar) .* h))
+        loss_q(q) = real(sum(conj(C) .* SH_Yrotate(cfg, q, alpha, similar(q))))
+        fd_directional = (loss_q(Q .+ ϵ .* h) - loss_q(Q .- ϵ .* h)) / (2ϵ)
+        @test isapprox(directional, fd_directional; rtol=1e-4, atol=1e-8)
+        @test isapprox(alpha_bar, fd_alpha; rtol=1e-4, atol=1e-8)
     end
 end
 else

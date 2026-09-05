@@ -948,14 +948,11 @@ end
             analysis(layout_cfg, layout_field; use_rfft=rank == 0)
         end
         MPI.Barrier(adapter.comm)
-        varying_analysis_plan = extension.DistAnalysisPlan(
-            layout_cfg, layout_field; use_rfft=rank == 0,
-        )
-        fill!(layout_dense, ComplexF64(18, -1))
         @test _all_ranks_catch(adapter.comm) do
-            analysis!(varying_analysis_plan, layout_dense, layout_field)
+            extension.DistAnalysisPlan(
+                layout_cfg, layout_field; use_rfft=rank == 0,
+            )
         end
-        @test all(==(ComplexF64(18, -1)), layout_dense)
         MPI.Barrier(adapter.comm)
         @test _all_ranks_catch(adapter.comm) do
             synthesis(
@@ -964,16 +961,11 @@ end
             )
         end
         MPI.Barrier(adapter.comm)
-        varying_synthesis_plan = extension.DistPlan(
-            layout_cfg, layout_field; use_rfft=rank == 0,
-        )
-        fill!(parent(correct_shape_output), 19)
         @test _all_ranks_catch(adapter.comm) do
-            synthesis!(
-                varying_synthesis_plan, correct_shape_output, layout_spectral,
+            extension.DistPlan(
+                layout_cfg, layout_field; use_rfft=rank == 0,
             )
         end
-        @test all(==(19.0), parent(correct_shape_output))
         MPI.Barrier(adapter.comm)
 
         divergent_cfg = deepcopy(layout_cfg)
@@ -2310,6 +2302,10 @@ if isempty(ARGS) || "rotations" in ARGS
             @test SHTnsKit.dist_SH_Zrotate(cfg, source, RT(0.27), output) === output
             expected_z = zeros(Complex{RT}, size(dense))
             SHTnsKit.dist_SH_Zrotate(cfg, dense, RT(0.27), expected_z)
+            for m in 0:cfg.mmax, l in m:cfg.lmax
+                @test expected_z[l + 1, m + 1] ≈
+                      dense[l + 1, m + 1] * cis(-RT(m) * RT(0.27)) atol=tol rtol=tol
+            end
             @test spectral_pencil_to_matrix(cfg, output) ≈ expected_z atol=tol rtol=tol
             @test extension._rotation_stats().z_payload_sent_elements == 0
 

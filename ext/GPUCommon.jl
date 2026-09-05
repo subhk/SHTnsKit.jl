@@ -24,7 +24,27 @@ export laplacian_kernel!, operator_matrix_kernel!, packed_operator_kernel!,
        scalar_workspace_clear!, scalar_workspace_size
 export RotationBlockCache, rotation_cache_lookup, rotation_cache_insert!,
        rotation_cache_publish!, rotation_cache_clear!, rotation_cache_size,
-       rotation_z_real_kernel!, rotation_real_kernel!, rotation_cplx_kernel!
+       rotation_z_real_kernel!, rotation_real_kernel!, rotation_cplx_kernel!,
+       launch_sht_loop!
+
+@kernel function _sht_loop_kernel!(body, range)
+    linear_index = @index(Global, Linear)
+    if linear_index <= length(range)
+        body(@inbounds range[linear_index])
+    end
+end
+
+"""Launch a body supplied by `@sht_loop` on the first operand's KA backend."""
+function launch_sht_loop!(args...)
+    first_array = args[1]
+    range = args[end - 1]
+    body = args[end]
+    backend = KernelAbstractions.get_backend(first_array)
+    kernel! = _sht_loop_kernel!(backend)
+    kernel!(body, range; ndrange=length(range))
+    KernelAbstractions.synchronize(backend)
+    return nothing
+end
 
 """One cached table set plus its mutable-configuration signature and LRU tick."""
 struct ScalarTableCacheEntry
@@ -786,7 +806,7 @@ end
 
 """MPI-pencil scalar analysis for an owned contiguous band of Fourier orders."""
 @kernel function distributed_scalar_analysis_kernel!(output, fourier, Plm,
-                                                       weights, cphi,
+                                                       weights, scales, cphi,
                                                        first_m, lmax, mmax,
                                                        mres, lcap)
     l_idx, local_m_idx, batch_idx = @index(Global, NTuple)
@@ -800,7 +820,8 @@ end
                 value += weights[i] * Plm[i, l_idx, m + 1] *
                          fourier[i, local_m_idx, batch_idx]
             end
-            output[l_idx, local_m_idx, batch_idx] = cphi * value
+            output[l_idx, local_m_idx, batch_idx] =
+                cphi * value / scales[l_idx, m + 1]
         else
             output[l_idx, local_m_idx, batch_idx] = zero(eltype(output))
         end
@@ -809,7 +830,7 @@ end
 
 """MPI-pencil scalar synthesis for an owned contiguous band of Fourier orders."""
 @kernel function distributed_scalar_synthesis_kernel!(fourier, input, Plm,
-                                                        inv_scale, first_m,
+                                                        scales, inv_scale, first_m,
                                                         lmax, mmax, mres)
     i, local_m_idx, batch_idx = @index(Global, NTuple)
     m = first_m + local_m_idx - 1
@@ -818,7 +839,7 @@ end
         value = zero(eltype(fourier))
         if m <= mmax && m % mres == 0
             @inbounds for l in m:lmax
-                value += Plm[i, l + 1, m + 1] *
+                value += scales[l + 1, m + 1] * Plm[i, l + 1, m + 1] *
                          input[l + 1, local_m_idx, batch_idx]
             end
         end
@@ -829,7 +850,7 @@ end
 """MPI-pencil vector analysis for an owned contiguous Fourier-order band."""
 @kernel function distributed_vector_analysis_kernel!(Sout, Tout, Ftheta,
                                                        Fphi, dtheta, over_sin,
-                                                       weights, x, cphi,
+                                                       weights, scales, x, cphi,
                                                        first_m, lmax, mmax,
                                                        mres, robert_form)
     l_idx, local_m_idx, batch_idx = @index(Global, NTuple)
@@ -854,8 +875,9 @@ end
                 Svalue += factor * (Ft * d + conj(term) * Fp)
                 Tvalue += factor * (-conj(term) * Ft + d * Fp)
             end
-            Sout[l_idx, local_m_idx, batch_idx] = Svalue
-            Tout[l_idx, local_m_idx, batch_idx] = Tvalue
+            scale = scales[l_idx, m + 1]
+            Sout[l_idx, local_m_idx, batch_idx] = Svalue / scale
+            Tout[l_idx, local_m_idx, batch_idx] = Tvalue / scale
         else
             Sout[l_idx, local_m_idx, batch_idx] = zero(eltype(Sout))
             Tout[l_idx, local_m_idx, batch_idx] = zero(eltype(Tout))
@@ -865,7 +887,7 @@ end
 
 """MPI-pencil vector synthesis for an owned contiguous Fourier-order band."""
 @kernel function distributed_vector_synthesis_kernel!(Ftheta, Fphi, Sin, Tin,
-                                                        dtheta, over_sin, x,
+                                                        dtheta, over_sin, scales, x,
                                                         inv_scale, first_m,
                                                         lmax, mmax, mres,
                                                         robert_form)
@@ -877,8 +899,9 @@ end
         gp = zero(eltype(Fphi))
         if m <= mmax && m % mres == 0
             @inbounds for l in max(1, m):lmax
-                S = Sin[l + 1, local_m_idx, batch_idx]
-                Tvalue = Tin[l + 1, local_m_idx, batch_idx]
+                scale = scales[l + 1, m + 1]
+                S = scale * Sin[l + 1, local_m_idx, batch_idx]
+                Tvalue = scale * Tin[l + 1, local_m_idx, batch_idx]
                 d = dtheta[i, l + 1, m + 1]
                 term = complex(zero(d), typeof(d)(m) *
                                over_sin[i, l + 1, m + 1])
@@ -1081,7 +1104,7 @@ end
 @kernel function rotation_z_real_kernel!(output, input, angle, orders)
     k = @index(Global, Linear)
     if k <= length(input)
-        output[k] = input[k] * cis(typeof(angle)(orders[k]) * angle)
+        output[k] = input[k] * cis(-typeof(angle)(orders[k]) * angle)
     end
 end
 

@@ -165,7 +165,9 @@ end
     transfer_fixture = TOML.parsefile(audit_path)
     scanned = scan_host_transfer_occurrences(root)
     allowed = transfer_fixture["entry"]
-    @test transfer_fixture["audit"]["entry_count"] == length(scanned) == 662
+    expected_transfer_count = fixture["host_transfer_audit"]["entry_count"]
+    @test transfer_fixture["audit"]["entry_count"] ==
+          length(scanned) == expected_transfer_count
     scanned_keys = Set(transfer_occurrence_key.(scanned))
     allowed_keys = Set(entry["key"] for entry in allowed)
     @test length(allowed_keys) == length(allowed)
@@ -222,19 +224,27 @@ end
     @test occursin("_require_host_pencil", parallel_ad_source)
     @test occursin("BackendUnavailableError", parallel_ad_source)
     scalar_synthesis_guard = findfirst(
-        "_require_host_pencil(:dist_synthesis_pullback, prototype_θφ)",
+        r"_require_host_pencil\(:dist_synthesis_pullback,\s*prototype_θφ,\s*comm\)",
         parallel_ad_source,
     )
     scalar_synthesis_forward = findfirst("y = SHTnsKit.dist_synthesis(", parallel_ad_source)
     vector_synthesis_guard = findfirst(
-        "_require_host_pencil(:dist_synthesis_sphtor_pullback, prototype_θφ)",
+        r"_require_host_pencil\(\s*:dist_synthesis_sphtor_pullback,\s*prototype_θφ,\s*comm,?\s*\)",
         parallel_ad_source,
     )
     vector_synthesis_forward = findfirst(
         "y = SHTnsKit.dist_synthesis_sphtor(", parallel_ad_source,
     )
-    @test first(scalar_synthesis_guard) < first(scalar_synthesis_forward)
-    @test first(vector_synthesis_guard) < first(vector_synthesis_forward)
+    @test scalar_synthesis_guard !== nothing
+    @test scalar_synthesis_forward !== nothing
+    @test vector_synthesis_guard !== nothing
+    @test vector_synthesis_forward !== nothing
+    if scalar_synthesis_guard !== nothing && scalar_synthesis_forward !== nothing
+        @test first(scalar_synthesis_guard) < first(scalar_synthesis_forward)
+    end
+    if vector_synthesis_guard !== nothing && vector_synthesis_forward !== nothing
+        @test first(vector_synthesis_guard) < first(vector_synthesis_forward)
+    end
 
     parallel_runner = read(joinpath(root, "test", "parallel", "runtests.jl"), String)
     @test occursin("include(\"test_parallel_ad_storage.jl\")", parallel_runner)

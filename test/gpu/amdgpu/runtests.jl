@@ -164,6 +164,7 @@ end
 @testset "AMDGPU backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitAMDGPUExt)
     @test extension !== nothing
+    @test SHTnsKit._GPU_LOOP_AVAILABLE[]
     test_gpu_rotation_contract(
         extension, ROCArray{ComplexF32,1}, ROCArray{ComplexF32,1},
     )
@@ -172,6 +173,9 @@ end
     )
     test_angle_axis_pi_singularity()
     if AMDGPU.functional()
+        loop_values = AMDGPU.zeros(Int32, 8)
+        @sht_loop loop_values[i] = Int32(i) over i ∈ eachindex(loop_values)
+        @test Array(loop_values) == Int32.(1:8)
         run_rotation_parity(AMDGPURotationAdapter())
         test_shtns37_gpu_fixtures(
             ROCArray, value -> (@test value isa AMDGPU.AnyROCArray),

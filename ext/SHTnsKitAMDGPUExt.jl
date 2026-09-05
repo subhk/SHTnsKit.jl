@@ -32,7 +32,7 @@ using .GPUCommon: local_scalar_kernel!, local_complex_kernel!, local_qst_kernel!
 using .GPUCommon: RotationBlockCache, rotation_cache_lookup,
                   rotation_cache_publish!, rotation_cache_clear!,
                   rotation_z_real_kernel!, rotation_real_kernel!,
-                  rotation_cplx_kernel!
+                  rotation_cplx_kernel!, launch_sht_loop!
 
 import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  analysis_packed, synthesis_packed,
@@ -78,6 +78,7 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
                  _gpu_adapter_analysis_sphtor,
                  _gpu_adapter_synthesis_sphtor, _gpu_adapter_clear_cache!
+import SHTnsKit: _enable_gpu_loops!
 
 import SHTnsKit: gpu_apply_laplacian!
 
@@ -86,6 +87,7 @@ const AMDGPU_ADAPTER = AMDGPUAdapter()
 
 function __init__()
     _register_gpu_adapter!(:amdgpu, AMDGPU_ADAPTER)
+    _enable_gpu_loops!(launch_sht_loop!)
     return nothing
 end
 

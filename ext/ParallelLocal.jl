@@ -13,52 +13,53 @@ using SHTnsKit
 
 Evaluate along a latitude (cosθ = cost) from distributed Alm. All ranks receive the full vector.
 
-`Alm_pencil` holds ORTHONORMAL coefficients — the form `dist_analysis` returns,
-matching serial `analysis`/`synthesis_point`. It is NOT the packed `SH_to_lat`
-convention, which applies the cfg norm/CS scale.
+`Alm_pencil` uses `cfg`'s normalization and Condon--Shortley phase convention,
+as returned by `analysis`/`dist_analysis`; evaluation converts to the canonical
+basis internally.
 """
 function SHTnsKit.dist_SH_to_lat(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray, cost::Real;
                                  nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax,
                                  real_output::Bool=true)
     comm = communicator(Alm_pencil)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    x = float(cost)
-    P = Vector{Float64}(undef, lmax + 1)
-    vals_local = zeros(ComplexF64, nphi)
-    lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
-    gl_l = collect(Int, globalindices(Alm_pencil, 1))
-    gl_m = collect(Int, globalindices(Alm_pencil, 2))
-    # m = 0 if present locally
-    j0 = findfirst(==(1), gl_m)
-    if j0 !== nothing
-        SHTnsKit.Plm_norm_row!(P, x, lmax, 0)
-        g0 = 0.0 + 0.0im
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            if lval <= ltr
-                g0 += P[lval+1] * Alm_pencil[il, mloc[j0]]
-            end
-        end
-        vals_local .+= g0
+    _validate_parallel_storage!(comm, :dist_SH_to_lat, Alm_pencil)
+    _validate_replicated_call_signature(
+        comm, "dist_SH_to_lat", (cost, nphi, ltr, mtr, real_output))
+    if real_output
+        return SHTnsKit.SH_to_lat(cfg, Alm_pencil, cost; nphi, ltr, mtr)
     end
-    # m > 0 columns owned by this rank
-    for (jj, jm) in enumerate(mloc)
-        mval = gl_m[jj] - 1
-        (mval > 0 && mval <= mtr) || continue
-        SHTnsKit.Plm_norm_row!(P, x, lmax, mval)
-        gm = 0.0 + 0.0im
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            if mval <= lval <= ltr
-                gm += P[lval+1] * Alm_pencil[il, jm]
-            end
+
+    # Complex output is one-sided: evaluate only the stored non-negative
+    # orders, matching synthesis(...; real_output=false), with no Hermitian
+    # doubling. The shared validators make every rejection collective.
+    comm = _validate_local_spectral_pencils!(
+        cfg, (Alm_pencil,), :dist_SH_to_lat)
+    count, lcap, mcap = _collective_local_options(
+        comm, cfg, cost, zero(cost), nphi, ltr, mtr, :dist_SH_to_lat)
+    CT = eltype(Alm_pencil)
+    RT = typeof(real(zero(CT)))
+    x = RT(cost)
+    P = Vector{RT}(undef, cfg.lmax + 1)
+    values = zeros(CT, count)
+    local_l = collect(Int, globalindices(Alm_pencil, 1))
+    local_m = collect(Int, globalindices(Alm_pencil, 2))
+    data = parent(Alm_pencil)
+    for (jlocal, mindex) in pairs(local_m)
+        m = mindex - 1
+        (m <= mcap && m % cfg.mres == 0) || continue
+        SHTnsKit.Plm_norm_row!(P, x, cfg.lmax, m)
+        mode = zero(CT)
+        @inbounds for (ilocal, lindex) in pairs(local_l)
+            l = lindex - 1
+            (m <= l <= lcap) || continue
+            scale = RT(SHTnsKit.coefficient_scale_to_canonical(cfg, l, m))
+            mode += P[l + 1] * scale * data[ilocal, jlocal]
         end
-        @inbounds for j in 0:(nphi-1)
-            vals_local[j+1] += 2 * real(gm * cis(2π * mval * j / nphi))
+        @inbounds for j in 1:count
+            values[j] += mode * cis(RT(2pi * m * (j - 1) / count))
         end
     end
-    MPI.Allreduce!(vals_local, +, comm)
-    return real_output ? real.(vals_local) : vals_local
+    MPI.Allreduce!(values, +, comm)
+    return values
 end
 
 """
@@ -67,190 +68,33 @@ end
 Evaluate spherical harmonic expansion at a single point for a real-valued field.
 Uses Hermitian symmetry: negative-m contribution added via 2*real(...) for m > 0.
 
-`Alm_pencil` holds orthonormal coefficients (see [`dist_SH_to_lat`](@ref)).
+`Alm_pencil` uses the coefficient convention configured by `cfg` (see
+[`dist_SH_to_lat`](@ref)).
 """
 function SHTnsKit.dist_SH_to_point(cfg::SHTnsKit.SHTConfig, Alm_pencil::PencilArray, cost::Real, phi::Real)
-    comm = communicator(Alm_pencil)
-    lmax, mmax = cfg.lmax, cfg.mmax
-    x = float(cost)
-    P = Vector{Float64}(undef, lmax + 1)
-    lloc = axes(Alm_pencil, 1); mloc = axes(Alm_pencil, 2)
-    gl_l = collect(Int, globalindices(Alm_pencil, 1))
-    gl_m = collect(Int, globalindices(Alm_pencil, 2))
-    s_local = 0.0
-    # m=0
-    j0 = findfirst(==(1), gl_m)
-    if j0 !== nothing
-        SHTnsKit.Plm_norm_row!(P, x, lmax, 0)
-        g0 = 0.0
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            g0 += P[lval+1] * real(Alm_pencil[il, mloc[j0]])
-        end
-        s_local += g0
-    end
-    # m>0: add both +m and -m via 2*real(...)
-    for (jj, jm) in enumerate(mloc)
-        mval = gl_m[jj] - 1
-        mval > 0 || continue
-        SHTnsKit.Plm_norm_row!(P, x, lmax, mval)
-        gm = 0.0 + 0.0im
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            if lval >= mval
-                gm += P[lval+1] * Alm_pencil[il, jm]
-            end
-        end
-        ph = cis(mval * phi)
-        s_local += 2 * real(gm * ph)
-    end
-    s = MPI.Allreduce(s_local, +, comm)
-    return s
+    return SHTnsKit.synthesis_point(cfg, Alm_pencil, cost, phi)
 end
 
 """
     dist_SHqst_to_point(cfg, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost, phi) -> (vr, vt, vp)
 
-`Q_p`/`S_p`/`T_p` hold orthonormal coefficients (see [`dist_SH_to_lat`](@ref)).
+`Q_p`/`S_p`/`T_p` use the coefficient convention configured by `cfg` (see
+[`dist_SH_to_lat`](@ref)).
 """
 function SHTnsKit.dist_SHqst_to_point(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real, phi::Real)
-    comm = communicator(Q_p)
-    _validate_parallel_storage!(
-        comm, :dist_SHqst_to_point, Q_p, S_p, T_p,
-    )
-    lmax, mmax = cfg.lmax, cfg.mmax
-    x = float(cost)
-    P = Vector{Float64}(undef, lmax + 1)
-    dPdtheta = Vector{Float64}(undef, lmax + 1)
-    P_over_sinth = Vector{Float64}(undef, lmax + 1)
-    lloc = axes(Q_p, 1); mloc = axes(Q_p, 2)
-    gl_l = collect(Int, globalindices(Q_p, 1))
-    gl_m = collect(Int, globalindices(Q_p, 2))
-    vr_local = 0.0 + 0.0im
-    vt_local = 0.0 + 0.0im
-    vp_local = 0.0 + 0.0im
-    # m=0
-    j0 = findfirst(==(1), gl_m)
-    if j0 !== nothing
-        SHTnsKit.Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            Y = P[lval+1]
-            dθY = dPdtheta[lval+1]
-                aQ = Q_p[il, mloc[j0]]; aS = S_p[il, mloc[j0]]; aT = T_p[il, mloc[j0]]
-            vr_local += Y   * aQ
-            vt_local += dθY * aS
-            vp_local += dθY * aT  # Vφ = dθY * T for m=0
-        end
-    end
-    # m>0 (use pole-safe Legendre functions)
-    for (jj, jm) in enumerate(mloc)
-        mval = gl_m[jj] - 1
-        mval > 0 || continue
-        SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, mval)
-        gvr = 0.0 + 0.0im
-        gvt = 0.0 + 0.0im
-        gvp = 0.0 + 0.0im
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            if lval >= mval
-                Y = P[lval+1]
-                dθY = dPdtheta[lval+1]
-                Y_over_sθ = P_over_sinth[lval+1]
-                aQ = Q_p[il, jm]; aS = S_p[il, jm]; aT = T_p[il, jm]
-                gvr += Y   * aQ
-                # Vθ = ∂S/∂θ - (im/sinθ) * T
-                gvt += dθY * aS - (0 + 1im) * mval * Y_over_sθ * aT
-                # Vφ = (im/sinθ) * S + ∂T/∂θ
-                gvp += (0 + 1im) * mval * Y_over_sθ * aS + dθY * aT
-            end
-        end
-        ph = cis(mval * phi)
-        vr_local += gvr * ph + conj(gvr) * conj(ph)
-        vt_local += gvt * ph + conj(gvt) * conj(ph)
-        vp_local += gvp * ph + conj(gvp) * conj(ph)
-    end
-    # One batched collective instead of three separate round-trips (vr,vt,vp).
-    red = MPI.Allreduce!(ComplexF64[vr_local, vt_local, vp_local], +, comm)
-    return real(red[1]), real(red[2]), real(red[3])
+    return SHTnsKit.SHqst_to_point(cfg, Q_p, S_p, T_p, cost, phi)
 end
 
 """
     dist_SHqst_to_lat(cfg, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real;
                       nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax) -> Vr, Vt, Vp
 
-`Q_p`/`S_p`/`T_p` hold orthonormal coefficients (see [`dist_SH_to_lat`](@ref)).
+`Q_p`/`S_p`/`T_p` use the coefficient convention configured by `cfg` (see
+[`dist_SH_to_lat`](@ref)).
 """
 function SHTnsKit.dist_SHqst_to_lat(cfg::SHTnsKit.SHTConfig, Q_p::PencilArray, S_p::PencilArray, T_p::PencilArray, cost::Real;
                                     nphi::Int=cfg.nlon, ltr::Int=cfg.lmax, mtr::Int=cfg.mmax)
-    comm = communicator(Q_p)
-    _validate_parallel_storage!(
-        comm, :dist_SHqst_to_lat, Q_p, S_p, T_p,
-    )
-    lmax = cfg.lmax
-    x = float(cost)
-    P = Vector{Float64}(undef, lmax + 1)
-    dPdtheta = Vector{Float64}(undef, lmax + 1)
-    P_over_sinth = Vector{Float64}(undef, lmax + 1)
-    lloc = axes(Q_p, 1); mloc = axes(Q_p, 2)
-    gl_l = collect(Int, globalindices(Q_p, 1))
-    gl_m = collect(Int, globalindices(Q_p, 2))
-    Vr_local = zeros(ComplexF64, nphi)
-    Vt_local = zeros(ComplexF64, nphi)
-    Vp_local = zeros(ComplexF64, nphi)
-    # m=0
-    j0 = findfirst(==(1), gl_m)
-    if j0 !== nothing
-        SHTnsKit.Plm_norm_and_dPdtheta_row!(P, dPdtheta, x, lmax, 0)
-        g0 = 0.0 + 0.0im; gθ0 = 0.0 + 0.0im; gφ0 = 0.0 + 0.0im
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            if lval <= ltr
-                Y = P[lval+1]
-                dθY = dPdtheta[lval+1]
-                aQ = Q_p[il, mloc[j0]]; aS = S_p[il, mloc[j0]]; aT = T_p[il, mloc[j0]]
-                g0  += Y * aQ
-                gθ0 += dθY * aS
-                gφ0 += dθY * aT  # Vφ = dθY * T for m=0
-            end
-        end
-        Vr_local .+= g0; Vt_local .+= gθ0; Vp_local .+= gφ0
-    end
-    # m>0 (use pole-safe Legendre functions)
-    for (jj, jm) in enumerate(mloc)
-        mval = gl_m[jj] - 1
-        (mval > 0 && mval <= mtr) || continue
-        SHTnsKit.Plm_norm_dPdtheta_over_sinth_row!(P, dPdtheta, P_over_sinth, x, lmax, mval)
-        g  = 0.0 + 0.0im
-        gθ = 0.0 + 0.0im
-        gφ = 0.0 + 0.0im
-        for (ii, il) in enumerate(lloc)
-            lval = gl_l[ii] - 1
-            if mval <= lval <= ltr
-                Y = P[lval+1]
-                dθY = dPdtheta[lval+1]
-                Y_over_sθ = P_over_sinth[lval+1]
-                aQ = Q_p[il, jm]; aS = S_p[il, jm]; aT = T_p[il, jm]
-                g  += Y   * aQ
-                # Vθ = ∂S/∂θ - (im/sinθ) * T
-                gθ += dθY * aS - (0 + 1im) * mval * Y_over_sθ * aT
-                # Vφ = (im/sinθ) * S + ∂T/∂θ
-                gφ += (0 + 1im) * mval * Y_over_sθ * aS + dθY * aT
-            end
-        end
-        @inbounds for j in 0:(nphi-1)
-            ph = cis(2π * mval * j / nphi)
-            Vr_local[j+1] += 2 * real(g * ph)
-            Vt_local[j+1] += 2 * real(gθ * ph)
-            Vp_local[j+1] += 2 * real(gφ * ph)
-        end
-    end
-    # One batched collective over the stacked (Vr,Vt,Vp) buffer instead of three.
-    combined = vcat(Vr_local, Vt_local, Vp_local)
-    MPI.Allreduce!(combined, +, comm)
-    return real.(@view combined[1:nphi]),
-           real.(@view combined[nphi+1:2nphi]),
-           real.(@view combined[2nphi+1:3nphi])
+    return SHTnsKit.SHqst_to_lat(cfg, Q_p, S_p, T_p, cost; nphi, ltr, mtr)
 end
 
 const _LOCAL_EVALUATION_STATS = Dict{Symbol,Int}(
@@ -313,12 +157,74 @@ function _collective_local_integer(comm, value::Integer, lower::Int, upper::Int,
     return candidate
 end
 
+function _validate_local_spectral_structure!(cfg, values::Tuple,
+                                             operation::Symbol;
+                                             comm=communicator(first(values)))
+    reference = first(values)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    local_flags = UInt32(0)
+
+    for value in values
+        compatible = try
+            value_comm = communicator(value)
+            MPI.Comm_size(value_comm) == MPI.Comm_size(comm) &&
+                MPI.Comm_compare(value_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+        catch
+            false
+        end
+        compatible || (local_flags |= 0x0008)
+        size_global(value) == expected || (local_flags |= 0x0001)
+        storage_matches = try
+            ranges = PencilArrays.range_local(pencil(value))
+            size(parent(value)) == Tuple(length(range) for range in ranges)
+        catch
+            false
+        end
+        storage_matches || (local_flags |= 0x0002)
+    end
+
+    reference_pen = pencil(reference)
+    for value in Base.tail(values)
+        layout_matches = try
+            candidate_pen = pencil(value)
+            size_global(reference) == size_global(value) &&
+                PencilArrays.decomposition(reference_pen) ==
+                    PencilArrays.decomposition(candidate_pen) &&
+                size(PencilArrays.topology(reference_pen)) ==
+                    size(PencilArrays.topology(candidate_pen)) &&
+                PencilArrays.range_local(reference_pen) ==
+                    PencilArrays.range_local(candidate_pen) &&
+                PencilArrays.permutation(reference) ==
+                    PencilArrays.permutation(value) &&
+                size(parent(reference)) == size(parent(value))
+        catch
+            false
+        end
+        layout_matches || (local_flags |= 0x0002)
+    end
+
+    flags = MPI.Allreduce(local_flags, |, comm)
+    if flags != 0
+        descriptions = String[]
+        flags & 0x0001 != 0 && push!(descriptions, "global shape mismatch")
+        flags & 0x0002 != 0 && push!(
+            descriptions, "local Pencil storage/decomposition mismatch",
+        )
+        flags & 0x0008 != 0 && push!(descriptions, "communicator mismatch")
+        throw(DimensionMismatch(
+            "$operation collective validation failed: $(join(descriptions, ", "))",
+        ))
+    end
+    return nothing
+end
+
 function _validate_local_spectral_pencils!(cfg, values::Tuple,
                                            operation::Symbol;
                                            comm=communicator(first(values)))
     reference = first(values)
     _validate_qst_pencil_communicators!(comm, values, operation)
     _validate_cfg_replicated(cfg, comm)
+    _validate_local_spectral_structure!(cfg, values, operation; comm)
     for value in values
         _validate_scalar_pencil!(
             cfg, value, (cfg.lmax + 1, cfg.mmax + 1), operation;
@@ -538,6 +444,7 @@ function SHTnsKit.dist_analysis_packed(cfg::SHTnsKit.SHTConfig,
                                        ltr::Integer=cfg.lmax,
                                        use_rfft::Bool=false)
     comm = communicator(fθφ)
+    _validate_parallel_storage!(comm, :dist_analysis_packed, fθφ)
     _validate_cfg_replicated(cfg, comm)
     _collective_validation_error(
         comm, eltype(fθφ) <: Real ? UInt32(0) : UInt32(0x0400),
@@ -618,6 +525,7 @@ end
 """
 function SHTnsKit.dist_analysis_packed_cplx(cfg::SHTnsKit.SHTConfig, z::PencilArray)
     comm = communicator(z)
+    _validate_parallel_storage!(comm, :dist_analysis_packed_cplx, z)
     _validate_cfg_replicated(cfg, comm)
     _validate_scalar_pencil!(
         cfg, z, (cfg.nlat, cfg.nlon), :dist_analysis_packed_cplx; comm,
@@ -740,13 +648,23 @@ function _validate_variant_vector!(cfg::SHTnsKit.SHTConfig, values::PencilArray,
                                    require_real::Bool=false,
                                    require_complex::Bool=false,
                                    allow_longer::Bool=false,
-                                   peer=nothing)
-    comm = communicator(values)
-    peer === nothing || _validate_parallel_storage!(
-        comm, operation, values, peer,
-    )
+                                   peer=nothing,
+                                   comm=communicator(values))
+    if peer === nothing
+        _validate_parallel_storage!(comm, operation, values)
+    else
+        _validate_parallel_storage!(comm, operation, values, peer)
+    end
     _validate_cfg_replicated(cfg, comm)
     flags = UInt32(0)
+    values_comm = communicator(values)
+    values_compatible = try
+        MPI.Comm_size(values_comm) == MPI.Comm_size(comm) &&
+            MPI.Comm_compare(values_comm, comm) in (MPI.IDENT, MPI.CONGRUENT)
+    catch
+        false
+    end
+    values_compatible || (flags |= 0x0008)
     global_size = size_global(values)
     valid_length = allow_longer ?
         (length(global_size) == 2 && global_size[1] >= expected_length &&
@@ -782,8 +700,8 @@ end
 function _validate_packed_synthesis_prototype!(
         cfg::SHTnsKit.SHTConfig, prototype::PencilArray,
         coefficients::PencilArray, operation::Symbol;
-        complex_output::Bool)
-    comm = communicator(coefficients)
+        complex_output::Bool,
+        comm=communicator(prototype))
     _validate_scalar_pencil!(
         cfg, prototype, (cfg.nlat, cfg.nlon), operation;
         comm, peer=coefficients, require_complex_input=complex_output,
@@ -901,8 +819,8 @@ function _pack_spectral_pencil(cfg::SHTnsKit.SHTConfig, spectral::PencilArray,
 end
 
 function _unpack_spectral_pencil(cfg::SHTnsKit.SHTConfig, packed::PencilArray,
-                                 lcap::Int)
-    comm = communicator(packed)
+                                 lcap::Int;
+                                 comm=communicator(packed))
     spectral = PencilArray{eltype(packed)}(
         undef, SHTnsKit.create_spectral_pencil(cfg; comm),
     )
@@ -952,6 +870,7 @@ end
 function SHTnsKit.analysis_packed_l(cfg::SHTnsKit.SHTConfig, field::PencilArray,
                                     ltr::Integer; use_rfft::Bool=false)
     comm = communicator(field)
+    _validate_parallel_storage!(comm, :analysis_packed_l, field)
     _validate_cfg_replicated(cfg, comm)
     _collective_validation_error(
         comm, eltype(field) <: Real ? UInt32(0) : UInt32(0x0400),
@@ -975,16 +894,17 @@ function SHTnsKit.synthesis_packed_l(cfg::SHTnsKit.SHTConfig,
                                      coefficients::PencilArray, ltr::Integer;
                                      prototype_θφ::PencilArray,
                                      use_rfft::Bool=false)
+    comm = communicator(prototype_θφ)
     comm = _validate_variant_vector!(
         cfg, coefficients, cfg.nlm, :synthesis_packed_l;
-        require_complex=true, peer=prototype_θφ,
+        require_complex=true, peer=prototype_θφ, comm,
     )
     _validate_packed_synthesis_prototype!(
         cfg, prototype_θφ, coefficients, :synthesis_packed_l;
-        complex_output=false,
+        complex_output=false, comm,
     )
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_packed_l)
-    spectral = _unpack_spectral_pencil(cfg, coefficients, lcap)
+    spectral = _unpack_spectral_pencil(cfg, coefficients, lcap; comm)
     local_result = SHTnsKit.dist_synthesis(
         cfg, spectral; prototype_θφ, real_output=true, use_rfft,
     )
@@ -1062,6 +982,7 @@ function SHTnsKit.analysis_packed_cplx_l(cfg::SHTnsKit.SHTConfig,
                                          field::PencilArray,
                                          ltr::Integer)
     comm = communicator(field)
+    _validate_parallel_storage!(comm, :analysis_packed_cplx_l, field)
     _validate_cfg_replicated(cfg, comm)
     _collective_validation_error(
         comm, cfg.mres == 1 ? UInt32(0) : UInt32(0x0200),
@@ -1090,8 +1011,8 @@ end
 
 function _unpack_complex_spectral_pencils(cfg::SHTnsKit.SHTConfig,
                                           packed::PencilArray,
-                                          lcap::Int=cfg.lmax)
-    comm = communicator(packed)
+                                          lcap::Int=cfg.lmax;
+                                          comm=communicator(packed))
     spectral_pen = SHTnsKit.create_spectral_pencil(cfg; comm)
     Aplus = PencilArray{eltype(packed)}(undef, spectral_pen)
     Aminus = PencilArray{eltype(packed)}(undef, spectral_pen)
@@ -1151,7 +1072,10 @@ function SHTnsKit.synthesis_packed_cplx_l(cfg::SHTnsKit.SHTConfig,
                                           coefficients::PencilArray,
                                           ltr::Integer;
                                           prototype_θφ::PencilArray)
-    comm = communicator(coefficients)
+    comm = communicator(prototype_θφ)
+    _validate_parallel_storage!(
+        comm, :synthesis_packed_cplx_l, coefficients, prototype_θφ,
+    )
     _validate_cfg_replicated(cfg, comm)
     _collective_validation_error(
         comm, cfg.mres == 1 ? UInt32(0) : UInt32(0x0200),
@@ -1160,17 +1084,17 @@ function SHTnsKit.synthesis_packed_cplx_l(cfg::SHTnsKit.SHTConfig,
     expected = SHTnsKit.nlm_cplx_calc(cfg.lmax, cfg.mmax, 1)
     _validate_variant_vector!(
         cfg, coefficients, expected, :synthesis_packed_cplx_l;
-        require_complex=true, peer=prototype_θφ,
+        require_complex=true, peer=prototype_θφ, comm,
     )
     _validate_packed_synthesis_prototype!(
         cfg, prototype_θφ, coefficients, :synthesis_packed_cplx_l;
-        complex_output=true,
+        complex_output=true, comm,
     )
     lcap = _collective_truncation(
         comm, ltr, cfg.lmax, :synthesis_packed_cplx_l,
     )
     Aplus, Aminus = _unpack_complex_spectral_pencils(
-        cfg, coefficients, lcap,
+        cfg, coefficients, lcap; comm,
     )
     local_result = SHTnsKit.dist_synthesis(
         cfg, Aplus; prototype_θφ, real_output=false, Aminus,
@@ -1184,6 +1108,10 @@ function _analysis_mode_pencil(cfg::SHTnsKit.SHTConfig, im::Int,
                                field::PencilArray, ltr::Int;
                                axisymmetric::Bool=false)
     comm = communicator(field)
+    _validate_parallel_storage!(
+        comm, axisymmetric ? :analysis_axisym_l : :analysis_packed_ml,
+        field,
+    )
     _validate_cfg_replicated(cfg, comm)
     im_min = MPI.Allreduce(im, min, comm)
     im_max = MPI.Allreduce(im, max, comm)
@@ -1245,6 +1173,10 @@ function _synthesis_mode_pencil(cfg::SHTnsKit.SHTConfig, im::Int,
                                 coefficients::PencilArray, ltr::Int;
                                 axisymmetric::Bool=false)
     comm = communicator(coefficients)
+    _validate_parallel_storage!(
+        comm, axisymmetric ? :synthesis_axisym_l : :synthesis_packed_ml,
+        coefficients,
+    )
     _validate_cfg_replicated(cfg, comm)
     im_min = MPI.Allreduce(im, min, comm)
     im_max = MPI.Allreduce(im, max, comm)
@@ -1307,6 +1239,7 @@ SHTnsKit.analysis_axisym(cfg::SHTnsKit.SHTConfig, field::PencilArray) =
 function SHTnsKit.analysis_axisym_l(cfg::SHTnsKit.SHTConfig,
                                     field::PencilArray, ltr::Integer)
     comm = communicator(field)
+    _validate_parallel_storage!(comm, :analysis_axisym_l, field)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :analysis_axisym_l)
     return _analysis_mode_pencil(cfg, 0, field, lcap; axisymmetric=true)
 end
@@ -1321,6 +1254,7 @@ end
 function SHTnsKit.synthesis_axisym_l(cfg::SHTnsKit.SHTConfig,
                                      coefficients::PencilArray, ltr::Integer)
     comm = communicator(coefficients)
+    _validate_parallel_storage!(comm, :synthesis_axisym_l, coefficients)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_axisym_l)
     return _synthesis_mode_pencil(
         cfg, 0, coefficients, lcap; axisymmetric=true,
@@ -1330,6 +1264,7 @@ end
 function SHTnsKit.analysis_packed_ml(cfg::SHTnsKit.SHTConfig, im::Int,
                                      field::PencilArray, ltr::Integer)
     comm = communicator(field)
+    _validate_parallel_storage!(comm, :analysis_packed_ml, field)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :analysis_packed_ml)
     return _analysis_mode_pencil(cfg, im, field, lcap)
 end
@@ -1337,6 +1272,7 @@ end
 function SHTnsKit.synthesis_packed_ml(cfg::SHTnsKit.SHTConfig, im::Int,
                                       coefficients::PencilArray, ltr::Integer)
     comm = communicator(coefficients)
+    _validate_parallel_storage!(comm, :synthesis_packed_ml, coefficients)
     lcap = _collective_truncation(comm, ltr, cfg.lmax, :synthesis_packed_ml)
     return _synthesis_mode_pencil(cfg, im, coefficients, lcap)
 end
@@ -1346,9 +1282,11 @@ function _validate_batch_pencil!(cfg::SHTnsKit.SHTConfig, values::PencilArray,
                                  operation::Symbol; require_real::Bool=false,
                                  require_complex::Bool=false, peer=nothing,
                                  comm=communicator(values))
-    peer === nothing || _validate_parallel_storage!(
-        comm, operation, values, peer,
-    )
+    if peer === nothing
+        _validate_parallel_storage!(comm, operation, values)
+    else
+        _validate_parallel_storage!(comm, operation, values, peer)
+    end
     _validate_cfg_replicated(cfg, comm)
     globals = size_global(values)
     flags = UInt32(0)
@@ -1385,9 +1323,11 @@ function _validate_batch_pencil!(cfg::SHTnsKit.SHTConfig, values::PencilArray,
     return nfields
 end
 
+# Keep batch entry points broad: rank and element-type errors must reach the
+# collective validator even when peer ranks dispatch to the GPU firewall.
 function SHTnsKit.analysis_batch(cfg::SHTnsKit.SHTConfig,
-                                 fields::PencilArray{T,3};
-                                 use_rfft::Bool=false) where {T<:Real}
+                                 fields::PencilArray{T};
+                                 use_rfft::Bool=false) where {T}
     nfields = _validate_batch_pencil!(
         cfg, fields, (cfg.nlat, cfg.nlon), :analysis_batch; require_real=true,
     )
@@ -1405,10 +1345,9 @@ function SHTnsKit.analysis_batch(cfg::SHTnsKit.SHTConfig,
 end
 
 function SHTnsKit.analysis_batch!(cfg::SHTnsKit.SHTConfig,
-                                  output::PencilArray{TO,3},
-                                  fields::PencilArray{TI,3};
-                                  use_rfft::Bool=false, fft_batch=nothing) where
-                                  {TO,TI<:Real}
+                                  output::PencilArray,
+                                  fields::PencilArray;
+                                  use_rfft::Bool=false, fft_batch=nothing)
     comm = communicator(fields)
     _validate_batch_pencil!(
         cfg, output, (cfg.lmax + 1, cfg.mmax + 1), :analysis_batch_output;
@@ -1431,15 +1370,20 @@ function SHTnsKit.analysis_batch!(cfg::SHTnsKit.SHTConfig,
 end
 
 function SHTnsKit.synthesis_batch(cfg::SHTnsKit.SHTConfig,
-                                  coefficients::PencilArray{T,3};
+                                  coefficients::PencilArray{T};
                                   prototype_θφ::PencilArray,
                                   real_output::Bool=true,
-                                  use_rfft::Bool=false) where {T<:Complex}
+                                  use_rfft::Bool=false,
+                                  comm=communicator(prototype_θφ)) where
+                                  {T}
+    comm = _validate_public_comm_anchor!(
+        communicator(prototype_θφ), comm, :synthesis_batch,
+        coefficients, prototype_θφ,
+    )
     nfields = _validate_batch_pencil!(
         cfg, coefficients, (cfg.lmax + 1, cfg.mmax + 1), :synthesis_batch;
-        require_complex=true, peer=prototype_θφ,
+        require_complex=true, peer=prototype_θφ, comm,
     )
-    comm = communicator(coefficients)
     _validate_collective_scalar_options!(
         comm, use_rfft, real_output, :synthesis_batch_options,
     )
@@ -1459,7 +1403,8 @@ function SHTnsKit.synthesis_batch(cfg::SHTnsKit.SHTConfig,
             undef, pencil(prototype_θφ),
         )
         local_result = SHTnsKit.dist_synthesis(
-            cfg, spectral; prototype_θφ=prototype, real_output, use_rfft,
+            cfg, spectral;
+            prototype_θφ=prototype, real_output, use_rfft, comm,
         )
         @views copyto!(parent(output)[:, :, k], local_result)
     end
@@ -1467,22 +1412,27 @@ function SHTnsKit.synthesis_batch(cfg::SHTnsKit.SHTConfig,
 end
 
 function SHTnsKit.synthesis_batch_cplx(cfg::SHTnsKit.SHTConfig,
-                                       coefficients::PencilArray{T,3};
+                                       coefficients::PencilArray;
                                        prototype_θφ::PencilArray,
-                                       use_rfft::Bool=false) where {T<:Complex}
+                                       use_rfft::Bool=false,
+                                       comm=communicator(prototype_θφ))
+    comm = _validate_public_comm_anchor!(
+        communicator(prototype_θφ), comm, :synthesis_batch_cplx,
+        coefficients, prototype_θφ,
+    )
     return SHTnsKit.synthesis_batch(
-        cfg, coefficients; prototype_θφ, real_output=false, use_rfft,
+        cfg, coefficients;
+        prototype_θφ, real_output=false, use_rfft, comm,
     )
 end
 
 function SHTnsKit.synthesis_batch!(cfg::SHTnsKit.SHTConfig,
                                    output::PencilArray,
-                                   coefficients::PencilArray{T,3};
+                                   coefficients::PencilArray;
                                    prototype_θφ::PencilArray=output,
                                    real_output::Bool=true,
-                                   use_rfft::Bool=false, fft_batch=nothing) where
-                                   {T<:Complex}
-    comm = communicator(coefficients)
+                                   use_rfft::Bool=false, fft_batch=nothing)
+    comm = communicator(output)
     _validate_batch_pencil!(
         cfg, output, (cfg.nlat, cfg.nlon), :synthesis_batch_output;
         peer=coefficients, comm,
@@ -1509,8 +1459,13 @@ function SHTnsKit.synthesis_batch!(cfg::SHTnsKit.SHTConfig,
         throw(ArgumentError(
         "distributed synthesis_batch! owns its per-call Fourier scratch",
     ))
+    # `output` is this in-place operation's stable communicator anchor.  The
+    # caller-supplied prototype was already validated above and may legitimately
+    # use a different congruent duplicate on each rank; do not re-anchor the
+    # allocating helper on that rank-selected context.
     transformed = SHTnsKit.synthesis_batch(
-        cfg, coefficients; prototype_θφ, real_output, use_rfft,
+        cfg, coefficients; prototype_θφ=output, real_output, use_rfft,
+        comm,
     )
     copyto!(parent(output), parent(transformed))
     return output

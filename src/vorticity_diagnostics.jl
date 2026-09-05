@@ -26,7 +26,7 @@ function enstrophy(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true)
     scale_matrix = _diagnostic_scale_matrix(cfg)
 
     Z = 0.0
-    for m in 0:mmax, l in max(1,m):lmax  # Vorticity starts at l=1
+    for m in 0:cfg.mres:mmax, l in max(1,m):lmax  # Vorticity starts at l=1
         ll1_sq = (l * (l + 1))^2
         Z += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1_sq *
              abs2(Tlm[l+1, m+1])
@@ -45,7 +45,7 @@ function vorticity_spectral(cfg::SHTConfig, Tlm::AbstractMatrix)
     ζlm = similar(Tlm)
     fill!(ζlm, 0.0)
     
-    for m in 0:mmax, l in max(1,m):lmax
+    for m in 0:cfg.mres:mmax, l in max(1,m):lmax
         ll1 = l * (l + 1)
         ζlm[l+1, m+1] = -ll1 * Tlm[l+1, m+1]
     end
@@ -93,7 +93,7 @@ function grad_enstrophy_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Boo
     grad = similar(Tlm)
     fill!(grad, 0.0)
 
-    for m in 0:mmax, l in max(1,m):lmax
+    for m in 0:cfg.mres:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
         grad[l+1, m+1] = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) *
                          ll1_sq * Tlm[l+1, m+1]
@@ -130,7 +130,7 @@ function enstrophy_l_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::B
     scale_matrix = _diagnostic_scale_matrix(cfg)
 
     Zl = zeros(real(float(eltype(Tlm))), lmax + 1)
-    for l in 1:lmax, m in 0:min(l, mmax)
+    for l in 1:lmax, m in 0:cfg.mres:min(l, mmax)
         ll1_sq = (l * (l + 1))^2
         Zl[l+1] += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1_sq *
                    abs2(Tlm[l+1, m+1])
@@ -149,7 +149,7 @@ function enstrophy_m_spectrum(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::B
     scale_matrix = _diagnostic_scale_matrix(cfg)
 
     Zm = zeros(real(float(eltype(Tlm))), mmax + 1)
-    for m in 0:mmax, l in max(1,m):lmax
+    for m in 0:cfg.mres:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
         Zm[m+1] += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1_sq *
                    abs2(Tlm[l+1, m+1])
@@ -171,7 +171,7 @@ function enstrophy_lm(cfg::SHTConfig, Tlm::AbstractMatrix; real_field::Bool=true
     Zlm = Matrix{RT}(undef, lmax+1, mmax+1)
     fill!(Zlm, zero(RT))
 
-    for m in 0:mmax, l in max(1,m):lmax
+    for m in 0:cfg.mres:mmax, l in max(1,m):lmax
         ll1_sq = (l * (l + 1))^2
         Zlm[l+1, m+1] = 0.5 * _wm(m, real_field) * _convention_metric(scale_matrix, l, m) *
                         ll1_sq * abs2(Tlm[l+1, m+1])

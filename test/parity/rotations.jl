@@ -119,7 +119,10 @@ function run_rotation_parity(adapter::RotationParityAdapter;
             rotation_resident(adapter, z)
             expected_z = similar(q)
             @inbounds for k in eachindex(q)
-                expected_z[k] = q[k] * cis(T(cfg.mi[k]) * T(0.37))
+                # SHTns rotates the field by +alpha (equivalently, the
+                # reference frame by -alpha), so exp(im*phi) coefficients
+                # acquire exp(-im*alpha).
+                expected_z[k] = q[k] * cis(-T(cfg.mi[k]) * T(0.37))
             end
             @test rotation_collect(adapter, z) ≈ expected_z atol=tol rtol=tol
 

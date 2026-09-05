@@ -25,13 +25,22 @@ end
     ParallelExt._parallel_gpu_adapter(PencilArrays.parent(value))
 
 function _stage_vendor_call(operation::Symbol, f, values...;
-                            mutated::Tuple=())
+                            mutated::Tuple=(), comm=_vendor_comm(values...))
+    # Ordinary CPU and vendor methods can be selected on different MPI ranks
+    # when residency itself is rank-varying. Participate in the same fixed-order
+    # storage preflight as the generic entry point before reporting that the
+    # all-vendor operation has no native implementation. A local early throw
+    # here would otherwise strand CPU ranks in their first collective.
+    ParallelExt._validate_parallel_storage!(comm, operation, values...)
     return _ordinary_vendor_backend_unavailable(operation)
 end
 
 function _stage_vendor_call_with_adapter(
         adapter, comm, operation::Symbol, f, values...; mutated::Tuple=(),
         validate_storage::Bool=true)
+    validate_storage && ParallelExt._validate_parallel_storage!(
+        comm, operation, values...; adapter,
+    )
     return _ordinary_vendor_backend_unavailable(operation)
 end
 
@@ -63,6 +72,83 @@ end
 # include.  All other compound APIs fail at this single boundary before a
 # generic CPU PencilArray method can copy or index device storage.
 
+function _distributed_spectral_reduce_vendor(
+        plan::ParallelExt.DistributedSpectralPlan,
+        local_contrib, result)
+    return _stage_vendor_call(
+        :distributed_spectral_reduce!,
+        (host_local, host_result) ->
+            ParallelExt.distributed_spectral_reduce!(
+                plan, host_local, host_result,
+            ),
+        local_contrib, result; mutated=(2,), comm=plan.comm,
+    )
+end
+
+function ParallelExt.distributed_spectral_reduce!(
+        plan::ParallelExt.DistributedSpectralPlan,
+        local_contrib::VendorArray, result::AbstractMatrix)
+    return _distributed_spectral_reduce_vendor(plan, local_contrib, result)
+end
+
+function ParallelExt.distributed_spectral_reduce!(
+        plan::ParallelExt.DistributedSpectralPlan,
+        local_contrib::AbstractMatrix, result::VendorArray)
+    return _distributed_spectral_reduce_vendor(plan, local_contrib, result)
+end
+
+function ParallelExt.distributed_spectral_reduce!(
+        plan::ParallelExt.DistributedSpectralPlan,
+        local_contrib::VendorArray, result::VendorArray)
+    return _distributed_spectral_reduce_vendor(plan, local_contrib, result)
+end
+
+function ParallelExt.dist_analysis_distributed(
+        cfg::SHTnsKit.SHTConfig, field::VendorPencilArray;
+        plan::ParallelExt.DistributedSpectralPlan, kwargs...)
+    return _stage_vendor_call(
+        :dist_analysis_distributed,
+        host -> ParallelExt.dist_analysis_distributed(
+            cfg, host; plan, kwargs...,
+        ),
+        field; comm=plan.comm,
+    )
+end
+
+
+function ParallelExt.dist_analysis_distributed_2d(
+        cfg::SHTnsKit.SHTConfig, field::VendorPencilArray;
+        plan::ParallelExt.DistributedSpectralPlan2D, kwargs...)
+    return _stage_vendor_call(
+        :dist_analysis_distributed_2d,
+        host -> ParallelExt.dist_analysis_distributed_2d(
+            cfg, host; plan, kwargs...,
+        ),
+        field; comm=plan.comm,
+    )
+end
+
+function SHTnsKit.matrix_to_spectral_pencil(
+        cfg::SHTnsKit.SHTConfig, coefficients::VendorArray;
+        comm=MPI.COMM_WORLD)
+    return _stage_vendor_call(
+        :matrix_to_spectral_pencil,
+        host -> SHTnsKit.matrix_to_spectral_pencil(cfg, host; comm),
+        coefficients; comm,
+    )
+end
+
+function SHTnsKit.spectral_pencil_to_matrix(
+        cfg::SHTnsKit.SHTConfig, coefficients::VendorPencilArray;
+        comm=nothing)
+    trusted_comm = PencilArrays.communicator(coefficients)
+    return _stage_vendor_call(
+        :spectral_pencil_to_matrix,
+        host -> SHTnsKit.spectral_pencil_to_matrix(cfg, host; comm),
+        coefficients; comm=trusted_comm,
+    )
+end
+
 function SHTnsKit.analysis(cfg::SHTnsKit.SHTConfig,
                            field::VendorPencilArray; kwargs...)
     return _stage_vendor_call(:analysis, field) do host
@@ -78,7 +164,8 @@ function SHTnsKit.synthesis(cfg::SHTnsKit.SHTConfig,
         (host_coefficients, host_prototype) -> SHTnsKit.synthesis(
             cfg, host_coefficients; prototype_θφ=host_prototype, kwargs...,
         ),
-        coefficients, prototype_θφ,
+        coefficients, prototype_θφ;
+        comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -89,7 +176,8 @@ function SHTnsKit.synthesis_cplx(cfg::SHTnsKit.SHTConfig,
         :synthesis_cplx,
         (host_coefficients, host_prototype) -> SHTnsKit.synthesis_cplx(
             cfg, host_coefficients; prototype_θφ=host_prototype,
-        ), coefficients, prototype_θφ,
+        ), coefficients, prototype_θφ;
+        comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -114,7 +202,8 @@ function SHTnsKit.synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
         (host_s, host_t, host_prototype) -> SHTnsKit.synthesis_sphtor(
             cfg, host_s, host_t; prototype_θφ=host_prototype, kwargs...,
         ),
-        S, T, prototype_θφ,
+        S, T, prototype_θφ;
+        comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -142,7 +231,8 @@ function SHTnsKit.synthesis_qst(cfg::SHTnsKit.SHTConfig,
             cfg, host_q, host_s, host_t;
             prototype_θφ=host_prototype, kwargs...,
         ),
-        Q, S, T, prototype_θφ,
+        Q, S, T, prototype_θφ;
+        comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -175,6 +265,7 @@ for name in (
                 cfg, host_output, host_input,
             ),
             output, input; mutated=(1,),
+            comm=PencilArrays.communicator(input),
         )
     end
 end
@@ -303,7 +394,8 @@ for name in (:synthesis_sphtor_cplx,)
             (host_s, host_t, host_prototype) -> SHTnsKit.$name(
                 cfg, host_s, host_t;
                 prototype_θφ=host_prototype, kwargs...,
-            ), S, T, prototype_θφ,
+            ), S, T, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -318,7 +410,8 @@ for name in (:synthesis_sph, :synthesis_sph_cplx,
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
                 cfg, host_coefficients;
                 prototype_θφ=host_prototype, kwargs...,
-            ), coefficients, prototype_θφ,
+            ), coefficients, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -344,7 +437,8 @@ for name in (:synthesis_sphtor_l, :synthesis_sphtor_l_cplx)
             (host_s, host_t, host_prototype) -> SHTnsKit.$name(
                 cfg, host_s, host_t, ltr;
                 prototype_θφ=host_prototype, kwargs...,
-            ), S, T, prototype_θφ,
+            ), S, T, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -359,7 +453,8 @@ for name in (:synthesis_sph_l, :synthesis_tor_l, :synthesis_grad_l)
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
                 cfg, host_coefficients, ltr;
                 prototype_θφ=host_prototype, kwargs...,
-            ), coefficients, prototype_θφ,
+            ), coefficients, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -377,7 +472,8 @@ for (complex_name, real_name) in (
             (host_coefficients, host_prototype) -> SHTnsKit.$real_name(
                 cfg, host_coefficients, ltr;
                 prototype_θφ=host_prototype, real_output=false,
-            ), coefficients, prototype_θφ,
+            ), coefficients, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -452,7 +548,8 @@ function SHTnsKit.synthesis_qst_cplx(cfg::SHTnsKit.SHTConfig,
             SHTnsKit.synthesis_qst_cplx(
                 cfg, host_q, host_s, host_t;
                 prototype_θφ=host_prototype,
-            ), Q, S, T, prototype_θφ,
+            ), Q, S, T, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -468,7 +565,8 @@ for name in (:synthesis_qst_l, :synthesis_qst_l_cplx)
             (host_q, host_s, host_t, host_prototype) -> SHTnsKit.$name(
                 cfg, host_q, host_s, host_t, ltr;
                 prototype_θφ=host_prototype, kwargs...,
-            ), Q, S, T, prototype_θφ,
+            ), Q, S, T, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -517,7 +615,8 @@ for name in (:synthesis_packed, :synthesis_packed_cplx)
             (host_input, host_prototype) -> SHTnsKit.$name(
                 cfg, host_input;
                 prototype_θφ=host_prototype, kwargs...,
-            ), input, prototype_θφ,
+            ), input, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -531,7 +630,8 @@ for name in (:synthesis_packed_l, :synthesis_packed_cplx_l)
             (host_input, host_prototype) -> SHTnsKit.$name(
                 cfg, host_input, ltr;
                 prototype_θφ=host_prototype, kwargs...,
-            ), input, prototype_θφ,
+            ), input, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -584,6 +684,7 @@ function SHTnsKit.analysis_batch!(cfg::SHTnsKit.SHTConfig,
         (host_output, host_input) -> SHTnsKit.analysis_batch!(
             cfg, host_output, host_input; kwargs...,
         ), output, input; mutated=(1,),
+        comm=PencilArrays.communicator(input),
     )
 end
 
@@ -595,7 +696,8 @@ for name in (:synthesis_batch, :synthesis_batch_cplx)
             $(QuoteNode(name)),
             (host_input, host_prototype) -> SHTnsKit.$name(
                 cfg, host_input; prototype_θφ=host_prototype, kwargs...,
-            ), input, prototype_θφ,
+            ), input, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
         )
     end
 end
@@ -613,6 +715,7 @@ function SHTnsKit.synthesis_batch!(cfg::SHTnsKit.SHTConfig,
                 prototype_θφ=host_prototype, kwargs...,
             ),
         output, input, prototype_θφ; mutated=(1,),
+        comm=PencilArrays.communicator(output),
     )
 end
 
@@ -772,7 +875,8 @@ function SHTnsKit.dist_synthesis_packed(
             SHTnsKit.dist_synthesis_packed(
                 cfg, host_coefficients;
                 prototype_θφ=host_prototype, kwargs...,
-            ), coefficients, prototype_θφ,
+            ), coefficients, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -793,7 +897,8 @@ function SHTnsKit.dist_synthesis_packed_cplx(
         (host_coefficients, host_prototype) ->
             SHTnsKit.dist_synthesis_packed_cplx(
                 cfg, host_coefficients; prototype_θφ=host_prototype,
-            ), coefficients, prototype_θφ,
+            ), coefficients, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -813,7 +918,8 @@ function SHTnsKit.dist_synthesis(cfg::SHTnsKit.SHTConfig,
         (host_coefficients, host_prototype) -> SHTnsKit.dist_synthesis(
             cfg, host_coefficients;
             prototype_θφ=host_prototype, kwargs...,
-        ), coefficients, prototype_θφ,
+        ), coefficients, prototype_θφ;
+        comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -886,7 +992,8 @@ function SHTnsKit.dist_synthesis_sphtor(cfg::SHTnsKit.SHTConfig,
             SHTnsKit.dist_synthesis_sphtor(
                 cfg, host_s, host_t;
                 prototype_θφ=host_prototype, kwargs...,
-            ), S, T, prototype_θφ,
+            ), S, T, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -946,7 +1053,8 @@ function SHTnsKit.dist_synthesis_qst(cfg::SHTnsKit.SHTConfig,
             SHTnsKit.dist_synthesis_qst(
                 cfg, host_q, host_s, host_t;
                 prototype_θφ=host_prototype, kwargs...,
-            ), Q, S, T, prototype_θφ,
+            ), Q, S, T, prototype_θφ;
+            comm=PencilArrays.communicator(prototype_θφ),
     )
 end
 
@@ -1061,6 +1169,7 @@ function SHTnsKit.dist_scalar_laplacian!(cfg::SHTnsKit.SHTConfig,
         (host_output, host_input) -> SHTnsKit.dist_scalar_laplacian!(
             cfg, host_output, host_input; kwargs...,
         ), output, input; mutated=(1,),
+        comm=PencilArrays.communicator(input),
     )
 end
 
@@ -1119,7 +1228,8 @@ for name in (:dist_SH_Zrotate_packed, :dist_SH_Yrotate_packed)
             $(QuoteNode(name)),
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
                 cfg, host_coefficients, angle; prototype_lm=host_prototype,
-            ), coefficients, prototype_lm,
+            ), coefficients, prototype_lm;
+            comm=PencilArrays.communicator(prototype_lm),
         )
     end
 end
@@ -1132,12 +1242,13 @@ for name in (:dist_SH_Yrotate90_packed, :dist_SH_Xrotate90_packed)
             $(QuoteNode(name)),
             (host_coefficients, host_prototype) -> SHTnsKit.$name(
                 cfg, host_coefficients; prototype_lm=host_prototype,
-            ), coefficients, prototype_lm,
+            ), coefficients, prototype_lm;
+            comm=PencilArrays.communicator(prototype_lm),
         )
     end
 end
 
-for name in (:enstrophy_l_spectrum, :enstrophy_m_spectrum)
+for name in (:enstrophy, :enstrophy_l_spectrum, :enstrophy_m_spectrum)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   input::VendorPencilArray; kwargs...)
         return _stage_vendor_call($(QuoteNode(name)), input) do host
@@ -1146,7 +1257,7 @@ for name in (:enstrophy_l_spectrum, :enstrophy_m_spectrum)
     end
 end
 
-for name in (:energy_vector_l_spectrum, :energy_vector_m_spectrum,
+for name in (:energy_vector, :energy_vector_l_spectrum, :energy_vector_m_spectrum,
              :grid_energy_vector)
     @eval function SHTnsKit.$name(cfg::SHTnsKit.SHTConfig,
                                   first::VendorPencilArray,

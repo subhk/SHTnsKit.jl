@@ -12,6 +12,28 @@ using SHTnsKit
     nlon = 2 * lmax + 1
     cfg = create_gauss_config(lmax, nlat; nlon=nlon)
 
+    @testset "m-order scheduling" begin
+        @test SHTnsKit.balanced_m_order(4) == [0, 4, 1, 3, 2]
+        @test SHTnsKit.balanced_m_order(5, 2) == [0, 4, 2]
+        @test_throws ArgumentError SHTnsKit.balanced_m_order(4, 0)
+
+        cfg_mres = create_gauss_config(5, 7; nlon=12, mres=2)
+        order = SHTnsKit.cached_m_order(cfg_mres)
+        @test order == [0, 4, 2]
+        @test all(m -> m % cfg_mres.mres == 0, order)
+    end
+
+    @testset "OTF scratch grows safely" begin
+        partial = Vector{Vector{Float64}}(undef, Threads.maxthreadid())
+        @test SHTnsKit._ensure_otf_scratch!(partial, 8) === partial
+        @test all(i -> isassigned(partial, i) && length(partial[i]) == 9,
+                  eachindex(partial))
+
+        large = [Vector{Float64}(undef, 101) for _ in 1:Threads.maxthreadid()]
+        @test SHTnsKit._ensure_otf_scratch!(large, 10) === large
+        @test all(buffer -> length(buffer) == 101, large)
+    end
+
     @testset "allocate_spectral_pair" begin
         t1 = zeros(ComplexF64, lmax+1, lmax+1)
         t2 = zeros(ComplexF64, lmax+1, lmax+1)

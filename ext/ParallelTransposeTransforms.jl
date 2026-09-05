@@ -22,7 +22,8 @@ Synthesis (spectral → spatial):
 
 Key invariants
 --------------
-* `plan.m_local[mi]` is the 0-based global m index this rank owns at slot mi.
+* `plan.m_local[mi]` is the active 0-based global m index this rank owns;
+  `plan.m_slots[mi]` is its physical local rFFT/spectral column.
 * `plan.NP[mi]` is the (lmax+1, nlat) matrix P̄_l^{m_local[mi]}(cos θ_i).
 * The m-distribution of `F_buf` (PencilFFTs output, decomposed on dim 1) is
   guaranteed to match the m-distribution of `spectral_pencil` (Alm, decomposed
@@ -30,9 +31,9 @@ Key invariants
   (`nbin = nlon÷2+1`) and uses the same block-distribution formula.  This holds
   for both canonical (`nlon = 2*mmax+1`, `nbin = mmax+1`) and dealiased
   (`nlon > 2*mmax+1`, `nbin > mmax+1`) grids; in the dealiased case the owned
-  coefficients are the `m ≤ mmax` columns (the leading `length(m_local)` per
-  rank) and the high bins (`m > mmax`) are unused/zero.  Asserted in the
-  constructor.
+  coefficients are the columns selected by `m_slots` (`m ≤ mmax` and
+  `m % mres == 0`); all other Fourier-bin columns are unused/zero. Asserted in
+  the constructor.
 ================================================================================
 =#
 
@@ -41,6 +42,8 @@ import LinearAlgebra: mul!, ldiv!
 # ---------------------------------------------------------------------------
 # Struct
 # ---------------------------------------------------------------------------
+
+const _TRANSPOSE_PLAN_CONTEXT_COUNTER = Threads.Atomic{UInt}(0)
 
 """
     DistTransposePlan
@@ -52,38 +55,43 @@ Constructed via `DistTransposePlan(cfg; comm, nlev, use_rfft, with_vector)`.
 # Fields
 - `cfg`             : SHTConfig (replicated across ranks)
 - `nlat`, `nlon`, `lmax`, `mmax`, `nlev` : grid / spectral dimensions
+- `use_rfft`        : cached FFT mode (currently required to be `true`)
 - `comm`            : MPI communicator
+- `context_token`   : replicated identity of this collective plan construction
 - `fft_plan`        : `PencilFFTPlan((nlon, nlat), …)` — rFFT(φ) + internal transpose
 - `F_buf`           : pre-allocated output of `fft_plan` (m-distributed, θ-local)
 - `F_buf2`          : second pre-allocated output buffer for the second vector component
 - `spectral_pencil` : `Pencil` for Alm arrays, global `(lmax+1, nbin)` where
                        `nbin = nlon÷2+1` (rFFT bins), dim-2 (m/bin) decomposed to
                        match the FFT output bin-for-bin. Owned coefficients are the
-                       `m ≤ mmax` columns (the leading `length(m_local)` per rank).
-- `m_local`         : 0-based global m indices owned by this rank (in F-dim-1 order)
+                       columns selected by `m_slots`.
+- `m_local`         : active 0-based global m indices owned by this rank
+- `m_slots`         : physical local Fourier-bin slots corresponding to `m_local`
 - `NP`              : `NP[mi]` = `(lmax+1, nlat)` matrix of P̄_l^{m_local[mi]}(cos θ_i)
 - `dP`              : `dP[mi]` = `(lmax+1, nlat)` matrix of dP̄_l^m/dθ at each latitude
 - `Pos`             : `Pos[mi]` = `(lmax+1, nlat)` matrix of P̄_l^m/sinθ at each latitude
 
-Coefficients crossing this plan's API are **orthonormal**, like every other
-transform in the package (serial `analysis`/`synthesis`, the `dist_*` family and
-the energy diagnostics). The Legendre tables are orthonormal too, so no
-normalization conversion happens anywhere on this path. Callers wanting another
-convention apply `convert_alm_norm!` themselves.
+The Legendre contractions use the package's canonical orthonormal convention
+internally. Coefficients crossing the public API honor the normalization,
+real-harmonic normalization, and Condon–Shortley phase configured in `cfg`.
 """
 struct DistTransposePlan{TP, TFB, TSP}
     cfg           :: SHTnsKit.SHTConfig
+    cfg_fingerprint :: UInt
     nlat          :: Int
     nlon          :: Int
     lmax          :: Int
     mmax          :: Int
     nlev          :: Int
+    use_rfft      :: Bool
     comm          :: MPI.Comm
+    context_token :: UInt                    # replicated identity for this collective construction
     fft_plan      :: TP                      # PencilFFTPlan
     F_buf         :: TFB                     # allocate_output(fft_plan): m-dist/θ-local + extra (nlev,)
     F_buf2        :: TFB                     # second buffer for vector component
     spectral_pencil :: TSP                   # Pencil for Alm: global (lmax+1,mmax+1), m-dist on dim2
     m_local       :: Vector{Int}             # 0-based global m indices this rank owns
+    m_slots       :: Vector{Int}             # physical local columns corresponding to m_local
     NP            :: Vector{Matrix{Float64}} # NP[mi] = (lmax+1, nlat) normalized Legendre table
     dP            :: Vector{Matrix{Float64}} # dP[mi] = (lmax+1, nlat) dP̄_l^m/dθ table
     Pos           :: Vector{Matrix{Float64}} # Pos[mi] = (lmax+1, nlat) P̄_l^m/sinθ table
@@ -140,6 +148,7 @@ function SHTnsKit.DistTransposePlan(
         array_type === prototype_array_type || (constructor_flags |= 0x20000)
     end
     _collective_validation_error(comm, constructor_flags, :DistTransposePlan)
+    cfg_fingerprint = _cfg_fingerprint(cfg)
     if prototype !== nothing
         _validate_explicit_comm!(
             comm, communicator(prototype), :DistTransposePlan,
@@ -178,6 +187,18 @@ function SHTnsKit.DistTransposePlan(
     end
     (; fft_plan, F_buf, F_buf2, spectral_pencil) = constructed
 
+    # Each PencilFFTPlan construction creates fresh Cartesian/subcommunicator
+    # contexts.  Two plans can therefore have identical dimensions and types
+    # while still being unsafe to mix rank-by-rank.  Give every collective
+    # construction a root-issued identity that execution can compare before it
+    # enters either plan's private communicators.
+    root_token = if MPI.Comm_rank(comm) == 0
+        Threads.atomic_add!(_TRANSPOSE_PLAN_CONTEXT_COUNTER, one(UInt)) + one(UInt)
+    else
+        zero(UInt)
+    end
+    context_token = MPI.bcast(root_token, 0, comm)
+
     # 3. Determine which m values this rank owns (from F_buf's pencil).
     #    dim1 of F_buf's pencil is the m dimension (after the internal FFT+transpose).
     #    The rFFT output has nbin = nlon÷2+1 Fourier bins (0..nlon÷2), distributed
@@ -186,28 +207,32 @@ function SHTnsKit.DistTransposePlan(
     mr     = range_local(pencil(F_buf))     # tuple of ranges; mr[1] = local bin-range (1-based)
     # Global bin index (0-based) = 1-based pencil index − 1
     all_m_0based = collect(mr[1]) .- 1
-    # Keep only m within [0, mmax].  Because the bins ascend, the kept indices are
-    # always the LEADING PREFIX of this rank's local bins.  This holds for both the
-    # canonical grid (nlon = 2*mmax+1, nbin = mmax+1) and dealiased grids
-    # (nlon > 2*mmax+1, nbin > mmax+1) where the high bins (m > mmax) carry no signal.
-    keep   = findall(m -> 0 <= m <= mmax, all_m_0based)
+    # Keep only configured m values within [0, mmax]. For mres > 1 these are not
+    # necessarily a leading prefix of the local Fourier bins, so retain their
+    # physical local slots explicitly.
+    keep   = findall(
+        m -> 0 <= m <= mmax && m % cfg.mres == 0, all_m_0based,
+    )
     m_local = all_m_0based[keep]
+    m_slots = keep
 
     # 4. Build the spectral Pencil for Alm sized to the rFFT BINS: global
     #    (lmax+1, nbin), decomposed on dim2 (the m/bin axis).  Sizing dim2 to nbin
     #    (instead of an independent mmax+1 block-split) GUARANTEES that dim2 of this
     #    pencil uses the SAME block distribution as dim1 of F_buf's pencil — so on
     #    every rank, the local columns of Alm correspond bin-for-bin to F_buf's local
-    #    bins, and the first length(m_local) of them correspond exactly to m_local.
+    #    bins. `m_slots` records the matching local columns for active m values.
     #    For the canonical grid nbin == mmax+1 so this is bitwise-identical to the old
     #    (lmax+1, mmax+1) pencil; for dealiased grids the extra (m > mmax) columns are
     #    unused/zero and the irFFT zero-pads them on synthesis.
-    # 5. Assert alignment: the leading m-columns of spectral_pencil (dim2, 0-based,
-    #    restricted to ≤ mmax) must equal m_local.  This catches any future
+    # 5. Assert alignment: the active m-columns of spectral_pencil (dim2, 0-based,
+    #    restricted by mmax and mres) must equal m_local. This catches any future
     #    divergence in distribution strategies between the FFT and spectral pencils.
     sp_mr    = range_local(spectral_pencil)       # (l-range, m-range) 1-based
     sp_m_0   = collect(sp_mr[2]) .- 1             # 0-based m from spectral_pencil
-    sp_m_kept = filter(m -> 0 <= m <= mmax, sp_m_0)
+    sp_m_kept = filter(
+        m -> 0 <= m <= mmax && m % cfg.mres == 0, sp_m_0,
+    )
     if sp_m_kept != m_local
         error("m-distribution mismatch on rank $(MPI.Comm_rank(comm)): " *
               "F_buf m_local=$m_local  ≠  spectral_pencil m(≤mmax)=$sp_m_kept")
@@ -252,78 +277,180 @@ function SHTnsKit.DistTransposePlan(
         NP[mi] = tbl_NP
     end
 
-    # No per-m normalization table is built or stored: the Legendre tables above
-    # are orthonormal+CS and so is this plan's API, matching `dist_analysis`/
-    # `dist_synthesis` and every other transform. Nothing to convert.
-
     return DistTransposePlan(
-        cfg, nlat, nlon, lmax, mmax, nlev, comm,
+        cfg, cfg_fingerprint, nlat, nlon, lmax, mmax, nlev, use_rfft,
+        comm, context_token,
         fft_plan, F_buf, F_buf2, spectral_pencil,
-        m_local, NP, dP, Pos, with_vector,
+        m_local, m_slots, NP, dP, Pos, with_vector,
     )
+end
+
+"""Externalize only the meaningful locally owned coefficient columns."""
+function _externalize_local_coefficients!(dest, plan::DistTransposePlan)
+    SHTnsKit._uses_canonical_convention(plan.cfg) && return dest
+    scales = SHTnsKit._ensure_norm_scale_matrix!(plan.cfg)
+    @inbounds for lev in axes(dest, 3)
+        for (mi, m) in enumerate(plan.m_local)
+            slot = plan.m_slots[mi]
+            for l in m:plan.lmax
+                dest[l + 1, slot, lev] /= scales[l + 1, m + 1]
+            end
+        end
+    end
+    return dest
 end
 
 @inline _transpose_spatial_reference(plan::DistTransposePlan) =
     PencilFFTs.pencil_input(plan.fft_plan)
 
+@inline function _transpose_operand_matches(
+        plan::DistTransposePlan, A::PencilArray, expected_pencil,
+        expected_parent::Tuple, expected_eltype::Type)
+    return _communicators_congruent(plan.comm, communicator(A)) &&
+           pencil(A) === expected_pencil &&
+           size(parent(A)) == expected_parent &&
+           eltype(A) === expected_eltype
+end
+
+@inline function _transpose_outputs_distinct(arrays::Tuple)
+    for j in 2:length(arrays), i in 1:(j - 1)
+        Base.mightalias(parent(arrays[i]), parent(arrays[j])) && return false
+    end
+    return true
+end
+
+@inline function _transpose_pencil_signature(pen)
+    return (
+        Tuple(PencilArrays.size_global(pen)),
+        Tuple(PencilArrays.decomposition(pen)),
+        Tuple(size(PencilArrays.topology(pen))),
+        Tuple(PencilArrays.permutation(pen)),
+        _parallel_array_type_code(PencilArrays.typeof_array(pen)),
+    )
+end
+
+"""
+Collectively verify that every rank selected the same transpose-plan instance
+and execution contract.  The construction token is essential: independently
+constructed PencilFFT plans own distinct private communicator contexts even
+when all of their visible layout metadata is identical.
+"""
+function _validate_transpose_plan_signature!(
+        plan::DistTransposePlan, operation::Symbol)
+    spatial_pencil = _transpose_spatial_reference(plan)
+    fft_output_pencil = PencilFFTs.pencil_output(plan.fft_plan)
+    current_cfg_fingerprint = _cfg_fingerprint(plan.cfg)
+    signature = (
+        operation,
+        plan.context_token,
+        plan.cfg_fingerprint,
+        current_cfg_fingerprint,
+        plan.nlat,
+        plan.nlon,
+        plan.lmax,
+        plan.mmax,
+        plan.nlev,
+        plan.use_rfft,
+        plan.with_vector,
+        Tuple(plan.fft_plan.extra_dims),
+        _scalar_precision_code(Transforms.eltype_input(plan.fft_plan)),
+        _scalar_precision_code(Transforms.eltype_output(plan.fft_plan)),
+        _parallel_storage_code(plan.F_buf),
+        _parallel_storage_code(plan.F_buf2),
+        _transpose_pencil_signature(spatial_pencil),
+        _transpose_pencil_signature(fft_output_pencil),
+        _transpose_pencil_signature(plan.spectral_pencil),
+    )
+    local_signature = hash(signature, zero(UInt))
+
+    # This bcast + Allreduce pair is deliberately unconditional and is the
+    # first collective in every transpose execution entry point.
+    root_signature = MPI.bcast(local_signature, 0, plan.comm)
+    local_ok = local_signature == root_signature &&
+               plan.use_rfft &&
+               current_cfg_fingerprint == plan.cfg_fingerprint &&
+               plan.cfg.nlat == plan.nlat &&
+               plan.cfg.nlon == plan.nlon &&
+               plan.cfg.lmax == plan.lmax &&
+               plan.cfg.mmax == plan.mmax
+    MPI.Allreduce(local_ok, &, plan.comm) || throw(ArgumentError(
+        "$operation requires the same valid DistTransposePlan construction " *
+        "and execution signature on every rank",
+    ))
+    return nothing
+end
+
+function _require_transpose_operands(
+        plan::DistTransposePlan, operation::Symbol,
+        spatial::Tuple, spectral::Tuple,
+        distinct_spatial::Tuple, distinct_spectral::Tuple,
+        needs_vector::Bool)
+    _validate_transpose_plan_signature!(plan, operation)
+
+    spatial_pencil = _transpose_spatial_reference(plan)
+    spectral_pencil = plan.spectral_pencil
+    spatial_parent = (
+        PencilArrays.size_local(
+            spatial_pencil, PencilArrays.MemoryOrder(),
+        )...,
+        plan.nlev,
+    )
+    spectral_parent = (
+        PencilArrays.size_local(
+            spectral_pencil, PencilArrays.MemoryOrder(),
+        )...,
+        plan.nlev,
+    )
+    spatial_eltype = Transforms.eltype_input(plan.fft_plan)
+    spectral_eltype = Transforms.eltype_output(plan.fft_plan)
+
+    plan_adapter = _parallel_gpu_adapter(parent(plan.F_buf))
+    # Backend residency is part of the plan signature above, so every rank
+    # either rejects there or takes this branch together.  Keep the CPU path's
+    # cheaper final verdict while preserving fixed collective order for a GPU
+    # plan and for rank-asymmetric adapter availability.
+    if plan_adapter !== nothing
+        _validate_parallel_storage!(
+            plan.comm, operation, plan.F_buf, plan.F_buf2,
+            spatial..., spectral...,
+        )
+    end
+
+    local_ok = (!needs_vector || plan.with_vector) &&
+               _communicators_congruent(
+                   plan.comm, PencilArrays.get_comm(spatial_pencil)) &&
+               _communicators_congruent(
+                   plan.comm, PencilArrays.get_comm(spectral_pencil))
+    for A in spatial
+        local_ok &= _transpose_operand_matches(
+            plan, A, spatial_pencil, spatial_parent, spatial_eltype,
+        )
+        plan_adapter === nothing &&
+            (local_ok &= _parallel_gpu_adapter(parent(A)) === nothing)
+    end
+    for A in spectral
+        local_ok &= _transpose_operand_matches(
+            plan, A, spectral_pencil, spectral_parent, spectral_eltype,
+        )
+        plan_adapter === nothing &&
+            (local_ok &= _parallel_gpu_adapter(parent(A)) === nothing)
+    end
+    local_ok &= _transpose_outputs_distinct(distinct_spatial)
+    local_ok &= _transpose_outputs_distinct(distinct_spectral)
+
+    MPI.Allreduce(local_ok, &, plan.comm) || throw(ArgumentError(
+        "$operation operands must use this DistTransposePlan's exact spatial " *
+        "and spectral pencils, congruent communicator, configured nlev, local " *
+        "parent layout/permutation, and element types; outputs must not alias",
+    ))
+    return nothing
+end
+
 function _validate_transpose_call!(plan::DistTransposePlan, operation::Symbol;
                                    spatial=(), spectral=())
-    comm = plan.comm
-    _validate_cfg_replicated(plan.cfg, comm)
-    all_values = (spatial..., spectral...)
-    isempty(all_values) || _validate_parallel_storage!(
-        comm, operation, plan.F_buf, plan.F_buf2, all_values...,
+    return _require_transpose_operands(
+        plan, operation, spatial, spectral, spatial, spectral, false,
     )
-    flags = UInt32(0)
-    spatial_type = Transforms.eltype_input(plan.fft_plan)
-    spectral_type = eltype(plan.F_buf)
-    spatial_reference = _transpose_spatial_reference(plan)
-    layout_matches = function(reference, value)
-        candidate = pencil(value)
-        try
-            size_global(candidate) == size_global(reference) &&
-            PencilArrays.decomposition(candidate) ==
-                PencilArrays.decomposition(reference) &&
-            size(PencilArrays.topology(candidate)) ==
-                size(PencilArrays.topology(reference)) &&
-            PencilArrays.range_local(candidate) ==
-                PencilArrays.range_local(reference) &&
-            size(parent(value)) ==
-                (PencilArrays.size_local(reference)..., plan.nlev)
-        catch
-            false
-        end
-    end
-    for value in spatial
-        layout_matches(spatial_reference, value) || (flags |= 0x0002)
-        eltype(value) === spatial_type || (flags |= 0x0004)
-        communicator(value) === comm || begin
-            compatible = try
-                MPI.Comm_compare(communicator(value), comm) in (MPI.IDENT, MPI.CONGRUENT)
-            catch
-                false
-            end
-            compatible || (flags |= 0x0008)
-        end
-    end
-    for value in spectral
-        layout_matches(plan.spectral_pencil, value) || (flags |= 0x0002)
-        eltype(value) === spectral_type || (flags |= 0x0004)
-        communicator(value) === comm || begin
-            compatible = try
-                MPI.Comm_compare(communicator(value), comm) in (MPI.IDENT, MPI.CONGRUENT)
-            catch
-                false
-            end
-            compatible || (flags |= 0x0008)
-        end
-    end
-    for i in eachindex(all_values), j in (i + 1):length(all_values)
-        Base.mightalias(parent(all_values[i]), parent(all_values[j])) &&
-            (flags |= 0x2000)
-    end
-    _collective_validation_error(comm, flags, operation)
-    return nothing
 end
 
 function _validate_transpose_qst_call!(
@@ -335,12 +462,9 @@ function _validate_transpose_qst_call!(
     # Validate the complete Q/S/T call before delegating to either scalar or
     # tangential transforms. In particular, no output may be changed when a
     # later vector argument has invalid storage, layout, precision, or comm.
-    _validate_transpose_call!(
-        plan, operation; spatial, spectral,
+    _require_transpose_operands(
+        plan, operation, spatial, spectral, spatial, spectral, true,
     )
-    plan.with_vector || throw(ArgumentError(
-        "DistTransposePlan requires with_vector=true for QST transforms",
-    ))
     return nothing
 end
 
@@ -364,8 +488,14 @@ The forward pass is:
    `Alm[l+1, mi, lev] = Σ_i w[i] · NP[mi][l+1, i] · cphi · F[mi, i, lev]`
 """
 function SHTnsKit.dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::PencilArray)
-    _validate_transpose_call!(plan, :dist_analysis_transpose;
-                              spatial=(f,), spectral=(Alm,))
+    _require_transpose_operands(
+        plan, :dist_analysis_transpose, (f,), (Alm,), (), (Alm,), false,
+    )
+    return _dist_transpose_analysis_unchecked!(plan, Alm, f)
+end
+
+function _dist_transpose_analysis_unchecked!(
+        plan::DistTransposePlan, Alm::PencilArray, f::PencilArray)
     adapter = _parallel_gpu_adapter(parent(f))
     adapter === nothing || return _dist_transpose_gpu_analysis!(adapter, plan, Alm, f)
     # Step 1: rFFT(φ) + internal pencil transpose.
@@ -396,15 +526,17 @@ function SHTnsKit.dist_analysis!(plan::DistTransposePlan, Alm::PencilArray, f::P
     # friendly with i as the fast index (dim1 of parent).
     @inbounds for lev in 1:nlev
         for (mi, m) in enumerate(plan.m_local)
+            slot = plan.m_slots[mi]
             NP_mi = plan.NP[mi]          # (lmax+1, nlat) matrix for this m
             for i in 1:nlat
-                wi_cphi_Fi = w[i] * scaleφ * F[i, mi, lev]
+                wi_cphi_Fi = w[i] * scaleφ * F[i, slot, lev]
                 for l in m:lmax
-                    A[l+1, mi, lev] += NP_mi[l+1, i] * wi_cphi_Fi
+                    A[l+1, slot, lev] += NP_mi[l+1, i] * wi_cphi_Fi
                 end
             end
         end
     end
+    _externalize_local_coefficients!(A, plan)
     return Alm
 end
 
@@ -428,8 +560,14 @@ The reverse pass is:
 2. `ldiv!(f, fft_plan, F_buf)` — inverse transpose + irFFT(φ) → real spatial field.
 """
 function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::PencilArray)
-    _validate_transpose_call!(plan, :dist_synthesis_transpose;
-                              spatial=(f,), spectral=(Alm,))
+    _require_transpose_operands(
+        plan, :dist_synthesis_transpose, (f,), (Alm,), (f,), (), false,
+    )
+    return _dist_transpose_synthesis_unchecked!(plan, f, Alm)
+end
+
+function _dist_transpose_synthesis_unchecked!(
+        plan::DistTransposePlan, f::PencilArray, Alm::PencilArray)
     adapter = _parallel_gpu_adapter(parent(f))
     adapter === nothing || return _dist_transpose_gpu_synthesis!(adapter, plan, f, Alm)
     A = parent(Alm)           # (lmax+1, n_m_local, nlev)
@@ -441,21 +579,25 @@ function SHTnsKit.dist_synthesis!(plan::DistTransposePlan, f::PencilArray, Alm::
     lmax = plan.lmax
     nlat = plan.nlat
     nlev = plan.nlev
-
-    # Incoming coefficients are orthonormal+CS, matching the tables — read them
-    # directly, no copy and no conversion.
+    scales = SHTnsKit._uses_canonical_convention(plan.cfg) ? nothing :
+        SHTnsKit._ensure_norm_scale_matrix!(plan.cfg)
 
     # Legendre expansion: for each local m, sum over l → F[i, mi, lev]
     # NP[mi] is (lmax+1, nlat) column-major; iterating i (fast dim of F) is cache-friendly.
     @inbounds for lev in 1:nlev
         for (mi, m) in enumerate(plan.m_local)
+            slot = plan.m_slots[mi]
             NP_mi = plan.NP[mi]          # (lmax+1, nlat) matrix for this m
             for i in 1:nlat
-                acc = zero(ComplexF64)
+                acc = zero(eltype(F))
                 for l in m:lmax
-                    acc += NP_mi[l+1, i] * A[l+1, mi, lev]
+                    Alm_lm = A[l+1, slot, lev]
+                    if scales !== nothing
+                        Alm_lm *= scales[l + 1, m + 1]
+                    end
+                    acc += NP_mi[l+1, i] * Alm_lm
                 end
-                F[i, mi, lev] = inv_scaleφ * acc
+                F[i, slot, lev] = inv_scaleφ * acc
             end
         end
     end
@@ -484,9 +626,19 @@ Legendre contraction over (lev, m, θ, l) using the pre-built dP and Pos tables.
 function SHTnsKit.dist_analysis_sphtor!(plan::DistTransposePlan,
                                          Slm::PencilArray, Tlm::PencilArray,
                                          Vt::PencilArray,  Vp::PencilArray)
-    _validate_transpose_call!(plan, :dist_analysis_sphtor_transpose;
-                              spatial=(Vt, Vp), spectral=(Slm, Tlm))
-    plan.with_vector || error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
+    _require_transpose_operands(
+        plan, :dist_analysis_sphtor_transpose,
+        (Vt, Vp), (Slm, Tlm), (), (Slm, Tlm), true,
+    )
+    return _dist_transpose_analysis_sphtor_unchecked!(
+        plan, Slm, Tlm, Vt, Vp,
+    )
+end
+
+function _dist_transpose_analysis_sphtor_unchecked!(
+        plan::DistTransposePlan,
+        Slm::PencilArray, Tlm::PencilArray,
+        Vt::PencilArray, Vp::PencilArray)
     adapter = _parallel_gpu_adapter(parent(Vt))
     adapter === nothing || return _dist_transpose_gpu_vector_analysis!(
         adapter, plan, Slm, Tlm, Vt, Vp,
@@ -518,23 +670,26 @@ function SHTnsKit.dist_analysis_sphtor!(plan::DistTransposePlan,
     #   Tacc[l] += coeff * (-conj(term) * Ft_i + dtheta_Y * Fp_i)
     @inbounds for lev in 1:nlev
         for (mi, m) in enumerate(plan.m_local)
+            slot = plan.m_slots[mi]
             dP_mi  = plan.dP[mi]   # (lmax+1, nlat)
             Pos_mi = plan.Pos[mi]  # (lmax+1, nlat)
             for i in 1:nlat
                 wi_scale = w[i] * scaleφ
-                Ft_i = Ft[i, mi, lev]
-                Fp_i = Fp[i, mi, lev]
+                Ft_i = Ft[i, slot, lev]
+                Fp_i = Fp[i, slot, lev]
                 for l in max(1, m):lmax
                     dtheta_Y = dP_mi[l+1, i]
                     Y_over_s = Pos_mi[l+1, i]
                     coeff    = wi_scale / (l * (l + 1))
                     term     = (1.0im * m) * Y_over_s   # im*m * P̄/sinθ
-                    S[l+1, mi, lev] += coeff * (Ft_i * dtheta_Y + conj(term) * Fp_i)
-                    T[l+1, mi, lev] += coeff * (-conj(term) * Ft_i + dtheta_Y * Fp_i)
+                    S[l+1, slot, lev] += coeff * (Ft_i * dtheta_Y + conj(term) * Fp_i)
+                    T[l+1, slot, lev] += coeff * (-conj(term) * Ft_i + dtheta_Y * Fp_i)
                 end
             end
         end
     end
+    _externalize_local_coefficients!(S, plan)
+    _externalize_local_coefficients!(T, plan)
     return Slm, Tlm
 end
 
@@ -553,9 +708,19 @@ Local Legendre expansion Slm,Tlm → Ft,Fp, then two inverse FFT+transpose colle
 function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
                                           Vt::PencilArray,  Vp::PencilArray,
                                           Slm::PencilArray, Tlm::PencilArray)
-    _validate_transpose_call!(plan, :dist_synthesis_sphtor_transpose;
-                              spatial=(Vt, Vp), spectral=(Slm, Tlm))
-    plan.with_vector || error("DistTransposePlan built with with_vector=false; rebuild with with_vector=true for sphtor/qst transforms")
+    _require_transpose_operands(
+        plan, :dist_synthesis_sphtor_transpose,
+        (Vt, Vp), (Slm, Tlm), (Vt, Vp), (), true,
+    )
+    return _dist_transpose_synthesis_sphtor_unchecked!(
+        plan, Vt, Vp, Slm, Tlm,
+    )
+end
+
+function _dist_transpose_synthesis_sphtor_unchecked!(
+        plan::DistTransposePlan,
+        Vt::PencilArray, Vp::PencilArray,
+        Slm::PencilArray, Tlm::PencilArray)
     adapter = _parallel_gpu_adapter(parent(Vt))
     adapter === nothing || return _dist_transpose_gpu_vector_synthesis!(
         adapter, plan, Vt, Vp, Slm, Tlm,
@@ -573,9 +738,8 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
     lmax = plan.lmax
     nlat = plan.nlat
     nlev = plan.nlev
-
-    # Incoming coefficients are orthonormal+CS, matching the tables — read them
-    # directly, no copies and no conversion.
+    scales = SHTnsKit._uses_canonical_convention(plan.cfg) ? nothing :
+        SHTnsKit._ensure_norm_scale_matrix!(plan.cfg)
 
     # Legendre expansion: for each local m, sum over l → Ft[i,mi,lev], Fp[i,mi,lev]
     # Kernel (from kernels.jl _sphtor_synthesis_kernel_otf):
@@ -584,21 +748,27 @@ function SHTnsKit.dist_synthesis_sphtor!(plan::DistTransposePlan,
     # Then scale by inv_scaleφ (same as scalar synthesis) to undo the rFFT normalization.
     @inbounds for lev in 1:nlev
         for (mi, m) in enumerate(plan.m_local)
+            slot = plan.m_slots[mi]
             dP_mi  = plan.dP[mi]
             Pos_mi = plan.Pos[mi]
             for i in 1:nlat
-                g_theta = zero(ComplexF64)
-                g_phi   = zero(ComplexF64)
+                g_theta = zero(eltype(Ft))
+                g_phi   = zero(eltype(Fp))
                 for l in max(1, m):lmax
                     dtheta_Y = dP_mi[l+1, i]
                     Y_over_s = Pos_mi[l+1, i]
-                    Sl = S[l+1, mi, lev]
-                    Tl = T[l+1, mi, lev]
+                    Sl = S[l+1, slot, lev]
+                    Tl = T[l+1, slot, lev]
+                    if scales !== nothing
+                        scale = scales[l + 1, m + 1]
+                        Sl *= scale
+                        Tl *= scale
+                    end
                     g_theta += dtheta_Y * Sl - (1.0im * m) * Y_over_s * Tl
                     g_phi   += (1.0im * m) * Y_over_s * Sl + dtheta_Y * Tl
                 end
-                Ft[i, mi, lev] = inv_scaleφ * g_theta
-                Fp[i, mi, lev] = inv_scaleφ * g_phi
+                Ft[i, slot, lev] = inv_scaleφ * g_theta
+                Fp[i, slot, lev] = inv_scaleφ * g_phi
             end
         end
     end
@@ -626,8 +796,8 @@ function SHTnsKit.dist_analysis_qst!(plan::DistTransposePlan,
         plan, :dist_analysis_qst_transpose;
         spatial=(Vr, Vt, Vp), spectral=(Qlm, Slm, Tlm),
     )
-    SHTnsKit.dist_analysis!(plan, Qlm, Vr)
-    SHTnsKit.dist_analysis_sphtor!(plan, Slm, Tlm, Vt, Vp)
+    _dist_transpose_analysis_unchecked!(plan, Qlm, Vr)
+    _dist_transpose_analysis_sphtor_unchecked!(plan, Slm, Tlm, Vt, Vp)
     return Qlm, Slm, Tlm
 end
 
@@ -644,8 +814,8 @@ function SHTnsKit.dist_synthesis_qst!(plan::DistTransposePlan,
         plan, :dist_synthesis_qst_transpose;
         spatial=(Vr, Vt, Vp), spectral=(Qlm, Slm, Tlm),
     )
-    SHTnsKit.dist_synthesis!(plan, Vr, Qlm)
-    SHTnsKit.dist_synthesis_sphtor!(plan, Vt, Vp, Slm, Tlm)
+    _dist_transpose_synthesis_unchecked!(plan, Vr, Qlm)
+    _dist_transpose_synthesis_sphtor_unchecked!(plan, Vt, Vp, Slm, Tlm)
     return Vr, Vt, Vp
 end
 
@@ -680,16 +850,15 @@ The dim-2 global size is `nbin = nlon÷2+1`, NOT `mmax+1`.
   is identical to the historical `(lmax+1, mmax+1)`.
 - For **dealiased** grids (`nlon > 2*mmax+1`, e.g. the 3/2 rule) `nbin > mmax+1`.
   The dim-2 distribution is aligned bin-for-bin with the rFFT output, so on every
-  rank the local columns map to that rank's Fourier bins. The MEANINGFUL spherical
-  harmonic coefficients are the columns with `m ≤ mmax`, which are exactly the
-  leading `length(plan.m_local)` local columns (`parent(Alm)[l+1, mi, lev]` for
-  `mi = 1:length(plan.m_local)` ↔ degree `plan.m_local[mi]`). Columns for bins
-  `m > mmax` are unused: zeroed by analysis and ignored by synthesis (the irFFT
-  zero-pads them).
+  rank the local columns map to that rank's Fourier bins. The meaningful spherical
+  harmonic coefficients are the active columns selected by `plan.m_slots`, with
+  `parent(Alm)[l+1, plan.m_slots[mi], lev]` corresponding to degree
+  `plan.m_local[mi]`. Columns excluded by `mmax` or `mres` are unused: zeroed by
+  analysis and ignored by synthesis (the irFFT zero-pads them).
 
-So callers should index owned coefficients via `plan.m_local` (as the `dist_*`
-kernels do), and treat the local column count as possibly exceeding
-`length(plan.m_local)` on dealiased grids.
+So callers should pair `plan.m_local` with `plan.m_slots`, and treat the local
+column count as possibly exceeding `length(plan.m_local)` on dealiased or
+`mres > 1` grids.
 """
 function SHTnsKit.allocate_spectral(plan::DistTransposePlan)
     return PencilArray{eltype(plan.F_buf)}(undef, plan.spectral_pencil, plan.nlev)

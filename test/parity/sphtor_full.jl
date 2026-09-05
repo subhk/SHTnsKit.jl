@@ -554,6 +554,54 @@ function run_shared_vector_kernel_reference(common, backend)
     @test all(iszero, S_out[:, 2])
     @test all(iszero, T_out[:, 2])
 
+    # As for scalar transpose plans, local columns are contiguous physical
+    # orders.  Exercise a nonzero first order so configured convention scales
+    # must be indexed by the global order on both public boundaries.
+    first_m = 1
+    local_orders = 2
+    local_range = (first_m + 1):(first_m + local_orders)
+    distributed_Ft = reshape(
+        copy(fourier_t[:, local_range]), cfg.nlat, local_orders, 1,
+    )
+    distributed_Fp = reshape(
+        copy(fourier_p[:, local_range]), cfg.nlat, local_orders, 1,
+    )
+    distributed_S = zeros(CT, cfg.lmax + 1, local_orders, 1)
+    distributed_T = similar(distributed_S)
+    event = common.distributed_vector_analysis_kernel!(backend)(
+        distributed_S, distributed_T, distributed_Ft, distributed_Fp,
+        dtheta, over_sin, weights, scales, x, T(cfg.cphi), first_m,
+        cfg.lmax, cfg.mmax, cfg.mres, cfg.robert_form;
+        ndrange=size(distributed_S),
+    )
+    event === nothing || wait(event)
+    @test distributed_S[:, :, 1] ≈ S_out[:, local_range] atol=4f-4 rtol=4f-4
+    @test distributed_T[:, :, 1] ≈ T_out[:, local_range] atol=4f-4 rtol=4f-4
+
+    distributed_Vt = zeros(CT, cfg.nlat, local_orders, 1)
+    distributed_Vp = similar(distributed_Vt)
+    distributed_Sin = reshape(
+        copy(S[:, local_range]), cfg.lmax + 1, local_orders, 1,
+    )
+    distributed_Tin = reshape(
+        copy(Tlm[:, local_range]), cfg.lmax + 1, local_orders, 1,
+    )
+    event = common.distributed_vector_synthesis_kernel!(backend)(
+        distributed_Vt, distributed_Vp, distributed_Sin, distributed_Tin,
+        dtheta, over_sin, scales, x, T(SHTnsKit.phi_inv_scale(cfg)), first_m,
+        cfg.lmax, cfg.mmax, cfg.mres, cfg.robert_form;
+        ndrange=size(distributed_Vt),
+    )
+    event === nothing || wait(event)
+    @test isapprox(
+        distributed_Vt[:, :, 1], fourier_t[:, local_range];
+        atol=8f-6, rtol=8f-6,
+    )
+    @test isapprox(
+        distributed_Vp[:, :, 1], fourier_p[:, local_range];
+        atol=8f-6, rtol=8f-6,
+    )
+
     S[2, 2] = CT(13, -5)
     diagonal = similar(S)
     event = common.vector_diagonal_kernel!(backend)(

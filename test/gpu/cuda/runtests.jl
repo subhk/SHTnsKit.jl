@@ -178,6 +178,14 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
 @testset "CUDA backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitGPUExt)
     @test extension !== nothing
+    @test SHTnsKit._GPU_LOOP_AVAILABLE[]
+    cfg_memory = create_gauss_config(4, 6; nlon=9)
+    spatial_bytes = cfg_memory.nlat * cfg_memory.nlon * 16
+    coefficient_bytes = (cfg_memory.lmax + 1) * (cfg_memory.mmax + 1) * 16
+    legendre_bytes = cfg_memory.nlat * (cfg_memory.lmax + 1) *
+                     (cfg_memory.mmax + 1) * 8
+    @test estimate_memory_usage(cfg_memory, :vector) ==
+          4spatial_bytes + 2coefficient_bytes + 6legendre_bytes
     test_gpu_rotation_contract(
         extension, CuArray{ComplexF32,1}, CuArray{ComplexF32,1},
     )
@@ -186,6 +194,9 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     )
     test_angle_axis_pi_singularity()
     if CUDA.functional()
+        loop_values = CUDA.zeros(Int32, 8)
+        @sht_loop loop_values[i] = Int32(i) over i ∈ eachindex(loop_values)
+        @test Array(loop_values) == Int32.(1:8)
         plan = extension.create_cufft_plan(2, 8)
         input = CUDA.rand(ComplexF64, 2, 8)
         transformed = copy(input)

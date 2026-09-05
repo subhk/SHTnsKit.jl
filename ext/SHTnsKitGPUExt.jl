@@ -32,7 +32,7 @@ using .GPUCommon: local_scalar_kernel!, local_complex_kernel!, local_qst_kernel!
 using .GPUCommon: RotationBlockCache, rotation_cache_lookup,
                   rotation_cache_publish!, rotation_cache_clear!,
                   rotation_z_real_kernel!, rotation_real_kernel!,
-                  rotation_cplx_kernel!
+                  rotation_cplx_kernel!, launch_sht_loop!
 
 # Import functions from SHTnsKit to extend them
 import SHTnsKit: gpu_analysis, gpu_synthesis, gpu_analysis_safe, gpu_synthesis_safe,
@@ -86,6 +86,7 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
                  _gpu_adapter_analysis_sphtor,
                  _gpu_adapter_synthesis_sphtor, _gpu_adapter_clear_cache!
+import SHTnsKit: _enable_gpu_loops!
 
 # ============================================================================
 # CUDA Backend Integration with device_utils.jl
@@ -96,6 +97,7 @@ const CUDA_ADAPTER = CUDAAdapter()
 
 function __init__()
     _register_gpu_adapter!(:cuda, CUDA_ADAPTER)
+    _enable_gpu_loops!(launch_sht_loop!)
     return nothing
 end
 
@@ -2346,7 +2348,9 @@ function estimate_memory_usage(cfg::SHTConfig, operation::Symbol)
     elseif operation == :synthesis
         return coeff_size + spatial_size + legendre_size + spatial_size
     elseif operation == :vector
-        return 2 * spatial_size + 2 * coeff_size + legendre_size + 2 * spatial_size
+        # Plm and dPlm are real (2×), while S/T contribution tensors are
+        # ComplexF64 (4× the real tensor's bytes): 6× in total.
+        return 2 * spatial_size + 2 * coeff_size + 6 * legendre_size + 2 * spatial_size
     else
         return spatial_size + coeff_size
     end

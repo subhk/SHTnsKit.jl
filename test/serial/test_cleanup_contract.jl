@@ -53,6 +53,7 @@ using SHTnsKit
         extension_source = read(joinpath(package_root, "ext", "SHTnsKitGPUExt.jl"), String)
         @test occursin(r"struct CuFFTPlan\{", extension_source)
         @test !occursin("inverse_plan::CUFFT.CuFFTPlan", extension_source)
+        @test occursin("_enable_gpu_loops!(launch_sht_loop!)", extension_source)
     end
 
     @testset "Breaking release uses a major version" begin
@@ -61,5 +62,21 @@ using SHTnsKit
         changelog = read(joinpath(package_root, "CHANGELOG.md"), String)
         @test VersionNumber(project["version"]).major == 2
         @test occursin("## Unreleased (v2.0.0)", changelog)
+    end
+
+    @testset "CI correctness regressions use supported APIs" begin
+        package_root = dirname(dirname(pathof(SHTnsKit)))
+        workflow = read(joinpath(package_root, ".github", "workflows", "ci.yml"), String)
+
+        @test !occursin(r"\bsynthesize\(", workflow)
+        @test !occursin("threaded_apply_costheta_operator!", workflow)
+        @test !occursin("get_advanced_pool", workflow)
+        @test !occursin("AD testing failed", workflow)
+        @test !occursin("Performance optimization test failed", workflow)
+
+        @test occursin("test/parallel/test_mpi_audit_fixes.jl", workflow)
+        @test occursin("test/parallel/test_mpi_ad_tangent_spaces.jl", workflow)
+        @test occursin("test/parallel/test_mpi_plan_preflight.jl", workflow)
+        @test occursin("test/parallel/test_mpi_transpose_operand_preflight.jl", workflow)
     end
 end

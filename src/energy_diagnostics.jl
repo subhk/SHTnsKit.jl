@@ -94,7 +94,7 @@ function energy_scalar(cfg::SHTConfig, alm::AbstractMatrix; real_field::Bool=tru
     scale_matrix = _diagnostic_scale_matrix(cfg)
     # Type-stable accumulator (stays inferrable for Float32 / ForwardDiff.Dual inputs).
     E = zero(promote_type(Float64, real(float(eltype(alm)))))
-    @inbounds for m in 0:mmax, l in m:lmax
+    @inbounds for m in 0:cfg.mres:mmax, l in m:lmax
         E += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * abs2(alm[l+1, m+1])
     end
     return 0.5 * E
@@ -112,7 +112,7 @@ function energy_vector(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::AbstractMatrix;
     lmax, mmax = cfg.lmax, cfg.mmax
     scale_matrix = _diagnostic_scale_matrix(cfg)
     E = zero(promote_type(Float64, real(float(eltype(Slm))), real(float(eltype(Tlm)))))
-    @inbounds for m in 0:mmax, l in max(1,m):lmax  # Vector fields start at l=1
+    @inbounds for m in 0:cfg.mres:mmax, l in max(1,m):lmax  # Vector fields start at l=1
         ll1 = l * (l + 1)
         E += _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1 *
              (abs2(Slm[l+1, m+1]) + abs2(Tlm[l+1, m+1]))
@@ -164,9 +164,9 @@ function grad_energy_scalar_alm(cfg::SHTConfig, alm::AbstractMatrix; real_field:
     scale_matrix = _diagnostic_scale_matrix(cfg)
     # Use zeros to ensure l < m positions are properly initialized to zero
     grad = zeros(eltype(alm), size(alm))
-    for m in 0:mmax, l in m:lmax
+    for m in 0:cfg.mres:mmax, l in m:lmax
         grad[l+1, m+1] = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) *
-                         conj(alm[l+1, m+1])
+                         alm[l+1, m+1]
     end
     return grad
 end
@@ -200,7 +200,7 @@ function grad_energy_scalar_packed(cfg::SHTConfig, Qlm::AbstractVector{<:Complex
     @inbounds for k in eachindex(Qlm)
         m = cfg.mi[k]
         l = cfg.li[k]
-        grad[k] = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * conj(Qlm[k])
+        grad[k] = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * Qlm[k]
     end
     return grad
 end
@@ -217,11 +217,11 @@ function grad_energy_vector_Slm_Tlm(cfg::SHTConfig, Slm::AbstractMatrix, Tlm::Ab
     fill!(grad_S, zero(eltype(grad_S)))
     fill!(grad_T, zero(eltype(grad_T)))
 
-    for m in 0:mmax, l in max(1,m):lmax
+    for m in 0:cfg.mres:mmax, l in max(1,m):lmax
         ll1 = l * (l + 1)
         w = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * ll1
-        grad_S[l+1, m+1] = w * conj(Slm[l+1, m+1])
-        grad_T[l+1, m+1] = w * conj(Tlm[l+1, m+1])
+        grad_S[l+1, m+1] = w * Slm[l+1, m+1]
+        grad_T[l+1, m+1] = w * Tlm[l+1, m+1]
     end
     return grad_S, grad_T
 end
@@ -238,7 +238,7 @@ function grad_grid_energy_scalar_field(cfg::SHTConfig, f::AbstractMatrix)
     
     grad = similar(f)
     for j in 1:nlon, i in 1:nlat
-        grad[i, j] = scale * wlat[i] * conj(f[i, j])
+        grad[i, j] = scale * wlat[i] * f[i, j]
     end
     return grad
 end
@@ -257,8 +257,8 @@ function grad_grid_energy_vector_fields(cfg::SHTConfig, Vt::AbstractMatrix, Vp::
     
     for j in 1:nlon, i in 1:nlat
         w = scale * wlat[i]
-        grad_Vt[i, j] = w * conj(Vt[i, j])
-        grad_Vp[i, j] = w * conj(Vp[i, j])
+        grad_Vt[i, j] = w * Vt[i, j]
+        grad_Vp[i, j] = w * Vp[i, j]
     end
     return grad_Vt, grad_Vp
 end
@@ -308,8 +308,8 @@ function grad_energy_vector_packed(cfg::SHTConfig,
         l = cfg.li[k]; m = cfg.mi[k]
         if l >= 1
             w = _wm(m, real_field) * _convention_metric(scale_matrix, l, m) * (l * (l + 1))
-            grad_S[k] = w * conj(Spacked[k])
-            grad_T[k] = w * conj(Tpacked[k])
+            grad_S[k] = w * Spacked[k]
+            grad_T[k] = w * Tpacked[k]
         end
     end
     return grad_S, grad_T

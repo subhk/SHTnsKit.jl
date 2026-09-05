@@ -2,25 +2,36 @@
 # Minimal plan structs to keep API stable
 ##########
 
-"""
-    _validate_cfg_replicated(cfg, comm)
-
-Rank-0 broadcasts a hash of the key cfg fields (lmax, mmax, mres, nlat, nlon,
-norm, cs_phase, robert_form); each rank compares and errors on mismatch. Cheap
-guard against users constructing divergent configs per rank (silent wrong
-results otherwise).
-"""
-function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
-    MPI.Comm_size(comm) > 1 || return
-    sig = hash((
-        cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon, cfg.nlm,
+"""Fingerprint every configuration field that can affect a transform."""
+function _cfg_fingerprint(cfg::SHTnsKit.SHTConfig)
+    fingerprint = hash((
+        cfg.lmax, cfg.mmax, cfg.mres, cfg.nlat, cfg.nlon, cfg.grid_type,
+        cfg.nlm, cfg.nspat, cfg.phi_scale, cfg.on_the_fly,
+        cfg.howmany, cfg.spec_dist, cfg.south_pole_first,
+        cfg.allow_padding, cfg.nlat_padded, cfg.spat_dist,
         cfg.norm, cfg.cs_phase, cfg.real_norm, cfg.robert_form,
-        cfg.grid_type, cfg.phi_scale, cfg.south_pole_first,
         cfg.cphi, cfg.use_plm_tables,
-        hash(cfg.θ), hash(cfg.φ), hash(cfg.x), hash(cfg.w), hash(cfg.st),
-        hash(cfg.Nlm), hash(cfg.norm_scale_matrix),
-        hash(cfg.plm_tables), hash(cfg.NP_tables),
     ))
+    for values in (cfg.li, cfg.mi, cfg.θ, cfg.φ, cfg.x, cfg.w, cfg.st, cfg.Nlm)
+        fingerprint = hash(values, fingerprint)
+    end
+    # The PLM arrays are derived caches.  Their enabled state and shapes affect
+    # dispatch, while hashing all values would make every cached-plan call
+    # unnecessarily O(lmax²*nlat).
+    for tables in (
+            cfg.plm_tables, cfg.dplm_tables, cfg.NP_tables, cfg.NdP_tables)
+        fingerprint = hash(length(tables), fingerprint)
+        for table in tables
+            fingerprint = hash(size(table), fingerprint)
+        end
+    end
+    return fingerprint
+end
+
+"""Collectively require a configuration to be identical on every rank."""
+function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
+    MPI.Comm_size(comm) > 1 || return nothing
+    sig = _cfg_fingerprint(cfg)
     root_sig = MPI.bcast(sig, 0, comm)
     # Decide the throw COLLECTIVELY: a lone throw on the mismatched rank(s) would
     # leave the matching ranks (incl. rank 0, which always matches) proceeding into
@@ -31,11 +42,271 @@ function _validate_cfg_replicated(cfg::SHTnsKit.SHTConfig, comm)
         throw(ArgumentError("SHTConfig diverges across ranks ($(n_mismatch) mismatched). " *
                             "All ranks must construct cfg with identical parameters."))
     end
-    return
+    return nothing
+end
+
+@inline function _communicators_congruent(a::MPI.Comm, b::MPI.Comm)
+    comparison = MPI.Comm_compare(a, b)
+    return comparison == MPI.IDENT || comparison == MPI.CONGRUENT
+end
+
+function _validate_prototype_communicator(comm::MPI.Comm, prototype::PencilArray,
+                                          operation::AbstractString)
+    local_ok = try
+        _communicators_congruent(comm, communicator(prototype))
+    catch
+        false
+    end
+    MPI.Allreduce(local_ok, &, comm) || throw(ArgumentError(
+        "$operation requires the plan and spatial prototype to use congruent MPI communicators",
+    ))
+    return nothing
+end
+
+function _validate_spatial_shape(cfg::SHTnsKit.SHTConfig, prototype::PencilArray,
+                                 comm::MPI.Comm, operation::AbstractString)
+    expected = (cfg.nlat, cfg.nlon)
+    actual = Tuple(PencilArrays.size_global(prototype))
+    mismatches = MPI.Allreduce(actual == expected ? 0 : 1, +, comm)
+    mismatches == 0 || throw(DimensionMismatch(
+        "$operation requires a spatial PencilArray with global shape $expected " *
+        "on every rank ($mismatches mismatched)",
+    ))
+    return nothing
+end
+
+"""Reject parent-storage permutations unsupported by the cfg-form kernels."""
+function _require_unpermuted_pencil(A::PencilArray, operation::AbstractString;
+                                    comm=communicator(A))
+    local_ok = try
+        PencilArrays.permutation(A) isa PencilArrays.NoPermutation
+    catch
+        false
+    end
+    MPI.Allreduce(local_ok, &, comm) || throw(ArgumentError(
+        "$operation does not support permuted PencilArray parent storage; " *
+        "construct the pencil with NoPermutation()",
+    ))
+    return nothing
+end
+
+function _validate_cfg_spatial_prototype(cfg::SHTnsKit.SHTConfig,
+                                         prototype::PencilArray,
+                                         operation::AbstractString;
+                                         comm=communicator(prototype))
+    _validate_cfg_replicated(cfg, comm)
+    _validate_prototype_communicator(comm, prototype, operation)
+    _validate_spatial_shape(cfg, prototype, comm, operation)
+    _require_unpermuted_pencil(prototype, operation; comm)
+    return nothing
+end
+
+function _validate_spatial_pencil_against_prototype(
+        cfg::SHTnsKit.SHTConfig, expected::PencilArray, actual::PencilArray,
+        operation::AbstractString; comm=communicator(expected))
+    _validate_prototype_communicator(comm, expected, operation)
+    _validate_prototype_communicator(comm, actual, operation)
+    _validate_spatial_shape(cfg, actual, comm, operation)
+    expected_ranges = PencilArrays.range_local(pencil(expected))
+    actual_ranges = PencilArrays.range_local(pencil(actual))
+    local_ok = expected_ranges == actual_ranges &&
+               size(parent(expected)) == size(parent(actual))
+    mismatches = MPI.Allreduce(local_ok ? 0 : 1, +, comm)
+    mismatches == 0 || throw(DimensionMismatch(
+        "$operation requires the same rank-local spatial ranges as the plan " *
+        "prototype on every rank ($mismatches mismatched)",
+    ))
+    _require_unpermuted_pencil(actual, operation; comm)
+    return nothing
+end
+
+function _validate_spectral_pencil(
+        cfg::SHTnsKit.SHTConfig, spectral::PencilArray,
+        spatial_prototype::PencilArray, operation::AbstractString;
+        validate_context::Bool=true,
+        comm=communicator(spatial_prototype))
+    validate_context && _validate_cfg_spatial_prototype(
+        cfg, spatial_prototype, operation; comm,
+    )
+    _validate_prototype_communicator(comm, spectral, operation)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    actual = Tuple(PencilArrays.size_global(spectral))
+    mismatches = MPI.Allreduce(actual == expected ? 0 : 1, +, comm)
+    mismatches == 0 || throw(DimensionMismatch(
+        "$operation requires spectral PencilArrays with global shape $expected " *
+        "on every rank ($mismatches mismatched)",
+    ))
+    _require_unpermuted_pencil(spectral, operation; comm)
+    return nothing
+end
+
+function _validate_matching_pencil_layout(reference::PencilArray,
+                                          actual::PencilArray,
+                                          operation::AbstractString;
+                                          comm=communicator(reference))
+    return _validate_pencil_layout_description!(
+        pencil(reference), size_global(reference), size(parent(reference)),
+        actual, Symbol(operation); comm,
+    )
+end
+
+function _validate_replicated_call_signature(
+        comm::MPI.Comm, operation::AbstractString, signature)
+    MPI.Comm_size(comm) > 1 || return nothing
+    local_sig = hash(signature)
+    root_sig = MPI.bcast(local_sig, 0, comm)
+    nbad = MPI.Allreduce(local_sig == root_sig ? 0 : 1, +, comm)
+    nbad == 0 || throw(ArgumentError(
+        "$operation requires identical replicated inputs and options on every rank",
+    ))
+    return nothing
+end
+
+function _validate_cached_plan_cfg(
+        cfg::SHTnsKit.SHTConfig, cfg_fingerprint::UInt, comm::MPI.Comm,
+        operation::AbstractString)
+    local_ok = _cfg_fingerprint(cfg) == cfg_fingerprint
+    MPI.Allreduce(local_ok, &, comm) || throw(ArgumentError(
+        "$operation cannot reuse a plan after its SHTConfig has changed; rebuild the plan",
+    ))
+    return nothing
+end
+
+function _validate_dense_spectral_shapes(
+        cfg::SHTnsKit.SHTConfig, comm::MPI.Comm,
+        operation::AbstractString, arrays::Tuple)
+    expected = (cfg.lmax + 1, cfg.mmax + 1)
+    local_ok = all(A -> A === nothing || size(A) == expected, arrays)
+    MPI.Allreduce(local_ok, &, comm) || throw(DimensionMismatch(
+        "$operation requires every dense spectral matrix to have shape $expected",
+    ))
+    return nothing
+end
+
+"""Validate every semantically active coefficient of replicated dense spectra."""
+function _validate_replicated_dense_spectra(
+        cfg::SHTnsKit.SHTConfig, comm::MPI.Comm,
+        operation::AbstractString, arrays::Tuple;
+        options::Tuple=(),
+        domains::Tuple=ntuple(
+            _ -> (minimum_l=0, include_m0=true), length(arrays),
+        ))
+    length(domains) == length(arrays) || throw(ArgumentError(
+        "one active coefficient domain is required for each dense spectrum",
+    ))
+    array_signatures = map(arrays, domains) do A, domain
+        A === nothing && return nothing
+        content_hash = hash((eltype(A), axes(A), domain))
+        @inbounds for m in 0:cfg.mres:cfg.mmax
+            !domain.include_m0 && m == 0 && continue
+            for l in max(m, domain.minimum_l):cfg.lmax
+                content_hash = hash(A[l + 1, m + 1], content_hash)
+            end
+        end
+        return (eltype(A), axes(A), content_hash)
+    end
+    _validate_replicated_call_signature(
+        comm, operation, (options, array_signatures),
+    )
+    return nothing
+end
+
+function _validate_distributed_plan_preflight(cfg::SHTnsKit.SHTConfig, plan,
+                                              prototype::PencilArray,
+                                              operation::AbstractString)
+    comm = plan.comm
+    is_2d = hasproperty(plan, :p_l)
+    plan_signature = if is_2d
+        context = getproperty(plan, :scratch_context)
+        scratch = getproperty(plan, :scratch)
+        (
+            true, getproperty(plan, :instance_id),
+            plan.lmax, plan.mmax, plan.mres, plan.nprocs,
+            getproperty(plan, :p_l), getproperty(plan, :p_m),
+            getproperty(plan, :with_scratch), scratch !== nothing,
+            context !== nothing, getproperty(plan, :closed),
+        )
+    else
+        (
+            false, plan.lmax, plan.mmax, plan.mres, plan.nprocs,
+            plan.recv_counts, plan.recv_displs,
+        )
+    end
+    # This must be the first collective. In particular, plan construction owns
+    # derived communicator contexts in the 2-D case, so its replicated instance
+    # identity must agree before any rank is allowed to touch those contexts.
+    _validate_replicated_call_signature(comm, operation, plan_signature)
+
+    if is_2d
+        nprocs = MPI.Comm_size(comm)
+        rank = MPI.Comm_rank(comm)
+        p_l = getproperty(plan, :p_l)
+        p_m = getproperty(plan, :p_m)
+        flags = UInt32(0)
+        getproperty(plan, :closed) && (flags |= 0x0002)
+        plan.nprocs == nprocs && plan.rank == rank || (flags |= 0x0002)
+        p_l > 0 && p_m > 0 && p_l * p_m == nprocs || (flags |= 0x0002)
+        getproperty(plan, :l_rank) == rank % max(p_l, 1) &&
+            getproperty(plan, :m_rank) == rank ÷ max(p_l, 1) ||
+            (flags |= 0x0002)
+        getproperty(plan, :local_nlm) ==
+            length(getproperty(plan, :local_lm_indices)) || (flags |= 0x0002)
+        length(getproperty(plan, :l_recv_counts)) == p_l &&
+            length(getproperty(plan, :l_recv_displs)) == p_l ||
+            (flags |= 0x0002)
+        getproperty(plan, :with_scratch) ==
+            (getproperty(plan, :scratch) !== nothing &&
+             getproperty(plan, :scratch_context) !== nothing) ||
+            (flags |= 0x0002)
+        !_comm_is_null(getproperty(plan, :l_comm)) &&
+            !_comm_is_null(getproperty(plan, :m_comm)) || (flags |= 0x0002)
+        _collective_validation_error(comm, flags, Symbol(operation))
+
+        # Safe only after the parent-communicator verdict above has established
+        # that every rank owns open subcommunicators and the same process grid.
+        subgroup_ok = MPI.Comm_size(getproperty(plan, :l_comm)) == p_l &&
+            MPI.Comm_rank(getproperty(plan, :l_comm)) ==
+                getproperty(plan, :l_rank) &&
+            MPI.Comm_size(getproperty(plan, :m_comm)) == p_m &&
+            MPI.Comm_rank(getproperty(plan, :m_comm)) ==
+                getproperty(plan, :m_rank)
+        _collective_validation_error(
+            comm, subgroup_ok ? UInt32(0) : UInt32(0x0002),
+            Symbol(operation),
+        )
+    end
+    _validate_cfg_replicated(cfg, comm)
+    expected = (plan.lmax, plan.mmax, plan.mres)
+    actual = (cfg.lmax, cfg.mmax, cfg.mres)
+    mismatches = MPI.Allreduce(actual == expected ? 0 : 1, +, comm)
+    mismatches == 0 || throw(ArgumentError(
+        "$operation configuration does not match the distributed plan on " *
+        "every rank ($mismatches mismatched)",
+    ))
+    _validate_prototype_communicator(comm, prototype, operation)
+    _validate_spatial_shape(cfg, prototype, comm, operation)
+    _require_unpermuted_pencil(prototype, operation; comm)
+    if hasproperty(plan, :scratch_context)
+        context = getproperty(plan, :scratch_context)
+        if context !== nothing
+            cfg_ok = _cfg_fingerprint(cfg) == context.cfg_fingerprint
+            MPI.Allreduce(cfg_ok, &, comm) || throw(ArgumentError(
+                "$operation configuration differs from the one used to build the scratch plan",
+            ))
+            actual_ranges = PencilArrays.range_local(pencil(prototype))
+            layout_ok = actual_ranges == context.spatial_ranges &&
+                        Tuple(size(parent(prototype))) == context.spatial_parent_size
+            MPI.Allreduce(layout_ok, &, comm) || throw(DimensionMismatch(
+                "$operation requires the exact rank-local spatial layout used to build the scratch plan",
+            ))
+        end
+    end
+    return nothing
 end
 
 struct DistAnalysisPlan{CT<:Complex}
     cfg::SHTnsKit.SHTConfig
+    cfg_fingerprint::UInt
     prototype_θφ::PencilArray
     use_rfft::Bool
     # φ-distributed prototypes need the longitude gather; dist_analysis! falls
@@ -79,13 +350,26 @@ function _validate_plan_prototype_precision(prototype_θφ::PencilArray,
     return candidate
 end
 
+function _require_cpu_plan_storage!(comm, operation::Symbol, values...)
+    storage_code = _validate_parallel_storage!(comm, operation, values...)
+    storage_code == 0 || throw(SHTnsKit.BackendUnavailableError(
+        operation,
+        "this reusable distributed plan owns CPU scratch storage; " *
+        "construct and execute it with CPU-backed PencilArrays",
+    ))
+    return nothing
+end
+
 function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft::Bool=false)
     # use_rfft=true is wired through dist_analysis_standard and dist_synthesis
     # for real inputs/outputs. Case A (φ replicated) uses FFTW.rfft directly;
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
-    _validate_cfg_replicated(cfg, comm)
+    _require_cpu_plan_storage!(comm, :DistAnalysisPlan, prototype_θφ)
+    _validate_cfg_spatial_prototype(cfg, prototype_θφ, "DistAnalysisPlan")
+    _validate_replicated_call_signature(comm, "DistAnalysisPlan", (use_rfft,))
+    cfg_fingerprint = _cfg_fingerprint(cfg)
     RT = _validate_plan_prototype_precision(
         prototype_θφ, comm, :DistAnalysisPlan,
     )
@@ -117,7 +401,7 @@ function DistAnalysisPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; 
     # finalizer. Code that rebuilds a plan per shell or timestep can exhaust the
     # MPI communicator pool that way.
     reduce_comm = comm
-    return DistAnalysisPlan(cfg, prototype_θφ, use_rfft, fallback_standard,
+    return DistAnalysisPlan(cfg, cfg_fingerprint, prototype_θφ, use_rfft, fallback_standard,
                             θ_globals, weights_cache, x_cache, P, Fθm, Alm_work,
                             θ_is_distributed, reduce_comm)
 end
@@ -134,13 +418,16 @@ function DistPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; use_rfft
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
-    _validate_cfg_replicated(cfg, comm)
+    _require_cpu_plan_storage!(comm, :DistPlan, prototype_θφ)
+    _validate_cfg_spatial_prototype(cfg, prototype_θφ, "DistPlan")
+    _validate_replicated_call_signature(comm, "DistPlan", (use_rfft,))
     _validate_plan_prototype_precision(prototype_θφ, comm, :DistPlan)
     return DistPlan(cfg, prototype_θφ, use_rfft)
 end
 
 struct DistSphtorPlan{CT<:Complex}
     cfg::SHTnsKit.SHTConfig
+    cfg_fingerprint::UInt
     prototype_θφ::PencilArray
     use_rfft::Bool
     with_spatial_scratch::Bool
@@ -170,7 +457,12 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     # Case B (φ split) uses a row-subcomm gather + FFTW.rfft via
     # distributed_rfft_phi!. Complex-valued callers still use the complex FFT.
     comm = communicator(prototype_θφ)
-    _validate_cfg_replicated(cfg, comm)
+    _require_cpu_plan_storage!(comm, :DistSphtorPlan, prototype_θφ)
+    _validate_cfg_spatial_prototype(cfg, prototype_θφ, "DistSphtorPlan")
+    _validate_replicated_call_signature(
+        comm, "DistSphtorPlan", (with_spatial_scratch, use_rfft),
+    )
+    cfg_fingerprint = _cfg_fingerprint(cfg)
     RT = _validate_plan_prototype_precision(
         prototype_θφ, comm, :DistSphtorPlan,
     )
@@ -222,7 +514,7 @@ function DistSphtorPlan(cfg::SHTnsKit.SHTConfig, prototype_θφ::PencilArray; wi
     # ranks block forever. Computed once at plan construction, not per call.
     θ_is_distributed = MPI.Allreduce(nθ_local < cfg.nlat, |, comm)
     reduce_comm = comm   # see DistAnalysisPlan: the split was provably a no-op here
-    return DistSphtorPlan(cfg, prototype_θφ, use_rfft, with_spatial_scratch, scratch,
+    return DistSphtorPlan(cfg, cfg_fingerprint, prototype_θφ, use_rfft, with_spatial_scratch, scratch,
                           fallback_standard, θ_globals, x_cache, sθ_cache, inv_sθ_cache,
                           weights_cache,
                           Vector{Float64}(undef, lmax + 1), Vector{Float64}(undef, lmax + 1),

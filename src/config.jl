@@ -1057,7 +1057,10 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
         if use_dh_weights
             # Validate DH requirements
             iseven(nlat) || throw(ArgumentError("DH weights require even nlat"))
-            nlat == 2*(lmax + 1) || @warn "DH weights are exact when nlat=2*(lmax+1)=$(2*(lmax+1)), got nlat=$nlat"
+            expected_nlat = 2 * (lmax + 1)
+            nlat == expected_nlat || throw(ArgumentError(
+                "DH weights require nlat=2*(lmax+1)=$expected_nlat, got nlat=$nlat",
+            ))
 
             # Use Driscoll-Healy grid: θ = π*j/n for j=0,...,n-1
             # This includes north pole (j=0, θ=0) but not south pole (j=n would give θ=π)
@@ -1127,7 +1130,8 @@ function create_regular_config(lmax::Int, nlat::Int; mmax::Int=lmax, mres::Int=1
 end
 
 """
-    create_config(lmax::Int; mmax=lmax, mres=1, nlat=lmax+2, nlon=max(2*lmax+1,4),
+    create_config(lmax::Int; mmax=lmax, mres=1, nlat=lmax+2,
+                   nlon=max(2*lmax+1,4),
                    norm::Symbol=:orthonormal, cs_phase::Bool=true,
                    real_norm::Bool=false, robert_form::Bool=false,
                    grid_type::Symbol=:gauss) -> SHTConfig
@@ -1139,7 +1143,8 @@ Supports Gauss–Legendre (`grid_type = :gauss`), regular equiangular
 `nlat`/`nlon` defaults are adjusted to satisfy accuracy constraints for the
 chosen grid.
 """
-function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
+function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1,
+                       nlat::Int=lmax + 2,
                        nlon::Int=_default_nlon(lmax), norm::Symbol=:orthonormal,
                        cs_phase::Bool=true, real_norm::Bool=false,
                        robert_form::Bool=false, grid_type::Symbol=:gauss,
@@ -1148,7 +1153,11 @@ function create_config(lmax::Int; mmax::Int=lmax, mres::Int=1, nlat::Int=lmax+2,
     pole_grid = grid_type === :regular_poles || grid_type === :driscoll_healy
     min_lat = grid_type === :gauss ? (lmax + 1) : (pole_grid ? (lmax + 1) : (lmax + 2))
     include_poles_eff = include_poles || pole_grid
-    nlat_eff = max(nlat, min_lat)               # Regular grids benefit from a small oversampling
+    # Preserve the long-standing public keyword signature (`nlat=lmax+2`) while
+    # making the omitted/default latitude count valid for the exact DH rule.
+    # Callers that request any other DH size still reach the strict validator.
+    nlat_eff = grid_type === :driscoll_healy && nlat == lmax + 2 ?
+               2 * (lmax + 1) : max(nlat, min_lat)
     nlon_eff = max(nlon, 2*mmax + 1)            # Azimuthal resolution requires ≥ 2*mmax+1
     if grid_type == :gauss
         return create_gauss_config(lmax, nlat_eff; mmax=mmax, mres=mres, nlon=nlon_eff,

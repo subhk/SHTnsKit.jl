@@ -419,5 +419,39 @@ function run_shared_scalar_kernel_reference(common, backend)
     event === nothing || wait(event)
     @test synthesized_bins[:, 2] == zeros(CT, cfg.nlat)
     @test synthesized_bins[:, cfg.nlon - 1] ≈ conj.(synthesized_bins[:, 3])
+
+    # Distributed transpose kernels own a contiguous slice of physical Fourier
+    # orders.  Their public coefficient boundary must apply the same configured
+    # normalization/phase conversion as the dense GPU kernels, using the global
+    # order rather than the local column number.
+    first_m = 1
+    local_orders = 2
+    local_range = (first_m + 1):(first_m + local_orders)
+    distributed_fourier = reshape(
+        copy(fourier[:, local_range]), cfg.nlat, local_orders, 1,
+    )
+    distributed_output = zeros(CT, cfg.lmax + 1, local_orders, 1)
+    event = common.distributed_scalar_analysis_kernel!(backend)(
+        distributed_output, distributed_fourier, Plm, weights, scales,
+        T(cfg.cphi), first_m, cfg.lmax, cfg.mmax, cfg.mres, cfg.lmax;
+        ndrange=size(distributed_output),
+    )
+    event === nothing || wait(event)
+    @test isapprox(
+        distributed_output[:, :, 1], configured[:, local_range];
+        atol=8f-7, rtol=8f-7,
+    )
+
+    distributed_bins = zeros(CT, cfg.nlat, local_orders, 1)
+    event = common.distributed_scalar_synthesis_kernel!(backend)(
+        distributed_bins, distributed_output, Plm, scales,
+        T(SHTnsKit.phi_inv_scale(cfg)), first_m, cfg.lmax, cfg.mmax, cfg.mres;
+        ndrange=size(distributed_bins),
+    )
+    event === nothing || wait(event)
+    @test isapprox(
+        distributed_bins[:, :, 1], synthesized_bins[:, local_range];
+        atol=8f-7, rtol=8f-7,
+    )
     return nothing
 end

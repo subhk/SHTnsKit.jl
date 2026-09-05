@@ -492,7 +492,7 @@ static void generate_operator_rotation_family(FILE *manifest,const char *out) {
       cplx *z=calloc(cfg->nlm,sizeof(*z)),*y=calloc(cfg->nlm,sizeof(*y)),*y90=calloc(cfg->nlm,sizeof(*y90)),*x90=calloc(cfg->nlm,sizeof(*x90));
       cplx *zyz=calloc(cfg->nlm,sizeof(*zyz)),*zxz=calloc(cfg->nlm,sizeof(*zxz)),*axis=calloc(cfg->nlm,sizeof(*axis));
       cplx *a=calloc(cfg->nlm_cplx,sizeof(*a)),*ac=calloc(cfg->nlm_cplx,sizeof(*ac));double *wigner=calloc((size_t)wigner_n*wigner_n,sizeof(*wigner));
-      SH_Zrotate(cfg,q,-alpha,z);SH_Yrotate(cfg,q,beta,y);SH_Yrotate90(cfg,q,y90);SH_Xrotate90(cfg,q,x90);
+      SH_Zrotate(cfg,q,alpha,z);SH_Yrotate(cfg,q,beta,y);SH_Yrotate90(cfg,q,y90);SH_Xrotate90(cfg,q,x90);
       shtns_rot rotation=shtns_rotation_create(lmax,mmax,sht_orthonormal);if(!rotation){fputs("rotation allocation failed\n",stderr);exit(1);}
       shtns_rotation_set_angles_ZYZ(rotation,euler_alpha,beta,euler_gamma);shtns_rotation_apply_real(rotation,q,zyz);shtns_rotation_wigner_d_matrix(rotation,wigner_l,wigner);
       fill_complex_coefficients(cfg,a,0.63);shtns_rotation_apply_cplx(rotation,a,ac);

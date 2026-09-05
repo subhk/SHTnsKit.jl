@@ -16,6 +16,17 @@ concurrency:
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
 jobs:
+  manual-cuda-tool:
+    name: Manual CUDA reporting tool
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test manual CUDA runner and status reporting without hardware
+        run: python3 -B -m unittest discover -s test/support -p test_manual_cuda.py -v
+
   shtns37-cpu-parity:
     name: SHTns 3.7 CPU parity
     runs-on: ubuntu-latest

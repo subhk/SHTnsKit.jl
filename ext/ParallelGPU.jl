@@ -6,17 +6,20 @@
 # package extensions register the small set of vendor operations needed here.
 # Mathematical code calls `allreduce!`/`exchange!` and storage helpers only.
 
-struct ParallelGPUAdapter{FM,FA,FD,FWD,FG,FS,FH,FHD,FDH}
-    name::Symbol
-    matches::FM
-    array_type::FA
-    device::FD
-    with_device::FWD
-    gpu_aware::FG
-    synchronize::FS
-    allocate_pinned::FH
-    device_to_host!::FHD
-    host_to_device!::FDH
+# Weak registry entries must refer to the caller's live adapter identity.
+# An immutable adapter can be boxed separately for WeakRef and disappear during
+# GC even inside GC.@preserve. Const fields retain the fixed callback contract.
+mutable struct ParallelGPUAdapter{FM,FA,FD,FWD,FG,FS,FH,FHD,FDH}
+    const name::Symbol
+    const matches::FM
+    const array_type::FA
+    const device::FD
+    const with_device::FWD
+    const gpu_aware::FG
+    const synchronize::FS
+    const allocate_pinned::FH
+    const device_to_host!::FHD
+    const host_to_device!::FDH
 end
 
 ParallelGPUAdapter(name::Symbol, matches, array_type, device, gpu_aware,

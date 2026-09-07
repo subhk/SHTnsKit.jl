@@ -1023,6 +1023,11 @@ end
         ParExt._register_parallel_gpu_adapter!(adapter)
         try
             GC.@preserve adapter begin
+                # A live adapter must remain registered even when it captures
+                # the matrix and garbage collection runs before validation.
+                GC.gc(true)
+                @test ParExt._parallel_gpu_adapter(mx) ===
+                      (rank == nprocs - 1 ? adapter : nothing)
                 @test_throws ArgumentError SHTnsKit.SH_mul_mx(
                     operator_cfg, mx, input, output,
                 )

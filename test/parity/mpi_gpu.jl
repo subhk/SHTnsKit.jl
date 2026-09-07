@@ -1977,14 +1977,11 @@ function test_mpi_gpu_policy(extension)
         (device, host) -> copyto!(device, host),
     )
     extension._register_parallel_gpu_adapter!(mixed_adapter)
-    # ParallelGPUAdapter is immutable and the registry intentionally holds a
-    # WeakRef. Keep the exact boxed registry value (rather than a potentially
-    # re-boxed local copy) strongly reachable for this test's lifetime.
-    mixed_adapter_holder = lock(extension._PARALLEL_GPU_ADAPTER_LOCK) do
-        Ref{Any}(extension._PARALLEL_GPU_ADAPTERS[:mock_mixed].value)
-    end
-    GC.@preserve mixed_adapter_holder begin
+    # Registration is weak: preserving the caller's adapter must keep the
+    # same identity reachable throughout these storage-policy checks.
+    GC.@preserve mixed_adapter begin
       try
+    GC.gc(true)
     mixed_cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
     cpu_spatial_pen = SHTnsKit.create_spatial_pencil(
         mixed_cfg; comm=MPI.COMM_SELF,

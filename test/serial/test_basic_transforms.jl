@@ -9,6 +9,42 @@ using SHTnsKit
 @isdefined(VERBOSE) || (const VERBOSE = get(ENV, "SHTNSKIT_TEST_VERBOSE", "0") == "1")
 
 @testset "Basic Scalar Transforms" begin
+    @testset "Real coefficient matrices" begin
+        for T in (Float32, Float64, Int), norm in (:orthonormal, :schmidt)
+            T === Int && norm !== :orthonormal && continue
+            cfg = create_gauss_config(3, 5; norm)
+            alm = zeros(T, cfg.lmax + 1, cfg.mmax + 1)
+            alm[2, 1] = 1
+            alm[3, 2] = 2
+            alm[4, 3] = -1
+            original = copy(alm)
+            complex_alm = complex.(float.(alm))
+            expected = synthesis(cfg, complex_alm)
+            expected_cplx = synthesis_cplx(cfg, complex_alm)
+            tolerance = T === Float32 ? 1e-5 : 1e-12
+
+            @test synthesis(cfg, alm) ≈ expected rtol=tolerance
+            @test synthesis_cplx(cfg, alm) ≈ expected_cplx rtol=tolerance
+            @test synthesis(cfg, alm; real_output=false) ≈ expected_cplx rtol=tolerance
+            for use_rfft in (false, true)
+                @test synthesis(cfg, alm; use_rfft) ≈ expected rtol=tolerance
+                out = similar(expected)
+                @test synthesis!(cfg, out, alm; use_rfft) === out
+                @test out ≈ expected rtol=tolerance
+            end
+            out_cplx = similar(expected_cplx)
+            @test synthesis!(cfg, out_cplx, alm; real_output=false) === out_cplx
+            @test out_cplx ≈ expected_cplx rtol=tolerance
+
+            # QST degree truncation reuses the scalar synthesis helper.
+            zero_coeffs = zeros(eltype(complex_alm), size(alm))
+            expected_l = synthesis_qst_l(cfg, complex_alm, zero_coeffs, zero_coeffs, 2)[1]
+            @test synthesis_qst_l(cfg, alm, zero_coeffs, zero_coeffs, 2)[1] ≈
+                  expected_l rtol=tolerance
+            @test alm == original
+        end
+    end
+
     @testset "Analysis-synthesis roundtrip" begin
         lmax = 10
         nlat = lmax + 2

@@ -208,6 +208,9 @@ function grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_target:
     
     # Backward pass: adjoint of vorticity calculation
     gζlm = analysis(cfg, residual)
+    # Analysis includes the loss's quadrature weights, but the adjoint also
+    # carries synthesis's inverse-FFT scale (1 for :dft, 1/2π for :quad).
+    synthesis_scale = phi_inv_scale(cfg) / cfg.nlon
     
     # Apply chain rule: ∂L/∂T_lm = ∂L/∂ζ_lm * ∂ζ_lm/∂T_lm
     lmax, mmax = cfg.lmax, cfg.mmax
@@ -217,7 +220,7 @@ function grad_loss_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_target:
     
     for m in 0:mmax, l in max(1,m):lmax
         L2 = l * (l + 1)  # Note: negative sign from ζ = -l(l+1)T
-        gT[l+1, m+1] = -L2 * _convention_metric(scale_matrix, l, m) * gζlm[l+1, m+1]
+        gT[l+1, m+1] = -L2 * synthesis_scale * _convention_metric(scale_matrix, l, m) * gζlm[l+1, m+1]
     end
     return gT
 end
@@ -236,6 +239,7 @@ function loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_tar
     
     # Backward pass for gradient
     gζlm = analysis(cfg, residual)
+    synthesis_scale = phi_inv_scale(cfg) / cfg.nlon
     lmax, mmax = cfg.lmax, cfg.mmax
     scale_matrix = _diagnostic_scale_matrix(cfg)
     gT = similar(Tlm)
@@ -243,7 +247,7 @@ function loss_and_grad_vorticity_Tlm(cfg::SHTConfig, Tlm::AbstractMatrix, ζ_tar
     
     for m in 0:mmax, l in max(1,m):lmax
         L2 = l * (l + 1)
-        gT[l+1, m+1] = -L2 * _convention_metric(scale_matrix, l, m) * gζlm[l+1, m+1]
+        gT[l+1, m+1] = -L2 * synthesis_scale * _convention_metric(scale_matrix, l, m) * gζlm[l+1, m+1]
     end
     
     return loss, gT

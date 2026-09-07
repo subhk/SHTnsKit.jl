@@ -6,6 +6,12 @@ using GPUArraysCore
 using KernelAbstractions
 
 include("../wrapper_reference.jl")
+include("../test_mres.jl")
+if CUDA.functional()
+    run_gpu_mres_tests()
+else
+    @test_skip CUDA.functional()
+end
 
 include("../../parity/scalar_full.jl")
 include("../../parity/scalar_variants.jl")

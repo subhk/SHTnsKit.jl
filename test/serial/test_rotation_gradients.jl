@@ -26,6 +26,63 @@ catch
     false
 end
 
+@testset "Z-rotation pullbacks preserve primal coefficients" begin
+    function check_saved_rotation(make_pullback)
+        for mres in (1, 2), storage in (:separate, :inplace, :overlapping_views)
+            @testset "mres=$mres, storage=$storage" begin
+                cfg = create_gauss_config(4, 6; nlon=9, mres=mres)
+                rng = MersenneTwister(4260 + mres)
+                Q = randn(rng, ComplexF64, cfg.nlm)
+                C = randn(rng, ComplexF64, cfg.nlm)
+                h = randn(rng, ComplexF64, cfg.nlm)
+                alpha, epsilon = 0.7, 1e-6
+                loss(q, a) = real(sum(conj(C) .* SH_Zrotate(cfg, q, a, similar(q))))
+                fd_alpha = (loss(Q, alpha + epsilon) - loss(Q, alpha - epsilon)) / (2epsilon)
+                fd_q = (loss(Q .+ epsilon .* h, alpha) - loss(Q .- epsilon .* h, alpha)) / (2epsilon)
+
+                if storage === :overlapping_views
+                    # The output precedes the input so the primal's forward
+                    # traversal reads each coefficient before overwriting it.
+                    buffer = vcat(zero(eltype(Q)), Q)
+                    q, out = view(buffer, 2:length(buffer)), view(buffer, 1:cfg.nlm)
+                else
+                    q = copy(Q)
+                    out = storage === :inplace ? q : similar(q)
+                end
+                y, back = make_pullback(cfg, q, alpha, out)
+                @test y === out
+                @test y ≈ SH_Zrotate(cfg, Q, alpha, similar(Q))
+                _, qbar, alphabar, _ = back(C)
+                @test real(sum(conj(qbar) .* h)) ≈ fd_q rtol=1e-6 atol=1e-8
+                @test alphabar ≈ fd_alpha rtol=1e-6 atol=1e-8
+
+                # Callers may reuse the input/output buffers after the primal.
+                # Repeated pullbacks must still use the values at that call.
+                fill!(q, 0)
+                fill!(out, 0)
+                _, qbar_again, alphabar_again, _ = back(C)
+                @test qbar_again ≈ qbar
+                @test alphabar_again ≈ fd_alpha rtol=1e-6 atol=1e-8
+                _, qbar_scaled, alphabar_scaled, _ = back(2 .* C)
+                @test qbar_scaled ≈ 2 .* qbar
+                @test alphabar_scaled ≈ 2fd_alpha rtol=1e-6 atol=1e-8
+            end
+        end
+    end
+
+    @testset "ChainRules" begin
+        check_saved_rotation() do cfg, q, alpha, out
+            y, back = ChainRulesCore.rrule(SH_Zrotate, cfg, q, alpha, out)
+            y, cotangent -> Base.tail(back(cotangent))
+        end
+    end
+    if _HAS_ZYGOTE_ROT
+        @testset "Zygote" begin
+            check_saved_rotation((cfg, q, alpha, out) -> Zygote.pullback(SH_Zrotate, cfg, q, alpha, out))
+        end
+    end
+end
+
 @testset "Complex-packed analysis rrule respects configured convention" begin
     lmax = 4
     cfg = create_gauss_config(lmax, 7; nlon=11, norm=:schmidt,

@@ -348,6 +348,9 @@ end
 
 function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Zrotate), cfg::SHTnsKit.SHTConfig, Qlm, alpha::Real, Rlm)
     y = SHTnsKit.SH_Zrotate(cfg, Qlm, alpha, Rlm)
+    # In-place rotation overwrites Qlm, and callers may reuse either buffer
+    # before the pullback. Preserve the primal values needed for dR/dα.
+    rotated = copy(y)
     function pullback(ȳ)
         # Diagonal rotation Rlm = Qlm·e^{-imα} ⇒ Q̄ = ȳ·e^{imα} = SH_Zrotate(ȳ, -α).
         Q̄ = similar(Qlm)
@@ -358,8 +361,7 @@ function ChainRulesCore.rrule(::typeof(SHTnsKit.SH_Zrotate), cfg::SHTnsKit.SHTCo
             (m % cfg.mres == 0) || continue
             for l in m:cfg.lmax
                 lm = LM_index(cfg.lmax, cfg.mres, l, m) + 1
-                Rval = Qlm[lm] * cis(-m * alpha)
-                dα += real(conj(ȳ[lm]) * (-im * m * Rval))
+                dα += real(conj(ȳ[lm]) * (-im * m * rotated[lm]))
             end
         end
         return NoTangent(), NoTangent(), Q̄, dα, ZeroTangent()

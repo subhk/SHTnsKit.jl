@@ -5,6 +5,7 @@ module GPUWrapperReference
 
 using Test, SHTnsKit, KernelAbstractions
 include("../../ext/GPUCommon.jl")
+include("test_mres.jl")
 
 module HostVendor
     using KernelAbstractions
@@ -104,6 +105,34 @@ end
 @testset "GPU wrapper host reference" begin
     rocm = wrapper_module(:AMDGPU)
     cuda = wrapper_module(:CUDA)
+    @testset "Order stride through production wrappers" begin
+        for (wrapper, prefix) in ((rocm, "amdgpu"), (cuda, "cuda"))
+            scalar_analysis! = getproperty(wrapper, Symbol("_", prefix, "_scalar_analysis_direct!"))
+            scalar_synthesis! = getproperty(wrapper, Symbol("_", prefix, "_scalar_synthesis_direct!"))
+            vector_analysis! = getproperty(wrapper, Symbol("_", prefix, "_vector_analysis_direct!"))
+            vector_synthesis! = getproperty(wrapper, Symbol("_", prefix, "_vector_synthesis_direct!"))
+            run_gpu_mres_tests(
+                scalar_analysis=(cfg, field) -> begin
+                    output = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+                    scalar_analysis!(cfg, cfg, output, field)
+                end,
+                scalar_synthesis=(cfg, coefficients; real_output=true) -> begin
+                    output = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
+                    scalar_synthesis!(cfg, cfg, output, coefficients; real_output)
+                end,
+                vector_analysis=(cfg, vt, vp) -> begin
+                    sout = zeros(ComplexF64, cfg.lmax + 1, cfg.mmax + 1)
+                    tout = similar(sout)
+                    vector_analysis!(cfg, cfg, sout, tout, vt, vp)
+                end,
+                vector_synthesis=(cfg, s, t; real_output=true) -> begin
+                    vt = zeros(real_output ? Float64 : ComplexF64, cfg.nlat, cfg.nlon)
+                    vp = similar(vt)
+                    vector_synthesis!(cfg, cfg, vt, vp, s, t; real_output)
+                end,
+            )
+        end
+    end
     @testset "Planned FFT execution" begin
         for (wrapper, prefix) in ((rocm, "amdgpu"), (cuda, "cuda")),
             T in (Float32, Float64), use_rfft in (false, true)

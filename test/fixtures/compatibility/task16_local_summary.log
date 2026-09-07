@@ -1,3 +1,5 @@
+# Historical readiness runs below predate the 2026-09-07 review integration.
+# Their counts and source-unchanged claim describe those runs only.
 evidence_kind=local_readiness
 certifying=false
 manual_cuda_tool_pass=9
@@ -7,7 +9,7 @@ manual_cuda_no_hardware_guard_rejected=true
 manual_cuda_julia_syntax_pass=3
 manual_cuda_github_status_published=false
 manual_cuda_numerical_source_unchanged_from=3b8b2fe118900f2431208088932631db4a162908
-audited_tree_digest=733aee029dadf7bf22a6a91eaa35a37e1afe30618e6c4b21026f9b144aae6631
+audited_tree_digest=1f1ed6328e04d876bfd33649935044162b7cfea8e06a214066698a6539471680
 platform=aarch64-apple-darwin
 julia=1.12.4
 pkg_exit_code=0
@@ -44,3 +46,24 @@ gpu_fix_qst_plan_full_fft_bytes=14736
 gpu_fix_qst_plan_real_fft_bytes=14736
 gpu_fix_plan_allocation_ranks=2
 gpu_fix_plan_allocation_exit_code=0
+
+# Current review integration results; historical results above are not new runs.
+review_date=2026-09-07
+review_base_commit=b7ee5bb
+review_gpu_wrapper_pass=376
+review_gpu_wrapper_exit_code=0
+review_gpu_wrapper_execution=production CUDA and ROCm wrappers on the CPU reference backend
+review_mpi_ranks=2
+review_mpi_local_pass_per_rank=172
+review_mpi_public_preflight_pass_per_rank=34
+review_mpi_exit_code=0
+review_allocation_one_thread_bytes_current=0
+review_allocation_one_thread_bytes_baseline=0
+review_allocation_two_threads_bytes_current=944
+review_allocation_two_threads_bytes_baseline=944
+review_two_thread_serial_failure=The unchanged allocation ceiling also fails on baseline; the current full serial run is performed with one thread.
+review_full_pkg_jet_aqua_four_rank_mpi_rerun=false
+review_physical_gpu_execution=false
+review_serial_threads=1
+review_serial_pass=76641
+review_serial_exit_code=0

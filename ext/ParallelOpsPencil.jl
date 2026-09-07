@@ -214,9 +214,9 @@ function SHTnsKit.dist_spatial_divergence(cfg::SHTnsKit.SHTConfig,
         cfg, Vtθφ, Vpθφ; use_rfft, comm,
     )
     δlm = SHTnsKit.divergence_from_spheroidal(cfg, Slm)
-    return SHTnsKit.dist_synthesis(cfg, δlm; prototype_θφ=prototype_θφ,
-                                   real_output=real_output, use_rfft=use_rfft,
-                                   comm)
+    return _dist_synthesis_dense(
+        cfg, δlm; prototype_θφ, real_output, use_rfft, comm,
+    )
 end
 
 """
@@ -237,9 +237,9 @@ function SHTnsKit.dist_spatial_vorticity(cfg::SHTnsKit.SHTConfig,
         cfg, Vtθφ, Vpθφ; use_rfft, comm,
     )
     ζlm = SHTnsKit.vorticity_from_toroidal(cfg, Tlm)
-    return SHTnsKit.dist_synthesis(cfg, ζlm; prototype_θφ=prototype_θφ,
-                                   real_output=real_output, use_rfft=use_rfft,
-                                   comm)
+    return _dist_synthesis_dense(
+        cfg, ζlm; prototype_θφ, real_output, use_rfft, comm,
+    )
 end
 
 function _dist_scalar_laplacian(
@@ -252,7 +252,7 @@ function _dist_scalar_laplacian(
     )
     Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft, comm)
     SHTnsKit.dist_apply_laplacian!(cfg, Alm)
-    return SHTnsKit.dist_synthesis(
+    return _dist_synthesis_dense(
         cfg, Alm; prototype_θφ, real_output, use_rfft, comm,
     )
 end

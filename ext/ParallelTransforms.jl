@@ -1584,7 +1584,20 @@ function SHTnsKit.dist_synthesis(
         known_comm, Alm, prototype_θφ, Aminus,
     )
     _validate_explicit_comm!(known_comm, comm, :dist_synthesis)
-    comm = known_comm
+    return _dist_synthesis_dense(
+        cfg, Alm; prototype_θφ, real_output, use_rfft, Aminus,
+        comm=known_comm, storage_prevalidated=true,
+    )
+end
+
+# Composite operators already have a trusted input communicator. Keep it for
+# every synthesis collective, even when ranks select different congruent output
+# prototypes. Public calls above still anchor execution to their own prototype.
+function _dist_synthesis_dense(
+        cfg::SHTnsKit.SHTConfig, Alm::AbstractMatrix;
+        prototype_θφ::PencilArray, real_output::Bool=true,
+        use_rfft::Bool=false, Aminus::Union{Nothing,AbstractMatrix}=nothing,
+        comm, storage_prevalidated::Bool=false)
     _validate_cfg_spatial_prototype(
         cfg, prototype_θφ, "dist_synthesis"; comm,
     )
@@ -1597,7 +1610,7 @@ function SHTnsKit.dist_synthesis(
     )
     _validate_dense_synthesis!(
         cfg, Alm, prototype_θφ; real_output, use_rfft, Aminus,
-        storage_prevalidated=true, comm,
+        storage_prevalidated, comm,
     )
     Alm_int = SHTnsKit._internal_coefficients(Alm, cfg)
     Aminus_int = Aminus === nothing ? nothing : SHTnsKit._internal_coefficients(Aminus, cfg)

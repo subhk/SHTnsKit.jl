@@ -81,11 +81,13 @@ end
 
         # COMM_SELF has a different group even though the global dimensions
         # agree. The reduction communicator must be shared by every component.
+        # Communicator preflight raises ArgumentError before layout validation;
+        # DimensionMismatch is reserved here for the shape/layout cases above.
         pen_self = Pencil(spectral_dims, MPI.COMM_SELF)
         S_self = scatter_spectral(pen_self, zeros_global)
-        @test_throws DimensionMismatch SHTnsKit.dist_SHqst_to_point(
+        @test_throws ArgumentError SHTnsKit.dist_SHqst_to_point(
             cfg, Q, S_self, Q, 0.2, 0.4)
-        @test_throws DimensionMismatch SHTnsKit.dist_SHqst_to_lat(
+        @test_throws ArgumentError SHTnsKit.dist_SHqst_to_lat(
             cfg, Q, S_self, Q, 0.2)
     end
 
@@ -144,38 +146,64 @@ end
 
     @testset "composite spatial operators keep the input communicator" begin
         spatial_dims = (cfg.nlat, cfg.nlon)
-        spatial_values = zeros(Float64, spatial_dims)
+        Q = zeros(ComplexF64, spectral_dims)
+        S = similar(Q); fill!(S, 0)
+        T = similar(Q); fill!(T, 0)
+        Q[3, 1], Q[4, 2] = 0.3, 0.4 - 0.2im
+        S[2, 1], S[5, 3] = -0.2, 0.3 + 0.1im
+        T[3, 1], T[4, 2] = 0.1, -0.2 + 0.4im
+        scalar_values = synthesis(cfg, Q)
+        theta_values, phi_values = synthesis_sphtor(cfg, S, T)
+        degree_factors = [-l * (l + 1) for l in 0:lmax]
         input_pen = Pencil(spatial_dims, (1,), comm)
-        input = scatter_spectral(input_pen, spatial_values)
+        input = scatter_spectral(input_pen, scalar_values)
+        theta_input = scatter_spectral(input_pen, theta_values)
 
         duplicate_a = MPI.Comm_dup(comm)
         duplicate_b = MPI.Comm_dup(comm)
         try
             pen_a = Pencil(spatial_dims, (1,), duplicate_a)
             pen_b = Pencil(spatial_dims, (1,), duplicate_b)
-            peer_a = scatter_spectral(pen_a, spatial_values)
-            peer_b = scatter_spectral(pen_b, spatial_values)
+            peer_a = scatter_spectral(pen_a, phi_values)
+            peer_b = scatter_spectral(pen_b, phi_values)
 
             # Every candidate communicator is congruent to `comm`, but choosing
             # a different duplicate on each rank makes it unsafe as a collective
             # context. All composite stages must stay on `input`'s communicator.
             peer = iseven(rank) ? peer_a : peer_b
-            output = iseven(rank) ? peer_b : peer_a
-            @test all(iszero, SHTnsKit.dist_spatial_divergence(
-                cfg, input, peer; prototype_θφ=output,
-            ))
-            @test all(iszero, SHTnsKit.dist_spatial_vorticity(
-                cfg, input, peer; prototype_θφ=output,
-            ))
-            @test all(iszero, SHTnsKit.dist_scalar_laplacian(
-                cfg, input; prototype_θφ=output,
-            ))
-            @test SHTnsKit.dist_scalar_laplacian!(cfg, output, input) === output
-            @test all(iszero, parent(output))
+            for decomposition in ((1,), (2,))
+                output_pen_a = Pencil(spatial_dims, decomposition, duplicate_a)
+                output_pen_b = Pencil(spatial_dims, decomposition, duplicate_b)
+                output_pen = iseven(rank) ? output_pen_b : output_pen_a
+                ranges = PencilArrays.range_local(output_pen)
+                for (use_rfft, real_output) in ((false, true), (true, true), (false, false))
+                    @testset "output=$decomposition, rfft=$use_rfft, real=$real_output" begin
+                        output = PencilArray{real_output ? Float64 : ComplexF64}(undef, output_pen)
+                        fill!(parent(output), 0)
+                        expected_divergence = synthesis(cfg, degree_factors .* S; real_output)[ranges...]
+                        expected_vorticity = synthesis(cfg, degree_factors .* T; real_output)[ranges...]
+                        expected_laplacian = synthesis(cfg, degree_factors .* Q; real_output)[ranges...]
+                        @test SHTnsKit.dist_spatial_divergence(
+                            cfg, theta_input, peer; prototype_θφ=output, use_rfft, real_output,
+                        ) ≈ expected_divergence rtol=1e-11 atol=1e-12
+                        @test SHTnsKit.dist_spatial_vorticity(
+                            cfg, theta_input, peer; prototype_θφ=output, use_rfft, real_output,
+                        ) ≈ expected_vorticity rtol=1e-11 atol=1e-12
+                        @test SHTnsKit.dist_scalar_laplacian(
+                            cfg, input; prototype_θφ=output, use_rfft, real_output,
+                        ) ≈ expected_laplacian rtol=1e-11 atol=1e-12
+                        @test SHTnsKit.dist_scalar_laplacian!(
+                            cfg, output, input; use_rfft, real_output,
+                        ) === output
+                        @test parent(output) ≈ expected_laplacian rtol=1e-11 atol=1e-12
+                    end
+                end
+            end
 
             self_pen = Pencil(spatial_dims, (1,), MPI.COMM_SELF)
-            self_output = scatter_spectral(self_pen, spatial_values)
-            incongruent_output = rank == 0 ? self_output : output
+            self_output = scatter_spectral(self_pen, zeros(Float64, spatial_dims))
+            incongruent_output = rank == 0 ? self_output : peer_a
+            output_before = copy(parent(incongruent_output))
             @test_throws ArgumentError SHTnsKit.dist_spatial_divergence(
                 cfg, input, input; prototype_θφ=incongruent_output,
             )
@@ -188,6 +216,7 @@ end
             @test_throws ArgumentError SHTnsKit.dist_scalar_laplacian!(
                 cfg, incongruent_output, input,
             )
+            @test parent(incongruent_output) == output_before
         finally
             Base.get_extension(SHTnsKit, :SHTnsKitParallelExt)._safe_comm_free(
                 duplicate_a,

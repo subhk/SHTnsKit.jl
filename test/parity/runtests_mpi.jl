@@ -1688,21 +1688,24 @@ if isempty(ARGS) || "qst_full" in ARGS
         end
         MPI.Barrier(qst_adapter.comm)
 
-        fill!(Qout, ComplexF32(31, -7))
-        fill!(Sout, ComplexF32(31, -7))
-        fill!(Tout, ComplexF32(31, -7))
-        rank_bad_vr = rank == 0 ? self_spatial : Vrd
-        @test _all_ranks_catch(
-            qst_adapter.comm; message_contains="communicator mismatch",
-        ) do
-            analysis_qst!(
-                plan, Qout, Sout, Tout, rank_bad_vr, Vtd, Vpd,
-            )
+        for analyze! in (analysis_qst!, dist_analysis_qst!), bad_component in 1:3
+            fill!(Qout, ComplexF32(31, -7))
+            fill!(Sout, ComplexF32(31, -7))
+            fill!(Tout, ComplexF32(31, -7))
+            inputs = ntuple(3) do component
+                rank == 0 && component == bad_component ? self_spatial :
+                    (Vrd, Vtd, Vpd)[component]
+            end
+            @test _all_ranks_catch(
+                qst_adapter.comm; message_contains="communicator mismatch",
+            ) do
+                analyze!(plan, Qout, Sout, Tout, inputs...)
+            end
+            @test all(==(ComplexF32(31, -7)), Qout)
+            @test all(==(ComplexF32(31, -7)), Sout)
+            @test all(==(ComplexF32(31, -7)), Tout)
+            MPI.Barrier(qst_adapter.comm)
         end
-        @test all(==(ComplexF32(31, -7)), Qout)
-        @test all(==(ComplexF32(31, -7)), Sout)
-        @test all(==(ComplexF32(31, -7)), Tout)
-        MPI.Barrier(qst_adapter.comm)
 
         rank_bad_vr_out = rank == 0 ? self_spatial : Vrout
         fill!(parent(Vtout), 32)

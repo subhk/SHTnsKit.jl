@@ -58,7 +58,8 @@ function _validate_prototype_communicator(comm::MPI.Comm, prototype::PencilArray
         false
     end
     MPI.Allreduce(local_ok, &, comm) || throw(ArgumentError(
-        "$operation requires the plan and spatial prototype to use congruent MPI communicators",
+        "$operation collective validation failed: communicator mismatch " *
+        "(the plan and spatial prototype must use congruent MPI communicators)",
     ))
     return nothing
 end

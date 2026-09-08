@@ -5,7 +5,7 @@ certifying=false
 manual_cuda_tool_command=python3 -B -m unittest discover -s test/support -p test_manual_cuda.py -v
 manual_cuda_contract_command=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=. test/serial/test_shtns37_contract.jl
 manual_cuda_numerical_source_unchanged_from=3b8b2fe118900f2431208088932631db4a162908
-audited_tree_digest=ed341947e96a8b9de8e553073a118e38c2f5a64884547dfebe23d2acc0cd7845
+audited_tree_digest=1bae4f3a0acc933d30369fe3e11d2333379b40dbc55e4dbadf9c705bb860cbd3
 audited_scope=Project.toml,.github/workflows,docs/src/shtns37-parity.md,ext,src,test
 audited_exclusions=test/fixtures/compatibility/task16_gate.toml,test/fixtures/compatibility/task16_local_commands.txt,test/fixtures/compatibility/task16_local_summary.log
 pkg_command=/usr/bin/env JULIA_DEPOT_PATH=/private/tmp/julia_depot_shtnskit:/Users/subha/.julia SHTNSKIT_RUN_JET_TESTS=1 SHTNSKIT_RUN_AQUA_TESTS=1 /Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'
@@ -54,3 +54,16 @@ adapter_lifetime_mpi_timeout_seconds=600 per test file, including JIT compilatio
 adapter_lifetime_audit_command=include("test/serial/test_final_parity_gate.jl")
 adapter_lifetime_plan_and_transpose_preflight_ranks=2,4
 adapter_lifetime_mpi_cuda_policy_ranks=2
+
+# QST plan communicator-diagnostic follow-up after PR #50 merged.
+qst_communicator_date=2026-09-08
+qst_communicator_base_commit=a2263402e04eea29bd990d4d9dba2aa2f00c0b93
+qst_communicator_depot=/private/tmp/shtnskit-parallel-robert-depot:/Users/subha/.julia
+qst_communicator_julia=/Users/subha/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia
+qst_communicator_project=/private/tmp/shtnskit-mpi-communicator-env
+qst_communicator_mpi_launcher=MPI.mpiexec() with the above Julia executable, depot, and project; --startup-file=no
+qst_communicator_red_file=test/parity/runtests_mpi.jl with ARGS=["qst_full"]
+qst_communicator_full_parity_file=test/parity/runtests_mpi.jl with no ARGS
+qst_communicator_mpi_timeout_seconds=900 per test file, including JIT compilation
+qst_communicator_audit_command=using SHTnsKit; include("test/serial/test_final_parity_gate.jl")
+qst_communicator_full_parity_ranks=2,4

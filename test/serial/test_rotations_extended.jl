@@ -30,6 +30,25 @@ using SHTnsKit
         @test_throws ArgumentError SHTnsKit.WignerCache(-1, β)
     end
 
+    @testset "Wigner-d remains stable at high degree" begin
+        d = SHTnsKit.wigner_d_matrix(64, 0.7)
+        @test opnorm(transpose(d) * d - I, Inf) < 1e-10
+
+        # Differentiating dᵀd = I gives this skew-tangent identity. It catches
+        # both overflow/cancellation in d and instability in its derivative.
+        dβ = SHTnsKit.wigner_d_matrix_deriv(64, 0.7)
+        @test opnorm(transpose(d) * dβ + transpose(dβ) * d, Inf) < 1e-9
+    end
+
+    @testset "Wigner-d preserves caller precision" begin
+        β = Float32(0.37)
+        d = SHTnsKit.wigner_d_matrix(8, β)
+        dβ = SHTnsKit.wigner_d_matrix_deriv(8, β)
+        @test eltype(d) === Float32
+        @test eltype(dβ) === Float32
+        @test opnorm(transpose(d) * d - I, Inf) < 2f-5
+    end
+
     @testset "wigner_d_matrix_deriv: finite-difference check" begin
         h = 1e-6
         for l in 0:3
@@ -103,6 +122,58 @@ using SHTnsKit
         SH_Xrotate90(cfg, tmp2, tmp3)
         SH_Xrotate90(cfg, tmp3, tmp4)
         @test isapprox(tmp4, Qlm; rtol=1e-8, atol=1e-10)
+    end
+
+    @testset "Fast axis helpers use the general rotation orientation" begin
+        lmax = 4
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
+        rng = MersenneTwister(405)
+        Qlm = randn(rng, ComplexF64, cfg.nlm)
+        Qlm[1:lmax + 1] .= real.(Qlm[1:lmax + 1])
+
+        α = 0.37
+        rz = SHTRotation(lmax, lmax)
+        shtns_rotation_set_angles_ZYZ(rz, α, 0.0, 0.0)
+        z_general = similar(Qlm)
+        z_fast = similar(Qlm)
+        shtns_rotation_apply_real(rz, Qlm, z_general)
+        SH_Zrotate(cfg, Qlm, α, z_fast)
+        @test z_fast ≈ z_general rtol=2e-13 atol=2e-13
+
+        rx = SHTRotation(lmax, lmax)
+        shtns_rotation_set_angle_axis(rx, π/2, 1.0, 0.0, 0.0)
+        x_general = similar(Qlm)
+        x_fast = similar(Qlm)
+        shtns_rotation_apply_real(rx, Qlm, x_general)
+        SH_Xrotate90(cfg, Qlm, x_fast)
+        @test x_fast ≈ x_general rtol=2e-13 atol=2e-13
+    end
+
+    @testset "Serial axis wrappers honor configured coefficient conventions" begin
+        lmax = 4
+        canonical_cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1)
+        cfg = create_gauss_config(lmax, lmax + 2; nlon=2*lmax + 1,
+                                  norm=:schmidt, real_norm=true, cs_phase=false)
+        rng = MersenneTwister(406)
+        Qcanonical = randn(rng, ComplexF64, canonical_cfg.nlm)
+        Qcanonical[1:lmax + 1] .= real.(Qcanonical[1:lmax + 1])
+        Qconfigured = similar(Qcanonical)
+        SHTnsKit.convert_alm_norm!(Qconfigured, Qcanonical, cfg; to_internal=false)
+
+        rotations = (
+            (q, out, c) -> SH_Yrotate(c, q, 0.41, out),
+            (q, out, c) -> SH_Yrotate90(c, q, out),
+            (q, out, c) -> SH_Xrotate90(c, q, out),
+        )
+        for rotate! in rotations
+            expected = similar(Qcanonical)
+            rotate!(Qcanonical, expected, canonical_cfg)
+            got_configured = similar(Qconfigured)
+            rotate!(Qconfigured, got_configured, cfg)
+            got_canonical = similar(Qcanonical)
+            SHTnsKit.convert_alm_norm!(got_canonical, got_configured, cfg; to_internal=true)
+            @test got_canonical ≈ expected rtol=2e-12 atol=2e-12
+        end
     end
 
     @testset "SHTns setter outer-Z argument order" begin

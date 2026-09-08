@@ -6,6 +6,7 @@ using GPUArrays
 using GPUArraysCore
 using KernelAbstractions
 using FFTW
+using LinearAlgebra: mul!
 
 include("GPUCommon.jl")
 using .GPUCommon: laplacian_kernel!, operator_matrix_kernel!,
@@ -32,7 +33,7 @@ using .GPUCommon: local_scalar_kernel!, local_complex_kernel!, local_qst_kernel!
 using .GPUCommon: RotationBlockCache, rotation_cache_lookup,
                   rotation_cache_publish!, rotation_cache_clear!,
                   rotation_z_real_kernel!, rotation_real_kernel!,
-                  rotation_cplx_kernel!
+                  rotation_cplx_kernel!, launch_sht_loop!
 
 import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  analysis_packed, synthesis_packed,
@@ -78,6 +79,7 @@ import SHTnsKit: analysis, synthesis, synthesis_cplx, on_device,
                  _gpu_adapter_analysis, _gpu_adapter_synthesis,
                  _gpu_adapter_analysis_sphtor,
                  _gpu_adapter_synthesis_sphtor, _gpu_adapter_clear_cache!
+import SHTnsKit: _enable_gpu_loops!
 
 import SHTnsKit: gpu_apply_laplacian!
 
@@ -86,6 +88,7 @@ const AMDGPU_ADAPTER = AMDGPUAdapter()
 
 function __init__()
     _register_gpu_adapter!(:amdgpu, AMDGPU_ADAPTER)
+    _enable_gpu_loops!(launch_sht_loop!)
     return nothing
 end
 
@@ -528,6 +531,8 @@ function _amdgpu_workspace_builder(cfg::SHTConfig, ::Type{RT}, nfields::Int,
         return (; canonical, fourier, real_buffer, forward, inverse)
     end
     fourier = AMDGPU.zeros(CT, spatial_shape)
+    # rocFFT executes in-place plans with `plan * buffer`; its mul! API
+    # is restricted to out-of-place (including real) transforms.
     forward = FFTW.plan_fft!(fourier, 2)
     inverse = FFTW.plan_ifft!(fourier, 2)
     return (; canonical, fourier, real_buffer=nothing, forward, inverse)
@@ -618,7 +623,7 @@ function _amdgpu_scalar_analysis_direct!(owner, cfg::SHTConfig,
             mul!(fourier, workspace.forward, workspace.real_buffer)
         else
             copyto!(fourier, field)
-            mul!(fourier, workspace.forward, fourier)
+            workspace.forward * fourier
         end
         backend = ROCBackend()
         scalar_analysis_kernel!(backend)(
@@ -675,7 +680,7 @@ function _amdgpu_scalar_synthesis_direct!(owner, cfg::SHTConfig,
             mul!(workspace.real_buffer, workspace.inverse, workspace.fourier)
             copyto!(output, workspace.real_buffer)
         else
-            mul!(workspace.fourier, workspace.inverse, workspace.fourier)
+            workspace.inverse * workspace.fourier
             real_output ? (output .= real.(workspace.fourier)) :
                           copyto!(output, workspace.fourier)
         end
@@ -838,8 +843,8 @@ function _amdgpu_vector_analysis_direct!(owner, cfg::SHTConfig,
     return _with_amdgpu_vector_workspace(owner, cfg, RT) do workspace
         copyto!(workspace.Ftheta, Vt)
         copyto!(workspace.Fphi, Vp)
-        mul!(workspace.Ftheta, workspace.forward_theta, workspace.Ftheta)
-        mul!(workspace.Fphi, workspace.forward_phi, workspace.Fphi)
+        workspace.forward_theta * workspace.Ftheta
+        workspace.forward_phi * workspace.Fphi
         fill!(Sout, zero(CT)); fill!(Tout, zero(CT))
         vector_analysis_kernel!(ROCBackend())(
             Sout, Tout, workspace.Ftheta, workspace.Fphi,
@@ -915,8 +920,8 @@ function _amdgpu_vector_synthesis_direct!(owner, cfg::SHTConfig,
             ndrange=(cfg.nlat, min(cfg.mmax, lcap) + 1),
         )
         AMDGPU.synchronize()
-        mul!(workspace.Ftheta, workspace.inverse_theta, workspace.Ftheta)
-        mul!(workspace.Fphi, workspace.inverse_phi, workspace.Fphi)
+        workspace.inverse_theta * workspace.Ftheta
+        workspace.inverse_phi * workspace.Fphi
         if real_output
             Vt .= real.(workspace.Ftheta)
             Vp .= real.(workspace.Fphi)
@@ -1195,7 +1200,8 @@ function _amdgpu_vector_batch_synthesis(cfg::SHTConfig,
     RTs = typeof(float(real(zero(T)))); RTt = typeof(float(real(zero(R))))
     RTs === RTt || throw(ArgumentError("vector batches must use the same precision"))
     RT = RTs; CT = Complex{RT}; tables = _amdgpu_vector_tables(cfg, RT)
-    Ft = AMDGPU.zeros(CT, cfg.nlat, cfg.nlon, nfields); Fp = similar(Ft)
+    Ft = AMDGPU.zeros(CT, cfg.nlat, cfg.nlon, nfields)
+    Fp = AMDGPU.zeros(CT, cfg.nlat, cfg.nlon, nfields)
     vector_batch_synthesis_kernel!(ROCBackend())(
         Ft, Fp, S, Tlm, tables.dtheta, tables.over_sin, tables.scales,
         tables.x, RT(SHTnsKit.phi_inv_scale(cfg)), cfg.nlon, cfg.lmax,
@@ -1742,7 +1748,7 @@ function _amdgpu_batch_analysis_direct!(cfg::SHTConfig,
     ))
     size(output) == (cfg.lmax + 1, cfg.mmax + 1, nfields) ||
         throw(DimensionMismatch("output batch shape mismatch"))
-    RT = typeof(float(eltype(fields)))
+    RT = float(eltype(fields))
     CT = Complex{RT}
     scratch = _amdgpu_batch_scratch(
         cfg, fft_batch, CT, nfields, use_rfft, output, fields,
@@ -1755,7 +1761,7 @@ function _amdgpu_batch_analysis_direct!(cfg::SHTConfig,
             mul!(fourier, workspace.forward, workspace.real_buffer)
         else
             copyto!(fourier, fields)
-            mul!(fourier, workspace.forward, fourier)
+            workspace.forward * fourier
         end
         backend = ROCBackend()
         scalar_batch_analysis_kernel!(backend)(
@@ -1865,7 +1871,7 @@ function _amdgpu_batch_synthesis_direct!(cfg::SHTConfig,
             mul!(workspace.real_buffer, workspace.inverse, fourier)
             copyto!(output, workspace.real_buffer)
         else
-            mul!(fourier, workspace.inverse, fourier)
+            workspace.inverse * fourier
             real_output ? (output .= real.(fourier)) : copyto!(output, fourier)
         end
         AMDGPU.synchronize()

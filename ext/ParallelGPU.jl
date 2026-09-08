@@ -6,17 +6,20 @@
 # package extensions register the small set of vendor operations needed here.
 # Mathematical code calls `allreduce!`/`exchange!` and storage helpers only.
 
-struct ParallelGPUAdapter{FM,FA,FD,FWD,FG,FS,FH,FHD,FDH}
-    name::Symbol
-    matches::FM
-    array_type::FA
-    device::FD
-    with_device::FWD
-    gpu_aware::FG
-    synchronize::FS
-    allocate_pinned::FH
-    device_to_host!::FHD
-    host_to_device!::FDH
+# Weak registry entries must refer to the caller's live adapter identity.
+# An immutable adapter can be boxed separately for WeakRef and disappear during
+# GC even inside GC.@preserve. Const fields retain the fixed callback contract.
+mutable struct ParallelGPUAdapter{FM,FA,FD,FWD,FG,FS,FH,FHD,FDH}
+    const name::Symbol
+    const matches::FM
+    const array_type::FA
+    const device::FD
+    const with_device::FWD
+    const gpu_aware::FG
+    const synchronize::FS
+    const allocate_pinned::FH
+    const device_to_host!::FHD
+    const host_to_device!::FDH
 end
 
 ParallelGPUAdapter(name::Symbol, matches, array_type, device, gpu_aware,
@@ -333,11 +336,12 @@ function parallel_gpu_clear_caches!()
 end
 
 function _build_gpu_transpose_host_entry(adapter, plan, device, plan_owner)
-    # Pencil/PencilFFT construction may itself enter MPI, so it must never run
-    # under the process-wide cache lock.
-    input_pencil = Pencil(
-        Array, (plan.nlon, plan.nlat), (2,), plan.comm,
-    )
+    # A cache miss is local: eviction, clearing, and subcommunicator use can
+    # differ across ranks. Reuse this plan's existing MPI topology so rebuilding
+    # a host mirror neither creates communicators collectively nor changes the
+    # communication context relative to mirrors still cached on other ranks.
+    # FFT planning and pinned allocation remain outside the registry lock.
+    input_pencil = similar(PencilFFTs.pencil_input(plan.fft_plan), Array)
     fft_plan = PencilFFTPlan(
         input_pencil,
         (Transforms.RFFT(), Transforms.NoTransform()),

@@ -24,7 +24,27 @@ export laplacian_kernel!, operator_matrix_kernel!, packed_operator_kernel!,
        scalar_workspace_clear!, scalar_workspace_size
 export RotationBlockCache, rotation_cache_lookup, rotation_cache_insert!,
        rotation_cache_publish!, rotation_cache_clear!, rotation_cache_size,
-       rotation_z_real_kernel!, rotation_real_kernel!, rotation_cplx_kernel!
+       rotation_z_real_kernel!, rotation_real_kernel!, rotation_cplx_kernel!,
+       launch_sht_loop!
+
+@kernel function _sht_loop_kernel!(body, range)
+    linear_index = @index(Global, Linear)
+    if linear_index <= length(range)
+        body(@inbounds range[linear_index])
+    end
+end
+
+"""Launch a body supplied by `@sht_loop` on the first operand's KA backend."""
+function launch_sht_loop!(args...)
+    first_array = args[1]
+    range = args[end - 1]
+    body = args[end]
+    backend = KernelAbstractions.get_backend(first_array)
+    kernel! = _sht_loop_kernel!(backend)
+    kernel!(body, range; ndrange=length(range))
+    KernelAbstractions.synchronize(backend)
+    return nothing
+end
 
 """One cached table set plus its mutable-configuration signature and LRU tick."""
 struct ScalarTableCacheEntry
@@ -378,40 +398,60 @@ function vector_host_tables(cfg::SHTnsKit.SHTConfig,
     return x, weights, scales, T.(cfg.Nlm)
 end
 
+# Preserve diagonal seeds that are smaller than the device format can store.
+# The recurrence uses a shared power-of-two exponent for its two mantissas;
+# only table writes restore the physical magnitude. Int32 selects the native
+# CUDA/ROCm ldexp intrinsic without widening Float32 arithmetic.
+@inline function _rescale_legendre_pair(previous2::T, previous1::T,
+                                         exponent::Int32) where {T}
+    magnitude = max(abs(previous2), abs(previous1))
+    if magnitude > T(0x1p32)
+        return previous2 * T(0x1p-64), previous1 * T(0x1p-64), exponent + Int32(64)
+    elseif !iszero(magnitude) && magnitude < T(0x1p-32)
+        return previous2 * T(0x1p64), previous1 * T(0x1p64), exponent - Int32(64)
+    end
+    return previous2, previous1, exponent
+end
+
+@inline function _legendre_table_row!(Plm, xi::T, i, m, lmax) where {T}
+    sint = sqrt(max(zero(T), one(T) - xi * xi))
+    pmm = inv(sqrt(T(4) * T(pi)))
+    exponent = Int32(0)
+    @inbounds for k in 1:m
+        tk = T(k)
+        pmm = -sqrt((T(2) * tk + one(T)) / (T(2) * tk)) * sint * pmm
+        if !iszero(pmm) && abs(pmm) < T(0x1p-32)
+            pmm *= T(0x1p64)
+            exponent -= Int32(64)
+        end
+    end
+    @inbounds Plm[i, m + 1, m + 1] = ldexp(pmm, exponent)
+    if m < lmax
+        pm1m = sqrt(T(2m + 3)) * xi * pmm
+        @inbounds Plm[i, m + 2, m + 1] = ldexp(pm1m, exponent)
+        previous2, previous1, exponent = _rescale_legendre_pair(pmm, pm1m, exponent)
+        @inbounds for l in (m + 2):lmax
+            tl = T(l)
+            tm = T(m)
+            a = sqrt(((T(2) * tl - one(T)) * (T(2) * tl + one(T))) /
+                     ((tl - tm) * (tl + tm)))
+            b = sqrt(((T(2) * tl + one(T)) * (tl - one(T) - tm) *
+                      (tl - one(T) + tm)) /
+                     ((T(2) * tl - T(3)) * (tl - tm) * (tl + tm)))
+            value = a * xi * previous1 - b * previous2
+            Plm[i, l + 1, m + 1] = ldexp(value, exponent)
+            previous2, previous1, exponent =
+                _rescale_legendre_pair(previous1, value, exponent)
+        end
+    end
+    return nothing
+end
+
 """Build orthonormal, Condon--Shortley associated Legendre values on device."""
 @kernel function legendre_table_kernel!(Plm, x, lmax, mmax)
     i, m_idx = @index(Global, NTuple)
     if i <= length(x) && m_idx <= mmax + 1
-        m = m_idx - 1
-        xi = x[i]
-        T = typeof(xi)
-        sint = sqrt(max(zero(T), one(T) - xi * xi))
-        pmm = inv(sqrt(T(4) * T(pi)))
-        @inbounds for k in 1:m
-            tk = T(k)
-            pmm = -sqrt((T(2) * tk + one(T)) / (T(2) * tk)) * sint * pmm
-        end
-        Plm[i, m + 1, m_idx] = pmm
-
-        if m < lmax
-            pm1m = sqrt(T(2m + 3)) * xi * pmm
-            Plm[i, m + 2, m_idx] = pm1m
-            previous2 = pmm
-            previous1 = pm1m
-            @inbounds for l in (m + 2):lmax
-                tl = T(l)
-                tm = T(m)
-                a = sqrt(((T(2) * tl - one(T)) * (T(2) * tl + one(T))) /
-                         ((tl - tm) * (tl + tm)))
-                b = sqrt(((T(2) * tl + one(T)) * (tl - one(T) - tm) *
-                          (tl - one(T) + tm)) /
-                         ((T(2) * tl - T(3)) * (tl - tm) * (tl + tm)))
-                value = a * xi * previous1 - b * previous2
-                Plm[i, l + 1, m_idx] = value
-                previous2 = previous1
-                previous1 = value
-            end
-        end
+        _legendre_table_row!(Plm, x[i], i, m_idx - 1, lmax)
     end
 end
 
@@ -428,30 +468,7 @@ ever forms a singular quotient and masks it afterwards.
         xi = x[i]
         T = typeof(xi)
         s = sqrt(max(zero(T), one(T) - xi * xi))
-        pmm = inv(sqrt(T(4) * T(pi)))
-        @inbounds for k in 1:m
-            tk = T(k)
-            pmm = -sqrt((T(2) * tk + one(T)) / (T(2) * tk)) * s * pmm
-        end
-        Plm[i, m + 1, m_idx] = pmm
-        if m < lmax
-            pm1m = sqrt(T(2m + 3)) * xi * pmm
-            Plm[i, m + 2, m_idx] = pm1m
-            previous2 = pmm
-            previous1 = pm1m
-            @inbounds for l in (m + 2):lmax
-                tl = T(l); tm = T(m)
-                a = sqrt(((T(2) * tl - one(T)) * (T(2) * tl + one(T))) /
-                         ((tl - tm) * (tl + tm)))
-                b = sqrt(((T(2) * tl + one(T)) * (tl - one(T) - tm) *
-                          (tl - one(T) + tm)) /
-                         ((T(2) * tl - T(3)) * (tl - tm) * (tl + tm)))
-                value = a * xi * previous1 - b * previous2
-                Plm[i, l + 1, m_idx] = value
-                previous2 = previous1
-                previous1 = value
-            end
-        end
+        _legendre_table_row!(Plm, xi, i, m, lmax)
 
         @inbounds for l in 0:lmax
             if l < m
@@ -786,7 +803,7 @@ end
 
 """MPI-pencil scalar analysis for an owned contiguous band of Fourier orders."""
 @kernel function distributed_scalar_analysis_kernel!(output, fourier, Plm,
-                                                       weights, cphi,
+                                                       weights, scales, cphi,
                                                        first_m, lmax, mmax,
                                                        mres, lcap)
     l_idx, local_m_idx, batch_idx = @index(Global, NTuple)
@@ -800,7 +817,8 @@ end
                 value += weights[i] * Plm[i, l_idx, m + 1] *
                          fourier[i, local_m_idx, batch_idx]
             end
-            output[l_idx, local_m_idx, batch_idx] = cphi * value
+            output[l_idx, local_m_idx, batch_idx] =
+                cphi * value / scales[l_idx, m + 1]
         else
             output[l_idx, local_m_idx, batch_idx] = zero(eltype(output))
         end
@@ -809,7 +827,7 @@ end
 
 """MPI-pencil scalar synthesis for an owned contiguous band of Fourier orders."""
 @kernel function distributed_scalar_synthesis_kernel!(fourier, input, Plm,
-                                                        inv_scale, first_m,
+                                                        scales, inv_scale, first_m,
                                                         lmax, mmax, mres)
     i, local_m_idx, batch_idx = @index(Global, NTuple)
     m = first_m + local_m_idx - 1
@@ -818,7 +836,7 @@ end
         value = zero(eltype(fourier))
         if m <= mmax && m % mres == 0
             @inbounds for l in m:lmax
-                value += Plm[i, l + 1, m + 1] *
+                value += scales[l + 1, m + 1] * Plm[i, l + 1, m + 1] *
                          input[l + 1, local_m_idx, batch_idx]
             end
         end
@@ -829,7 +847,7 @@ end
 """MPI-pencil vector analysis for an owned contiguous Fourier-order band."""
 @kernel function distributed_vector_analysis_kernel!(Sout, Tout, Ftheta,
                                                        Fphi, dtheta, over_sin,
-                                                       weights, x, cphi,
+                                                       weights, scales, x, cphi,
                                                        first_m, lmax, mmax,
                                                        mres, robert_form)
     l_idx, local_m_idx, batch_idx = @index(Global, NTuple)
@@ -854,8 +872,9 @@ end
                 Svalue += factor * (Ft * d + conj(term) * Fp)
                 Tvalue += factor * (-conj(term) * Ft + d * Fp)
             end
-            Sout[l_idx, local_m_idx, batch_idx] = Svalue
-            Tout[l_idx, local_m_idx, batch_idx] = Tvalue
+            scale = scales[l_idx, m + 1]
+            Sout[l_idx, local_m_idx, batch_idx] = Svalue / scale
+            Tout[l_idx, local_m_idx, batch_idx] = Tvalue / scale
         else
             Sout[l_idx, local_m_idx, batch_idx] = zero(eltype(Sout))
             Tout[l_idx, local_m_idx, batch_idx] = zero(eltype(Tout))
@@ -865,7 +884,7 @@ end
 
 """MPI-pencil vector synthesis for an owned contiguous Fourier-order band."""
 @kernel function distributed_vector_synthesis_kernel!(Ftheta, Fphi, Sin, Tin,
-                                                        dtheta, over_sin, x,
+                                                        dtheta, over_sin, scales, x,
                                                         inv_scale, first_m,
                                                         lmax, mmax, mres,
                                                         robert_form)
@@ -877,8 +896,9 @@ end
         gp = zero(eltype(Fphi))
         if m <= mmax && m % mres == 0
             @inbounds for l in max(1, m):lmax
-                S = Sin[l + 1, local_m_idx, batch_idx]
-                Tvalue = Tin[l + 1, local_m_idx, batch_idx]
+                scale = scales[l + 1, m + 1]
+                S = scale * Sin[l + 1, local_m_idx, batch_idx]
+                Tvalue = scale * Tin[l + 1, local_m_idx, batch_idx]
                 d = dtheta[i, l + 1, m + 1]
                 term = complex(zero(d), typeof(d)(m) *
                                over_sin[i, l + 1, m + 1])
@@ -1081,7 +1101,7 @@ end
 @kernel function rotation_z_real_kernel!(output, input, angle, orders)
     k = @index(Global, Linear)
     if k <= length(input)
-        output[k] = input[k] * cis(typeof(angle)(orders[k]) * angle)
+        output[k] = input[k] * cis(-typeof(angle)(orders[k]) * angle)
     end
 end
 

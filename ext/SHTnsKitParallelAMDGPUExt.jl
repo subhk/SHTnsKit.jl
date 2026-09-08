@@ -66,8 +66,8 @@ function ParallelExt._dist_transpose_gpu_analysis!(
             AMDGPU.ROCBackend(),
         )
         kernel!(parent(output), parent(plan.F_buf), tables.Plm, tables.weights,
-                RT(plan.cfg.cphi), _first_m(plan), plan.lmax, plan.mmax,
-                plan.cfg.mres, plan.lmax;
+                tables.scales, RT(plan.cfg.cphi), _first_m(plan), plan.lmax,
+                plan.mmax, plan.cfg.mres, plan.lmax;
                 ndrange=size(parent(output)))
         AMDGPU.synchronize()
     end
@@ -83,7 +83,7 @@ function ParallelExt._dist_transpose_gpu_synthesis!(
         kernel! = AMDGPUExt.GPUCommon.distributed_scalar_synthesis_kernel!(
             AMDGPU.ROCBackend(),
         )
-        kernel!(parent(plan.F_buf), parent(input), tables.Plm,
+        kernel!(parent(plan.F_buf), parent(input), tables.Plm, tables.scales,
                 RT(SHTnsKit.phi_inv_scale(plan.cfg)), _first_m(plan),
                 plan.lmax, plan.mmax, plan.cfg.mres;
                 ndrange=size(parent(plan.F_buf)))
@@ -111,8 +111,9 @@ function ParallelExt._dist_transpose_gpu_vector_analysis!(
         )
         kernel!(parent(Sout), parent(Tout), parent(plan.F_buf),
                 parent(plan.F_buf2), tables.dtheta, tables.over_sin,
-                tables.weights, tables.x, RT(plan.cfg.cphi), _first_m(plan),
-                plan.lmax, plan.mmax, plan.cfg.mres, plan.cfg.robert_form;
+                tables.weights, tables.scales, tables.x, RT(plan.cfg.cphi),
+                _first_m(plan), plan.lmax, plan.mmax, plan.cfg.mres,
+                plan.cfg.robert_form;
                 ndrange=size(parent(Sout)))
         AMDGPU.synchronize()
     end
@@ -130,7 +131,7 @@ function ParallelExt._dist_transpose_gpu_vector_synthesis!(
             AMDGPU.ROCBackend(),
         )
         kernel!(parent(plan.F_buf), parent(plan.F_buf2), parent(Sin), parent(Tin),
-                tables.dtheta, tables.over_sin, tables.x,
+                tables.dtheta, tables.over_sin, tables.scales, tables.x,
                 RT(SHTnsKit.phi_inv_scale(plan.cfg)), _first_m(plan),
                 plan.lmax, plan.mmax, plan.cfg.mres, plan.cfg.robert_form;
                 ndrange=size(parent(plan.F_buf)))

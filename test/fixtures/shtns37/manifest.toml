@@ -4,7 +4,7 @@ shtns_interface = 0x307A0
 upstream_tag = "v3.7"
 upstream_commit = "4e04fba84ea156974df5edaf4ee856c0f4f86e77"
 upstream_archive_sha256 = "5c6a2d585211232a030c6fbbb08f6a794dd1aab987d31511ef53deea12138d97"
-generator_source_sha256 = "49a492966585ccb221c2f763f319c36400003dee2412ecf32a7941bf8d513a28"
+generator_source_sha256 = "6c6367f8e2d65563b11c31caf8ab35004476b07d4c226c4894ec372ff9660696"
 
 [[fixture]]
 id = "scalar_real_full_gauss_f64"
@@ -1139,7 +1139,7 @@ endian = "little"
 eltype = "complex64"
 shape = [15]
 bytes = 240
-sha256 = "4b26998739adabb2bc79a1c9916f365bb8f3eeadc08aac803cbd41ae3ad66ca5"
+sha256 = "dbb4617691a1565f5d5cbc47070d81e06066a0ffac1d03e94107a899e6faee0c"
 
 [[fixture.payload]]
 name = "Y"

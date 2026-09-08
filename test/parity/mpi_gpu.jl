@@ -487,7 +487,15 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
         dense_coefficients = array_type(
             zeros(ComplexF32, cfg.lmax + 1, cfg.mmax + 1),
         )
+        dense_reduction_output = similar(dense_coefficients)
         packed_coefficients = array_type(zeros(ComplexF32, cfg.nlm))
+        distributed_plan = extension.create_distributed_spectral_plan(
+            cfg.lmax, cfg.mmax, comm; mres=cfg.mres,
+        )
+        distributed_plan_2d = extension.create_distributed_spectral_plan_2d(
+            cfg.lmax, cfg.mmax, comm;
+            p_l=1, p_m=nranks, mres=cfg.mres,
+        )
         public_calls = (
             cfg_scalar=(:analysis, () -> SHTnsKit.analysis(cfg, field)),
             cfg_vector=(:analysis_sphtor,
@@ -534,6 +542,25 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
                 () -> SHTnsKit.energy_vector_l_spectrum(
                     cfg, coefficients, coefficients,
                 )),
+            diagnostics_scalar_total=(:enstrophy,
+                () -> SHTnsKit.enstrophy(cfg, coefficients)),
+            diagnostics_vector_total=(:energy_vector,
+                () -> SHTnsKit.energy_vector(
+                    cfg, coefficients, coefficients,
+                )),
+            distributed_storage_reduce=(:distributed_spectral_reduce!,
+                () -> extension.distributed_spectral_reduce!(
+                    distributed_plan, dense_coefficients,
+                    dense_reduction_output,
+                )),
+            distributed_storage_1d=(:dist_analysis_distributed,
+                () -> extension.dist_analysis_distributed(
+                    cfg, field; plan=distributed_plan,
+                )),
+            distributed_storage_2d=(:dist_analysis_distributed_2d,
+                () -> extension.dist_analysis_distributed_2d(
+                    cfg, field; plan=distributed_plan_2d,
+                )),
             distributed_compatibility=(:dist_analysis,
                 () -> SHTnsKit.dist_analysis(cfg, field)),
             dense_compatibility=(:dist_synthesis_qst_dense,
@@ -565,6 +592,7 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
                   before_payloads
             MPI.Barrier(comm)
         end
+        close(distributed_plan_2d)
     end
 
     for RT in (Float32, Float64)
@@ -713,6 +741,65 @@ function run_mpi_gpu_full_parity(vendor::Symbol, array_type::Type,
     end
     return nothing
 end
+# Exercise the real distributed FFT staging boundary without requiring a GPU.
+# Cache pressure on a subcommunicator must not change the MPI contexts used by
+# a still-live plan on the parent communicator.
+function test_mpi_gpu_native_cache_collectives(extension)
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    adapter = extension.ParallelGPUAdapter(
+        :mock_native_cache_collectives,
+        value -> value isa Array, _ -> Array, _ -> 0,
+        (f, _device) -> f(), _ -> false, _ -> nothing,
+        (T, n) -> Vector{T}(undef, n),
+        (host, device) -> copyto!(host, device),
+        (device, host) -> copyto!(device, host),
+    )
+    cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
+    plan = SHTnsKit.DistTransposePlan(cfg; comm, nlev=2)
+    input = SHTnsKit.allocate_spatial(plan)
+    original = reshape(
+        sin.(collect(1:length(parent(input))) .+ rank), size(parent(input)),
+    )
+    copyto!(parent(input), original)
+    mul!(plan.F_buf, plan.fft_plan, input)
+    expected = copy(parent(plan.F_buf))
+
+    @testset "native host cache survives rank-local $disruption" for disruption in
+            (:clear, :eviction)
+        extension.parallel_gpu_clear_caches!()
+        extension._gpu_transpose_forward!(adapter, plan, plan.F_buf, input)
+        @test parent(plan.F_buf) ≈ expected
+        if rank == 0
+            if disruption === :clear
+                extension.parallel_gpu_clear_caches!()
+            else
+                # Keep all local plans alive so this deterministically exceeds
+                # the bounded cache capacity on rank zero only.
+                local_plans = [SHTnsKit.DistTransposePlan(
+                    cfg; comm=MPI.COMM_SELF, nlev=2,
+                ) for _ in 1:8]
+                for local_plan in local_plans
+                    local_input = SHTnsKit.allocate_spatial(local_plan)
+                    fill!(parent(local_input), 1)
+                    extension._gpu_transpose_forward!(
+                        adapter, local_plan, local_plan.F_buf, local_input,
+                    )
+                end
+            end
+        end
+        MPI.Barrier(comm)
+        # Rank zero rebuilds while peers retain their cached mirror. Both the
+        # forward and inverse transforms must still use matching communicators.
+        extension._gpu_transpose_forward!(adapter, plan, plan.F_buf, input)
+        @test parent(plan.F_buf) ≈ expected
+        extension._gpu_transpose_inverse!(adapter, plan, input, plan.F_buf)
+        @test parent(input) ≈ original
+    end
+    extension.parallel_gpu_clear_caches!()
+    return nothing
+end
+
 function test_mpi_gpu_policy(extension)
     @test isdefined(extension, :ParallelGPUAdapter)
     @test isdefined(extension, :exchange!)
@@ -1152,6 +1239,8 @@ function test_mpi_gpu_policy(extension)
         @test pending_native_allocations[] == 2
         @test length(extension._GPU_TRANSPOSE_HOST) == 0
     end
+
+    test_mpi_gpu_native_cache_collectives(extension)
 
     # Every sync/copy must run on the physical device owning that buffer while
     # host MPI/CPU callbacks run on the caller's original current device.
@@ -1888,14 +1977,11 @@ function test_mpi_gpu_policy(extension)
         (device, host) -> copyto!(device, host),
     )
     extension._register_parallel_gpu_adapter!(mixed_adapter)
-    # ParallelGPUAdapter is immutable and the registry intentionally holds a
-    # WeakRef. Keep the exact boxed registry value (rather than a potentially
-    # re-boxed local copy) strongly reachable for this test's lifetime.
-    mixed_adapter_holder = lock(extension._PARALLEL_GPU_ADAPTER_LOCK) do
-        Ref{Any}(extension._PARALLEL_GPU_ADAPTERS[:mock_mixed].value)
-    end
-    GC.@preserve mixed_adapter_holder begin
+    # Registration is weak: preserving the caller's adapter must keep the
+    # same identity reachable throughout these storage-policy checks.
+    GC.@preserve mixed_adapter begin
       try
+    GC.gc(true)
     mixed_cfg = SHTnsKit.create_gauss_config(2, 4; nlon=6)
     cpu_spatial_pen = SHTnsKit.create_spatial_pencil(
         mixed_cfg; comm=MPI.COMM_SELF,
@@ -2180,6 +2266,9 @@ function test_mpi_gpu_policy(extension)
     gpu_batch_complex_spatial = PencilArrays.PencilArray{ComplexF64}(
         undef, gpu_spatial_pen, 2,
     )
+    cpu_batch_real_spectral = PencilArrays.PencilArray{Float64}(
+        undef, cpu_spectral_pen, 2,
+    )
     for value in (cpu_batch_spatial, cpu_batch_spectral)
         fill!(parent(value), 0)
     end
@@ -2188,6 +2277,64 @@ function test_mpi_gpu_policy(extension)
     end
     fill!(parent(cpu_batch_complex_spatial), 0)
     fill!(parent(gpu_batch_complex_spatial).data, 0)
+    fill!(parent(cpu_batch_real_spectral), 0)
+
+    # Invalid CPU batch ranks must still enter a broad distributed entry point.
+    # A local MethodError here becomes a deadlock when peer ranks dispatch to
+    # the compound GPU firewall and wait in its storage collective.
+    invalid_cpu_batch_calls = (
+        () -> SHTnsKit.analysis_batch(mixed_cfg, cpu_spatial),
+        () -> SHTnsKit.analysis_batch(
+            mixed_cfg, cpu_batch_complex_spatial,
+        ),
+        () -> SHTnsKit.analysis_batch!(
+            mixed_cfg, cpu_spectral, cpu_spatial,
+        ),
+        () -> SHTnsKit.analysis_batch!(
+            mixed_cfg, cpu_batch_spectral, cpu_batch_complex_spatial,
+        ),
+        () -> SHTnsKit.synthesis_batch(
+            mixed_cfg, cpu_spectral; prototype_θφ=cpu_spatial,
+        ),
+        () -> SHTnsKit.synthesis_batch(
+            mixed_cfg, cpu_batch_real_spectral;
+            prototype_θφ=cpu_batch_spatial,
+        ),
+        () -> SHTnsKit.synthesis_batch_cplx(
+            mixed_cfg, cpu_spectral; prototype_θφ=cpu_complex_spatial,
+        ),
+        () -> SHTnsKit.synthesis_batch_cplx(
+            mixed_cfg, cpu_batch_real_spectral;
+            prototype_θφ=cpu_batch_complex_spatial,
+        ),
+        () -> SHTnsKit.synthesis_batch!(
+            mixed_cfg, cpu_spatial, cpu_spectral;
+            prototype_θφ=cpu_spatial,
+        ),
+        () -> SHTnsKit.synthesis_batch!(
+            mixed_cfg, cpu_batch_spatial, cpu_batch_real_spectral;
+            prototype_θφ=cpu_batch_spatial,
+        ),
+    )
+    invalid_cpu_batch_values = (
+        cpu_spatial, cpu_spectral, cpu_complex_spatial,
+        cpu_batch_spatial, cpu_batch_complex_spatial,
+        cpu_batch_spectral, cpu_batch_real_spectral,
+    )
+    invalid_cpu_batch_before = map(
+        value -> copy(parent(value)), invalid_cpu_batch_values,
+    )
+    for call in invalid_cpu_batch_calls
+        error = try
+            call()
+            nothing
+        catch caught
+            caught
+        end
+        @test error isa ArgumentError
+    end
+    @test map(value -> parent(value), invalid_cpu_batch_values) ==
+          invalid_cpu_batch_before
     append!(mixed_cases, (
         :analysis_batch_output => (() -> SHTnsKit.analysis_batch!(
             mixed_cfg, gpu_batch_spectral, cpu_batch_spatial,
@@ -2334,6 +2481,45 @@ function test_mpi_gpu_policy(extension)
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
     world_gpu_comm = PencilArrays.get_comm(world_gpu)
 
+    # Reusable cfg-form plans own CPU matrices and must reject vendor storage
+    # before allocating scratch or entering any layout/FFT collective.
+    for constructor in (
+            (prototype -> extension.DistAnalysisPlan(mixed_cfg, prototype)),
+            (prototype -> extension.DistPlan(mixed_cfg, prototype)),
+            (prototype -> extension.DistSphtorPlan(mixed_cfg, prototype)),
+            (prototype -> extension.DistQstPlan(mixed_cfg, prototype)),
+        )
+        uniform_vendor_error = try
+            constructor(world_gpu)
+            nothing
+        catch error
+            error
+        end
+        @test uniform_vendor_error isa SHTnsKit.BackendUnavailableError
+        @test MPI.Allreduce(
+            uniform_vendor_error isa SHTnsKit.BackendUnavailableError ? 1 : 0,
+            min, MPI.COMM_WORLD,
+        ) == 1
+        MPI.Barrier(MPI.COMM_WORLD)
+
+        mixed_storage_error = try
+            constructor(iseven(rank) ? world_cpu : world_gpu)
+            nothing
+        catch error
+            error
+        end
+        @test mixed_storage_error isa ArgumentError
+        @test occursin(
+            "storage/vendor/device mismatch",
+            sprint(showerror, mixed_storage_error),
+        )
+        @test MPI.Allreduce(
+            mixed_storage_error isa ArgumentError ? 1 : 0,
+            min, MPI.COMM_WORLD,
+        ) == 1
+        MPI.Barrier(MPI.COMM_WORLD)
+    end
+
     # Dense compatibility dispatch depends on coefficient residency.  Every
     # rank must therefore enter the same storage preflight before a CPU rank
     # starts generic conversion while a vendor rank starts staging.
@@ -2463,6 +2649,184 @@ function test_mpi_gpu_policy(extension)
     )
     fill!(parent(world_cpu_spectral), 0)
     fill!(parent(world_gpu_spectral).data, 0)
+
+    # Simulate the method split that real CUDA/ROCm PencilArrays create when
+    # storage residency differs by rank: CPU ranks enter the ordinary generic
+    # method while vendor ranks enter the compound-extension firewall. Both
+    # branches must rendezvous in the same storage preflight before either
+    # starts configuration/layout collectives or raises a local backend error.
+    split_dispatch_cases = (
+        matrix_to_spectral_pencil=(:matrix_to_spectral_pencil,
+            () -> iseven(rank) ? SHTnsKit.matrix_to_spectral_pencil(
+                mixed_cfg, dense_Q; comm=MPI.COMM_WORLD,
+            ) : compound_extension._stage_vendor_call(
+                :matrix_to_spectral_pencil, identity, vendor_Q;
+                comm=MPI.COMM_WORLD,
+            )),
+        spectral_pencil_to_matrix=(:spectral_pencil_to_matrix,
+            () -> iseven(rank) ? SHTnsKit.spectral_pencil_to_matrix(
+                mixed_cfg, world_cpu_spectral,
+            ) : compound_extension._stage_vendor_call(
+                :spectral_pencil_to_matrix, identity, world_gpu_spectral;
+                comm=PencilArrays.get_comm(world_gpu_spectral),
+            )),
+        analysis=(:analysis, () -> iseven(rank) ?
+            SHTnsKit.analysis(mixed_cfg, world_cpu) :
+            compound_extension._stage_vendor_call(
+                :analysis, identity, world_gpu; comm=world_gpu_comm,
+            )),
+        dist_analysis=(:dist_analysis, () -> iseven(rank) ?
+            SHTnsKit.dist_analysis(mixed_cfg, world_cpu) :
+            compound_extension._stage_vendor_call(
+                :dist_analysis, identity, world_gpu; comm=world_gpu_comm,
+            )),
+        synthesis=(:synthesis, () -> iseven(rank) ?
+            SHTnsKit.synthesis(
+                mixed_cfg, world_cpu_spectral; prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :synthesis, identity, world_gpu_spectral, world_gpu;
+                comm=world_gpu_comm,
+            )),
+        dist_synthesis=(:dist_synthesis, () -> iseven(rank) ?
+            SHTnsKit.dist_synthesis(
+                mixed_cfg, world_cpu_spectral; prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :dist_synthesis, identity, world_gpu_spectral, world_gpu;
+                comm=world_gpu_comm,
+            )),
+        analysis_sphtor=(:analysis_sphtor, () -> iseven(rank) ?
+            SHTnsKit.analysis_sphtor(mixed_cfg, world_cpu, world_cpu) :
+            compound_extension._stage_vendor_call(
+                :analysis_sphtor, identity, world_gpu, world_gpu;
+                comm=world_gpu_comm,
+            )),
+        dist_analysis_sphtor=(:dist_analysis_sphtor, () -> iseven(rank) ?
+            SHTnsKit.dist_analysis_sphtor(mixed_cfg, world_cpu, world_cpu) :
+            compound_extension._stage_vendor_call(
+                :dist_analysis_sphtor, identity, world_gpu, world_gpu;
+                comm=world_gpu_comm,
+            )),
+        synthesis_sphtor=(:synthesis_sphtor, () -> iseven(rank) ?
+            SHTnsKit.synthesis_sphtor(
+                mixed_cfg, world_cpu_spectral, world_cpu_spectral;
+                prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :synthesis_sphtor, identity, world_gpu_spectral,
+                world_gpu_spectral, world_gpu; comm=world_gpu_comm,
+            )),
+        synthesis_sph_l_cplx=(:synthesis_sph_l_cplx,
+            () -> iseven(rank) ? SHTnsKit.synthesis_sph_l_cplx(
+                mixed_cfg, world_cpu_spectral, mixed_cfg.lmax;
+                prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :synthesis_sph_l_cplx, identity,
+                world_gpu_spectral, world_gpu; comm=world_gpu_comm,
+            )),
+        synthesis_tor_l_cplx=(:synthesis_tor_l_cplx,
+            () -> iseven(rank) ? SHTnsKit.synthesis_tor_l_cplx(
+                mixed_cfg, world_cpu_spectral, mixed_cfg.lmax;
+                prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :synthesis_tor_l_cplx, identity,
+                world_gpu_spectral, world_gpu; comm=world_gpu_comm,
+            )),
+        dist_synthesis_sphtor=(:dist_synthesis_sphtor, () -> iseven(rank) ?
+            SHTnsKit.dist_synthesis_sphtor(
+                mixed_cfg, world_cpu_spectral, world_cpu_spectral;
+                prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :dist_synthesis_sphtor, identity, world_gpu_spectral,
+                world_gpu_spectral, world_gpu; comm=world_gpu_comm,
+            )),
+        analysis_qst=(:analysis_qst, () -> iseven(rank) ?
+            SHTnsKit.analysis_qst(
+                mixed_cfg, world_cpu, world_cpu, world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :analysis_qst, identity, world_gpu, world_gpu, world_gpu;
+                comm=world_gpu_comm,
+            )),
+        dist_analysis_qst=(:dist_analysis_qst, () -> iseven(rank) ?
+            SHTnsKit.dist_analysis_qst(
+                mixed_cfg, world_cpu, world_cpu, world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :dist_analysis_qst, identity, world_gpu, world_gpu, world_gpu;
+                comm=world_gpu_comm,
+            )),
+        synthesis_qst=(:synthesis_qst, () -> iseven(rank) ?
+            SHTnsKit.synthesis_qst(
+                mixed_cfg, world_cpu_spectral, world_cpu_spectral,
+                world_cpu_spectral; prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :synthesis_qst, identity, world_gpu_spectral,
+                world_gpu_spectral, world_gpu_spectral, world_gpu;
+                comm=world_gpu_comm,
+            )),
+        dist_synthesis_qst=(:dist_synthesis_qst, () -> iseven(rank) ?
+            SHTnsKit.dist_synthesis_qst(
+                mixed_cfg, world_cpu_spectral, world_cpu_spectral,
+                world_cpu_spectral; prototype_θφ=world_cpu,
+            ) : compound_extension._stage_vendor_call(
+                :dist_synthesis_qst, identity, world_gpu_spectral,
+                world_gpu_spectral, world_gpu_spectral, world_gpu;
+                comm=world_gpu_comm,
+            )),
+    )
+    # Invalid CPU dimensionality must rendezvous with a peer's vendor method
+    # before either branch reports its local argument/backend error.
+    split_batch_cases = (
+        (:analysis_batch, (world_cpu,), (world_gpu,), (;)),
+        (:analysis_batch!, (world_cpu_spectral, world_cpu),
+         (world_gpu_spectral, world_gpu), (;)),
+        (:synthesis_batch, (world_cpu_spectral,), (world_gpu_spectral, world_gpu),
+         (; prototype_θφ=world_cpu)),
+        (:synthesis_batch_cplx, (world_cpu_spectral,),
+         (world_gpu_spectral, world_gpu), (; prototype_θφ=world_cpu)),
+        (:synthesis_batch!, (world_cpu, world_cpu_spectral),
+         (world_gpu, world_gpu_spectral, world_gpu), (; prototype_θφ=world_cpu)),
+    )
+    split_batch_values = (world_cpu, world_cpu_spectral, world_gpu, world_gpu_spectral)
+    split_batch_before = map(value -> Array(parent(value)), split_batch_values)
+    split_batch_stats = extension.parallel_gpu_stats()
+    for (operation, cpu_args, gpu_args, kwargs) in split_batch_cases
+        caught = try
+            if iseven(rank)
+                getfield(SHTnsKit, operation)(mixed_cfg, cpu_args...; kwargs...)
+            else
+                compound_extension._stage_vendor_call(
+                    operation, identity, gpu_args...; comm=world_gpu_comm,
+                )
+            end
+            nothing
+        catch error
+            error
+        end
+        @test caught isa ArgumentError
+        @test occursin("storage/vendor/device mismatch", sprint(showerror, caught))
+        @test MPI.Allreduce(caught isa ArgumentError ? 1 : 0, min,
+                            MPI.COMM_WORLD) == 1
+        MPI.Barrier(MPI.COMM_WORLD)
+    end
+    @test map(value -> Array(parent(value)), split_batch_values) == split_batch_before
+    @test extension.parallel_gpu_stats() == split_batch_stats
+
+    for (operation, call) in values(split_dispatch_cases)
+        caught = try
+            call()
+            nothing
+        catch error
+            error
+        end
+        @test caught isa ArgumentError
+        @test occursin(
+            "$operation collective validation failed: " *
+            "storage/vendor/device mismatch",
+            sprint(showerror, caught),
+        )
+        @test MPI.Allreduce(caught isa ArgumentError ? 1 : 0, min,
+                            MPI.COMM_WORLD) == 1
+        MPI.Barrier(MPI.COMM_WORLD)
+    end
+
     alternating_synthesis = iseven(rank) ?
         (world_cpu_spectral, world_gpu) :
         (world_gpu_spectral, world_cpu)
@@ -2582,6 +2946,7 @@ function test_mpi_gpu_policy(extension)
 end
 
 const MPI_GPU_FIREWALL_GROUPS = (
+    :matrix_to_spectral_pencil, :spectral_pencil_to_matrix,
     :analysis, :synthesis, :synthesis_cplx,
     :analysis_sphtor, :analysis_sphtor_cplx, :synthesis_sphtor,
     :synthesis_sphtor_cplx, :synthesis_sph, :synthesis_sph_cplx,
@@ -2626,8 +2991,8 @@ const MPI_GPU_FIREWALL_GROUPS = (
     :dist_SH_Zrotate_packed, :dist_SH_Yrotate_packed,
     :dist_SH_Yrotate90_packed, :dist_SH_Xrotate90_packed, :energy_scalar,
     :energy_scalar_l_spectrum, :energy_scalar_m_spectrum,
-    :energy_vector_l_spectrum, :energy_vector_m_spectrum,
-    :enstrophy_l_spectrum, :enstrophy_m_spectrum,
+    :energy_vector, :energy_vector_l_spectrum, :energy_vector_m_spectrum,
+    :enstrophy, :enstrophy_l_spectrum, :enstrophy_m_spectrum,
     :grid_energy_scalar, :grid_energy_vector, :grid_enstrophy,
     :dist_analysis!, :dist_synthesis!, :dist_analysis_sphtor!,
     :dist_synthesis_sphtor!, :dist_analysis_qst!, :dist_synthesis_qst!,
@@ -2651,6 +3016,11 @@ const MPI_GPU_ORDINARY_EARLY_ERROR_FAMILIES = (
     rotation=:dist_SH_rotate_euler,
     packed_rotation=:dist_SH_Yrotate_packed,
     diagnostics=:energy_vector_l_spectrum,
+    diagnostics_scalar_total=:enstrophy,
+    diagnostics_vector_total=:energy_vector,
+    distributed_storage_reduce=:distributed_spectral_reduce!,
+    distributed_storage_1d=:dist_analysis_distributed,
+    distributed_storage_2d=:dist_analysis_distributed_2d,
     distributed_compatibility=:dist_analysis,
     dense_compatibility=:dist_synthesis_qst_dense,
 )
@@ -2848,7 +3218,10 @@ function test_mpi_gpu_source_contract(root::AbstractString, vendor::Symbol,
     transpose_source = read(
         joinpath(root, "ext", "ParallelTransposeTransforms.jl"), String,
     )
-    @test occursin("plan.F_buf, plan.F_buf2, all_values...", transpose_source)
+    @test occursin(
+        r"_validate_parallel_storage!\(\s*plan.comm, operation, plan.F_buf, plan.F_buf2,\s*spatial\.\.\., spectral\.\.\.,",
+        transpose_source,
+    )
     @test occursin("_scalar_precision_code(real_type)", transpose_source)
     @test occursin("comm, communicator(prototype)", transpose_source)
     @test occursin("array_type === prototype_array_type", transpose_source)

@@ -66,7 +66,7 @@ function _validate_rotation_pencils!(cfg, input::PencilArray,
     # communicator must enter with a compatible input; candidate outputs are
     # then preflighted collectively before any mutation or data movement.
     comm = communicator(input)
-    _validate_qst_pencil_communicators!(comm, (output,), operation)
+    _validate_qst_pencil_communicators!(comm, (input, output), operation)
     _validate_cfg_replicated(cfg, comm)
     expected = (cfg.lmax + 1, cfg.mmax + 1)
     _validate_scalar_pencil!(
@@ -94,7 +94,7 @@ function _dist_zrotate_local!(cfg, input::PencilArray, angle::Real,
     RT = typeof(real(zero(eltype(input))))
     @inbounds for (local_m, m_index) in pairs(orders)
         m = m_index - 1
-        phase = cis(RT(m) * RT(angle))
+        phase = cis(-RT(m) * RT(angle))
         for local_l in axes(source, 1)
             destination[local_l, local_m] = phase * source[local_l, local_m]
         end
@@ -133,7 +133,7 @@ function _dist_yrotate_rows!(cfg, input::PencilArray, beta::Real,
     b = Vector{CT}(undef, 2cfg.lmax + 1)
     c = similar(b)
     d = Matrix{RT}(undef, 2cfg.lmax + 1, 2cfg.lmax + 1)
-    lg = RT[SHTnsKit._loggamma(i + 1) for i in 0:(2cfg.lmax)]
+    dwork = similar(d)
     local_sent = 0
     local_maximum = 0
 
@@ -167,7 +167,8 @@ function _dist_yrotate_rows!(cfg, input::PencilArray, beta::Real,
             end
         end
         block = view(d, 1:n, 1:n)
-        SHTnsKit.wigner_d_matrix!(block, l, RT(beta), lg)
+        work = view(dwork, 1:n, 1:n)
+        SHTnsKit.wigner_d_matrix!(block, l, RT(beta), work)
         @inbounds for m in -l:l
             acc = zero(CT)
             for mp in -l:l
@@ -233,7 +234,9 @@ end
 SHTnsKit.dist_SH_Xrotate90(cfg::SHTnsKit.SHTConfig,
                            input::PencilArray, output::PencilArray) =
     SHTnsKit.dist_SH_rotate_euler(
-        cfg, input, -pi / 2, pi / 2, pi / 2, output,
+        # `dist_SH_rotate_euler` applies the first Z factor first, matching
+        # the intrinsic/setter call order used by the serial X90 helper.
+        cfg, input, pi / 2, pi / 2, -pi / 2, output,
     )
 
 function _validate_packed_rotation!(cfg, coefficients, angles, prototype,

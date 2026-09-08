@@ -30,8 +30,14 @@ end
 
 function _validate_operator_pencils!(cfg, input::PencilArray,
                                      output::PencilArray,
+                                     mx::AbstractVector,
                                      operation::Symbol;
                                      comm=communicator(input))
+    # `mx` participates in the local numerical kernel and is indexed before
+    # the operator-value broadcast below.  Include it in the first residency
+    # decision so a rank-local device vector cannot throw while CPU peers have
+    # already advanced to later collectives.
+    _validate_parallel_storage!(comm, operation, input, output, mx)
     _validate_qst_pencil_communicators!(comm, (input, output), operation)
     _validate_cfg_replicated(cfg, comm)
     expected = (cfg.lmax + 1, cfg.mmax + 1)
@@ -118,7 +124,7 @@ where lm_prev = LM_index(l-1,m) and lm_next = LM_index(l+1,m).
 function SHTnsKit.SH_mul_mx(::SHTnsKit.CPU, cfg::SHTnsKit.SHTConfig,
                             mx::AbstractVector{<:Real},
                             input::PencilArray, output::PencilArray)
-    comm = _validate_operator_pencils!(cfg, input, output, :SH_mul_mx)
+    comm = _validate_operator_pencils!(cfg, input, output, mx, :SH_mul_mx)
     _validate_operator_matrix!(mx, cfg, comm, :SH_mul_mx)
     l_globals = collect(Int, globalindices(input, 1))
     m_globals = collect(Int, globalindices(input, 2))
@@ -152,6 +158,44 @@ SHTnsKit.dist_SH_mul_mx!(cfg::SHTnsKit.SHTConfig,
                          output::PencilArray) =
     SHTnsKit.SH_mul_mx(SHTnsKit.CPU(), cfg, mx, input, output)
 
+"""Validate every operand before a composite spatial operator starts work."""
+function _validate_composite_spatial_operator!(
+        cfg::SHTnsKit.SHTConfig, input::PencilArray,
+        analysis_peers::Tuple, output_prototype::PencilArray,
+        operation::Symbol; use_rfft::Bool, real_output::Bool)
+    # `input` is the trust anchor. Congruent duplicated communicators are valid
+    # operand metadata, but a rank-varying choice of duplicate must never become
+    # the context for a later collective.
+    comm = communicator(input)
+    candidates = (input, analysis_peers..., output_prototype)
+    _validate_qst_pencil_communicators!(comm, candidates, operation)
+    _validate_cfg_spatial_prototype(cfg, input, String(operation); comm)
+    _validate_scalar_pencil!(
+        cfg, input, (cfg.nlat, cfg.nlon), operation;
+        comm, use_rfft, require_real_input=true,
+    )
+    for peer in analysis_peers
+        _validate_spatial_pencil_against_prototype(
+            cfg, input, peer, String(operation); comm,
+        )
+        _validate_scalar_pencil!(
+            cfg, peer, (cfg.nlat, cfg.nlon), operation;
+            comm, peer=input, use_rfft, require_real_input=true,
+        )
+    end
+    _validate_cfg_spatial_prototype(
+        cfg, output_prototype, String(operation); comm,
+    )
+    _validate_scalar_pencil!(
+        cfg, output_prototype, (cfg.nlat, cfg.nlon), operation;
+        comm, peer=input, use_rfft, real_output,
+    )
+    _validate_collective_scalar_options!(
+        comm, use_rfft, real_output, operation,
+    )
+    return comm
+end
+
 """
     dist_spatial_divergence(cfg, Vtθφ, Vpθφ; prototype_θφ=Vtθφ, use_rfft=false, real_output=true)
 
@@ -162,10 +206,17 @@ function SHTnsKit.dist_spatial_divergence(cfg::SHTnsKit.SHTConfig,
                                           prototype_θφ::PencilArray=Vtθφ,
                                           use_rfft::Bool=false,
                                           real_output::Bool=true)
-    Slm, _ = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; use_rfft)
+    comm = _validate_composite_spatial_operator!(
+        cfg, Vtθφ, (Vpθφ,), prototype_θφ, :dist_spatial_divergence;
+        use_rfft, real_output,
+    )
+    Slm, _ = SHTnsKit.dist_analysis_sphtor(
+        cfg, Vtθφ, Vpθφ; use_rfft, comm,
+    )
     δlm = SHTnsKit.divergence_from_spheroidal(cfg, Slm)
-    return SHTnsKit.dist_synthesis(cfg, δlm; prototype_θφ=prototype_θφ,
-                                   real_output=real_output, use_rfft=use_rfft)
+    return _dist_synthesis_dense(
+        cfg, δlm; prototype_θφ, real_output, use_rfft, comm,
+    )
 end
 
 """
@@ -178,10 +229,32 @@ function SHTnsKit.dist_spatial_vorticity(cfg::SHTnsKit.SHTConfig,
                                          prototype_θφ::PencilArray=Vtθφ,
                                          use_rfft::Bool=false,
                                          real_output::Bool=true)
-    _, Tlm = SHTnsKit.dist_analysis_sphtor(cfg, Vtθφ, Vpθφ; use_rfft)
+    comm = _validate_composite_spatial_operator!(
+        cfg, Vtθφ, (Vpθφ,), prototype_θφ, :dist_spatial_vorticity;
+        use_rfft, real_output,
+    )
+    _, Tlm = SHTnsKit.dist_analysis_sphtor(
+        cfg, Vtθφ, Vpθφ; use_rfft, comm,
+    )
     ζlm = SHTnsKit.vorticity_from_toroidal(cfg, Tlm)
-    return SHTnsKit.dist_synthesis(cfg, ζlm; prototype_θφ=prototype_θφ,
-                                   real_output=real_output, use_rfft=use_rfft)
+    return _dist_synthesis_dense(
+        cfg, ζlm; prototype_θφ, real_output, use_rfft, comm,
+    )
+end
+
+function _dist_scalar_laplacian(
+        cfg::SHTnsKit.SHTConfig, fθφ::PencilArray,
+        prototype_θφ::PencilArray, use_rfft::Bool, real_output::Bool,
+        comm)
+    _validate_composite_spatial_operator!(
+        cfg, fθφ, (), prototype_θφ, :dist_scalar_laplacian;
+        use_rfft, real_output,
+    )
+    Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft, comm)
+    SHTnsKit.dist_apply_laplacian!(cfg, Alm)
+    return _dist_synthesis_dense(
+        cfg, Alm; prototype_θφ, real_output, use_rfft, comm,
+    )
 end
 
 """
@@ -195,10 +268,10 @@ function SHTnsKit.dist_scalar_laplacian(cfg::SHTnsKit.SHTConfig,
                                         prototype_θφ::PencilArray=fθφ,
                                         use_rfft::Bool=false,
                                         real_output::Bool=true)
-    Alm = SHTnsKit.dist_analysis(cfg, fθφ; use_rfft)
-    SHTnsKit.dist_apply_laplacian!(cfg, Alm)
-    return SHTnsKit.dist_synthesis(cfg, Alm; prototype_θφ=prototype_θφ,
-                                   real_output=real_output, use_rfft=use_rfft)
+    comm = communicator(fθφ)
+    return _dist_scalar_laplacian(
+        cfg, fθφ, prototype_θφ, use_rfft, real_output, comm,
+    )
 end
 
 """
@@ -211,8 +284,10 @@ function SHTnsKit.dist_scalar_laplacian!(cfg::SHTnsKit.SHTConfig,
                                          inθφ::PencilArray;
                                          use_rfft::Bool=false,
                                          real_output::Bool=true)
-    result = SHTnsKit.dist_scalar_laplacian(cfg, inθφ; prototype_θφ=outθφ,
-                                            use_rfft=use_rfft, real_output=real_output)
+    comm = communicator(inθφ)
+    result = _dist_scalar_laplacian(
+        cfg, inθφ, outθφ, use_rfft, real_output, comm,
+    )
     copyto!(outθφ, result)
     return outθφ
 end

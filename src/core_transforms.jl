@@ -285,7 +285,8 @@ function _synthesis(cfg::SHTConfig, alm::AbstractMatrix, ::Val{real_output},
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
     scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     nlat, nlon = cfg.nlat, cfg.nlon
-    CT = eltype(alm)
+    # Fourier bins are complex even when all spectral coefficients are real.
+    CT = complex(float(eltype(alm)))
     if use_rfft
         # The rfft path returns real output by construction. Hermitian
         # symmetry is not materialized in Fph; irfft_phi! reconstructs it.
@@ -329,7 +330,7 @@ function _synthesis_l(cfg::SHTConfig, alm::AbstractMatrix, ltr::Int, ::Val{real_
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
     scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     nlat, nlon = cfg.nlat, cfg.nlon
-    CT = eltype(alm)
+    CT = complex(float(eltype(alm)))
     Fph = Matrix{CT}(undef, nlat, nlon)
     fill!(Fph, zero(CT))
     _synthesis_scalar_mloop!(Fph, cfg, alm; real_output=real_output, ltr=ltr,
@@ -369,7 +370,7 @@ function _synthesis!(cfg::SHTConfig, f_out::AbstractMatrix, alm::AbstractMatrix,
     size(alm, 2) == mmax + 1 || throw(DimensionMismatch("second dim must be mmax+1=$(mmax+1)"))
     scale_matrix = _coefficient_scale_matrix_to_canonical(cfg)
     nlat, nlon = cfg.nlat, cfg.nlon
-    CT = eltype(alm)
+    CT = complex(float(eltype(alm)))
     if use_rfft
         real_output || throw(ArgumentError("use_rfft=true implies real_output"))
         eltype(f_out) <: Real || throw(ArgumentError("use_rfft=true requires real-valued f_out"))
@@ -510,9 +511,24 @@ function _adjoint_synthesis_sphtor(cfg::SHTConfig, V̄t::AbstractMatrix, V̄p::A
                                    real_output::Bool=true)
     lmax, mmax = cfg.lmax, cfg.mmax
     CT = complex(float(promote_type(eltype(V̄t), eltype(V̄p))))
+    # Robert-form synthesis multiplies each output row by sin(θ), so its
+    # adjoint applies that same real diagonal before the Fourier adjoint.
+    V̄t_eff = V̄t
+    V̄p_eff = V̄p
+    if cfg.robert_form
+        V̄t_scaled = Matrix{CT}(undef, size(V̄t))
+        V̄p_scaled = Matrix{CT}(undef, size(V̄p))
+        @inbounds for (ii, iglob) in pairs(θ_globals), j in axes(V̄t, 2)
+            sθ = sqrt(max(0.0, 1 - cfg.x[iglob]^2))
+            V̄t_scaled[ii, j] = sθ * V̄t[ii, j]
+            V̄p_scaled[ii, j] = sθ * V̄p[ii, j]
+        end
+        V̄t_eff = V̄t_scaled
+        V̄p_eff = V̄p_scaled
+    end
     # Adjoint of ifft_phi is fft_phi; one buffer per field + cached FFTW plan.
-    F̄θ = fft_phi!(Matrix{CT}(undef, size(V̄t)...), V̄t)
-    F̄φ = fft_phi!(Matrix{CT}(undef, size(V̄p)...), V̄p)
+    F̄θ = fft_phi!(Matrix{CT}(undef, size(V̄t_eff)...), V̄t_eff)
+    F̄φ = fft_phi!(Matrix{CT}(undef, size(V̄p_eff)...), V̄p_eff)
 
     S̄ = zeros(CT, lmax + 1, mmax + 1)
     T̄ = zeros(CT, lmax + 1, mmax + 1)
@@ -530,7 +546,7 @@ function _adjoint_synthesis_sphtor(cfg::SHTConfig, V̄t::AbstractMatrix, V̄p::A
     # the cancellation made every gradient exactly 2π too large.
     # wm accounts for the Hermitian "fill conjugate" step (real output).
     φadj = phi_inv_scale(cfg) / cfg.nlon
-    for m in 0:mmax
+    for m in 0:cfg.mres:mmax
         col = m + 1
         wm = ((m == 0 || !real_output) ? 1.0 : 2.0) * φadj
         @inbounds for (ii, iglob) in pairs(θ_globals)
@@ -595,12 +611,12 @@ function _adjoint_analysis(cfg::SHTConfig, Alm̄::AbstractMatrix;
     end
     ifft_phi!(Fφ, Fφ)
     if φ_window === nothing
-        return real.(Fφ)
+        return Fφ
     end
-    out = Matrix{real(CT)}(undef, nlat_local, length(φ_window))
+    out = Matrix{CT}(undef, nlat_local, length(φ_window))
     @inbounds for (jj, jglob) in pairs(φ_window)
         for i in 1:nlat_local
-            out[i, jj] = real(Fφ[i, jglob])
+            out[i, jj] = Fφ[i, jglob]
         end
     end
     return out
@@ -620,10 +636,10 @@ function _analysis_scalar_mloop!(alm::AbstractMatrix, cfg::SHTConfig, Fph::Abstr
 end
 
 @inline function _analysis_scalar_mloop_tbl!(alm, cfg, Fph, m_order, scale_phi)
-    # Avoid @threads setup and closure allocation on single-thread runs. The
-    # serial and threaded bodies stay separate so performance tests can lock
-    # down the low-allocation path.
-    if Threads.nthreads() == 1
+    # Avoid @threads setup when only one thread is available or the caller is
+    # already threaded. The separate serial body also preserves the
+    # low-allocation path used by performance tests.
+    if !_use_internal_mloop_threads()
         return _analysis_scalar_mloop_tbl_serial!(alm, cfg, Fph, m_order, scale_phi)
     else
         return _analysis_scalar_mloop_tbl_threaded!(alm, cfg, Fph, m_order, scale_phi)
@@ -663,9 +679,9 @@ end
 @inline function _analysis_scalar_mloop_otf!(alm, cfg, Fph, m_order, scale_phi)
     lmax = cfg.lmax
     thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, lmax)
-    # See table path above: single-thread transforms use a direct loop and
-    # the first scratch buffer instead of paying threaded-loop overhead.
-    if Threads.nthreads() == 1
+    # See table path above: transforms that cannot safely start a static loop
+    # use a direct loop and the caller thread's scratch buffer.
+    if !_use_internal_mloop_threads()
         return _analysis_scalar_mloop_otf_serial!(alm, cfg, Fph, m_order, scale_phi, thread_local_P, lmax)
     else
         return _analysis_scalar_mloop_otf_threaded!(alm, cfg, Fph, m_order, scale_phi, thread_local_P, lmax)
@@ -674,7 +690,7 @@ end
 
 @inline function _analysis_scalar_mloop_otf_serial!(alm, cfg, Fph, m_order, scale_phi, thread_local_P, lmax)
     nlat = cfg.nlat
-    P = thread_local_P[1]
+    P = thread_local_P[Threads.threadid()]
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
         m % cfg.mres == 0 || continue
@@ -733,9 +749,9 @@ end
 
 @inline function _synthesis_scalar_mloop_tbl!(Fph, cfg, alm, m_order, inv_scale_phi,
                                               ltr_eff, scale_matrix)
-    # Keep the single-thread path free of @threads overhead. This matters for
-    # allocation-sensitive small transforms and scalar in-place APIs.
-    if Threads.nthreads() == 1
+    # Keep serial and already-threaded callers free of @threads overhead. This
+    # matters for allocation-sensitive small transforms and in-place APIs.
+    if !_use_internal_mloop_threads()
         return _synthesis_scalar_mloop_tbl_serial!(Fph, cfg, alm, m_order, inv_scale_phi,
                                                    ltr_eff, scale_matrix)
     else
@@ -777,10 +793,13 @@ end
 
 @inline function _synthesis_scalar_mloop_otf!(Fph, cfg, alm, m_order, inv_scale_phi,
                                               ltr_eff, scale_matrix)
-    thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, max(ltr_eff, 0))
-    # `thread_local_P[1]` is valid in serial mode because _ensure_otf_scratch!
-    # sizes scratch for maxthreadid().
-    if Threads.nthreads() == 1
+    # Keep this cfg-owned cache at one stable size. Using ltr_eff here made
+    # concurrent transforms with different truncations replace buffers that
+    # another thread could still be using.
+    thread_local_P = _ensure_otf_scratch!(cfg._otf_scratch_P, cfg.lmax)
+    # _ensure_otf_scratch! sizes scratch for maxthreadid(), so the direct loop
+    # can safely use the caller thread's buffer.
+    if !_use_internal_mloop_threads()
         return _synthesis_scalar_mloop_otf_serial!(Fph, cfg, alm, m_order, inv_scale_phi,
                                                    ltr_eff, thread_local_P, scale_matrix)
     else
@@ -792,7 +811,7 @@ end
 @inline function _synthesis_scalar_mloop_otf_serial!(Fph, cfg, alm, m_order, inv_scale_phi,
                                                      ltr_eff, thread_local_P, scale_matrix)
     nlat = cfg.nlat
-    P = thread_local_P[1]
+    P = thread_local_P[Threads.threadid()]
     @inbounds for idx in 1:length(m_order)
         m = m_order[idx]
         m % cfg.mres == 0 || continue

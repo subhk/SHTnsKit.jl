@@ -91,9 +91,9 @@ using FFTW                               # For 1D FFTs on local arrays
 import LinearAlgebra
 import SHTnsKit                          # Core spherical harmonic functionality
 
-# `MPI.Comm_free` is present in MPI.jl 0.20.x but was removed from the public
-# API in some newer builds in favor of finalizer-driven cleanup. Use a shim so
-# subcomm cleanup doesn't crash either way.
+# `MPI.Comm_free` is present in MPI.jl 0.20.x; newer releases expose
+# `MPI.free(::Comm)` instead. Use a shim so subcommunicators are released
+# deterministically on either API rather than being left to a finalizer.
 @inline function _safe_comm_free(c)
     if isdefined(MPI, :Initialized)
         try
@@ -118,6 +118,12 @@ import SHTnsKit                          # Core spherical harmonic functionality
     if isdefined(MPI, :Comm_free)
         try
             getfield(MPI, :Comm_free)(c)
+        catch
+            # Communicator may already be freed or auto-finalized; ignore.
+        end
+    elseif isdefined(MPI, :free)
+        try
+            getfield(MPI, :free)(c)
         catch
             # Communicator may already be freed or auto-finalized; ignore.
         end

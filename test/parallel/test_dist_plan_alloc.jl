@@ -141,17 +141,20 @@ end
     # QST plan composes the scalar + sphtor planned paths
     Vr_pa, _ = band_limited_field(cfg, pen)
     Qr_ref = SHTnsKit.dist_analysis(cfg, Vr_pa)
-    qplan = ParExt.DistQstPlan(cfg, Vr_pa)
-    Qlm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
-    Slm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
-    Tlm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
-    SHTnsKit.dist_analysis_qst!(qplan, Qlm_out, Slm_out, Tlm_out, Vr_pa, Vt_pa, Vp_pa)
-    @test maximum(abs.(Qlm_out .- Qr_ref)) < 1e-12
-    @test maximum(abs.(Slm_out .- S_ref)) < 1e-10
-    SHTnsKit.dist_analysis_qst!(qplan, Qlm_out, Slm_out, Tlm_out, Vr_pa, Vt_pa, Vp_pa)  # warmup
-    a = @allocated SHTnsKit.dist_analysis_qst!(qplan, Qlm_out, Slm_out, Tlm_out, Vr_pa, Vt_pa, Vp_pa)
-    rank == 0 && println("dist_analysis_qst!: $a B/call")
-    @test a < 16384
+    for use_rfft in (false, true)
+        qplan = ParExt.DistQstPlan(cfg, Vr_pa; use_rfft)
+        Qlm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
+        Slm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
+        Tlm_out = zeros(ComplexF64, lmax + 1, cfg.mmax + 1)
+        SHTnsKit.dist_analysis_qst!(qplan, Qlm_out, Slm_out, Tlm_out, Vr_pa, Vt_pa, Vp_pa)
+        @test maximum(abs.(Qlm_out .- Qr_ref)) < 1e-12
+        @test maximum(abs.(Slm_out .- S_ref)) < 1e-10
+        @test maximum(abs.(Tlm_out .- T_ref)) < 1e-10
+        SHTnsKit.dist_analysis_qst!(qplan, Qlm_out, Slm_out, Tlm_out, Vr_pa, Vt_pa, Vp_pa)  # warmup
+        a = @allocated SHTnsKit.dist_analysis_qst!(qplan, Qlm_out, Slm_out, Tlm_out, Vr_pa, Vt_pa, Vp_pa)
+        rank == 0 && println("dist_analysis_qst! (use_rfft=$use_rfft): $a B/call")
+        @test a < 16384
+    end
 end
 
 @testset "dist_SH_Yrotate pencil form: correctness + allocations" begin

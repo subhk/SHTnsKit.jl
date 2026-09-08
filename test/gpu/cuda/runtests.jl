@@ -5,11 +5,20 @@ using GPUArrays
 using GPUArraysCore
 using KernelAbstractions
 
+include("../wrapper_reference.jl")
+include("../test_mres.jl")
+if CUDA.functional()
+    run_gpu_mres_tests()
+else
+    @test_skip CUDA.functional()
+end
+
 include("../../parity/scalar_full.jl")
 include("../../parity/scalar_variants.jl")
 include("../../parity/sphtor_full.jl")
 include("../../parity/qst_full.jl")
 include("../../parity/vector_variants.jl")
+include("../../parity/vector_batches.jl")
 include("../../parity/local_evaluation.jl")
 include("../../parity/operators.jl")
 include("../../parity/rotations.jl")
@@ -178,6 +187,14 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
 @testset "CUDA backend routing" begin
     extension = Base.get_extension(SHTnsKit, :SHTnsKitGPUExt)
     @test extension !== nothing
+    @test SHTnsKit._GPU_LOOP_AVAILABLE[]
+    cfg_memory = create_gauss_config(4, 6; nlon=9)
+    spatial_bytes = cfg_memory.nlat * cfg_memory.nlon * 16
+    coefficient_bytes = (cfg_memory.lmax + 1) * (cfg_memory.mmax + 1) * 16
+    legendre_bytes = cfg_memory.nlat * (cfg_memory.lmax + 1) *
+                     (cfg_memory.mmax + 1) * 8
+    @test estimate_memory_usage(cfg_memory, :vector) ==
+          4spatial_bytes + 2coefficient_bytes + 6legendre_bytes
     test_gpu_rotation_contract(
         extension, CuArray{ComplexF32,1}, CuArray{ComplexF32,1},
     )
@@ -186,6 +203,9 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
     )
     test_angle_axis_pi_singularity()
     if CUDA.functional()
+        loop_values = CUDA.zeros(Int32, 8)
+        @sht_loop loop_values[i] = Int32(i) over i ∈ eachindex(loop_values)
+        @test Array(loop_values) == Int32.(1:8)
         plan = extension.create_cufft_plan(2, 8)
         input = CUDA.rand(ComplexF64, 2, 8)
         transformed = copy(input)
@@ -718,6 +738,10 @@ SHTnsKit.synthesis(::SHTConfig, ::SafeFallbackArray; kwargs...) =
             real_norm_values=(false, true),
             cs_phase_values=(false, true),
             pole_orders=(false, true),
+        )
+        run_gpu_vector_batch_parity(CUDAVectorAdapter())
+        run_shared_legendre_precision_reference(
+            extension.GPUCommon, CUDABackend(); place=CuArray,
         )
         run_sphtor_full_parity(CUDAVectorAdapter())
         run_qst_full_parity(CUDAQSTAdapter())
